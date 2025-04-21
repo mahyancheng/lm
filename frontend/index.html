@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI Agent</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="chatbox-area">
+            <h2>Chat</h2>
+            <div class="chat-history scrollable" id="chatHistory">
+                <p class="message agent-activity">Welcome! Select a model and enter your query.</p>
+            </div>
+             <div class="model-selection">
+                 <label for="modelSelect">Select Model (for Review):</label>
+                 <select id="modelSelect">
+                     <option value="qwen2.5:32b-instruct" selected>Qwen 2.5 Instruct 32B</option>
+                     <option value="deepcoder">Deepcoder</option>
+                     </select>
+            </div>
+            <div class="chat-input">
+                <textarea id="userInput" placeholder="Enter your query here... (Shift+Enter for newline)" rows="3"></textarea>
+                <button id="sendButton">Send</button>
+            </div>
+        </div>
+
+        <div class="display-area">
+            <div class="activity-section">
+                <h2>Agent Activity</h2>
+                <div class="activity-log scrollable" id="agentActivity">
+                    <p>Waiting for connection...</p>
+                </div>
+            </div>
+             <div class="results-section">
+                 <h2>Final Results</h2>
+                 <div class="final-results scrollable" id="finalResults">
+                     <p>No results yet.</p>
+                 </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

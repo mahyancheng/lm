@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  backend:
+    build:
+      context: ..                     # Project root
+      dockerfile: backend/Dockerfile  # Dockerfile location
+    ports:
+      - "8000:8000"   # FastAPI
+      - "6080:6080"   # noVNC web UI
+      - "5901:5901"   # VNC
+    environment:
+      - OLLAMA_ENDPOINT=http://host.docker.internal:11434
+      - BROWSER_AGENT_INTERNAL_MODEL=qwen2.5:7b
+      - DISPLAY=:99
+    volumes:
+      - ./tasks:/app/tasks                 # Persist tasks
+      - ./backend/.env:/app/.env           # Optional .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: '2gb'
+    restart: unless-stopped

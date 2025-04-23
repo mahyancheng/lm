@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI Agent</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="chatbox-area">
+            <h2>Chat & Agent Log</h2>
+            <div class="chat-history scrollable" id="chatHistory">
+                <p class="message agent-activity">Welcome! Select a model and enter your query.</p>
+            </div>
+                <div class="model-selection">
+                    <!-- populated at runtime -->
+                    <label for="plannerSel">Planner LLM:</label>
+                    <select id="plannerSel"></select>
+                
+                    <label for="browserSel" style="margin-left:1.5rem">Browser LLM:</label>
+                    <select id="browserSel"></select>
+                
+                    <label for="codeSel" style="margin-left:1.5rem">Code LLM:</label>
+                    <select id="codeSel"></select>
+                </div>
+            <div class="chat-input">
+                <textarea id="userInput" placeholder="Enter your query here... (Shift+Enter for newline)" rows="3"></textarea>
+                <button id="sendButton">Send</button>
+            </div>
+        </div>
+
+        <div class="display-area">
+            <div class="live-view-section">
+                <h2>Live Agent View (Browser/Tools)</h2>
+                <div class="live-view-content">
+                    <iframe id="liveViewFrame" src="about:blank" title="Live Agent View"></iframe>
+                    <p id="liveViewStatus">Attempting to connect to VNC...</p>
+                 </div>
+            </div>
+             <div class="task-list-section">
+                 <h2>Current Tasks</h2>
+                 <div class="task-list scrollable" id="taskList">
+                     <p class="message agent-activity">Task list display area.</p>
+                     <p class="message agent-activity">(Backend currently not configured to send dynamic task updates).</p>
+                 </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

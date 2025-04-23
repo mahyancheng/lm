@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ..          # project root
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "8000:8000"
+      - "6080:6080"
+      - "5901:5901"
+    environment:
+      OLLAMA_ENDPOINT:               ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      PLANNING_TOOLING_MODEL:        ${PLANNING_TOOLING_MODEL:-llama3:latest}
+      DEEPCODER_MODEL:               ${DEEPCODER_MODEL:-deepcoder:latest}
+      BROWSER_AGENT_INTERNAL_MODEL:  ${BROWSER_AGENT_INTERNAL_MODEL:-qwen2.5:7b}
+      DISPLAY: ":99"
+      TZ: Asia/Kuala_Lumpur
+      PYTHONUNBUFFERED: "1"
+
+    # 🔻 ADD THIS LINE 🔻  (mount the *host* frontend folder read-only)
+    volumes:
+      - ./backend/frontend:/app/frontend:ro     # serve your latest script.js, index.html, …
+      - ./tasks:/app/tasks                      # already there – keep it
+
+    shm_size: "2gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ..          # project root
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "8000:8000"        # FastAPI
+      - "6080:6080"        # noVNC
+      - "5901:5901"        # raw VNC
+    environment:
+      # overridable from host → `OLLAMA_ENDPOINT=http://… docker compose up`
+      OLLAMA_ENDPOINT:               ${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      PLANNING_TOOLING_MODEL:        ${PLANNING_TOOLING_MODEL:-llama3:latest}
+      DEEPCODER_MODEL:               ${DEEPCODER_MODEL:-deepcoder:latest}
+      BROWSER_AGENT_INTERNAL_MODEL:  ${BROWSER_AGENT_INTERNAL_MODEL:-qwen2.5:7b}
+      DISPLAY: ":99"
+      TZ: Asia/Kuala_Lumpur
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./tasks:/app/tasks            # persists any downloaded artefacts
+    shm_size: "2gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -1,0 +1,276 @@
+/* frontend/style.css */
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f4f7f9;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden; /* Prevent body scroll */
+}
+
+.container {
+    display: flex;
+    width: 95%;
+    max-width: 1600px; /* Allow wider view */
+    height: 90vh; /* Use viewport height */
+    background-color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    overflow: hidden; /* Prevent content spill */
+}
+
+/* Left Column: Chatbox Area */
+.chatbox-area {
+    flex: 4; /* Adjusted flex */
+    min-width: 400px; /* Minimum width */
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #d1d5da;
+    padding: 16px;
+    background-color: #f6f8fa; /* Light grey background */
+    overflow: hidden; /* Prevent inner elements from overflowing */
+}
+
+/* Right Column: Display Area */
+.display-area {
+    flex: 6; /* Adjusted flex */
+    display: flex;
+    flex-direction: column;
+    padding: 0; /* Remove padding to allow iframe to fill */
+    background-color: #ffffff;
+    overflow: hidden;
+}
+
+/* Common Section Titles */
+.chatbox-area h2, .display-area h2 {
+     margin: 0 16px 12px 16px; /* Add horizontal margin back */
+     padding-top: 16px; /* Add top padding */
+     padding-bottom: 8px;
+     border-bottom: 1px solid #eaecef;
+     font-size: 1.1em;
+     font-weight: 600;
+     color: #24292e; /* Dark grey text */
+}
+/* Specific title padding for display area */
+.display-area h2 {
+    margin-top: 0;
+}
+
+.chat-history {
+    flex-grow: 1; /* Takes available vertical space */
+    overflow-y: auto; /* Enable vertical scroll */
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 1px solid #eaecef; /* Light border */
+    background-color: #fff; /* White background for chat */
+    border-radius: 6px;
+}
+
+/* Model Selection Area */
+.model-selection {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #eaecef;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+.model-selection label {
+    margin-right: 8px;
+    font-size: 0.9em;
+    font-weight: 500;
+    color: #586069; /* Medium grey text */
+}
+
+.model-selection select {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #d1d5da;
+    background-color: #fff;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+.model-selection select:focus {
+    border-color: #0366d6; /* Blue border on focus */
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(3, 102, 214, 0.3);
+}
+
+/* Chat Input Area */
+.chat-input {
+    display: flex;
+    align-items: flex-end; /* Align button with bottom of textarea */
+    padding-top: 12px;
+    border-top: 1px solid #eaecef;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+.chat-input textarea {
+    flex-grow: 1;
+    padding: 8px 12px;
+    border: 1px solid #d1d5da;
+    border-radius: 6px;
+    resize: none; /* Disable manual resize */
+    margin-right: 8px;
+    font-size: 0.95em;
+    line-height: 1.5;
+    min-height: 40px; /* Ensure minimum height */
+    max-height: 150px; /* Limit maximum height */
+    overflow-y: auto; /* Allow scroll if needed */
+}
+.chat-input textarea:focus {
+    border-color: #0366d6;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(3, 102, 214, 0.3);
+}
+
+.chat-input button {
+    padding: 8px 16px;
+    background-color: #2ea44f; /* GitHub green */
+    color: white;
+    border: 1px solid rgba(27, 31, 35, 0.15);
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.95em;
+    transition: background-color 0.2s;
+    white-space: nowrap; /* Prevent button text wrapping */
+    height: 40px; /* Match min-height of textarea */
+}
+.chat-input button:hover { background-color: #2c974b; }
+.chat-input button:active { background-color: #298e46; }
+
+/* Right Column Sections */
+.live-view-section, .task-list-section {
+    flex: 1; /* Each takes half of the vertical space */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Important for child scrolling/iframe */
+    min-height: 150px; /* Ensure sections have some height */
+}
+
+.live-view-section {
+     border-bottom: 1px solid #eaecef;
+     /* padding-bottom: 12px; Remove padding */
+}
+
+.live-view-content {
+    flex-grow: 1; /* Takes available space */
+    position: relative; /* For positioning status */
+    background-color: #e9ecef; /* Placeholder background */
+    border: 1px solid #d1d5da;
+    margin: 0 16px 16px 16px; /* Add margin */
+    border-radius: 6px;
+    overflow: hidden; /* Clip iframe */
+}
+
+#liveViewFrame {
+    width: 100%;
+    height: 100%;
+    border: none; /* Remove iframe border */
+    display: block; /* Remove extra space below iframe */
+}
+
+#liveViewStatus {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 8px 15px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    text-align: center;
+    display: none; /* Initially hidden */
+    z-index: 10; /* Above iframe */
+}
+#liveViewStatus.visible {
+    display: block;
+}
+
+
+.task-list-section {
+    padding-bottom: 16px; /* Add padding below task list */
+}
+
+/* Task List Styling (Static Placeholder) */
+.task-list {
+    flex-grow: 1; /* Takes available space within parent */
+    overflow-y: auto; /* Enable vertical scroll */
+    background-color: #f8f9fa; /* Slightly different background */
+    border: 1px solid #eaecef;
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 0.9em;
+    line-height: 1.5;
+    color: #586069; /* Grey text */
+    margin: 0 16px 0 16px; /* Match content margin */
+}
+.task-list p:last-child { margin-bottom: 0; }
+.task-list p.message.agent-activity { /* Style placeholder text */
+    color: #586069;
+    font-style: italic;
+    background-color: transparent;
+    text-align: left;
+    margin: 5px 0;
+    padding: 2px 0; /* Reduce padding for placeholder */
+}
+
+
+/* Common style for scrollable areas */
+.scrollable {
+    /* Inherited styles are mostly fine, ensure scrollbar visibility if needed */
+    scrollbar-width: thin; /* Firefox */
+    scrollbar-color: #adb5bd #f1f3f5; /* Firefox */
+}
+/* Webkit Scrollbars */
+.scrollable::-webkit-scrollbar { width: 8px; }
+.scrollable::-webkit-scrollbar-track { background: #f1f3f5; border-radius: 4px; }
+.scrollable::-webkit-scrollbar-thumb { background-color: #adb5bd; border-radius: 4px; border: 2px solid #f1f3f5; }
+.scrollable::-webkit-scrollbar-thumb:hover { background-color: #868e96; }
+
+
+/* Message Styling in Chat History */
+.message {
+    padding: 7px 12px; /* Adjusted padding */
+    border-radius: 12px; /* More rounded bubbles */
+    margin-bottom: 8px;
+    max-width: 85%; /* Slightly narrower max width */
+    word-wrap: break-word; /* Wrap long words */
+    white-space: pre-wrap; /* Preserve whitespace and wrap */
+    line-height: 1.45;
+    position: relative; /* For potential future elements like timestamps */
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05); /* Subtle shadow */
+}
+
+.message.user {
+    background-color: #d1e7fd; /* Lighter blue */
+    color: #0a3660; /* Darker blue text */
+    margin-left: auto; /* Align user messages to the right */
+    text-align: left; /* Keep text left-aligned within the bubble */
+    border-bottom-right-radius: 4px; /* Bubble tail effect */
+}
+.message.agent-activity, .message.agent-final, .message.agent-error, .message.agent-warning {
+    background-color: #e9ecef; /* Light grey for agent */
+    color: #343a40; /* Dark grey text */
+    margin-right: auto; /* Align agent messages to the left */
+    border-bottom-left-radius: 4px; /* Bubble tail effect */
+}
+.message.agent-final { background-color: #d4edda; border: 1px solid #c3e6cb; font-weight: 500; color: #155724; }
+.message.agent-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; font-weight: 500; }
+.message.agent-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; font-weight: 500; }
+
+/* Placeholder message style in chat history */
+.chat-history p:only-child.message.agent-activity {
+    color: #6c757d; /* Standard grey text */
+    font-style: italic;
+    background-color: transparent; /* Remove background for placeholders */
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+    max-width: 100%;
+    box-shadow: none; /* Remove shadow */
+}

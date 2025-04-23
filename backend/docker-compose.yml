@@ -1,0 +1,38 @@
+# backend/docker-compose.yml
+version: '3.8' # This version tag is okay, despite the warning
+services:
+  backend:
+    build:
+      # Context is the parent directory (mahyancheng-go/) relative to this compose file
+      context: ..
+      # Dockerfile is located in the same directory as this compose file
+      dockerfile: ./backend/Dockerfile
+    ports:
+      # Map host ports to container ports
+      - "8000:8000"   # FastAPI application
+      - "6080:6080"   # noVNC web UI for live view
+      - "5901:5901"   # Raw VNC port (optional, for external VNC clients)
+    environment:
+      # Point to Ollama running on the Docker host machine
+      - OLLAMA_ENDPOINT=http://host.docker.internal:11434
+      # Specify the model for the browser agent subprocess
+      - BROWSER_AGENT_INTERNAL_MODEL=qwen2.5:7b
+      # Set the display for Xvfb (must match supervisord.conf)
+      - DISPLAY=:99
+      # Set timezone inside the container (matches Dockerfile)
+      - TZ=Asia/Kuala_Lumpur
+      # Optional: Set Python unbuffered output if needed for logging
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount the tasks directory to persist output outside the container
+      # Path is relative to the docker-compose.yml file location
+      - ./tasks:/app/tasks
+      # Optional: Mount .env file if you create one in backend/
+      # - ./.env:/app/.env
+    # Required for Playwright/Chrome shared memory access
+    shm_size: '2gb'
+    # Allow container to resolve host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Restart policy
+    restart: unless-stopped

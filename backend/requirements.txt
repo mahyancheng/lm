@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-browser-use
-playwright
-ollama
-python-dotenv
-pyperclip==1.9.0 # For potential clipboard actions (can be removed if not used)
-json-repair
-# Removed Gradio and MainContentExtractor as they aren't used in this core backendpip ins

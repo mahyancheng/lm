@@ -51,6 +51,7 @@ export {
   recentFailedBridges,
   rescueQuartersRunning,
   chronicallyRescued,
+  isWoundUp,
 } from './distress';
 export type { AdministrationCause } from './distress';
 export { applyNpcDefaults, bidTarget } from './npc';

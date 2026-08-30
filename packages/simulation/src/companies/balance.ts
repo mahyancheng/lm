@@ -373,8 +373,16 @@ export const BRIDGE_MAX_DILUTION = 0.75;
 /** Consecutive failed rescues after which a company is wound up. */
 export const INSOLVENCY_FAILED_BRIDGES = 3;
 /**
- * Consecutive quarters of rescue financing after which a company is wound up
- * even though every one of those rescues cleared.
+ * Quarters of continuous rescue financing after which a company is wound up even
+ * though every one of those rescues cleared.
+ *
+ * The same window does both jobs, which is what keeps the rule coherent: a
+ * company that goes this long without needing rescue capital has got out and its
+ * episode ends, and a company this long inside one never will. A bridge is sized
+ * to cover several quarters (`BRIDGE_ROUND_COVER_MULTIPLE`), so the measure is
+ * the span of the episode rather than a count of the quarters a bridge was
+ * signed in — a continuously financed company signs one every few quarters, not
+ * every quarter.
  *
  * `INSOLVENCY_FAILED_BRIDGES` only fires when nobody will fund the company. A
  * zombie whose bridges keep clearing never trips it and lives forever on other

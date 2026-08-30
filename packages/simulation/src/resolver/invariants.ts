@@ -170,12 +170,18 @@ function checkFinancialIntegrity(draft: SessionState, opening: SessionState, eve
     const capital = moved === undefined ? 0 : moved.capital;
     // A stake sold realises its gain into equity: cash in, carrying value out.
     // The carrying value is not on the row, but the investments line moved by
-    // exactly it, net of what the quarter's purchases added and of what an
-    // acquisition absorbed from the company it swallowed.
+    // exactly it, net of what the quarter's purchases added, of what an
+    // acquisition absorbed from the company it swallowed, and of what a wind-up
+    // swept into the estate — the last two having already been accounted for on
+    // their own rows.
     const trading =
       moved === undefined
         ? 0
-        : moved.sold - moved.bought + (company.balanceSheet.assets.investments - before.balanceSheet.assets.investments) - moved.absorbedInvestments;
+        : moved.sold -
+          moved.bought +
+          (company.balanceSheet.assets.investments - before.balanceSheet.assets.investments) -
+          moved.absorbedInvestments +
+          moved.woundUpInvestments;
 
     const expected = before.balanceSheet.equity + netIncome + capital + trading;
     const gap = company.balanceSheet.equity - expected;
@@ -206,6 +212,8 @@ interface EquityMovement {
   bought: number;
   sold: number;
   absorbedInvestments: number;
+  /** Carrying value the investments line lost to a wind-up rather than to a sale. */
+  woundUpInvestments: number;
   /** Whether the financial phase's own three rows were all read. */
   sawRevenue: boolean;
   sawCost: boolean;
@@ -243,6 +251,7 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
       bought: 0,
       sold: 0,
       absorbedInvestments: 0,
+      woundUpInvestments: 0,
       sawRevenue: false,
       sawCost: false,
       sawCashFlow: false,
@@ -314,8 +323,13 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
         // haircut and the creditors it cannot pay are released. The row states
         // that movement from its causes, so the reconstruction reads it like any
         // other declared flow — and a wind-up that moved equity by some other
-        // amount fails the gate.
-        if (event.payload.kind === 'administration') add(event, actor, 'equityMovementUsd', (value) => (actor.capital += value));
+        // amount fails the gate. The stakes it swept into the estate are stated
+        // too: the investments line falls, and without this the fall would be
+        // read a second time as a stake sold at a loss.
+        if (event.payload.kind === 'administration') {
+          add(event, actor, 'equityMovementUsd', (value) => (actor.capital += value));
+          add(event, actor, 'investmentsRealisedUsd', (value) => (actor.woundUpInvestments += value));
+        }
         break;
       default:
         break;

@@ -98,29 +98,54 @@ export function recentFailedBridges(draft: SessionState, companyId: string, quar
 /* -------------------------------------------------------------------------- */
 
 /**
- * Unbroken quarters, counting back from `quarter`, in which this company needed
- * rescue capital.
+ * How long this company has been living on rescue capital, in quarters, counting
+ * to `quarter`. Zero when it is not in a rescue episode at all.
  *
- * A quarter counts when a forced bridge is *dated* in it, which is exactly the
- * two things the phase does to one: `queueBridgeRound` stamps the quarter it
- * opened the round in, and `closeBridge`/`failBridge` restamp it with the
- * quarter it settled. So a company that opens a bridge every quarter and settles
- * it the next carries one dated round per quarter for as long as it is being
- * financed, and the run breaks the first quarter it pays its own way.
+ * The dates come from the rounds themselves, which carry exactly the two things
+ * the phase does to one: `queueBridgeRound` stamps the quarter it opened the
+ * round in, and `closeBridge`/`failBridge` restamp it with the quarter it
+ * settled. What is measured is the *span* of the current episode rather than a
+ * count of the quarters a bridge was signed in, because a bridge is deliberately
+ * sized to cover several quarters: a company kept alive continuously signs one
+ * every few quarters, so counting signatures would show a run of two and no
+ * zombie would ever trip the trigger.
+ *
+ * One window does both jobs, which is what makes the rule coherent:
+ * `CHRONIC_DISTRESS_QUARTERS` without needing rescue capital is long enough to
+ * say the company got out, and it ends the episode; `CHRONIC_DISTRESS_QUARTERS`
+ * spent inside one is long enough to say it never will.
  *
  * Derived from the rounds rather than counted into a field on the company: there
  * is no per-company counter in `SessionState` to keep in step with the ledger,
  * and a figure reconstructed from the rounds cannot drift away from them.
  */
 export function rescueQuartersRunning(draft: SessionState, companyId: string, quarter: number): number {
-  const rescued = new Set<number>();
+  const dates: number[] = [];
   for (const round of draft.fundingRounds) {
-    if (round.companyId !== companyId || round.stage !== 'bridge') continue;
-    rescued.add(round.closedQuarter);
+    if (round.companyId !== companyId || round.stage !== 'bridge' || round.closedQuarter > quarter) continue;
+    if (!dates.includes(round.closedQuarter)) dates.push(round.closedQuarter);
   }
-  let run = 0;
-  while (run < CHRONIC_DISTRESS_QUARTERS && rescued.has(quarter - run)) run += 1;
-  return run;
+  dates.sort((a, b) => b - a);
+
+  const latest = dates[0];
+  // Nothing recent enough to be what the company is currently living on.
+  if (latest === undefined || quarter - latest >= CHRONIC_DISTRESS_QUARTERS) return 0;
+
+  let earliest = latest;
+  for (const date of dates) {
+    if (earliest - date >= CHRONIC_DISTRESS_QUARTERS) break;
+    earliest = date;
+  }
+  return quarter - earliest + 1;
+}
+
+/**
+ * A husk: a company administration has already been through. It keeps its books
+ * and can still be bought, but there is nothing left to wind up, so neither
+ * trigger may reach it again.
+ */
+export function isWoundUp(company: Company): boolean {
+  return totalHeadcount(company) === 0 && !company.products.some((product) => product.isActive);
 }
 
 /**
@@ -400,6 +425,11 @@ export function enterAdministration(
   const impairment = money(
     sheet.assets.goodwill + (sheet.assets.ppe + sheet.assets.receivables + sheet.assets.investments) * (1 - ADMINISTRATION_ASSET_RECOVERY),
   );
+  // The stakes the company held go into the estate with everything else. The
+  // carrying value that leaves the investments line is stated on the row below,
+  // because `financial_integrity` otherwise reads a fall in that line as a stake
+  // sold at a loss and charges the shareholders for the same money twice.
+  const investmentsRealised = sheet.assets.investments;
   const realisable =
     sheet.assets.cash +
     (sheet.assets.ppe + sheet.assets.receivables + sheet.assets.investments) * ADMINISTRATION_ASSET_RECOVERY;
@@ -465,6 +495,10 @@ export function enterAdministration(
       staffReleased: released,
       creditorsWrittenOffUsd: writtenOff,
       assetsImpairedUsd: impairment,
+      // The carrying value the investments line lost to the estate. Read by
+      // `financial_integrity`, which would otherwise count it a second time as a
+      // stake sold.
+      investmentsRealisedUsd: money(investmentsRealised),
       // The equity flow the wind-up caused, stated from its two causes rather
       // than read back off the sheet: creditors released, less the value the
       // estate lost being realised. `financial_integrity` adds this to the
@@ -505,7 +539,6 @@ export function resolveDistress(draft: SessionState, ctx: ResolverContext): void
     const open = draft.fundingRounds
       .filter((r) => r.companyId === company.id && r.stage === 'bridge' && r.status === 'open' && r.closedQuarter < ctx.quarter)
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    if (open.length === 0) continue;
 
     for (const round of open) {
       const target = issuanceTargetFor(draft, company);
@@ -528,6 +561,15 @@ export function resolveDistress(draft: SessionState, ctx: ResolverContext): void
       }
     }
 
+    // A husk has already been through administration: no staff, no live product,
+    // nothing left to realise. Its bridges still settle above — that is how its
+    // creditors and its cap table stay honest — but it is never wound up twice.
+    if (isWoundUp(company)) continue;
+
+    // Both triggers are read for every company, not only for one that had a
+    // bridge to settle this quarter: a rescue is sized to last several quarters,
+    // so the quarter a company's episode finally runs too long is usually a
+    // quarter in which nothing was signed.
     if (recentFailedBridges(draft, company.id, ctx.quarter).length >= INSOLVENCY_FAILED_BRIDGES) {
       enterAdministration(draft, ctx, company, 'failed_rescues');
     } else if (chronicallyRescued(draft, company, ctx.quarter)) {

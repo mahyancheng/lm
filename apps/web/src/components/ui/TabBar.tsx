@@ -25,7 +25,11 @@ export interface TabBarProps {
 export function TabBar({ tabs, value, onChange, variant = 'underline', className, ariaLabel }: TabBarProps): React.JSX.Element {
   if (variant === 'segmented') {
     return (
-      <div role="tablist" aria-label={ariaLabel} className={cx('no-scrollbar flex gap-0.5 overflow-x-auto rounded-[4px] bg-base p-0.5', className)}>
+      <div
+        role="tablist"
+        aria-label={ariaLabel}
+        className={cx('no-scrollbar flex gap-0.5 overflow-x-auto rounded-chip bg-raised p-1', className)}
+      >
         {tabs.map((tab) => {
           const active = tab.id === value;
           return (
@@ -36,9 +40,11 @@ export function TabBar({ tabs, value, onChange, variant = 'underline', className
               aria-selected={active}
               disabled={tab.disabled}
               onClick={() => onChange(tab.id)}
+              // The active segment RISES out of the track: on a light theme the
+              // selected pill is the white one, not the tinted one.
               className={cx(
-                'flex items-center gap-1.5 rounded-[3px] px-2.5 py-1 text-[11px] whitespace-nowrap transition-colors',
-                active ? 'bg-raised text-ink' : 'text-ink-faint hover:text-ink-dim',
+                'flex items-center gap-1.5 rounded-chip px-3 py-1.5 text-[11px] font-semibold whitespace-nowrap transition-colors',
+                active ? 'bg-panel text-ink shadow-card' : 'text-ink-faint hover:text-ink-dim',
                 tab.disabled === true ? 'cursor-not-allowed opacity-40' : '',
               )}
             >
@@ -64,8 +70,8 @@ export function TabBar({ tabs, value, onChange, variant = 'underline', className
             disabled={tab.disabled}
             onClick={() => onChange(tab.id)}
             className={cx(
-              '-mb-px flex items-center gap-1.5 border-b-2 px-0.5 pb-2 text-[12px] whitespace-nowrap transition-colors',
-              active ? 'border-brand text-ink' : 'border-transparent text-ink-faint hover:text-ink-dim',
+              '-mb-px flex items-center gap-1.5 border-b-[3px] px-0.5 pt-1 pb-2.5 text-[12px] font-semibold whitespace-nowrap transition-colors',
+              active ? 'border-brand text-brand' : 'border-transparent text-ink-faint hover:text-ink-dim',
               tab.disabled === true ? 'cursor-not-allowed opacity-40' : '',
             )}
           >

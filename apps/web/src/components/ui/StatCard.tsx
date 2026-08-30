@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import type { DeltaFormat } from '@frontier/shared';
 import { DeltaBadge } from './DeltaBadge';
 import { Sparkline } from './Charts';
-import { cx, type Tone } from './tokens';
+import { TONE_CHIP, cx, type Tone } from './tokens';
 
 export interface StatCardProps {
   /** Small-caps label, e.g. "Market Cap". */
@@ -25,6 +25,13 @@ export interface StatCardProps {
   readonly tone?: Tone;
   /** One line under the figure: the working, the source, the caveat. */
   readonly hint?: ReactNode;
+  /**
+   * A flat vector glyph in a tinted rounded square, left of the label.
+   * Optional and additive: a card without one keeps its old shape.
+   */
+  readonly icon?: ReactNode;
+  /** Tint for the icon chip. Defaults to the card's `tone`, then neutral. */
+  readonly iconTone?: Tone;
   /** Makes the whole card a link to the screen that explains this number. */
   readonly href?: string;
   readonly onClick?: () => void;
@@ -35,7 +42,8 @@ export interface StatCardProps {
  * One figure with its change and, where it helps, its recent shape.
  *
  * Every derived number should be able to open its working: pass `href` to the
- * screen that decomposes it.
+ * screen that decomposes it. The figure keeps the tabular monospace face —
+ * money stays legible however friendly the card around it gets.
  */
 export function StatCard({
   label,
@@ -47,6 +55,8 @@ export function StatCard({
   spark,
   tone,
   hint,
+  icon,
+  iconTone,
   href,
   onClick,
   className,
@@ -56,25 +66,43 @@ export function StatCard({
   const body = (
     <>
       <div className="flex items-start justify-between gap-2">
-        <span className="label-caps truncate">{label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {icon !== undefined ? (
+            <span
+              aria-hidden="true"
+              className={cx(
+                'flex size-6 shrink-0 items-center justify-center rounded-chip border text-[12px] leading-none',
+                TONE_CHIP[iconTone ?? tone ?? 'neutral'],
+              )}
+            >
+              {icon}
+            </span>
+          ) : null}
+          <span className="label-caps truncate">{label}</span>
+        </span>
         {delta !== undefined ? <DeltaBadge value={delta} format={deltaFormat} invert={deltaInvert} bare /> : null}
       </div>
-      <div className="mt-1.5 flex items-end justify-between gap-2">
+      <div className="mt-2 flex items-end justify-between gap-2">
         <div className="min-w-0">
-          <span className={cx('figure text-[19px] leading-none font-medium', tone === undefined ? 'text-ink' : `tone-${tone}`)}>
+          <span
+            className={cx(
+              'figure animate-count-up inline-block text-[21px] leading-none font-semibold',
+              tone === undefined ? 'text-ink' : `tone-${tone}`,
+            )}
+          >
             {value}
           </span>
           {unit !== undefined ? <span className="ml-1 text-[11px] text-ink-faint">{unit}</span> : null}
         </div>
-        {spark !== undefined && spark.length > 1 ? <Sparkline values={spark} width={72} height={22} /> : null}
+        {spark !== undefined && spark.length > 1 ? <Sparkline values={spark} width={72} height={24} /> : null}
       </div>
       {hint !== undefined ? <p className="mt-1.5 truncate text-[10px] text-ink-faint">{hint}</p> : null}
     </>
   );
 
   const classes = cx(
-    'panel-surface block min-w-0 px-3 py-2.5 text-left',
-    interactive ? 'transition-colors hover:border-hair-strong hover:bg-raised' : '',
+    'panel-surface animate-pop-in block min-w-0 px-3.5 py-3 text-left',
+    interactive ? 'hover-lift press-pop hover:border-hair-strong' : '',
     className,
   );
 

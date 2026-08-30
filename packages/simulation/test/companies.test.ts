@@ -26,9 +26,12 @@ import type {
 import { SessionStateSchema, balanceSheetReconciles } from '@frontier/contracts';
 import {
   applyNpcDefaults,
+  CAPACITY_BASE_LOSS_CEILING,
+  CHRONIC_DISTRESS_QUARTERS,
   poachProbability,
   priceFactor,
   recomputeMetrics,
+  RESERVATION_RENEWAL_QUARTERS,
   resolveFinancials,
   resolveHiring,
   resolveProducts,
@@ -835,6 +838,39 @@ describe('serving capacity', () => {
     expect(orbit?.payload['capacityConstrained']).toBe(false);
   });
 
+  it('drains rather than empties the base of a company with no serving compute at all', () => {
+    // The capacity cap used to multiply the whole book, so a company at zero
+    // serving compute lost every customer it had — retained accounts included —
+    // in a single quarter. A shortage may now cost at most
+    // `CAPACITY_BASE_LOSS_CEILING` of the retained base per quarter, on top of
+    // ordinary churn, and takes every unit of new demand it cannot serve.
+    const state = makeState();
+    const target = company(state, 'cmp_orbit');
+    const before = target.products[0]?.activeCustomers ?? 0;
+    target.compute.ownedAccelerators = 0;
+    target.compute.reservedAccelerators = 0;
+    target.compute.reservationExpiryQuarter = null;
+    target.compute.cloudSpendQuarterly = 0;
+
+    const customers: number[] = [];
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 4; quarter += 1) {
+      runQuarter(state, quarter, '424242');
+      const now = company(state, 'cmp_orbit');
+      expect(now.compute.ownedAccelerators + now.compute.reservedAccelerators + now.compute.cloudSpendQuarterly).toBe(0);
+      customers.push(now.products[0]?.activeCustomers ?? 0);
+    }
+
+    // One quarter of total capacity failure costs a bounded share of the base.
+    const afterOne = customers[0] ?? 0;
+    expect(afterOne / Math.max(1, before)).toBeGreaterThanOrEqual(1 - CAPACITY_BASE_LOSS_CEILING - 0.05);
+    // But it is a collapse: every quarter is worse than the last, and the book
+    // is a fraction of what it was inside a year.
+    for (let i = 1; i < customers.length; i += 1) {
+      expect(customers[i] ?? 0).toBeLessThan(customers[i - 1] ?? 0);
+    }
+    expect(customers[customers.length - 1] ?? 0).toBeLessThan(before * 0.25);
+  });
+
   it('lifts served customers when the same company is given more compute', () => {
     const starved = makeState();
     const fed = makeState();
@@ -1213,6 +1249,97 @@ describe('the compute pillar', () => {
     expect(events.some((event) => event.payload['kind'] === 'compute_reservation_failed')).toBe(true);
   });
 
+  it('renews an NPC company reservation when its term runs out, holding its serving capacity', () => {
+    // Orbit's seeded 34,000 units carry an expiry. Nothing used to read it, so
+    // the block ran forever; a bare expiry rule would instead empty the
+    // datacentre the quarter the seeded term ended. An NPC company that is still
+    // serving customers out of the block re-signs it and its capacity holds.
+    const state = makeState();
+    const seeded = company(state, 'cmp_orbit').compute;
+    const reserved = seeded.reservedAccelerators;
+    const expiry = seeded.reservationExpiryQuarter;
+    expect([reserved, expiry]).toEqual([34_000, 5]);
+
+    const customers: number[] = [];
+    let renewedAt: number | null = null;
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 6; quarter += 1) {
+      const { events } = runQuarter(state, quarter, '424242');
+      if (events.some((event) => event.actorId === 'cmp_orbit' && event.payload['kind'] === 'compute_reservation_renewed')) {
+        renewedAt = quarter;
+      }
+      const now = company(state, 'cmp_orbit');
+      expect(now.compute.reservedAccelerators).toBe(reserved);
+      customers.push(now.products[0]?.activeCustomers ?? 0);
+    }
+
+    expect(renewedAt).toBe(expiry);
+    const after = company(state, 'cmp_orbit').compute;
+    expect(after.reservationExpiryQuarter).toBe((expiry ?? 0) + RESERVATION_RENEWAL_QUARTERS);
+    // Capacity held, so the book did not fall off the quarter the term ended.
+    const atExpiry = customers[(expiry ?? 1) - START_QUARTER] ?? 0;
+    const beforeExpiry = customers[(expiry ?? 1) - START_QUARTER - 1] ?? 0;
+    expect(atExpiry).toBeGreaterThan(beforeExpiry * 0.9);
+  });
+
+  it('releases the reservation of a company that cannot cover the renewal, and its capacity falls', () => {
+    const state = makeState();
+    const target = company(state, 'cmp_orbit');
+    target.compute.reservationExpiryQuarter = START_QUARTER;
+    starve(state, 'cmp_orbit');
+
+    const { events, lines } = runQuarter(state, START_QUARTER, '424242');
+    const after = company(state, 'cmp_orbit').compute;
+    expect(after.reservedAccelerators).toBe(0);
+    expect(after.reservationExpiryQuarter).toBeNull();
+
+    const expired = events.find((event) => event.actorId === 'cmp_orbit' && event.payload['kind'] === 'compute_reservation_expired');
+    expect(expired?.payload['reason']).toBe('insufficient_cash');
+    expect(expired?.payload['units']).toBe(34_000);
+    const line = lines.find((candidate) => candidate.subjectId === 'cmp_orbit' && candidate.text.includes('expired'));
+    expect(line?.refEventIds ?? []).toContain(expired?.eventId);
+    // Losing the block is a capacity event, not an accounting one: the quarter
+    // it lapses the company is short of serving capacity.
+    expect(events.some((event) => event.actorId === 'cmp_orbit' && event.payload['capacityConstrained'] === true)).toBe(true);
+  });
+
+  it('warns a player the quarter before their reservation expires and leaves the renewal to them', () => {
+    const lapsing = makeState();
+    // Nexus is the player's company in this fixture: its reservation is a
+    // decision, so it is told in time to make it rather than renewed for it.
+    company(lapsing, 'cmp_nexus').compute.reservationExpiryQuarter = START_QUARTER + 1;
+    const held = company(lapsing, 'cmp_nexus').compute.reservedAccelerators;
+
+    const { events, lines } = runQuarter(lapsing, START_QUARTER, '424242');
+    const warning = lines.find((line) => line.subjectId === 'cmp_nexus' && line.text.includes('expires next quarter'));
+    expect(warning).toBeDefined();
+    const ids = new Set(events.map((event) => event.eventId));
+    expect(warning?.refEventIds ?? []).not.toHaveLength(0);
+    for (const ref of warning?.refEventIds ?? []) expect(ids.has(ref)).toBe(true);
+    expect(events.some((event) => event.actorId === 'cmp_nexus' && event.payload['kind'] === 'compute_reservation_expiring')).toBe(true);
+    // Warned, not acted upon.
+    expect(company(lapsing, 'cmp_nexus').compute.reservedAccelerators).toBe(held);
+
+    // A player who does nothing loses the block the quarter it expires.
+    const renewing = makeState();
+    company(renewing, 'cmp_nexus').compute.reservationExpiryQuarter = START_QUARTER + 1;
+    runQuarter(renewing, START_QUARTER, '424242');
+    runQuarter(lapsing, START_QUARTER + 1, '424242');
+    expect(company(lapsing, 'cmp_nexus').compute.reservedAccelerators).toBe(0);
+
+    // A player who reserves again keeps it: renewal is an action, not a rule.
+    renewing.pendingActions.push(
+      action(renewing, START_QUARTER + 1, 0, 'cmp_nexus', 'chr_maya_chen', {
+        type: 'reserve_compute',
+        units: 10_000,
+        quarters: 4,
+        maxPricePerUnitUsd: 10_000,
+      }),
+    );
+    runQuarter(renewing, START_QUARTER + 1, '424242');
+    expect(company(renewing, 'cmp_nexus').compute.reservedAccelerators).toBe(held + 10_000);
+    expect(company(renewing, 'cmp_nexus').compute.reservationExpiryQuarter).toBe(START_QUARTER + 5);
+  });
+
   it('moves cloud spend and the training split, and the split changes what can be served', () => {
     const serving = makeState();
     const training = makeState();
@@ -1411,6 +1538,46 @@ describe('insolvency', () => {
     expect(wound.isActive).toBe(true);
     // Its people are on the market.
     expect(state.characters.some((character) => character.companyId === 'cmp_vector')).toBe(false);
+  });
+
+  it('winds up a company whose rescues all clear but which never becomes a business', () => {
+    // The zombie the failed-bridge trigger cannot see. Every bridge this company
+    // forces is funded, so it never takes a strike; without the chronic trigger
+    // it runs on other people's money on zero revenue for ever.
+    const state = makeState();
+    // Authorised deep enough that no rescue can fail for want of shares: this
+    // company must die of chronic distress, not of a bridge nobody could price.
+    withCapTable(state, 'cmp_vector', 300_000_000, 400_000_000_000);
+    const zombie = company(state, 'cmp_vector');
+    for (const product of zombie.products) product.activeCustomers = 0;
+    zombie.employees = { ...zombie.employees, engineers: 60, researchers: 0, sales: 0, ops: 0, execs: 4, openRoles: 0 };
+    zombie.compute.cloudSpendQuarterly = 0;
+    starve(state, 'cmp_vector');
+
+    let woundAt: number | null = null;
+    let cause: unknown = null;
+    const rescueQuarters: number[] = [];
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 8 && woundAt === null; quarter += 1) {
+      const { events } = runQuarter(state, quarter, '424242');
+      // Nobody ever refused it: the failed-bridge trigger never comes into it.
+      expect(events.filter((event) => event.type === 'funding_round_failed' && event.actorId === 'cmp_vector')).toEqual([]);
+      if (events.some((event) => event.type === 'funding_round_closed' && event.actorId === 'cmp_vector')) rescueQuarters.push(quarter);
+      const administration = events.find((event) => event.actorId === 'cmp_vector' && event.payload['kind'] === 'administration');
+      if (administration !== undefined) {
+        woundAt = quarter;
+        cause = administration.payload['cause'];
+      }
+    }
+
+    expect(`wound up at ${String(woundAt)} because ${String(cause)}`).toBe(`wound up at ${String(woundAt)} because chronic_distress`);
+    expect(woundAt).not.toBeNull();
+    expect(rescueQuarters.length).toBeGreaterThanOrEqual(CHRONIC_DISTRESS_QUARTERS - 1);
+
+    const wound = company(state, 'cmp_vector');
+    expect(wound.products.every((product) => !product.isActive)).toBe(true);
+    expect(wound.employees.engineers + wound.employees.execs).toBe(0);
+    expect(wound.balanceSheet.liabilities.payables).toBe(0);
+    expect(balanceSheetReconciles(wound.balanceSheet)).toBe(true);
   });
 
   it('leaves a rescued company alone', () => {

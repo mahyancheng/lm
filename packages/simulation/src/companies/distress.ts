@@ -16,6 +16,17 @@
  * after three consecutive failed bridges -> administration
  * ```
  *
+ * ## Two ways to die
+ *
+ * The failed-bridge count is the *sudden* death: nobody will fund the company,
+ * three times running, and it is wound up. On its own it made the opposite case
+ * immortal. A company with no revenue whose bridges keep *clearing* never takes
+ * a strike, so it could be rescued forever on somebody else's money and never
+ * fail — the zombie the playtest found. `chronicallyRescued` is the slow death
+ * beside it: six quarters in which every quarter needed rescue capital while
+ * revenue never came near the wage bill is not a company having a bad year, it
+ * is a payroll being financed, and it goes into the same administration.
+ *
  * Why it lives here rather than in `capital_resolution`: the bridge is created
  * in phase eleven and capital is phase six, so a bridge queued this quarter
  * cannot be funded until the next one anyway. Settling it at the start of the
@@ -44,6 +55,8 @@ import {
   ADMINISTRATION_ASSET_RECOVERY,
   BRIDGE_APPETITE_FLOOR,
   BRIDGE_MAX_DILUTION,
+  CHRONIC_DISTRESS_QUARTERS,
+  CHRONIC_DISTRESS_REVENUE_FLOOR,
   INSOLVENCY_FAILED_BRIDGES,
   TALENT_RELEASE_SUPPLY_LIFT,
 } from './balance';
@@ -78,6 +91,57 @@ export function recentFailedBridges(draft: SessionState, companyId: string, quar
       round.status === 'failed' &&
       round.closedQuarter > quarter - INSOLVENCY_FAILED_BRIDGES,
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Chronic distress                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Unbroken quarters, counting back from `quarter`, in which this company needed
+ * rescue capital.
+ *
+ * A quarter counts when a forced bridge is *dated* in it, which is exactly the
+ * two things the phase does to one: `queueBridgeRound` stamps the quarter it
+ * opened the round in, and `closeBridge`/`failBridge` restamp it with the
+ * quarter it settled. So a company that opens a bridge every quarter and settles
+ * it the next carries one dated round per quarter for as long as it is being
+ * financed, and the run breaks the first quarter it pays its own way.
+ *
+ * Derived from the rounds rather than counted into a field on the company: there
+ * is no per-company counter in `SessionState` to keep in step with the ledger,
+ * and a figure reconstructed from the rounds cannot drift away from them.
+ */
+export function rescueQuartersRunning(draft: SessionState, companyId: string, quarter: number): number {
+  const rescued = new Set<number>();
+  for (const round of draft.fundingRounds) {
+    if (round.companyId !== companyId || round.stage !== 'bridge') continue;
+    rescued.add(round.closedQuarter);
+  }
+  let run = 0;
+  while (run < CHRONIC_DISTRESS_QUARTERS && rescued.has(quarter - run)) run += 1;
+  return run;
+}
+
+/**
+ * Whether the company is a zombie: rescued quarter after quarter while its
+ * revenue never approached its own wage bill.
+ *
+ * Both halves matter. The run of rescues says the company has not paid for
+ * itself in a year and a half; the revenue test says there is no business under
+ * the rescues to recover — a company earning less than
+ * `CHRONIC_DISTRESS_REVENUE_FLOOR` of its payroll is not trading its way out of
+ * anything. A real business having a terrible year clears the second test and is
+ * financed rather than wound up.
+ *
+ * The wage bill also identifies a live company: a husk already in administration
+ * has no payroll, so it can never be wound up twice by this route.
+ */
+export function chronicallyRescued(draft: SessionState, company: Company, quarter: number): boolean {
+  const payroll = company.financials.payroll;
+  if (payroll <= 0) return false;
+  if (company.financials.revenueQuarterly >= payroll * CHRONIC_DISTRESS_REVENUE_FLOOR) return false;
+  return rescueQuartersRunning(draft, company.id, quarter) >= CHRONIC_DISTRESS_QUARTERS;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -216,12 +280,30 @@ function failBridge(draft: SessionState, ctx: ResolverContext, company: Company,
 /*  Administration                                                             */
 /* -------------------------------------------------------------------------- */
 
+/** Why a company was wound up. Both routes take the same path through the estate. */
+export type AdministrationCause = 'failed_rescues' | 'chronic_distress';
+
 /**
  * Wind the company down: products off, people out, compute surrendered, estate
  * realised and creditors paid what there is. Every movement is double entry, so
  * the closing sheet still reconciles.
+ *
+ * `cause` changes what the row and the report line say and nothing else: a
+ * company nobody would rescue and a company everybody kept rescuing are wound up
+ * by the same code, through the same estate, onto the same ledger row.
  */
-export function enterAdministration(draft: SessionState, ctx: ResolverContext, company: Company): void {
+export function enterAdministration(
+  draft: SessionState,
+  ctx: ResolverContext,
+  company: Company,
+  cause: AdministrationCause = 'failed_rescues',
+): void {
+  // Read before the wind-up zeroes them: the row explains why this company died.
+  const lastRevenue = company.financials.revenueQuarterly;
+  const lastPayroll = company.financials.payroll;
+  const rescuedQuarters = rescueQuartersRunning(draft, company.id, ctx.quarter);
+  const failedBridges = recentFailedBridges(draft, company.id, ctx.quarter).length;
+
   /* --- products --------------------------------------------------------- */
   for (const product of company.products) {
     if (!product.isActive) continue;
@@ -375,7 +457,11 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
     null,
     {
       kind: 'administration',
-      failedBridges: INSOLVENCY_FAILED_BRIDGES,
+      cause,
+      failedBridges,
+      rescuedQuarters,
+      lastRevenueUsd: money(lastRevenue),
+      lastPayrollUsd: money(lastPayroll),
       staffReleased: released,
       creditorsWrittenOffUsd: writtenOff,
       assetsImpairedUsd: impairment,
@@ -389,9 +475,13 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
     },
     'public',
   );
+  const because =
+    cause === 'failed_rescues'
+      ? `after ${failedBridges} failed rescues`
+      : `after ${rescuedQuarters} quarters financed by rescue capital on ${usdLabel(lastRevenue)} of revenue against a ${usdLabel(lastPayroll)} wage bill`;
   ctx.log({
     phase: 'financial_resolution',
-    text: `${company.name} went into administration after ${INSOLVENCY_FAILED_BRIDGES} failed rescues: its products are sunset, ${released} people are on the market, and ${usdLabel(writtenOff)} of obligations were written off. What remains can be bought.`,
+    text: `${company.name} went into administration ${because}: its products are sunset, ${released} people are on the market, and ${usdLabel(writtenOff)} of obligations were written off. What remains can be bought.`,
     deltaLabel: 'administration',
     refEventIds: [eventId],
     tone: 'negative',
@@ -405,7 +495,8 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
 
 /**
  * Settle every forced bridge left open by an earlier quarter, then wind up the
- * companies that could not be rescued. Called first thing in
+ * companies that could not be rescued — and the ones that could, over and over,
+ * without ever becoming businesses. Called first thing in
  * `financial_resolution`, so the rescue cash is on the balance sheet before this
  * quarter's obligations are settled against it.
  */
@@ -438,7 +529,11 @@ export function resolveDistress(draft: SessionState, ctx: ResolverContext): void
     }
 
     if (recentFailedBridges(draft, company.id, ctx.quarter).length >= INSOLVENCY_FAILED_BRIDGES) {
-      enterAdministration(draft, ctx, company);
+      enterAdministration(draft, ctx, company, 'failed_rescues');
+    } else if (chronicallyRescued(draft, company, ctx.quarter)) {
+      // Every rescue cleared and the company is still not a business. Nobody
+      // refuses it money, so nothing else in this file would ever stop it.
+      enterAdministration(draft, ctx, company, 'chronic_distress');
     }
   }
 }

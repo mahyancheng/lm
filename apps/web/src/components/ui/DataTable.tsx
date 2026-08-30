@@ -143,6 +143,10 @@ export function DataTable<T>({
               <tr
                 key={rowKey(row, index)}
                 data-clickable={clickable ? 'true' : 'false'}
+                // The highlight paints the cells, not the row: zebra striping
+                // sets a `td` background, and a `tr` background would sit under
+                // it. `.data-table` orders stripe < highlight < hover.
+                data-highlight={isHighlighted?.(row) === true ? 'true' : undefined}
                 role={clickable ? (href !== null ? 'link' : 'button') : undefined}
                 tabIndex={clickable ? 0 : undefined}
                 onClick={clickable ? activate : undefined}
@@ -156,7 +160,6 @@ export function DataTable<T>({
                       }
                     : undefined
                 }
-                className={isHighlighted?.(row) === true ? 'bg-brand-wash/40' : undefined}
               >
                 {columns.map((column) => (
                   <td

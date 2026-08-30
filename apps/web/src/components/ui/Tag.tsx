@@ -19,8 +19,8 @@ export function Tag({ children, tone = 'neutral', size = 'sm', dot = false, titl
     <span
       title={title}
       className={cx(
-        'inline-flex items-center gap-1 rounded-[3px] border whitespace-nowrap',
-        size === 'sm' ? 'px-1.5 py-px text-[10px] leading-[16px]' : 'px-2 py-0.5 text-[11px]',
+        'inline-flex items-center gap-1 rounded-pill border font-semibold whitespace-nowrap',
+        size === 'sm' ? 'px-2 py-px text-[10px] leading-[17px]' : 'px-2.5 py-0.5 text-[11px]',
         TONE_CHIP[tone],
         className,
       )}
@@ -40,7 +40,7 @@ export function AiLabel({ className }: { readonly className?: string }): React.J
     <span
       title="Written by an AI-controlled character."
       className={cx(
-        'inline-flex items-center rounded-[3px] border border-brand/30 bg-brand-wash px-1 py-px text-[9px] font-semibold tracking-[0.1em] text-brand uppercase',
+        'inline-flex items-center rounded-pill border border-brand/25 bg-brand-wash px-1.5 py-px text-[9px] font-bold tracking-[0.1em] text-brand uppercase',
         className,
       )}
     >

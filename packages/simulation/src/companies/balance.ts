@@ -100,6 +100,23 @@ export const REPUTATION_CHURN_SENSITIVITY = 0.05;
 /** Extra churn suffered when demand had to be turned away for lack of capacity. */
 export const CAPACITY_SHORTFALL_CHURN = 0.12;
 
+/**
+ * Most of the retained base a capacity shortage may take in a single quarter,
+ * reached at zero serving capacity.
+ *
+ * Capacity still rations *new* demand exactly: what a company cannot serve it
+ * does not sell. The installed base is not rationed the same way. Customers sit
+ * behind contracts, integrations and habit; a supplier that runs short degrades
+ * — rate limits, queues, brownouts — and loses the share of them that will not
+ * put up with it, over quarters. Without this ceiling the capacity ratio
+ * multiplies the whole book, so a company that lost its compute lost every
+ * customer it had in one quarter, retained accounts included, and no business
+ * behaves like that. At the value below a company at zero serving capacity
+ * keeps roughly three fifths of its base each quarter: a collapse that empties
+ * the book in about a year rather than an evaporation.
+ */
+export const CAPACITY_BASE_LOSS_CEILING = 0.4;
+
 /** Largest multiplicative lift marketing can buy, at infinite spend. */
 export const MARKETING_MAX_LIFT = 0.55;
 /**
@@ -172,6 +189,25 @@ export const BASELINE_COMPUTE_INTENSITY = 0.5;
 export const CLOUD_UNIT_COST_USD_PER_QUARTER = 2_600;
 /** Dollar cost of one reserved accelerator-equivalent for a quarter at reserved index 1.0. */
 export const RESERVED_UNIT_COST_USD_PER_QUARTER = 2_100;
+/**
+ * How many quarters an automatically renewed compute reservation runs for.
+ *
+ * A reservation is a term contract and the term ends. Nothing used to release
+ * one, so a seeded block was capacity a company held forever; expiring it
+ * without a renewal path is the opposite error, and would empty every seeded
+ * NPC datacentre the quarter its term ran out. So the term ends and an NPC-run
+ * company that still depends on the block re-signs for this long at the
+ * prevailing reserved price. A player decides for themselves, with a quarter's
+ * notice, through `reserve_compute`.
+ */
+export const RESERVATION_RENEWAL_QUARTERS = 4;
+/**
+ * Quarters of the renewed block's cost a company must hold in cash before an
+ * automatic renewal clears. Nobody re-signs a term contract with a counterparty
+ * that cannot show it can pay for the term; a company that cannot loses the
+ * capacity, and its serving falls with it.
+ */
+export const RESERVATION_RENEWAL_CASH_COVER_QUARTERS = 2;
 /** Energy cost per accelerator-equivalent per quarter at electricity index 1.0. */
 export const ENERGY_USD_PER_ACCELERATOR_QUARTER = 420;
 /** Quarterly depreciation rate applied to property, plant and equipment. */
@@ -336,6 +372,28 @@ export const BRIDGE_APPETITE_FLOOR = 0.35;
 export const BRIDGE_MAX_DILUTION = 0.75;
 /** Consecutive failed rescues after which a company is wound up. */
 export const INSOLVENCY_FAILED_BRIDGES = 3;
+/**
+ * Consecutive quarters of rescue financing after which a company is wound up
+ * even though every one of those rescues cleared.
+ *
+ * `INSOLVENCY_FAILED_BRIDGES` only fires when nobody will fund the company. A
+ * zombie whose bridges keep clearing never trips it and lives forever on other
+ * people's money, which made a business with no revenue immortal as long as
+ * somebody kept writing cheques. Six quarters — a year and a half in which
+ * every bill was met by a rescue rather than by trading — is where a company
+ * stops being run and starts being financed.
+ */
+export const CHRONIC_DISTRESS_QUARTERS = 6;
+/**
+ * Revenue, as a share of the wage bill, below which a company under rescue
+ * after rescue is not a business at all.
+ *
+ * A company earning less than roughly a third of its own payroll is not trading
+ * its way anywhere: it is a payroll with a story attached. Both this and
+ * `CHRONIC_DISTRESS_QUARTERS` must hold before administration, so a real
+ * business having a bad year is financed rather than wound up.
+ */
+export const CHRONIC_DISTRESS_REVENUE_FLOOR = 0.35;
 /** Share of book value the estate of a wound-up company realises. */
 export const ADMINISTRATION_ASSET_RECOVERY = 0.35;
 /**

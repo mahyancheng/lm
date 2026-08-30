@@ -45,7 +45,7 @@ export function Drawer({
 
   return (
     <div className="fixed inset-0 z-40">
-      <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-ink/25" onClick={onClose} aria-hidden="true" />
       <aside
         ref={dialogRef}
         role="dialog"
@@ -53,28 +53,28 @@ export function Drawer({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cx(
-          'absolute flex flex-col border-hair-strong bg-panel shadow-2xl shadow-black/60',
+          'animate-rise absolute flex flex-col border-hair bg-panel shadow-sheet',
           side === 'right'
             ? 'inset-y-0 right-0 w-full border-l sm:w-[var(--drawer-width)]'
-            : 'inset-x-0 bottom-0 max-h-[80dvh] rounded-t-[10px] border-t',
+            : 'inset-x-0 bottom-0 max-h-[80dvh] rounded-t-panel border-t',
           className,
         )}
         style={side === 'right' ? ({ ['--drawer-width' as string]: `${width}px` } as React.CSSProperties) : undefined}
       >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-4 py-3">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-5 py-3.5">
           <div className="min-w-0">
-            <h2 id={titleId} className="truncate text-[13px] font-semibold text-ink">
+            <h2 id={titleId} className="truncate text-[14px] font-bold text-ink">
               {title}
             </h2>
             {subtitle !== undefined ? <p className="mt-0.5 truncate text-[11px] text-ink-dim">{subtitle}</p> : null}
           </div>
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm" aria-label="Close">
+          <button type="button" onClick={onClose} className="btn btn-ghost tap-target -mr-1.5 shrink-0" aria-label="Close">
             ✕
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
         {footer !== undefined ? (
-          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hair bg-base/40 px-4 py-3">{footer}</footer>
+          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hair bg-raised/60 px-5 py-3.5">{footer}</footer>
         ) : null}
       </aside>
     </div>

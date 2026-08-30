@@ -24,7 +24,7 @@ export function ProgressBar({
   tone = 'brand',
   label,
   valueLabel,
-  height = 6,
+  height = 8,
   ghostValue,
   className,
 }: ProgressBarProps): React.JSX.Element {
@@ -39,11 +39,17 @@ export function ProgressBar({
           {valueLabel !== undefined ? <span className="figure text-[11px] text-ink-dim">{valueLabel}</span> : null}
         </div>
       ) : null}
-      <div className="relative w-full overflow-hidden rounded-full bg-raised" style={{ height }}>
+      <div className="relative w-full overflow-hidden rounded-pill bg-raised" style={{ height }}>
         {ghostPct !== null ? (
-          <div className="absolute inset-y-0 left-0 rounded-full opacity-30" style={{ width: `${ghostPct}%`, backgroundColor: TONE_VAR[tone] }} />
+          <div
+            className="absolute inset-y-0 left-0 rounded-pill opacity-25"
+            style={{ width: `${ghostPct}%`, backgroundColor: TONE_VAR[tone] }}
+          />
         ) : null}
-        <div className={cx('relative h-full rounded-full', TONE_FILL[tone])} style={{ width: `${pct}%` }} />
+        <div
+          className={cx('relative h-full rounded-pill transition-[width] duration-500 ease-out', TONE_FILL[tone])}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );

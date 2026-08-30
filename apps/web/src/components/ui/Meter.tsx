@@ -41,15 +41,20 @@ export function Meter({ value, label, tone, benchmark, benchmarkLabel, showValue
       {label !== undefined || showValue ? (
         <div className="mb-1 flex items-baseline justify-between gap-2">
           {label !== undefined ? <span className="label-caps-faint truncate">{label}</span> : <span />}
-          {showValue ? <span className={cx('figure text-[11px]', `tone-${resolved}`)}>{Math.round(clamped)}</span> : null}
+          {showValue ? (
+            <span className={cx('figure text-[11px] font-semibold', `tone-${resolved}`)}>{Math.round(clamped)}</span>
+          ) : null}
         </div>
       ) : null}
-      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-raised">
-        <div className="h-full rounded-full" style={{ width: `${clamped}%`, backgroundColor: TONE_VAR[resolved] }} />
+      <div className="relative h-2.5 w-full overflow-hidden rounded-pill bg-raised">
+        <div
+          className="h-full rounded-pill transition-[width] duration-500 ease-out"
+          style={{ width: `${clamped}%`, backgroundColor: TONE_VAR[resolved] }}
+        />
         {benchmark !== undefined ? (
           <span
             title={benchmarkLabel ?? `Benchmark ${Math.round(benchmark)}`}
-            className="absolute top-[-2px] h-[10px] w-px bg-ink-dim"
+            className="absolute top-[-2px] h-[14px] w-[2px] rounded-pill bg-ink-dim"
             style={{ left: `${Math.max(0, Math.min(100, benchmark))}%` }}
           />
         ) : null}

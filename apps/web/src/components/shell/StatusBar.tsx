@@ -33,13 +33,13 @@ function Reading({ label, value, tone = 'neutral', href, title, secondary = fals
       <span className={cx('figure block text-[12px] leading-tight', tone === 'neutral' ? 'text-ink' : `tone-${tone}`)}>{value}</span>
     </>
   );
-  const classes = cx('min-w-0 px-3', secondary ? 'hidden xl:block' : 'hidden sm:block');
+  const classes = cx('min-w-0 px-3 py-1', secondary ? 'hidden xl:block' : 'hidden sm:block');
   return href === undefined ? (
     <div className={classes} title={title}>
       {body}
     </div>
   ) : (
-    <Link href={href} className={cx(classes, 'rounded-[3px] hover:bg-raised')} title={title}>
+    <Link href={href} className={cx(classes, 'rounded-chip transition-colors hover:bg-raised')} title={title}>
       {body}
     </Link>
   );
@@ -74,24 +74,30 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
   return (
     <>
     <header
-      className="sticky top-0 z-20 flex items-center gap-1 border-b border-hair bg-panel/95 backdrop-blur"
+      className="sticky top-0 z-20 flex items-center gap-1 border-b border-hair bg-panel/92 backdrop-blur"
       style={{ height: 'var(--statusbar-height)' }}
     >
-      <button type="button" onClick={onOpenNav} className="btn btn-ghost btn-sm ml-2 lg:hidden" aria-expanded={navOpen} aria-label="Screens">
-        <span className="text-[14px] leading-none">{navOpen ? '✕' : '☰'}</span>
+      <button
+        type="button"
+        onClick={onOpenNav}
+        className="btn btn-ghost tap-target ml-1 lg:hidden"
+        aria-expanded={navOpen}
+        aria-label="Screens"
+      >
+        <span className="text-[15px] leading-none">{navOpen ? '✕' : '☰'}</span>
       </button>
 
-      <Link href="/command-centre" className="flex min-w-0 shrink-0 items-center gap-2.5 px-3">
-        <span className="figure flex size-6 shrink-0 items-center justify-center rounded-[3px] border border-brand/40 bg-brand-wash text-[9px] font-semibold text-brand">
+      <Link href="/command-centre" className="flex min-w-0 shrink-0 items-center gap-2.5 rounded-chip px-3 py-1 hover:bg-raised">
+        <span className="figure flex size-7 shrink-0 items-center justify-center rounded-chip bg-brand-strong text-[10px] font-bold text-white shadow-card">
           FC
         </span>
         <span className="min-w-0">
-          <span className="block truncate text-[12px] leading-tight font-semibold text-ink">{company.name}</span>
+          <span className="block truncate text-[12.5px] leading-tight font-bold text-ink">{company.name}</span>
           <span className="label-caps-faint block leading-none">Frontier Capital</span>
         </span>
       </Link>
 
-      <div className="figure shrink-0 border-l border-hair px-3 text-[12px] text-ink">
+      <div className="figure shrink-0 border-l border-hair px-3 text-[12px] font-semibold text-ink">
         <span className="label-caps-faint block leading-none">Quarter</span>
         {quarterLabel(session.startYear, session.quarter)}
       </div>
@@ -106,8 +112,8 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
       <Link
         href="/command-centre"
         className={cx(
-          'mr-1 flex shrink-0 items-center gap-1.5 rounded-[4px] border px-2 py-1 text-[11px]',
-          alerts > 0 ? 'border-warn/30 bg-warn-wash text-warn' : 'border-hair text-ink-faint',
+          'press-pop mr-1 flex shrink-0 items-center gap-1.5 rounded-pill border px-2.5 py-1.5 text-[11px] font-semibold',
+          alerts > 0 ? 'border-warn/30 bg-warn-wash text-warn' : 'border-hair bg-panel text-ink-faint',
         )}
         title={alerts > 0 ? view.alerts.join('\n') : 'No alerts this quarter.'}
       >
@@ -116,7 +122,7 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
       </Link>
 
       <span
-        className="mr-1 hidden items-center gap-1.5 rounded-[4px] border border-hair px-2 py-1 text-[10px] text-ink-dim md:flex"
+        className="mr-1 hidden items-center gap-1.5 rounded-pill border border-hair bg-panel px-2.5 py-1.5 text-[10px] font-semibold text-ink-dim md:flex"
         title={
           llm.available
             ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter.`
@@ -130,7 +136,7 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
       <button
         type="button"
         onClick={() => setSettingsOpen(true)}
-        className="btn btn-ghost btn-sm mr-2 shrink-0"
+        className="btn btn-ghost tap-target mr-1.5 shrink-0"
         aria-label="Session settings and save"
         aria-expanded={settingsOpen}
         title="Session settings, the live-model switch and the save file"

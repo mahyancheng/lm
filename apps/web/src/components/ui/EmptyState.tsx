@@ -24,13 +24,17 @@ export function EmptyState({ title, message, action, glyph, compact = false, cla
   return (
     <div
       className={cx(
-        'flex flex-col items-center justify-center rounded-[6px] border border-dashed border-hair text-center',
-        compact ? 'gap-1 px-4 py-6' : 'gap-2 px-6 py-12',
+        'flex flex-col items-center justify-center rounded-card border border-dashed border-hair-strong bg-raised/50 text-center',
+        compact ? 'gap-1.5 px-4 py-6' : 'gap-2.5 px-6 py-12',
         className,
       )}
     >
-      {glyph !== undefined ? <div className="figure text-[18px] text-ink-faint/60">{glyph}</div> : null}
-      <p className="text-[13px] font-medium text-ink-dim">{title}</p>
+      {glyph !== undefined ? (
+        <div className="figure animate-bob-slow flex size-10 items-center justify-center rounded-pill bg-panel text-[16px] text-ink-faint shadow-card">
+          {glyph}
+        </div>
+      ) : null}
+      <p className="text-[13px] font-semibold text-ink-dim">{title}</p>
       {message !== undefined ? <p className="max-w-md text-[11px] text-ink-faint">{message}</p> : null}
       {action !== undefined ? <div className="mt-2">{action}</div> : null}
     </div>

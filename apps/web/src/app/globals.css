@@ -2,45 +2,107 @@
 
 /* ==========================================================================
    Frontier Capital — design tokens
-   Premium financial terminal x venture dashboard. Dark, dense, information
-   first. Colour carries meaning and nothing else.
+   Bright, flat, cheerful 2D business-sim. Off-white world, white cards, soft
+   diffuse shadows, friendly saturated accents. Colour carries meaning and
+   nothing else; the cartoon comes from shape, radius and motion.
+
+   Every token NAME here is load-bearing: eighteen screens and thirty
+   components style themselves exclusively through these. Change values, never
+   names. `apps/web/ART_DIRECTION.md` is the prose version of this file.
    ========================================================================== */
 
 @theme {
-  /* --- layered backgrounds ------------------------------------------------ */
-  --color-base: #0a0e12;
-  --color-panel: #10161d;
-  --color-raised: #161e27;
-  --color-overlay: #0d1319;
+  /* --- layered surfaces ---------------------------------------------------
+     The stack runs light-to-lighter-to-tinted:
+       base   — the page behind everything (off-white)
+       panel  — a card (pure white)
+       raised — a row, a chip, a hover, a track (soft blue-grey tint)
+     `raised` is *tinted*, not darker-or-lighter dogma: it is simply the
+     surface that must separate itself from a white card.                    */
+  --color-base: #f2f5f9;
+  --color-panel: #ffffff;
+  --color-raised: #eef2f7;
+  --color-overlay: #ffffff;
 
   /* --- hairlines ---------------------------------------------------------- */
-  --color-hair: #1f2a35;
-  --color-hair-strong: #2c3a47;
+  --color-hair: #e4e9f0;
+  --color-hair-strong: #d2dbe6;
 
-  /* --- text hierarchy ----------------------------------------------------- */
-  --color-ink: #e6edf3;
-  --color-ink-dim: #8b98a5;
-  /*
-     The faint tier carries the app's whole explanatory layer at 10-11px, so it
-     is held to the WCAG AA body-text floor rather than the large-text one:
-     4.5:1 against every surface it is used on (5.34 on base, 5.01 on panel,
-     4.63 on raised). The old #566573 scored 2.81 on a raised surface.
-  */
-  --color-ink-faint: #7a8896;
+  /* --- text hierarchy -----------------------------------------------------
+     Dark slate ink ramp. The faint tier carries the app's whole explanatory
+     layer at 10-11px, so it is held to the WCAG AA body-text floor rather
+     than the large-text one: 4.5:1 against every surface it sits on
+     (4.79 on base, 5.24 on panel, 4.66 on raised). `interaction.test.ts`
+     recomputes these from this file on every run.                           */
+  --color-ink: #1e293b;
+  --color-ink-dim: #4b5a70;
+  --color-ink-faint: #5f6d84;
 
-  /* --- restrained accents ------------------------------------------------- */
-  --color-gain: #3fdc97;
-  --color-loss: #ff5d5d;
-  --color-warn: #ffb454;
-  --color-info: #4cc9f0;
-  --color-brand: #7aa2ff;
+  /* --- flat accents -------------------------------------------------------
+     One value per tone, because `text-gain` and `bg-gain` are the same token
+     in fifty places each. Each is deep enough to read as 11px text on white
+     (3.4:1 or better) and saturated enough to read as a flat fill.          */
+  --color-gain: #059669;
+  --color-loss: #ef4444;
+  --color-warn: #c2740a;
+  --color-info: #0284c7;
+  --color-brand: #3b82f6;
 
-  /* --- accent washes (10% / 18% alpha, precomputed) ----------------------- */
-  --color-gain-wash: #12291f;
-  --color-loss-wash: #2b1719;
-  --color-warn-wash: #2b2216;
-  --color-info-wash: #12242c;
-  --color-brand-wash: #1a2033;
+  /* --- solid variants -----------------------------------------------------
+     For a filled control or badge that carries WHITE text: every one of these
+     clears 4.5:1 against #ffffff. Use these, never the plain tone, whenever
+     white sits on top of the colour.                                        */
+  --color-brand-strong: #2563eb;
+  --color-gain-strong: #047857;
+  --color-loss-strong: #dc2626;
+  --color-warn-strong: #b45309;
+  --color-info-strong: #0369a1;
+
+  /* --- accent washes (light tints for chips, banners, highlights) --------- */
+  --color-gain-wash: #e8f7f1;
+  --color-loss-wash: #fdecec;
+  --color-warn-wash: #fdf2e0;
+  --color-info-wash: #e6f4fc;
+  --color-brand-wash: #eaf1fe;
+
+  /* --- flat pastels -------------------------------------------------------
+     The supporting set for categorical tags, multi-series charts and
+     illustration. They mean "different from each other" and nothing more, so
+     never use one where gain/loss/warn/info/brand would carry meaning.      */
+  --color-pop-1: #6366f1;
+  --color-pop-2: #14b8a6;
+  --color-pop-3: #f472b6;
+  --color-pop-4: #f59e0b;
+  --color-pop-5: #8b5cf6;
+  --color-pop-6: #22c55e;
+  --color-pop-7: #fb7185;
+  --color-pop-8: #38bdf8;
+
+  /* --- illustration -------------------------------------------------------
+     Flat-vector people and places. Skin, hair and garment ramps are picked
+     per entity from fnv1a64(entityId) — never at random — so a character
+     draws identically forever.                                              */
+  --color-skin-1: #f6d5bd;
+  --color-skin-2: #eebd9a;
+  --color-skin-3: #d69f74;
+  --color-skin-4: #a9714a;
+  --color-skin-5: #7b4b2c;
+  --color-hair-1: #2f2a29;
+  --color-hair-2: #5b3a26;
+  --color-hair-3: #9a6b3f;
+  --color-hair-4: #d9a441;
+  --color-hair-5: #b0464b;
+  --color-hair-6: #8e93a3;
+  --color-cloth-suit: #3f4d63;
+  --color-cloth-lab: #f4f7fb;
+  --color-cloth-hoodie: #4f7cf0;
+  --color-cloth-casual: #10a5a0;
+  --color-build-face: #dfe7f2;
+  --color-build-side: #c6d2e3;
+  --color-build-roof: #9fb2cc;
+  --color-build-glass: #a8d5f2;
+  --color-sky: #dbeafe;
+  --color-ground: #e2e8f0;
 
   /* --- typography --------------------------------------------------------- */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
@@ -49,13 +111,24 @@
     "Roboto Mono", Menlo, Consolas, monospace;
 
   /* --- geometry ----------------------------------------------------------- */
-  --radius-panel: 6px;
-  --radius-chip: 4px;
+  --radius-panel: 14px;
+  --radius-card: 12px;
+  --radius-chip: 8px;
+  --radius-field: 10px;
+  --radius-pill: 999px;
+
+  /* --- soft diffuse shadows ----------------------------------------------
+     Light theme: shadows are a whisper of slate, never black. Four steps —
+     resting card, lifted card, floating control, full sheet.                */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.05);
+  --shadow-pop: 0 2px 4px rgba(15, 23, 42, 0.05), 0 8px 20px rgba(15, 23, 42, 0.08);
+  --shadow-float: 0 6px 16px rgba(15, 23, 42, 0.1), 0 16px 40px rgba(15, 23, 42, 0.12);
+  --shadow-sheet: 0 12px 48px rgba(15, 23, 42, 0.18);
 
   /* --- shell metrics ------------------------------------------------------ */
   --spacing-rail: 232px;
-  --spacing-statusbar: 52px;
-  --spacing-bottombar: 52px;
+  --spacing-statusbar: 56px;
+  --spacing-bottombar: 60px;
 }
 
 /* ==========================================================================
@@ -64,28 +137,34 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
     --rail-width: 232px;
-    --statusbar-height: 52px;
+    --statusbar-height: 56px;
     /* The mobile quick-nav's fixed height. Anything else pinned to the bottom
        of a phone viewport clears it by this much. */
-    --bottombar-height: 52px;
+    --bottombar-height: 60px;
+    /* The smallest a tap target may be. Scenes and controls both read it. */
+    --tap: 44px;
   }
 
   html {
-    background-color: #0a0e12;
+    background-color: #f2f5f9;
     -webkit-text-size-adjust: 100%;
   }
 
   /* The body background is explicit: nothing borrows a host theme. */
   body {
-    background-color: #0a0e12;
-    color: #e6edf3;
+    background-color: #f2f5f9;
+    color: #1e293b;
     font-family: var(--font-sans);
     font-size: 13px;
     line-height: 1.5;
     margin: 0;
     min-height: 100dvh;
+    /* A screen contains its own width — wide content lives in a `.scroll-x`
+       or a `.scene-frame`. The body is deliberately NOT `overflow-x: hidden`:
+       that would make it a scroll container and break every sticky header
+       (the status bar, the rail, the data-table thead). */
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -96,12 +175,14 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Headings gain the friendlier, rounder weight the art direction asks for:
+     heavier, tighter, and never thin. Figures keep their tabular face. */
   h1,
   h2,
   h3,
   h4 {
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    font-weight: 700;
+    letter-spacing: -0.015em;
     margin: 0;
   }
 
@@ -117,20 +198,20 @@
 
   /* --- focus rings: visible, never decorative --------------------------- */
   :focus-visible {
-    outline: 2px solid #7aa2ff;
+    outline: 2px solid #2563eb;
     outline-offset: 2px;
-    border-radius: 3px;
+    border-radius: 6px;
   }
 
   ::selection {
-    background: #7aa2ff;
-    color: #0a0e12;
+    background: #dbeafe;
+    color: #1e293b;
   }
 
-  /* --- scrollbars ------------------------------------------------------- */
+  /* --- scrollbars: light, quiet, still grabbable ------------------------ */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #2c3a47 transparent;
+    scrollbar-color: #cbd5e1 transparent;
   }
 
   ::-webkit-scrollbar {
@@ -143,14 +224,14 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #2c3a47;
+    background: #cbd5e1;
     border: 3px solid transparent;
     background-clip: padding-box;
     border-radius: 6px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #3c4d5e;
+    background: #94a3b8;
     background-clip: padding-box;
   }
 
@@ -164,7 +245,8 @@
    ========================================================================== */
 
 @layer components {
-  /* Every figure that can be compared vertically uses this. */
+  /* Every figure that can be compared vertically uses this. Money stays
+     legible: the tabular numerals are not negotiable in a re-skin. */
   .tabnum {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
@@ -176,62 +258,72 @@
     font-feature-settings: "tnum" 1;
   }
 
-  /* Small-caps section label. The terminal's only ornament. */
+  /* Small-caps section label. */
   .label-caps {
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
+    font-weight: 700;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #8b98a5;
+    color: var(--color-ink-dim);
   }
 
   .label-caps-faint {
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.12em;
+    font-weight: 700;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #7a8896;
+    color: var(--color-ink-faint);
   }
 
+  /* A white card with a hairline and a soft diffuse shadow. */
   .panel-surface {
-    background-color: #10161d;
-    border: 1px solid #1f2a35;
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-hair);
     border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-card);
   }
 
   .raised-surface {
-    background-color: #161e27;
-    border: 1px solid #1f2a35;
-    border-radius: var(--radius-panel);
+    background-color: var(--color-raised);
+    border: 1px solid var(--color-hair);
+    border-radius: var(--radius-card);
   }
 
   .hairline {
-    border-color: #1f2a35;
+    border-color: var(--color-hair);
   }
 
-  /* Buttons ------------------------------------------------------------- */
+  /* Buttons -------------------------------------------------------------
+     Rounded, roomy and bouncy. Heights clear a comfortable tap; icon-only
+     controls get a square minimum so they never fall under 28px either way. */
   .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 4px;
-    border: 1px solid #2c3a47;
-    background-color: #161e27;
-    color: #e6edf3;
+    height: 34px;
+    min-width: 34px;
+    padding: 0 14px;
+    border-radius: var(--radius-field);
+    border: 1px solid var(--color-hair-strong);
+    background-color: var(--color-panel);
+    color: var(--color-ink);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
-    transition: background-color 120ms ease, border-color 120ms ease,
-      color 120ms ease;
+    transition: background-color 140ms ease, border-color 140ms ease,
+      color 140ms ease, box-shadow 140ms ease, transform 140ms
+        cubic-bezier(0.2, 0.9, 0.3, 1.2);
     white-space: nowrap;
   }
 
   .btn:hover:not(:disabled) {
-    background-color: #1d2733;
-    border-color: #3c4d5e;
+    background-color: var(--color-raised);
+    border-color: #bcc8d8;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
   }
 
   .btn:disabled {
@@ -240,70 +332,87 @@
   }
 
   .btn-primary {
-    background-color: #7aa2ff;
-    border-color: #7aa2ff;
-    color: #0a0e12;
-    font-weight: 600;
+    background-color: var(--color-brand-strong);
+    border-color: var(--color-brand-strong);
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(37, 99, 235, 0.28);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background-color: #94b4ff;
-    border-color: #94b4ff;
+    background-color: #1d4ed8;
+    border-color: #1d4ed8;
   }
 
   .btn-danger {
-    background-color: #2b1719;
-    border-color: #6d2b2f;
-    color: #ff8a8a;
+    background-color: var(--color-loss-strong);
+    border-color: var(--color-loss-strong);
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(220, 38, 38, 0.24);
   }
 
   .btn-danger:hover:not(:disabled) {
-    background-color: #3a1d20;
-    border-color: #8c3439;
+    background-color: #b91c1c;
+    border-color: #b91c1c;
   }
 
   .btn-ghost {
     background-color: transparent;
     border-color: transparent;
-    color: #8b98a5;
+    color: var(--color-ink-dim);
+    box-shadow: none;
   }
 
   .btn-ghost:hover:not(:disabled) {
-    background-color: #161e27;
-    color: #e6edf3;
+    background-color: var(--color-raised);
+    color: var(--color-ink);
   }
 
   .btn-sm {
-    height: 24px;
-    padding: 0 8px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0 10px;
     font-size: 11px;
+    border-radius: var(--radius-chip);
+  }
+
+  /* Big, friendly call to action. Additive: nothing existing changes. */
+  .btn-lg {
+    height: 46px;
+    min-width: 46px;
+    padding: 0 22px;
+    font-size: 14px;
+    border-radius: 14px;
   }
 
   /* Form controls ------------------------------------------------------- */
   .field {
     width: 100%;
-    height: 30px;
-    padding: 0 9px;
-    background-color: #0d1319;
-    border: 1px solid #2c3a47;
-    border-radius: 4px;
-    color: #e6edf3;
+    height: 34px;
+    padding: 0 11px;
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-hair-strong);
+    border-radius: var(--radius-field);
+    color: var(--color-ink);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
   }
 
   .field::placeholder {
-    color: #7a8896;
+    color: var(--color-ink-faint);
   }
 
   .field:focus {
-    border-color: #7aa2ff;
+    border-color: var(--color-brand);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
     outline: none;
   }
 
   textarea.field {
     height: auto;
-    padding: 8px 9px;
+    padding: 9px 11px;
     line-height: 1.55;
     resize: vertical;
     font-family: var(--font-sans);
@@ -311,10 +420,11 @@
 
   select.field {
     appearance: none;
-    padding-right: 24px;
+    padding-right: 26px;
   }
 
-  /* Data table ---------------------------------------------------------- */
+  /* Data table ----------------------------------------------------------
+     Light stripes, a white sticky header, a soft tinted hover. */
   .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -325,26 +435,37 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    background-color: #10161d;
-    border-bottom: 1px solid #1f2a35;
-    padding: 7px 10px;
+    background-color: var(--color-panel);
+    border-bottom: 1px solid var(--color-hair);
+    padding: 8px 12px;
     text-align: left;
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    font-weight: 700;
+    letter-spacing: 0.09em;
     text-transform: uppercase;
-    color: #8b98a5;
+    color: var(--color-ink-faint);
     white-space: nowrap;
   }
 
   .data-table tbody td {
-    border-bottom: 1px solid #161e27;
-    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-hair);
+    padding: 9px 12px;
     vertical-align: middle;
   }
 
+  /* Striping, highlight and hover all paint the CELL, and all three share a
+     specificity of (0,2,3) — so the order below IS the precedence: a striped
+     row loses to a highlighted one, and both lose to the pointer. */
+  .data-table tbody tr:nth-child(even) td {
+    background-color: #fafcfe;
+  }
+
+  .data-table tbody tr[data-highlight="true"] td {
+    background-color: var(--color-brand-wash);
+  }
+
   .data-table.dense tbody td {
-    padding: 5px 10px;
+    padding: 6px 12px;
     font-size: 12px;
   }
 
@@ -357,23 +478,38 @@
   }
 
   .data-table tbody tr[data-clickable="true"]:hover td {
-    background-color: #161e27;
+    background-color: var(--color-raised);
   }
 
   /* A clickable row is a control: it takes focus and shows that it has it. */
   .data-table tbody tr[data-clickable="true"]:focus-visible {
-    outline: 2px solid #7aa2ff;
+    outline: 2px solid var(--color-brand-strong);
     outline-offset: -2px;
   }
 
   .data-table tbody tr[data-clickable="true"]:focus-visible td {
-    background-color: #161e27;
+    background-color: var(--color-brand-wash);
   }
 
   /* Scroll containers: wide content never scrolls the page body. */
   .scroll-x {
     overflow-x: auto;
     max-width: 100%;
+  }
+
+  /* A scene contains itself: it scrolls or scales INSIDE its own frame, and
+     never widens the page. Illustrated surfaces sit in one of these. */
+  .scene-frame {
+    position: relative;
+    overflow: hidden;
+    max-width: 100%;
+    border-radius: var(--radius-panel);
+  }
+
+  /* Any zone a finger must find. 44x44 is the floor, not the target. */
+  .tap-target {
+    min-width: var(--tap);
+    min-height: var(--tap);
   }
 }
 
@@ -383,22 +519,22 @@
 
 @layer utilities {
   .tone-gain {
-    color: #3fdc97;
+    color: var(--color-gain);
   }
   .tone-loss {
-    color: #ff5d5d;
+    color: var(--color-loss);
   }
   .tone-warn {
-    color: #ffb454;
+    color: var(--color-warn);
   }
   .tone-info {
-    color: #4cc9f0;
+    color: var(--color-info);
   }
   .tone-brand {
-    color: #7aa2ff;
+    color: var(--color-brand);
   }
   .tone-neutral {
-    color: #8b98a5;
+    color: var(--color-ink-dim);
   }
 
   .no-scrollbar::-webkit-scrollbar {
@@ -408,12 +544,89 @@
     scrollbar-width: none;
   }
 
+  /* --- motion: transform and opacity only, every one of them cheap ------
+     Nothing here drives layout, nothing here runs a loop in JavaScript, and
+     every animation is disabled wholesale under prefers-reduced-motion. */
+
   .animate-fade-in {
     animation: fc-fade-in 180ms ease-out both;
   }
 
   .animate-rise {
     animation: fc-rise 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+
+  /* A card, a chip or a person arriving: a small overshoot, then settle. */
+  .animate-pop-in {
+    animation: fc-pop-in 320ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+  }
+
+  /* Idle life for a flat-vector character or an icon. Infinite, tiny, cheap. */
+  .animate-bob {
+    animation: fc-bob 2.6s ease-in-out infinite;
+  }
+
+  .animate-bob-slow {
+    animation: fc-bob 4.2s ease-in-out infinite;
+  }
+
+  /* A gentle lean, for a sign, a plant, a hovering balloon. */
+  .animate-sway {
+    animation: fc-sway 5s ease-in-out infinite;
+  }
+
+  /* A figure that has just changed: it rises into place and settles. Pair it
+     with a React `key` on the value so a new number remounts and replays. */
+  .animate-count-up {
+    animation: fc-count-up 420ms cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+  }
+
+  .animate-pulse-soft {
+    animation: fc-pulse-soft 2.2s ease-in-out infinite;
+  }
+
+  /* Stagger a list: put `animate-pop-in stagger-3` on the fourth child. */
+  .stagger-1 {
+    animation-delay: 40ms;
+  }
+  .stagger-2 {
+    animation-delay: 80ms;
+  }
+  .stagger-3 {
+    animation-delay: 120ms;
+  }
+  .stagger-4 {
+    animation-delay: 160ms;
+  }
+  .stagger-5 {
+    animation-delay: 200ms;
+  }
+  .stagger-6 {
+    animation-delay: 240ms;
+  }
+
+  /* A card that answers the pointer.
+     These use the INDIVIDUAL `translate` / `scale` properties rather than
+     `transform`, deliberately: a card carrying `animate-pop-in` holds its
+     final `transform` through `animation-fill-mode: both`, and an animation
+     outranks the cascade for the property it animates. Composing on separate
+     properties lets a card pop in on mount and still lift under the pointer. */
+  .hover-lift {
+    transition: translate 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1),
+      box-shadow 160ms ease, border-color 160ms ease;
+  }
+
+  .hover-lift:hover {
+    translate: 0 -2px;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .press-pop {
+    transition: scale 120ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  }
+
+  .press-pop:active {
+    scale: 0.97;
   }
 }
 
@@ -437,6 +650,68 @@
   }
 }
 
+@keyframes fc-pop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes fc-sway {
+  0%,
+  100% {
+    transform: rotate(-1.4deg);
+  }
+  50% {
+    transform: rotate(1.4deg);
+  }
+}
+
+@keyframes fc-count-up {
+  0% {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-1.5px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+}
+
 @keyframes fc-pulse {
   0%,
   100% {
@@ -451,12 +726,31 @@
   animation: fc-pulse 1.4s ease-in-out infinite;
 }
 
+/* Every animation above is decoration. Reduced motion turns all of it off,
+   including the idle bobs, and leaves the interface fully usable. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-bob,
+  .animate-bob-slow,
+  .animate-sway,
+  .animate-pulse-soft {
+    transform: none !important;
+  }
+
+  .hover-lift:hover {
+    translate: none !important;
+  }
+
+  .press-pop:active {
+    scale: none !important;
   }
 }

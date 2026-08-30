@@ -63,7 +63,19 @@ export type { ValidationBannerProps } from './ValidationBanner';
 
 export { ActionQueueTray } from './ActionQueueTray';
 
-export { TONE_CHIP, TONE_FILL, TONE_TEXT, TONE_VAR, cx, isActivationKey, nextTrapIndex, toneOfDelta, toneOfLine } from './tokens';
+export {
+  TONE_CHIP,
+  TONE_FILL,
+  TONE_SOLID,
+  TONE_TEXT,
+  TONE_VAR,
+  TONE_WASH,
+  cx,
+  isActivationKey,
+  nextTrapIndex,
+  toneOfDelta,
+  toneOfLine,
+} from './tokens';
 export type { Tone } from './tokens';
 
 export { useDialogFocus } from './focusTrap';

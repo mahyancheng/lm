@@ -44,7 +44,15 @@ export {
 export { resolveComputeOrders, reservedUnitPriceUsd } from './compute';
 export { resolveFinancials, computeCost } from './financials';
 export type { ComputeCostBreakdown } from './financials';
-export { resolveDistress, bridgeAppetite, enterAdministration, recentFailedBridges } from './distress';
+export {
+  resolveDistress,
+  bridgeAppetite,
+  enterAdministration,
+  recentFailedBridges,
+  rescueQuartersRunning,
+  chronicallyRescued,
+} from './distress';
+export type { AdministrationCause } from './distress';
 export { applyNpcDefaults, bidTarget } from './npc';
 export { recomputeMetrics } from './metrics';
 export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';

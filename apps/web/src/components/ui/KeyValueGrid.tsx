@@ -40,7 +40,7 @@ export function KeyValueGrid({ items, columns = 2, stacked = false, className }:
         <div
           key={index}
           className={cx(
-            stacked ? '' : 'flex items-baseline justify-between gap-3 border-b border-hair/60 pb-1.5',
+            stacked ? '' : 'flex items-baseline justify-between gap-3 border-b border-hair pb-2',
             item.wide === true ? 'col-span-full' : '',
           )}
         >

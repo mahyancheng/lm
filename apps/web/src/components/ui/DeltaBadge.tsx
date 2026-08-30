@@ -43,7 +43,7 @@ export function DeltaBadge({
 
   if (bare) {
     return (
-      <span className={cx('figure text-[11px]', `tone-${resolved}`, className)}>
+      <span className={cx('figure text-[11px] font-semibold', `tone-${resolved}`, className)}>
         {mark === '' ? null : <span className="mr-0.5 text-[9px]">{mark}</span>}
         {label}
       </span>
@@ -53,7 +53,7 @@ export function DeltaBadge({
   return (
     <span
       className={cx(
-        'figure inline-flex items-center gap-0.5 rounded-[3px] border px-1.5 py-px text-[11px] leading-[16px]',
+        'figure inline-flex items-center gap-0.5 rounded-pill border px-2 py-px text-[11px] leading-[17px] font-semibold',
         TONE_CHIP[resolved],
         className,
       )}

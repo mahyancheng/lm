@@ -39,9 +39,9 @@ export function ValidationBanner({ result, showClamped = true, compact = false, 
   return (
     <div
       className={cx(
-        'rounded-[4px] border',
+        'animate-pop-in rounded-card border',
         tone === 'gain' ? 'border-gain/25 bg-gain-wash' : tone === 'warn' ? 'border-warn/25 bg-warn-wash' : 'border-loss/25 bg-loss-wash',
-        compact ? 'px-2 py-1.5' : 'px-3 py-2',
+        compact ? 'px-2.5 py-2' : 'px-3.5 py-2.5',
         className,
       )}
     >

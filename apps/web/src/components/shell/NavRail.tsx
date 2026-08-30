@@ -48,14 +48,14 @@ export function NavRail({ variant = 'rail', onNavigate }: NavRailProps): React.J
                     title={item.blurb}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'group flex items-center gap-2.5 rounded-[4px] px-2 py-1.5 text-[12px] transition-colors',
-                      active ? 'bg-raised text-ink' : 'text-ink-dim hover:bg-raised/60 hover:text-ink',
+                      'group flex min-h-9 items-center gap-2.5 rounded-chip px-2 py-1.5 text-[12px] font-medium transition-colors',
+                      active ? 'bg-brand-wash font-semibold text-brand' : 'text-ink-dim hover:bg-raised hover:text-ink',
                     )}
                   >
                     <span
                       className={cx(
-                        'figure flex size-5 shrink-0 items-center justify-center rounded-[3px] border text-[8.5px] font-semibold',
-                        active ? 'border-brand/40 bg-brand-wash text-brand' : 'border-hair text-ink-faint group-hover:text-ink-dim',
+                        'figure flex size-6 shrink-0 items-center justify-center rounded-chip text-[8.5px] font-bold transition-colors',
+                        active ? 'bg-brand-strong text-white' : 'bg-raised text-ink-faint group-hover:text-ink-dim',
                       )}
                     >
                       {item.glyph}
@@ -64,8 +64,8 @@ export function NavRail({ variant = 'rail', onNavigate }: NavRailProps): React.J
                     {badge !== null ? (
                       <span
                         className={cx(
-                          'figure rounded-full px-1.5 text-[10px] leading-[15px]',
-                          blocked > 0 ? 'bg-warn-wash text-warn' : 'bg-hair text-ink-dim',
+                          'figure rounded-pill px-1.5 text-[10px] font-bold leading-[16px]',
+                          blocked > 0 ? 'bg-warn-wash text-warn' : 'bg-raised text-ink-dim',
                         )}
                       >
                         {badge}

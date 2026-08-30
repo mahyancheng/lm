@@ -100,7 +100,7 @@ export function ConfirmDialog({
       {body !== undefined ? <p className="text-[12px] leading-relaxed text-ink-dim">{body}</p> : null}
 
       {terms !== undefined && terms.length > 0 ? (
-        <dl className="mt-3 divide-y divide-hair rounded-[4px] border border-hair bg-base/50">
+        <dl className="mt-3 divide-y divide-hair rounded-card border border-hair bg-raised/60">
           {terms.map((term, index) => (
             <div key={index} className="flex items-baseline justify-between gap-4 px-3 py-2">
               <dt className="label-caps-faint">{term.label}</dt>
@@ -111,7 +111,7 @@ export function ConfirmDialog({
       ) : null}
 
       {alwaysConfirms ? (
-        <p className="mt-3 rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+        <p className="mt-3 rounded-card border border-warn/25 bg-warn-wash px-3.5 py-2.5 text-[11px] text-warn">
           This action always requires an explicit human confirmation, regardless of your automation preference.
         </p>
       ) : null}

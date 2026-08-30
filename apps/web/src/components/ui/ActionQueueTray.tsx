@@ -36,8 +36,8 @@ export function ActionQueueTray(): React.JSX.Element | null {
     // a higher z-index, which is exactly when a player has something queued.
     <div className="pointer-events-none fixed right-3 bottom-[calc(var(--bottombar-height)+0.75rem)] z-30 flex w-[min(360px,calc(100vw-24px))] flex-col items-end gap-2 lg:right-4 lg:bottom-4">
       {open ? (
-        <div className="animate-rise pointer-events-auto max-h-[52dvh] w-full overflow-hidden rounded-[8px] border border-hair-strong bg-panel shadow-2xl shadow-black/60">
-          <header className="flex items-center justify-between border-b border-hair px-3 py-2">
+        <div className="animate-pop-in pointer-events-auto max-h-[52dvh] w-full overflow-hidden rounded-panel border border-hair bg-panel shadow-float">
+          <header className="flex items-center justify-between border-b border-hair px-3.5 py-2.5">
             <span className="label-caps">Action queue</span>
             <button type="button" className="btn btn-ghost btn-sm" onClick={clearQueue}>
               Clear all
@@ -61,7 +61,7 @@ export function ActionQueueTray(): React.JSX.Element | null {
                 </div>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
+                  className="btn btn-ghost tap-target shrink-0"
                   aria-label={`Remove ${labelFor(entry.action.intent)}`}
                   onClick={() => unqueueAction(entry.action.actionId)}
                 >
@@ -70,7 +70,7 @@ export function ActionQueueTray(): React.JSX.Element | null {
               </li>
             ))}
           </ul>
-          <footer className="flex items-center justify-between gap-2 border-t border-hair bg-base/40 px-3 py-2">
+          <footer className="flex items-center justify-between gap-2 border-t border-hair bg-raised/60 px-3.5 py-2.5">
             <span className="text-[10px] text-ink-faint">Nothing is committed until the quarter is submitted.</span>
             <Link href="/end-quarter" className="btn btn-primary btn-sm">
               Review
@@ -83,8 +83,8 @@ export function ActionQueueTray(): React.JSX.Element | null {
         type="button"
         onClick={() => setOpen((value) => !value)}
         className={cx(
-          'pointer-events-auto flex items-center gap-2 rounded-full border px-3.5 py-2 text-[12px] shadow-lg shadow-black/40 transition-colors',
-          blocked > 0 || rejected > 0 ? 'border-warn/40 bg-warn-wash text-warn' : 'border-hair-strong bg-raised text-ink',
+          'press-pop pointer-events-auto flex min-h-11 items-center gap-2 rounded-pill border px-4 py-2 text-[12px] font-semibold shadow-float transition-colors',
+          blocked > 0 || rejected > 0 ? 'border-warn/40 bg-warn-wash text-warn' : 'border-hair bg-panel text-ink',
         )}
       >
         <span className="figure font-semibold">{entries.length}</span>

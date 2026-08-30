@@ -53,10 +53,10 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
           style={{ width: 'var(--rail-width)' }}
         >
           <div className="flex h-14 items-center gap-2.5 border-b border-hair px-4">
-            <span className="figure flex size-6 items-center justify-center rounded-[3px] border border-brand/40 bg-brand-wash text-[9px] font-semibold text-brand">
+            <span className="figure flex size-7 items-center justify-center rounded-chip bg-brand-strong text-[10px] font-bold text-white shadow-card">
               FC
             </span>
-            <span className="text-[12px] font-semibold tracking-tight text-ink">Frontier Capital</span>
+            <span className="text-[13px] font-bold tracking-tight text-ink">Frontier Capital</span>
           </div>
           <div className="h-[calc(100dvh-3.5rem)]">
             <NavRail />
@@ -68,9 +68,14 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
           <StatusBar onOpenNav={() => setNavOpen((open) => !open)} navOpen={navOpen} />
 
           {notice !== null ? (
-            <div className="flex items-start justify-between gap-3 border-b border-warn/25 bg-warn-wash px-4 py-2 text-[11px] text-warn">
+            <div className="animate-rise flex items-start justify-between gap-3 border-b border-warn/25 bg-warn-wash px-4 py-2.5 text-[11.5px] font-medium text-warn">
               <span>{notice}</span>
-              <button type="button" onClick={dismissNotice} className="shrink-0 opacity-70 hover:opacity-100" aria-label="Dismiss">
+              <button
+                type="button"
+                onClick={dismissNotice}
+                className="tap-target -my-2 shrink-0 rounded-chip opacity-70 hover:opacity-100"
+                aria-label="Dismiss"
+              >
                 ✕
               </button>
             </div>
@@ -85,9 +90,9 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
       {/* Mobile sheet */}
       {navOpen ? (
         <div className="fixed inset-0 z-30 lg:hidden">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setNavOpen(false)} aria-hidden="true" />
+          <div className="absolute inset-0 bg-ink/25" onClick={() => setNavOpen(false)} aria-hidden="true" />
           <div
-            className="animate-rise absolute inset-x-0 border-b border-hair bg-panel"
+            className="animate-rise absolute inset-x-0 rounded-b-panel border-b border-hair bg-panel shadow-float"
             style={{ top: 'var(--statusbar-height)' }}
           >
             <NavRail variant="sheet" onNavigate={() => setNavOpen(false)} />
@@ -109,12 +114,20 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
             <Link
               key={link.href}
               href={link.href}
+              aria-current={active ? 'page' : undefined}
               className={cx(
-                'flex flex-col items-center justify-center gap-0.5 text-[10px]',
+                'press-pop flex flex-col items-center justify-center gap-1 text-[10px] font-semibold',
                 active ? 'text-brand' : 'text-ink-dim',
               )}
             >
-              <span className="figure text-[9px]">{link.glyph}</span>
+              <span
+                className={cx(
+                  'figure flex h-6 w-9 items-center justify-center rounded-pill text-[9px] font-bold transition-colors',
+                  active ? 'bg-brand-wash text-brand' : 'text-ink-faint',
+                )}
+              >
+                {link.glyph}
+              </span>
               {link.label}
             </Link>
           );

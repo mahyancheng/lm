@@ -3,9 +3,9 @@
 /**
  * Charts, drawn as inline SVG.
  *
- * No charting library: three shapes, theme-aware through CSS variables, and no
- * decorative gradient behind data. Every chart is deterministic in its layout,
- * so a re-render never reshuffles a series.
+ * No charting library: three shapes, flat fills, and every colour read from a
+ * CSS variable so the palette owns them. Every chart is deterministic in its
+ * layout, so a re-render never reshuffles a series.
  */
 
 import { useId, useMemo } from 'react';
@@ -105,15 +105,33 @@ export function Sparkline({
         <>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={colour} stopOpacity="0.22" />
-              <stop offset="100%" stopColor={colour} stopOpacity="0" />
+              <stop offset="0%" stopColor={colour} stopOpacity="0.20" />
+              <stop offset="100%" stopColor={colour} stopOpacity="0.02" />
             </linearGradient>
           </defs>
           <path d={`${path} L ${width},${height} L 0,${height} Z`} fill={`url(#${gradientId})`} stroke="none" />
         </>
       ) : null}
-      <path d={path} fill="none" stroke={colour} strokeWidth="1.25" strokeLinejoin="round" strokeLinecap="round" />
-      {marker ? <circle cx={Number(lastCoord[0])} cy={Number(lastCoord[1])} r="1.75" fill={colour} /> : null}
+      <path
+        d={path}
+        fill="none"
+        stroke={colour}
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+      {marker ? (
+        <circle
+          cx={Number(lastCoord[0])}
+          cy={Number(lastCoord[1])}
+          r="2.4"
+          fill={colour}
+          stroke="var(--color-panel)"
+          strokeWidth="1.2"
+          vectorEffect="non-scaling-stroke"
+        />
+      ) : null}
     </svg>
   );
 }
@@ -189,7 +207,15 @@ export function LineChart({
           const y = project(tick, extent, height, padTop, padBottom);
           return (
             <g key={`tick-${index}`}>
-              <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="var(--color-hair)" strokeWidth="1" />
+              <line
+                x1={padLeft}
+                y1={y}
+                x2={width - padRight}
+                y2={y}
+                stroke="var(--color-hair)"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+              />
               <text
                 x={padLeft - 6}
                 y={y + 3}
@@ -217,7 +243,7 @@ export function LineChart({
               d={`M ${coords.join(' L ')}`}
               fill="none"
               stroke={colour}
-              strokeWidth="1.5"
+              strokeWidth="2"
               strokeDasharray={entry.dashed === true ? '4 3' : undefined}
               strokeLinejoin="round"
               strokeLinecap="round"
@@ -253,7 +279,7 @@ export function LineChart({
             const tone = entry.tone ?? SERIES_TONES[index % SERIES_TONES.length] ?? 'brand';
             return (
               <span key={entry.id} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-                <span className="inline-block h-px w-3" style={{ backgroundColor: TONE_VAR[tone] }} />
+                <span className="inline-block h-[3px] w-3.5 rounded-full" style={{ backgroundColor: TONE_VAR[tone] }} />
                 {entry.label}
               </span>
             );
@@ -311,8 +337,8 @@ export function BarChart({
                 <div className="truncate text-[11px] text-ink-dim">{datum.label}</div>
                 {datum.caption !== undefined ? <div className="truncate text-[10px] text-ink-faint">{datum.caption}</div> : null}
               </div>
-              <div className="h-2.5 min-w-0 overflow-hidden rounded-[2px] bg-raised">
-                <div className="h-full rounded-[2px]" style={{ width: `${pct}%`, backgroundColor: TONE_VAR[tone] }} />
+              <div className="h-3 min-w-0 overflow-hidden rounded-pill bg-raised">
+                <div className="h-full rounded-pill" style={{ width: `${pct}%`, backgroundColor: TONE_VAR[tone] }} />
               </div>
               <div className="figure w-14 text-right text-[11px] text-ink">{format(datum.value)}</div>
             </div>
@@ -346,7 +372,7 @@ export function BarChart({
         const y = height - padBottom - barHeight;
         return (
           <g key={`${datum.label}-${index}`}>
-            <rect x={x} y={y} width={barWidth} height={barHeight} rx="2" fill={TONE_VAR[tone]} />
+            <rect x={x} y={y} width={barWidth} height={barHeight} rx="5" fill={TONE_VAR[tone]} />
             <text
               x={index * slot + slot / 2}
               y={height - 14}

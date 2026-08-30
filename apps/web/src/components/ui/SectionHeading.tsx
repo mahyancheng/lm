@@ -18,7 +18,7 @@ export function SectionHeading({ children, actions, rule = false, className }: S
     <div
       className={cx(
         'flex items-center justify-between gap-3',
-        rule ? 'border-b border-hair pb-1.5' : '',
+        rule ? 'border-b border-hair pb-2' : '',
         className,
       )}
     >
@@ -48,11 +48,15 @@ export interface PageHeaderProps {
  */
 export function PageHeader({ title, subtitle, eyebrow, actions, className }: PageHeaderProps): React.JSX.Element {
   return (
-    <header className={cx('flex flex-wrap items-end justify-between gap-3', className)}>
+    <header className={cx('animate-pop-in flex flex-wrap items-end justify-between gap-3', className)}>
       <div className="min-w-0">
-        {eyebrow !== undefined ? <div className="label-caps-faint mb-1">{eyebrow}</div> : null}
-        <h1 className="truncate text-[19px] leading-tight font-semibold text-ink">{title}</h1>
-        {subtitle !== undefined ? <p className="mt-1 max-w-3xl text-[12px] text-ink-dim">{subtitle}</p> : null}
+        {eyebrow !== undefined ? (
+          <div className="label-caps mb-1.5 inline-flex items-center rounded-pill bg-brand-wash px-2.5 py-0.5 text-brand">
+            {eyebrow}
+          </div>
+        ) : null}
+        <h1 className="truncate text-[22px] leading-tight font-extrabold text-ink">{title}</h1>
+        {subtitle !== undefined ? <p className="mt-1 max-w-3xl text-[12.5px] text-ink-dim">{subtitle}</p> : null}
       </div>
       {actions !== undefined ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </header>

@@ -8,14 +8,21 @@
  * ```text
  * grossAdds     = base × (1 + quality edge) × (1 - price effect) × reputation
  *                 × marketing lift
- * customers_t+1 = min(capacity cap, customers_t × (1 - churn) + grossAdds)
+ * retained      = customers_t × (1 - churn)
+ * customers_t+1 = min(retained + grossAdds,
+ *                     grossAdds × capacityRatio
+ *                       + retained × (1 - baseLossCeiling × (1 - capacityRatio)))
  * ```
  *
  * Two properties are load-bearing and are asserted by the tests:
  *
- * 1. **Capacity is a hard cap.** A company that sells more inference than it can
- *    serve does not book the revenue; it books churn, and the quarter report
- *    carries a `capacity_constraint` line saying so.
+ * 1. **Capacity rations new demand outright and drains the base at a bounded
+ *    rate.** A company that sells more inference than it can serve does not book
+ *    the new demand; it books churn, and the quarter report carries a
+ *    `capacity_constraint` line saying so. What it already has degrades instead
+ *    of disappearing: a shortage costs at most `CAPACITY_BASE_LOSS_CEILING` of
+ *    the retained base per quarter, so a company at zero serving compute falls
+ *    steeply over a year rather than losing every customer in one quarter.
  * 2. **Elasticity is segment-shaped.** Consumers leave over a price rise
  *    (elasticity 1.6); governments barely react (0.4).
  *
@@ -29,6 +36,7 @@ import type { Company, Product, ProductSegment, ResolverContext, SessionState } 
 import { makeId } from '@frontier/contracts';
 import {
   BASELINE_COMPUTE_INTENSITY,
+  CAPACITY_BASE_LOSS_CEILING,
   CAPACITY_SHORTFALL_CHURN,
   CLOUD_UNIT_COST_USD_PER_QUARTER,
   DEMAND_NOISE_BAND,
@@ -398,6 +406,11 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
     for (const d of drafts) unitsRequired += d.unitsRequired;
     const capacityRatio = unitsRequired <= 0 ? 1 : Math.min(1, ratio(serving, unitsRequired, 1));
     const constrained = capacityRatio < 0.999;
+    // What is left of the retained base after a shortage. New demand is rationed
+    // by the capacity ratio outright; the base only degrades, and never by more
+    // than `CAPACITY_BASE_LOSS_CEILING` in one quarter, so losing the compute
+    // starts a collapse instead of finishing one.
+    const baseRetention = 1 - CAPACITY_BASE_LOSS_CEILING * (1 - capacityRatio);
 
     let servedCustomers = 0;
     let lostToCapacity = 0;
@@ -405,7 +418,7 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
     for (const d of drafts) {
       const product = d.product;
       const before = product.activeCustomers;
-      const allowed = d.desiredCustomers * capacityRatio;
+      const allowed = Math.min(d.desiredCustomers, d.grossAdds * capacityRatio + d.retained * baseRetention);
       const shortfall = unit(ratio(d.desiredCustomers - allowed, Math.max(1, d.desiredCustomers)));
       // Demand that cannot be served is not deferred, it is lost — and it makes
       // the customers who stayed more likely to leave next quarter.

@@ -52,7 +52,7 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-black/65 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-ink/30 backdrop-blur-[2px]"
         onClick={dismissible ? onClose : undefined}
         aria-hidden="true"
       />
@@ -63,27 +63,27 @@ export function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cx(
-          'animate-rise relative flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-[8px] border border-hair-strong bg-panel shadow-2xl shadow-black/60',
+          'animate-pop-in relative flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-panel border border-hair bg-panel shadow-sheet',
           WIDTH[width],
           className,
         )}
       >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-4 py-3">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-5 py-3.5">
           <div className="min-w-0">
-            <h2 id={titleId} className="text-[14px] font-semibold text-ink">
+            <h2 id={titleId} className="text-[15px] font-bold text-ink">
               {title}
             </h2>
             {subtitle !== undefined ? <p className="mt-0.5 text-[11px] text-ink-dim">{subtitle}</p> : null}
           </div>
           {dismissible ? (
-            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm" aria-label="Close">
+            <button type="button" onClick={onClose} className="btn btn-ghost tap-target -mr-1.5 shrink-0" aria-label="Close">
               ✕
             </button>
           ) : null}
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
         {footer !== undefined ? (
-          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hair bg-base/40 px-4 py-3">{footer}</footer>
+          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-hair bg-raised/60 px-5 py-3.5">{footer}</footer>
         ) : null}
       </div>
     </div>

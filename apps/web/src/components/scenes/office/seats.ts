@@ -62,11 +62,17 @@ export interface SeatLook {
   readonly lean: number;
 }
 
-/** Eight independent 8-bit lanes out of one 64-bit hash. */
-function lane(hash: string, index: number): number {
-  const start = (index % 8) * 2;
-  const slice = hash.slice(start, start + 2);
-  const value = Number.parseInt(slice, 16);
+/**
+ * One independent lane per attribute, each from its own salted hash. Slicing
+ * lanes out of a single fnv1a64(id) is NOT enough here: seat ids differ only
+ * in a trailing index, and the un-salted hash moves those ids a fixed stride
+ * apart in some lanes — a stride divisible by a palette size collapses the
+ * palette (observed: 24 seats drawing 2 of the 5 skin tones). The salt on
+ * both sides forces a full avalanche per attribute, matching the portrait
+ * generator in scenes/people/look.ts.
+ */
+function lane(id: string, salt: string): number {
+  const value = Number.parseInt(fnv1a64(`${salt}:${id}:${salt}`).slice(0, 8), 16);
   return Number.isNaN(value) ? 0 : value;
 }
 
@@ -74,16 +80,15 @@ function lane(hash: string, index: number): number {
  * The complete look of one seat. Pure: same id in, same face out, forever.
  */
 export function seatLook(id: string): SeatLook {
-  const hash = fnv1a64(id);
   return {
-    skin: lane(hash, 0) % SKIN_TONE_COUNT,
-    hairStyle: lane(hash, 1) % HAIR_STYLE_COUNT,
-    hairColour: lane(hash, 2) % HAIR_COLOUR_COUNT,
-    outfit: lane(hash, 3) % OUTFIT_COUNT,
-    bobDelayMs: (lane(hash, 4) * 9) % 2200,
-    bobDurationMs: 2600 + ((lane(hash, 5) * 7) % 1500),
-    typing: lane(hash, 6) % 3 !== 0,
-    lean: ((lane(hash, 7) % 3) - 1),
+    skin: lane(id, 'skin') % SKIN_TONE_COUNT,
+    hairStyle: lane(id, 'hairStyle') % HAIR_STYLE_COUNT,
+    hairColour: lane(id, 'hairColour') % HAIR_COLOUR_COUNT,
+    outfit: lane(id, 'outfit') % OUTFIT_COUNT,
+    bobDelayMs: (lane(id, 'bobDelay') * 9) % 2200,
+    bobDurationMs: 2600 + ((lane(id, 'bobDuration') * 7) % 1500),
+    typing: lane(id, 'typing') % 3 !== 0,
+    lean: ((lane(id, 'lean') % 3) - 1),
   };
 }
 

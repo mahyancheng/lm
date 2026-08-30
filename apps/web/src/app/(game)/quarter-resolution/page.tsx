@@ -354,7 +354,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           iconTone="gain"
           flush
         >
-          <PriceTape rows={prices} />
+          <PriceTape rows={prices} reveal={reveal} />
           <DataTable
             dense
             rows={prices}
@@ -423,7 +423,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         <Panel title="Rank movement" subtitle="Where the quarter left you on each of the ten boards" icon={<PodiumGlyph />} iconTone="brand" flush>
           {ranks.length === 0 ? null : (
             <div className="border-b border-hair px-4 pt-4 pb-3">
-              <RankPodium rows={ranks} />
+              <RankPodium rows={ranks} reveal={reveal} />
             </div>
           )}
           <DataTable

@@ -62,7 +62,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     id: 'world',
     label: 'World',
     items: [
-      { href: '/news', label: 'News', glyph: 'NW', blurb: 'World events, causal chains, public information.' },
+      { href: '/news', label: 'World', glyph: 'WO', blurb: 'The living map, world events, public information.' },
       { href: '/social', label: 'Social', glyph: 'SO', blurb: 'Synthetic social networks, PR, marketing.' },
       { href: '/network', label: 'Network', glyph: 'NE', blurb: 'Investors, founders, officials, directors, journalists.' },
       { href: '/leaderboard', label: 'Leaderboard', glyph: 'LB', blurb: 'Session rankings and the power network.' },

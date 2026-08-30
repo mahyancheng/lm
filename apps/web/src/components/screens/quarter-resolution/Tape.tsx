@@ -32,7 +32,13 @@ export interface PriceRow {
 /** A move worth a pulse. Below this the dot is a quiet marker. */
 const NOTABLE_MOVE = 0.05;
 
-export function PriceTape({ rows }: { readonly rows: readonly PriceRow[] }): React.JSX.Element {
+export interface PriceTapeProps {
+  readonly rows: readonly PriceRow[];
+  /** False when the player has asked to skip the reveal: figures land settled. */
+  readonly reveal?: boolean;
+}
+
+export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.Element {
   if (rows.length === 0) {
     return (
       <p className="px-4 py-3 text-[11px] text-ink-faint">
@@ -56,7 +62,7 @@ export function PriceTape({ rows }: { readonly rows: readonly PriceRow[] }): Rea
                 'animate-pop-in hover-lift press-pop flex min-h-11 w-[152px] shrink-0 flex-col justify-center rounded-card border bg-panel px-3 py-2',
                 row.isOwn ? 'border-brand' : 'border-hair',
               )}
-              style={{ animationDelay: `${Math.min(index * 45, 540)}ms` }}
+              style={reveal ? { animationDelay: `${Math.min(index * 45, 540)}ms` } : undefined}
               title={`${row.name} — ${formatPct(row.quarterReturn)} this quarter`}
             >
               <div className="flex items-center gap-1.5">
@@ -76,6 +82,7 @@ export function PriceTape({ rows }: { readonly rows: readonly PriceRow[] }): Rea
                 <CountUp
                   value={row.quarterReturn}
                   from={0}
+                  enabled={reveal}
                   delayMs={Math.min(index * 45, 540)}
                   format={(value) => `${value >= 0 ? '▲' : '▼'} ${formatPct(Math.abs(value))}`}
                   className={cx('figure shrink-0 text-[11px] leading-none font-semibold', up ? 'tone-gain' : 'tone-loss')}

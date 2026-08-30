@@ -48,7 +48,9 @@ export function Newspaper({
             Ledger {sequenceFrom}–{sequenceTo}
           </span>
         </div>
-        <h2 className="mt-2 text-center font-mono text-[clamp(18px,6.4vw,32px)] leading-none font-bold tracking-[0.14em] text-ink uppercase">
+        {/* Sized in `vw` so the nameplate fills the card without ever exceeding
+            it: at 390px it lands near 19px, and the clamp caps it on a desk. */}
+        <h2 className="mt-2 overflow-hidden text-center font-mono text-[clamp(15px,5vw,28px)] leading-tight font-bold tracking-[0.1em] text-ink uppercase">
           The Frontier Times
         </h2>
         <p className="mt-1.5 text-center text-[9px] font-semibold tracking-[0.22em] text-ink-faint uppercase">

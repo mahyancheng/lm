@@ -85,7 +85,7 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [entries.length]);
+  }, [entries.length, sending]);
 
   const budgets = useMemo(() => currentBudgets(company), [company]);
   const decisions = useMemo(() => openDecisions(session, company), [session, company]);
@@ -122,6 +122,15 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
     setEntries(appendTranscript(session.sessionId, entry));
     setSending(false);
   }
+
+  /** Who is talking, on every card the Chief of Staff owns. Model-authored, so labelled. */
+  const chiefSpeaker = (
+    <>
+      <span className="text-[12px] font-semibold text-ink">{CHIEF_OF_STAFF.name}</span>
+      <span className="text-[10px] text-ink-faint">{CHIEF_OF_STAFF.title}</span>
+      <AiLabel />
+    </>
+  );
 
   return (
     <>
@@ -161,17 +170,7 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
                 ring="brand"
                 className="mt-1"
               />
-              <SpeechCard
-                className="min-w-0 flex-1"
-                bodyClassName="px-3 py-3"
-                speaker={
-                  <>
-                    <span className="text-[12px] font-semibold text-ink">{CHIEF_OF_STAFF.name}</span>
-                    <span className="text-[10px] text-ink-faint">{CHIEF_OF_STAFF.title}</span>
-                    <AiLabel />
-                  </>
-                }
-              >
+              <SpeechCard className="min-w-0 flex-1" bodyClassName="px-3 py-3" speaker={chiefSpeaker}>
                 <p className="text-[12px] leading-relaxed text-ink-dim">
                   Tell me what you want in your own words. I read it against your company briefing, the world briefing, your current budget
                   lines and every decision open this quarter, and hand it back as typed actions with the validator&rsquo;s answer already on
@@ -189,6 +188,30 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
           ) : (
             entries.map((entry) => <Exchange key={entry.id} entry={entry} founder={founder} startYear={session.startYear} />)
           )}
+
+          {/* The wait is a person reading, not a spinner. */}
+          {sending ? (
+            <div className="flex items-start gap-2.5">
+              <Portrait
+                characterId={CHIEF_OF_STAFF.id}
+                name={CHIEF_OF_STAFF.name}
+                role={CHIEF_OF_STAFF.role}
+                size="lg"
+                idle
+                mood="neutral"
+                ring="brand"
+                className="mt-1"
+              />
+              <SpeechCard className="min-w-0 flex-1" bodyClassName="px-3 py-2.5" speaker={chiefSpeaker}>
+                <div className="flex items-center gap-1.5">
+                  <span className="animate-pulse-soft size-1.5 rounded-pill bg-brand" />
+                  <span className="animate-pulse-soft stagger-2 size-1.5 rounded-pill bg-brand" />
+                  <span className="animate-pulse-soft stagger-4 size-1.5 rounded-pill bg-brand" />
+                  <span className="ml-1 text-[11px] text-ink-faint">Reading it against your briefing and the world…</span>
+                </div>
+              </SpeechCard>
+            </div>
+          ) : null}
 
           <div ref={bottom} />
 

@@ -68,9 +68,12 @@ export function BoardroomScene({
     return map;
   }, [whip]);
 
-  // A crowded table draws smaller people rather than overlapping ones.
+  // A crowded table draws smaller people rather than overlapping ones, and past
+  // eight seats it drops the stance label: the ring around each face already
+  // carries the colour, and the full reading stays in the seat's own label.
   const portraitSize = seats.length <= 6 ? 'lg' : seats.length <= 10 ? 'md' : 'sm';
-  const seatWidth = seats.length <= 6 ? 92 : seats.length <= 10 ? 78 : 68;
+  const seatWidth = seats.length <= 6 ? 96 : seats.length <= 10 ? 88 : 78;
+  const showStance = seats.length <= 8;
 
   const ownSeat = board.directors.find((seat) => seat.characterId === founder.id) ?? null;
   const ownLine = lineOf.get(founder.id) ?? null;
@@ -173,11 +176,11 @@ export function BoardroomScene({
                     mood={moodFromRelationship(director?.relationshipWithCeo)}
                   />
                   <span className="w-full truncate text-[10px] font-semibold text-ink">{shortName}</span>
-                  <span className="flex items-center gap-1">
+                  {showStance ? (
                     <Tag tone={tone} size="sm" dot={stance !== 'unknown'}>
                       {STANCE_LABEL[stance]}
                     </Tag>
-                  </span>
+                  ) : null}
                   {director?.isChair === true ? <span className="label-caps-faint text-[9px]">Chair</span> : null}
                   {line !== null && line.honouredCommitmentId !== null ? <span className="text-[9px] text-info">commitment</span> : null}
                 </button>

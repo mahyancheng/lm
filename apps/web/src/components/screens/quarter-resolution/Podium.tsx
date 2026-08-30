@@ -29,7 +29,13 @@ export interface RankRow {
   readonly percentile: number;
 }
 
-export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): React.JSX.Element | null {
+export interface RankPodiumProps {
+  readonly rows: readonly RankRow[];
+  /** False when the player has asked to skip the reveal: figures land settled. */
+  readonly reveal?: boolean;
+}
+
+export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.Element | null {
   if (rows.length === 0) return null;
 
   const steps = podiumOrder(rows, (row) => row.percentile);
@@ -49,7 +55,7 @@ export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): Rea
               key={row.board}
               href="/leaderboard"
               className="animate-pop-in press-pop flex min-w-0 flex-col items-center gap-1.5 rounded-card focus-visible:outline-2"
-              style={{ animationDelay: `${index * 110}ms` }}
+              style={reveal ? { animationDelay: `${index * 110}ms` } : undefined}
               title={`${row.board.replace(/_/g, ' ')} — rank ${row.rank}`}
             >
               {best ? <PodiumFigure className="animate-bob h-8 w-6" /> : <span className="h-8" aria-hidden="true" />}
@@ -57,6 +63,7 @@ export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): Rea
               <CountUp
                 value={row.rank}
                 from={row.previousRank ?? row.rank}
+                enabled={reveal}
                 delayMs={index * 110}
                 format={(value) => `#${Math.max(1, Math.round(value))}`}
                 className={cx('figure leading-none font-semibold', best ? 'text-[24px] text-ink' : 'text-[18px] text-ink-dim')}

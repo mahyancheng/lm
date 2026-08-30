@@ -147,7 +147,9 @@ export function ResolvingOverlay(): React.JSX.Element | null {
         <p className="mt-1 text-[13px] font-semibold text-ink">{detail}</p>
 
         {/* --- the vignette ----------------------------------------------- */}
-        <div className="scene-frame mt-3 bg-sky/60">
+        {/* Hidden from the a11y tree: the caption under it says the same thing
+            in words, and this sits inside a live region. */}
+        <div className="scene-frame mt-3 bg-sky/60" aria-hidden="true">
           <div key={stage?.id ?? 'replay'} className="animate-fade-in flex items-center justify-center px-3 py-2">
             <Vignette id={stage?.id ?? 'desk'} className="h-[104px] w-full max-w-[248px]" />
           </div>
@@ -188,7 +190,9 @@ export function ResolvingOverlay(): React.JSX.Element | null {
                   ].join(' ')}
                   aria-current={state === 'active' ? 'step' : undefined}
                 >
-                  <Vignette id={entry.id} className={state === 'waiting' ? 'h-7 w-full opacity-45' : 'h-7 w-full'} />
+                  <span aria-hidden="true" className="block w-full">
+                    <Vignette id={entry.id} className={state === 'waiting' ? 'h-7 w-full opacity-45' : 'h-7 w-full'} />
+                  </span>
                   <span
                     className={[
                       'w-full truncate text-center text-[9px] leading-tight font-semibold',
@@ -205,7 +209,10 @@ export function ResolvingOverlay(): React.JSX.Element | null {
 
         {/* --- the phases, streaming --------------------------------------- */}
         {resolving ? (
-          <ul key={stageIndex} className="mt-3 grid grid-cols-2 gap-x-3 gap-y-0.5" aria-label="Resolution phases">
+          /* Deliberately not keyed on the stage: re-mounting inside a live
+             region would re-announce all eighteen names on every step. The
+             stream plays once, on arrival, and the marks update in place. */
+          <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-0.5" aria-label="Resolution phases">
             {RESOLUTION_PHASES.map((phase, index) => {
               const owner = STAGE_OF_PHASE.get(phase) ?? STAGES.length;
               const state = owner < stageIndex ? 'done' : owner <= lastActive ? 'active' : 'waiting';

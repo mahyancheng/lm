@@ -13,6 +13,8 @@
 import type {
   ActionIntent,
   ActionType,
+  GmProposalBatch,
+  NpcActionBundle,
   ResolverContext,
   SessionDifficulty,
   SessionState,
@@ -28,6 +30,7 @@ import {
   demoSessionInput,
   phaseStream,
   type FrontierEngine,
+  type FrontierResolutionOutcome,
 } from '@frontier/simulation';
 
 export { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, DEMO_SEED } from '@frontier/simulation';
@@ -163,6 +166,69 @@ export function buildSubmittedAction(
     intent,
     confirmedByHuman: options.confirmedByHuman ?? !needsConfirmation(intent.type),
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Resolving without a way to get stuck                                       */
+/* -------------------------------------------------------------------------- */
+
+/** What one attempt to resolve a quarter produced, including its own failure. */
+export interface ResolveAttempt {
+  /** The outcome, or null when the engine threw on both attempts. */
+  readonly outcome: FrontierResolutionOutcome | null;
+  /** The World Director proposal the surviving attempt actually used. */
+  readonly gmProposal: GmProposalBatch | null;
+  /** The NPC bundles the surviving attempt actually used. */
+  readonly npcBundles: readonly NpcActionBundle[];
+  /** Why nothing resolved, or null. */
+  readonly error: string | null;
+}
+
+/**
+ * Resolve a quarter and never throw.
+ *
+ * `resolveQuarter` throws `InvariantViolationError` for the four engine
+ * invariants — `deterministic_replay`, `auditability`, `agent_reproducibility`,
+ * `failure_mode` — and those are checks over the ledger this resolve just
+ * produced, so they are deterministic in the input state and independent of
+ * anything the model contributed. Retrying offline therefore fixes a bad
+ * proposal and cannot fix a subsystem fault, and the caller has to be told which
+ * happened rather than being left holding a rejected promise behind a
+ * full-screen overlay with no dismiss control.
+ *
+ * The returned `gmProposal`/`npcBundles` are the inputs of the attempt that
+ * *survived*, so a caller recording them for replay records what happened rather
+ * than what was attempted.
+ */
+export function resolveQuarterSafely(
+  session: SessionState,
+  submitted: readonly SubmittedAction[],
+  gmProposal: GmProposalBatch | null,
+  npcBundles: readonly NpcActionBundle[],
+  resolve: (
+    state: SessionState,
+    actions: readonly SubmittedAction[],
+    proposal: GmProposalBatch | null,
+    bundles: readonly NpcActionBundle[],
+  ) => FrontierResolutionOutcome = (state, actions, proposal, bundles) =>
+    getEngine().resolver.resolveQuarter(state, actions, proposal, bundles),
+): ResolveAttempt {
+  try {
+    return { outcome: resolve(session, submitted, gmProposal, npcBundles), gmProposal, npcBundles, error: null };
+  } catch {
+    // Anything the model contributed is discarded and the quarter resolves
+    // fully offline. The game never blocks on a model.
+  }
+  try {
+    return { outcome: resolve(session, submitted, null, []), gmProposal: null, npcBundles: [], error: null };
+  } catch (error) {
+    return {
+      outcome: null,
+      gmProposal: null,
+      npcBundles: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**

@@ -14,9 +14,18 @@
  * A line whose subject is neither a company nor a character — a Frontier Map
  * node whose public confidence moved, an index, an opportunity that opened — is
  * public news about the world, and reads correctly there.
+ *
+ * **Sorting is not redaction.** `sectionOf` decides where a line reads, never
+ * whether the viewer is entitled to it — a rival's morale, runway or churn would
+ * land tidily in "Competition" and still be a leak. Entitlement is the engine's
+ * answer, so `playerQuarter` projects the outcome through
+ * `projectResolutionOutcomeForPlayer` before a line reaches these buckets at
+ * all. The projection is idempotent, so a store that has already applied it
+ * loses nothing by the screen applying it again.
  */
 
-import type { ResolutionLine, ResolutionPhase, ResolutionReport } from '@frontier/contracts';
+import type { ResolutionLine, ResolutionPhase, ResolutionReport, SessionState, SimEvent } from '@frontier/contracts';
+import { audienceFor, projectResolutionOutcomeForPlayer } from '@frontier/simulation';
 
 export type SectionId = 'world' | 'competition' | 'company' | 'markets' | 'rank' | 'ledger';
 
@@ -76,6 +85,40 @@ export function groupLines(report: ResolutionReport, ownIds: ReadonlySet<string>
     subtitle: TITLES[id].subtitle,
     lines: buckets.get(id) ?? [],
   }));
+}
+
+/** The quarter as one seat may read it: projected first, then grouped. */
+export interface PlayerQuarter {
+  readonly report: ResolutionReport;
+  /** The ledger rows this seat may open, and the only ones a line can cite. */
+  readonly events: SimEvent[];
+  readonly sections: ResolutionSection[];
+}
+
+/**
+ * Project a resolved quarter to one player, then group what survives.
+ *
+ * The audience comes from the engine — the companies this seat controls and the
+ * characters it is — so "your company" and "competition" are drawn on the same
+ * line the projection was, rather than on a set the screen assembled itself.
+ */
+export function playerQuarter(
+  outcome: { readonly report: ResolutionReport; readonly events: readonly SimEvent[] },
+  session: SessionState,
+  playerId: string,
+): PlayerQuarter {
+  const projected = projectResolutionOutcomeForPlayer(outcome, session, playerId);
+  const audience = audienceFor(session, playerId);
+  const ownIds = new Set<string>([...audience.companyIds, ...audience.characterIds]);
+  const actorIds = new Set<string>([
+    ...session.companies.map((company) => company.id),
+    ...session.characters.map((character) => character.id),
+  ]);
+  return {
+    report: projected.report,
+    events: projected.events,
+    sections: groupLines(projected.report, ownIds, actorIds),
+  };
 }
 
 /** Total lines in a report, for the header count. */

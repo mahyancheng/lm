@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, type ReactNode } from 'react';
 import { EmptyState } from './EmptyState';
-import { cx } from './tokens';
+import { cx, isActivationKey } from './tokens';
 
 export interface Column<T> {
   /** Stable key; also the sort key. */
@@ -130,15 +130,29 @@ export function DataTable<T>({
           {sorted.map((row, index) => {
             const href = rowHref?.(row) ?? null;
             const clickable = href !== null || onRowClick !== undefined;
+            // A clickable row is a control, so it takes focus, answers Enter and
+            // Space, and says what it is. Twelve tables across eight screens
+            // navigate from a row — on Markets it is the only way to reach the
+            // trade ticket at all — and a bare `onClick` on a `<tr>` is
+            // unreachable without a pointer.
+            const activate = (): void => {
+              if (href !== null) router.push(href);
+              else onRowClick?.(row);
+            };
             return (
               <tr
                 key={rowKey(row, index)}
                 data-clickable={clickable ? 'true' : 'false'}
-                onClick={
+                role={clickable ? (href !== null ? 'link' : 'button') : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onClick={clickable ? activate : undefined}
+                onKeyDown={
                   clickable
-                    ? () => {
-                        if (href !== null) router.push(href);
-                        else onRowClick?.(row);
+                    ? (event) => {
+                        if (!isActivationKey(event.key)) return;
+                        // Space would otherwise scroll the page under the row.
+                        event.preventDefault();
+                        activate();
                       }
                     : undefined
                 }

@@ -98,6 +98,9 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
       {/* Mobile bottom bar */}
       <nav
         aria-label="Quick navigation"
+        // The height is a token, not a consequence of the padding: the action
+        // tray offsets itself by exactly this much so it never covers the bar.
+        style={{ height: 'var(--bottombar-height)' }}
         className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t border-hair bg-panel/95 backdrop-blur lg:hidden"
       >
         {QUICK_LINKS.map((link) => {
@@ -106,7 +109,10 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
             <Link
               key={link.href}
               href={link.href}
-              className={cx('flex flex-col items-center gap-0.5 py-2 text-[10px]', active ? 'text-brand' : 'text-ink-faint')}
+              className={cx(
+                'flex flex-col items-center justify-center gap-0.5 text-[10px]',
+                active ? 'text-brand' : 'text-ink-dim',
+              )}
             >
               <span className="figure text-[9px]">{link.glyph}</span>
               {link.label}

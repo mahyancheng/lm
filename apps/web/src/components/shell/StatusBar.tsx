@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
@@ -13,6 +14,7 @@ import {
   useSession,
 } from '@/lib/game';
 import { cx } from '@/components/ui';
+import { SettingsDrawer } from './SettingsDrawer';
 
 interface ReadingProps {
   readonly label: string;
@@ -64,11 +66,13 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
   const netWorth = useFounderNetWorth();
   const connection = useConnection();
   const llm = useLlm();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const alerts = view.alerts.length;
   const cash = company.financials.cash;
 
   return (
+    <>
     <header
       className="sticky top-0 z-20 flex items-center gap-1 border-b border-hair bg-panel/95 backdrop-blur"
       style={{ height: 'var(--statusbar-height)' }}
@@ -112,7 +116,7 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
       </Link>
 
       <span
-        className="mr-2 hidden items-center gap-1.5 rounded-[4px] border border-hair px-2 py-1 text-[10px] text-ink-faint md:flex"
+        className="mr-1 hidden items-center gap-1.5 rounded-[4px] border border-hair px-2 py-1 text-[10px] text-ink-dim md:flex"
         title={
           llm.available
             ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter.`
@@ -122,6 +126,20 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
         <span className={cx('inline-block size-1.5 rounded-full', llm.available ? 'bg-gain pulse-dot' : 'bg-ink-faint')} />
         {llm.available ? 'Live' : 'Offline'}
       </span>
+
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        className="btn btn-ghost btn-sm mr-2 shrink-0"
+        aria-label="Session settings and save"
+        aria-expanded={settingsOpen}
+        title="Session settings, the live-model switch and the save file"
+      >
+        <span className="text-[13px] leading-none">⚙</span>
+      </button>
     </header>
+
+    <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </>
   );
 }

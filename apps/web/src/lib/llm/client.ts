@@ -125,6 +125,35 @@ async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Conversations                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which thread a conversational call belongs to.
+ *
+ * A conversation key is what the transport resumes a Claude session from, so it
+ * decides whose transcript a reply is written into. It must therefore name the
+ * **seat**, not just the session: two players in one game session each hold
+ * their own Chief of Staff, and a key that omits the player id resumes one
+ * shared thread carrying the other player's private company briefing.
+ *
+ * The components are sent alongside the composed key so the server can derive
+ * the key from the authenticated identity instead of trusting this one. The
+ * client's key is a convenience, never an authority.
+ */
+export interface ConversationRef {
+  readonly sessionId: string;
+  readonly playerId: string;
+  /** The thread within that seat: `main` for the Chief of Staff, the character id for dialogue. */
+  readonly conversationId: string;
+}
+
+/** `<role>:<sessionId>:<playerId>:<conversationId>` — stable for the life of the thread. */
+export function conversationKeyFor(role: 'cos' | 'chr', ref: ConversationRef): string {
+  return `${role}:${ref.sessionId}:${ref.playerId}:${ref.conversationId}`;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Roles                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -137,9 +166,13 @@ async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT
  */
 export function requestChiefOfStaff(
   input: ChiefOfStaffInput,
-  conversationKey: string,
+  conversation: ConversationRef,
 ): Promise<ChiefOfStaffInterpretation | null> {
-  return postRole<ChiefOfStaffInterpretation>('/api/llm/chief-of-staff', { input, conversationKey });
+  return postRole<ChiefOfStaffInterpretation>('/api/llm/chief-of-staff', {
+    input,
+    conversationKey: conversationKeyFor('cos', conversation),
+    conversation,
+  });
 }
 
 /**
@@ -165,12 +198,16 @@ export function requestNpcBundle(
   return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, QUARTER_ROLE_TIMEOUT_MS);
 }
 
-/** One turn of dialogue with a character. */
+/** One turn of dialogue with a character, on that seat's own thread. */
 export function requestCharacterReply(
   context: CharacterUtteranceContext,
-  conversationKey: string,
+  conversation: ConversationRef,
 ): Promise<CharacterReply | null> {
-  return postRole<CharacterReply>('/api/llm/character', { context, conversationKey });
+  return postRole<CharacterReply>('/api/llm/character', {
+    context,
+    conversationKey: conversationKeyFor('chr', conversation),
+    conversation,
+  });
 }
 
 /**

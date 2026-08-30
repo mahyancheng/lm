@@ -73,6 +73,11 @@ export interface InterpretationCardProps {
 
 export function InterpretationCard({ entry, startYear }: InterpretationCardProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
+  // `validateIntent` reads the live session, so the verdicts below are only as
+  // current as the session they were computed against. The memo is keyed on it:
+  // a card that survives a resolve must recompute rather than keep showing a
+  // clamp that was calculated against a world that no longer exists.
+  const session = useSession();
   const [queued, setQueued] = useState<Readonly<Record<number, ActionValidationResult>>>({});
   const [pending, setPending] = useState<{ index: number; intent: ActionIntent } | null>(null);
 
@@ -88,7 +93,7 @@ export function InterpretationCard({ entry, startYear }: InterpretationCardProps
         validation: validateIntent(intent),
         needsHuman: needsConfirmation(intent.type),
       })),
-    [interpretation.interpretedInstructions, startYear, validateIntent],
+    [interpretation.interpretedInstructions, startYear, validateIntent, session],
   );
 
   const routine = rows.filter((row) => !row.needsHuman && queued[row.index] === undefined);

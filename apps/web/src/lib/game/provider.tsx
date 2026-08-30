@@ -63,6 +63,7 @@ import {
   needsConfirmation,
   playerCharacterOf,
   playerCompanyOf,
+  resolveQuarterSafely,
   seedOf,
 } from './engine';
 import { buildNpcStrategistInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
@@ -611,48 +612,33 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     dispatch({ type: 'resolve_status', status: 'Resolving eighteen phases' });
     await nextPaint();
 
-    // The record is the inputs the resolver was *actually* handed. When the
-    // first attempt throws and the offline retry succeeds, the agent inputs the
-    // record carries are the offline ones — a replay reproduces the quarter that
-    // happened, not the one that was attempted.
-    let outcome: FrontierResolutionOutcome;
-    let usedGmProposal: GmProposalBatch | null = gmProposal;
-    let usedNpcBundles: readonly NpcActionBundle[] = npcBundles;
-    const engine = getEngine();
-    try {
-      try {
-        outcome = engine.resolver.resolveQuarter(session, submitted, gmProposal, npcBundles);
-      } catch {
-        // Anything the model contributed is discarded and the quarter resolves
-        // fully offline. The game never blocks on a model.
-        usedGmProposal = null;
-        usedNpcBundles = [];
-        outcome = engine.resolver.resolveQuarter(session, submitted, null, []);
-      }
-    } catch (error) {
+    // The record holds the inputs the surviving attempt was *actually* handed:
+    // when the model's contribution makes the engine throw and the offline retry
+    // succeeds, a replay must reproduce the quarter that happened.
+    const attempt = resolveQuarterSafely(session, submitted, gmProposal, npcBundles);
+    if (attempt.outcome === null) {
       // Both attempts threw, so the fault is in the engine and not in anything
       // the model said. The queue is preserved and the overlay comes down: a
       // full-screen overlay with no dismiss control is the one state this
       // function may never leave behind.
-      const detail = error instanceof Error ? error.message : String(error);
       dispatch({
         type: 'resolve_failed',
-        notice: `The quarter could not be resolved: ${detail}. Nothing was committed and your queue is intact.`,
+        notice: `The quarter could not be resolved: ${attempt.error ?? 'the engine refused it'}. Nothing was committed and your queue is intact.`,
       });
       return false;
     }
 
     dispatch({
       type: 'resolve_done',
-      outcome,
+      outcome: attempt.outcome,
       record: {
         quarter: session.quarter,
         actions: submitted,
-        gmProposal: usedGmProposal,
-        npcBundles: [...usedNpcBundles],
+        gmProposal: attempt.gmProposal,
+        npcBundles: [...attempt.npcBundles],
       },
     });
-    if (outcome.committed) sequences.reset(0);
+    if (attempt.outcome.committed) sequences.reset(0);
     return true;
   }, [sequences]);
 

@@ -189,7 +189,6 @@ export function validateAction(
   }
   let shareholderCapacity = false;
   if (actor.playerId !== null && company.controllerPlayerId !== actor.playerId) {
-    const stake = shareholderStake(draft, company.id, actor);
     if (!SHAREHOLDER_CAPACITY_ACTIONS.includes(intent.type)) {
       verdict.reject(
         'not_controller_of_company',
@@ -197,6 +196,7 @@ export function validateAction(
       );
       return verdict.toResult(actionId);
     }
+    const stake = shareholderStake(draft, company.id, actor);
     if (stake < SHAREHOLDER_ACTION_THRESHOLD) {
       verdict.reject(
         'not_controller_of_company',

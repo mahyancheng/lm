@@ -33,6 +33,7 @@ import {
 } from '@/components/screens/chief-of-staff/transcript';
 import { requestChiefOfStaff } from '@/lib/llm/client';
 import {
+  PLAYER_ID,
   buildChiefOfStaffInput,
   currentBudgets,
   openDecisions,
@@ -95,7 +96,14 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
     const input = buildChiefOfStaffInput(session, text, history);
     let interpretation = null;
     try {
-      interpretation = await requestChiefOfStaff(input, `cos:${session.sessionId}`);
+      // The key names the seat, not just the session: one shared key would
+      // resume one Claude thread for every player in the session, and this
+      // prompt carries the player's whole private company briefing.
+      interpretation = await requestChiefOfStaff(input, {
+        sessionId: session.sessionId,
+        playerId: PLAYER_ID,
+        conversationId: 'main',
+      });
     } catch {
       interpretation = null;
     }

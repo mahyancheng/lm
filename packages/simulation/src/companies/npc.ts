@@ -20,6 +20,9 @@
 
 import type { ActionIntent, Company, ProcurementOpportunity, ResolverContext, SessionState, StaffRole, SubmittedAction } from '@frontier/contracts';
 import { makeId } from '@frontier/contracts';
+// The two procurement gates a default bid has to clear are restated by the
+// government subsystem as data, so they are imported rather than duplicated
+// here: a change to the clearance table must move NPC bidding with it.
 import { CLEARANCE_STAFF_REQUIREMENT, requiredReliability } from '../government/programmes';
 import {
   NPC_BID_APPETITE_FLOOR,

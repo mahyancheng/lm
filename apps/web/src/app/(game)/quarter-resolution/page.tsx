@@ -39,9 +39,9 @@ import {
   type Column,
 } from '@/components/ui';
 import { LedgerDrawer } from '@/components/screens/quarter-resolution/LedgerDrawer';
-import { groupLines, lineCount, markOf } from '@/components/screens/quarter-resolution/sections';
+import { lineCount, markOf, playerQuarter } from '@/components/screens/quarter-resolution/sections';
 import { requestNarrative } from '@/lib/llm/client';
-import { useGameActions, useLlm, useOutcome, usePlayerCharacter, usePlayerCompany, useSession, useSettings } from '@/lib/game';
+import { PLAYER_ID, useGameActions, useLlm, useOutcome, usePlayerCharacter, usePlayerCompany, useSession, useSettings } from '@/lib/game';
 
 /** Milliseconds between one revealed line and the next. CSS only — no timers. */
 const REVEAL_STEP_MS = 55;
@@ -81,7 +81,13 @@ export default function QuarterResolutionPage(): React.JSX.Element {
   const [narrating, setNarrating] = useState(false);
   const [openLine, setOpenLine] = useState<ResolutionLine | null>(null);
 
-  const report = outcome?.report ?? null;
+  /* --- the quarter, as this seat may read it -------------------------------- */
+  // The engine returns the whole quarter — every rival's morale, runway and
+  // churn. The projection is what a screen is allowed to render, and the
+  // narrator is fed the projection too: a model may not be told what the player
+  // may not be.
+  const view = useMemo(() => (outcome === null ? null : playerQuarter(outcome, session, PLAYER_ID)), [outcome, session]);
+  const report = view?.report ?? null;
 
   /* --- optional colour ----------------------------------------------------- */
   useEffect(() => {
@@ -101,14 +107,9 @@ export default function QuarterResolutionPage(): React.JSX.Element {
     };
   }, [report, company.id, llm.available]);
 
+  const sections = view?.sections ?? [];
+  /** The subjects the rank panel looks for: the company and the founder behind it. */
   const ownIds = useMemo(() => new Set<string>([company.id, founder.id]), [company.id, founder.id]);
-  // Every company and character in the session: a subject in here that is not
-  // yours is a rival's line; a subject in neither is public news about the world.
-  const actorIds = useMemo(
-    () => new Set<string>([...session.companies.map((entry) => entry.id), ...session.characters.map((entry) => entry.id)]),
-    [session.companies, session.characters],
-  );
-  const sections = useMemo(() => (report === null ? [] : groupLines(report, ownIds, actorIds)), [report, ownIds, actorIds]);
 
   /* --- the state the report describes -------------------------------------- */
   // For a committed quarter this is the world afterwards. For a refused one the
@@ -159,7 +160,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
   }, [resolved, committed, ownIds]);
 
   /* --- nothing to show ------------------------------------------------------ */
-  if (outcome === null || report === null) {
+  if (outcome === null || view === null || report === null) {
     return (
       <>
         <PageHeader
@@ -431,7 +432,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
             </li>
             <li className="flex items-baseline justify-between gap-3">
               <span className="text-ink-dim">Ledger rows</span>
-              <span className="figure text-ink">{outcome.events.length}</span>
+              <span className="figure text-ink">{view.events.length}</span>
             </li>
           </ul>
           <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
@@ -471,7 +472,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         </Link>
       </div>
 
-      <LedgerDrawer line={openLine} events={outcome.events} startYear={session.startYear} onClose={() => setOpenLine(null)} />
+      <LedgerDrawer line={openLine} events={view.events} startYear={session.startYear} onClose={() => setOpenLine(null)} />
     </>
   );
 }

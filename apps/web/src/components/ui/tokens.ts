@@ -76,3 +76,33 @@ export function toneOfDelta(value: number, invert = false): Tone {
 export function cx(...parts: readonly (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Keyboard                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Does this key activate a control?
+ *
+ * A native button answers Enter and Space; anything given `role="button"` has to
+ * answer them itself or it is unreachable without a pointer. `Spacebar` is the
+ * legacy name older engines still send.
+ */
+export function isActivationKey(key: string): boolean {
+  return key === 'Enter' || key === ' ' || key === 'Spacebar';
+}
+
+/**
+ * The index Tab should move to inside a focus trap.
+ *
+ * Wrapping in both directions is what makes a dialog modal to the keyboard:
+ * Tab past the last control returns to the first, Shift+Tab before the first
+ * goes to the last, and focus never escapes into the `aria-hidden` background.
+ * `current` of -1 means focus is outside the trap, where the next Tab belongs
+ * at the start and the previous at the end.
+ */
+export function nextTrapIndex(count: number, current: number, backwards: boolean): number {
+  if (count <= 0) return -1;
+  if (current < 0) return backwards ? count - 1 : 0;
+  return backwards ? (current - 1 + count) % count : (current + 1) % count;
+}

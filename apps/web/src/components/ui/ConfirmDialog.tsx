@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ActionType } from '@frontier/contracts';
 import { requiresExplicitConfirmation } from '@frontier/contracts';
 import { Modal } from './Modal';
@@ -62,6 +62,10 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps): React.JSX.Element {
   const [typed, setTyped] = useState('');
+  // The gate is the typed word, so that is where the keyboard should land:
+  // thirteen action types route through here and every one of them is otherwise
+  // several tab stops away from being confirmable.
+  const typedRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!open) setTyped('');
@@ -76,6 +80,7 @@ export function ConfirmDialog({
       onClose={onCancel}
       title={title}
       width="sm"
+      initialFocus={requireTyped === null ? undefined : typedRef}
       footer={
         <>
           <button type="button" className="btn" onClick={onCancel} disabled={busy}>
@@ -117,6 +122,7 @@ export function ConfirmDialog({
             Type <span className="text-ink">{requireTyped}</span> to continue
           </span>
           <input
+            ref={typedRef}
             className="field mt-1"
             value={typed}
             onChange={(event) => setTyped(event.target.value)}

@@ -31,7 +31,10 @@ export function ActionQueueTray(): React.JSX.Element | null {
   const rejected = entries.filter((entry) => entry.validation.status === 'rejected').length;
 
   return (
-    <div className="pointer-events-none fixed right-3 bottom-3 z-30 flex w-[min(360px,calc(100vw-24px))] flex-col items-end gap-2 lg:right-4 lg:bottom-4">
+    // Below `lg` the fixed quick-nav owns the bottom of the viewport, so the
+    // tray sits above it: the pill used to cover the Submit and Result tabs at
+    // a higher z-index, which is exactly when a player has something queued.
+    <div className="pointer-events-none fixed right-3 bottom-[calc(var(--bottombar-height)+0.75rem)] z-30 flex w-[min(360px,calc(100vw-24px))] flex-col items-end gap-2 lg:right-4 lg:bottom-4">
       {open ? (
         <div className="animate-rise pointer-events-auto max-h-[52dvh] w-full overflow-hidden rounded-[8px] border border-hair-strong bg-panel shadow-2xl shadow-black/60">
           <header className="flex items-center justify-between border-b border-hair px-3 py-2">

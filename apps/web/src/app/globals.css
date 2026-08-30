@@ -20,7 +20,13 @@
   /* --- text hierarchy ----------------------------------------------------- */
   --color-ink: #e6edf3;
   --color-ink-dim: #8b98a5;
-  --color-ink-faint: #566573;
+  /*
+     The faint tier carries the app's whole explanatory layer at 10-11px, so it
+     is held to the WCAG AA body-text floor rather than the large-text one:
+     4.5:1 against every surface it is used on (5.34 on base, 5.01 on panel,
+     4.63 on raised). The old #566573 scored 2.81 on a raised surface.
+  */
+  --color-ink-faint: #7a8896;
 
   /* --- restrained accents ------------------------------------------------- */
   --color-gain: #3fdc97;
@@ -49,6 +55,7 @@
   /* --- shell metrics ------------------------------------------------------ */
   --spacing-rail: 232px;
   --spacing-statusbar: 52px;
+  --spacing-bottombar: 52px;
 }
 
 /* ==========================================================================
@@ -60,6 +67,9 @@
     color-scheme: dark;
     --rail-width: 232px;
     --statusbar-height: 52px;
+    /* The mobile quick-nav's fixed height. Anything else pinned to the bottom
+       of a phone viewport clears it by this much. */
+    --bottombar-height: 52px;
   }
 
   html {
@@ -180,7 +190,7 @@
     font-weight: 600;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #566573;
+    color: #7a8896;
   }
 
   .panel-surface {
@@ -283,7 +293,7 @@
   }
 
   .field::placeholder {
-    color: #566573;
+    color: #7a8896;
   }
 
   .field:focus {
@@ -347,6 +357,16 @@
   }
 
   .data-table tbody tr[data-clickable="true"]:hover td {
+    background-color: #161e27;
+  }
+
+  /* A clickable row is a control: it takes focus and shows that it has it. */
+  .data-table tbody tr[data-clickable="true"]:focus-visible {
+    outline: 2px solid #7aa2ff;
+    outline-offset: -2px;
+  }
+
+  .data-table tbody tr[data-clickable="true"]:focus-visible td {
     background-color: #161e27;
   }
 

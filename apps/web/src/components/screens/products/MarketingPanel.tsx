@@ -1,0 +1,149 @@
+'use client';
+
+/**
+ * Marketing allocation.
+ *
+ * The panel opens on the plan that will actually run this quarter, computed by
+ * the engine's own `marketingPlan` against the queue as it stands. Until a
+ * `set_marketing_budget` is queued that plan is the archetype policy — a share
+ * of last quarter's revenue, bent by posture, split across the segments the
+ * company sells into. Stating an allocation replaces it outright, and segments
+ * left at zero are set to zero: the action documents that, so the panel says it.
+ */
+
+import { useMemo, useState } from 'react';
+import type { ActionValidationResult, Company, ProductSegment, SubmittedAction } from '@frontier/contracts';
+import { PRODUCT_SEGMENTS } from '@frontier/contracts';
+import { marketingPlan } from '@frontier/simulation';
+import { formatMoney } from '@frontier/shared';
+import { BarChart, Panel, Tag, ValidationBanner } from '@/components/ui';
+import { useGameActions } from '@/lib/game';
+import { SEGMENT_LABEL } from './labels';
+
+export interface MarketingPanelProps {
+  readonly company: Company;
+  readonly queued: readonly SubmittedAction[];
+}
+
+type Draft = Record<ProductSegment, string>;
+
+const EMPTY_DRAFT: Draft = { consumer: '', enterprise: '', developer_api: '', government: '' };
+
+export function MarketingPanel({ company, queued }: MarketingPanelProps): React.JSX.Element {
+  const { queueAction, validateIntent } = useGameActions();
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [result, setResult] = useState<ActionValidationResult | null>(null);
+
+  const plan = useMemo(() => marketingPlan(company, queued), [company, queued]);
+
+  const allocations = useMemo(
+    () =>
+      PRODUCT_SEGMENTS.map((segment) => {
+        const parsed = Number.parseFloat(draft[segment]);
+        return { segment, budgetUsd: Number.isFinite(parsed) && parsed > 0 ? parsed : 0 };
+      }),
+    [draft],
+  );
+
+  const total = allocations.reduce((sum, allocation) => sum + allocation.budgetUsd, 0);
+  const touched = PRODUCT_SEGMENTS.some((segment) => draft[segment].trim().length > 0);
+
+  const preview = useMemo(
+    () => (touched ? validateIntent({ type: 'set_marketing_budget', allocations }) : null),
+    [touched, allocations, validateIntent],
+  );
+
+  function apply(): void {
+    if (!touched) return;
+    const entry = queueAction({ type: 'set_marketing_budget', allocations });
+    setResult(entry.validation);
+  }
+
+  function prefillFromPlan(): void {
+    const next: Draft = { ...EMPTY_DRAFT };
+    for (const segment of PRODUCT_SEGMENTS) {
+      const value = plan.bySegment[segment] ?? 0;
+      next[segment] = value > 0 ? String(Math.round(value)) : '';
+    }
+    setDraft(next);
+    setResult(null);
+  }
+
+  const planData = PRODUCT_SEGMENTS.map((segment) => ({
+    label: SEGMENT_LABEL[segment],
+    value: plan.bySegment[segment] ?? 0,
+    tone: 'info' as const,
+  })).filter((datum) => datum.value > 0);
+
+  return (
+    <Panel
+      title="Marketing allocation"
+      subtitle={`${formatMoney(plan.recurringUsd)} recurring${plan.oneOffUsd > 0 ? ` · ${formatMoney(plan.oneOffUsd)} one-off` : ''} this quarter`}
+      actions={
+        plan.stated ? (
+          <Tag tone="brand" dot>
+            Stated by an action
+          </Tag>
+        ) : (
+          <Tag tone="neutral" dot>
+            Archetype policy
+          </Tag>
+        )
+      }
+    >
+      {planData.length === 0 ? (
+        <p className="text-[11px] text-ink-faint">No marketing spend is planned for this quarter.</p>
+      ) : (
+        <BarChart data={planData} formatValue={(value) => formatMoney(value)} />
+      )}
+
+      <div className="mt-4 border-t border-hair pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="label-caps">Reallocate</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={prefillFromPlan}>
+            Start from the current plan
+          </button>
+        </div>
+
+        <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+          {PRODUCT_SEGMENTS.map((segment) => (
+            <label key={segment} className="min-w-0">
+              <span className="label-caps-faint mb-1 block">{SEGMENT_LABEL[segment]}</span>
+              <input
+                className="field"
+                type="number"
+                min={0}
+                step="1000"
+                inputMode="numeric"
+                placeholder="0"
+                value={draft[segment]}
+                onChange={(event) => setDraft((current) => ({ ...current, [segment]: event.target.value }))}
+              />
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] text-ink-dim">
+            Total <span className="figure text-ink">{formatMoney(total)}</span>
+            <span className="text-ink-faint"> · unlisted segments are set to zero</span>
+          </div>
+          <button type="button" className="btn btn-primary btn-sm" disabled={!touched} onClick={apply}>
+            Queue allocation
+          </button>
+        </div>
+
+        {result === null && preview !== null ? (
+          <div className="mt-2.5">
+            <ValidationBanner result={preview} compact />
+          </div>
+        ) : null}
+        {result === null ? null : (
+          <div className="mt-2.5">
+            <ValidationBanner result={result} />
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}

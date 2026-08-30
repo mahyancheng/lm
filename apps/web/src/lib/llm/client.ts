@@ -92,8 +92,15 @@ interface RoleResponse<T> {
   readonly reason?: string;
 }
 
-/** Milliseconds before a role call is abandoned and the deterministic path taken. */
+/** Milliseconds before an interactive role call is abandoned. */
 export const ROLE_TIMEOUT_MS = 45_000;
+
+/**
+ * The ceiling for calls that stand between the player and a resolved quarter.
+ * Shorter on purpose: a quarter that takes half a minute to submit is a worse
+ * game than a quarter the World Director sat out.
+ */
+export const QUARTER_ROLE_TIMEOUT_MS = 20_000;
 
 async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT_MS): Promise<T | null> {
   if (typeof window === 'undefined') return null;
@@ -135,17 +142,27 @@ export function requestChiefOfStaff(
   return postRole<ChiefOfStaffInterpretation>('/api/llm/chief-of-staff', { input, conversationKey });
 }
 
-/** Ask the World Director to contextualise this quarter's drawn candidates. */
+/**
+ * Ask the World Director to contextualise this quarter's drawn candidates.
+ *
+ * Called by the store during `endQuarter`, never by a screen. Null falls the
+ * resolver back to firing the drawn candidates on their family templates.
+ */
 export function requestWorldDirector(input: WorldDirectorInput): Promise<GmProposalBatch | null> {
-  return postRole<GmProposalBatch>('/api/llm/world-director', { input });
+  return postRole<GmProposalBatch>('/api/llm/world-director', { input }, QUARTER_ROLE_TIMEOUT_MS);
 }
 
-/** Ask an NPC strategist for one company's quarter. */
+/**
+ * Ask an NPC strategist for one company's quarter.
+ *
+ * Called by the store during `endQuarter`, never by a screen. Null leaves that
+ * company on its archetype default.
+ */
 export function requestNpcBundle(
   input: NpcStrategistInput,
   evidence?: unknown,
 ): Promise<NpcActionBundle | null> {
-  return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null });
+  return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, QUARTER_ROLE_TIMEOUT_MS);
 }
 
 /** One turn of dialogue with a character. */

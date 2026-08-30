@@ -1,0 +1,322 @@
+'use client';
+
+/**
+ * One node of the Frontier Map, opened.
+ *
+ * The reading this drawer exists to give is the gap between two numbers: what
+ * the world rates this at, and what you rate it at. A node the world prices at
+ * 0.31 and you price at 0.68 is where a research thesis lives, and the two
+ * meters sit one above the other so that gap is unmissable.
+ *
+ * The start-project ticket underneath is validated live. Researchers are the
+ * usual binding constraint, so the validator's clamp — "the rest are on other
+ * programmes" — is shown before the action is queued, not after.
+ */
+
+import { useMemo, useState } from 'react';
+import type { ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
+import { PUBLICATION_MODES, quarterLabel } from '@frontier/contracts';
+import { formatMoney, formatPct } from '@frontier/shared';
+import {
+  Drawer,
+  KeyValueGrid,
+  Meter,
+  ProgressBar,
+  SectionHeading,
+  Tag,
+  ValidationBanner,
+} from '@/components/ui';
+import { useGameActions } from '@/lib/game';
+import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
+
+export interface NodeDrawerProps {
+  readonly session: SessionState;
+  readonly graph: TechGraph;
+  readonly company: Company;
+  readonly node: TechNode | null;
+  readonly projects: readonly ResearchProject[];
+  readonly onClose: () => void;
+  readonly onSelect: (nodeId: string) => void;
+}
+
+const PUBLICATION_LABEL: Readonly<Record<PublicationMode, string>> = {
+  paper: 'Paper — reputation, and the method',
+  open_weights: 'Open weights — a governance matter',
+  product_demonstration: 'Product demonstration',
+  closed_briefing: 'Closed briefing — government and investors',
+  leak: 'Leak',
+};
+
+export function NodeDrawer({ session, graph, company, node, projects, onClose, onSelect }: NodeDrawerProps): React.JSX.Element {
+  const { queueAction, validateIntent } = useGameActions();
+  const [budget, setBudget] = useState('500000');
+  const [computeUnits, setComputeUnits] = useState('0');
+  const [researchers, setResearchers] = useState('1');
+  const [secret, setSecret] = useState(true);
+  const [startResult, setStartResult] = useState<ActionValidationResult | null>(null);
+  const [publishMode, setPublishMode] = useState<PublicationMode>('paper');
+  const [publishResult, setPublishResult] = useState<ActionValidationResult | null>(null);
+
+  const titles = useMemo(() => new Map(graph.nodes.map((entry) => [entry.id, entry.title])), [graph.nodes]);
+
+  const existing = node === null ? null : (projects.find((project) => project.targetNodeId === node.id) ?? null);
+  const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
+
+  const startIntent =
+    node === null
+      ? null
+      : {
+          type: 'start_research_project' as const,
+          targetNodeId: node.id,
+          budgetUsd: Math.max(0, Number.parseFloat(budget) || 0),
+          computeUnits: Math.max(0, Math.round(Number.parseFloat(computeUnits) || 0)),
+          researchersAssigned: Math.max(0, Math.round(Number.parseFloat(researchers) || 0)),
+          secret,
+        };
+
+  const startPreview = startIntent === null ? null : validateIntent(startIntent);
+
+  const owns =
+    node !== null &&
+    (node.achievedByCompanyId === company.id ||
+      projects.some((project) => project.targetNodeId === node.id && project.status === 'succeeded'));
+
+  function startProject(): void {
+    if (startIntent === null) return;
+    const entry = queueAction(startIntent);
+    setStartResult(entry.validation);
+  }
+
+  function publish(): void {
+    if (node === null) return;
+    const entry = queueAction({ type: 'publish_research', nodeId: node.id, mode: publishMode, rationale: 'Published from the Frontier Map.' });
+    setPublishResult(entry.validation);
+  }
+
+  function close(): void {
+    setStartResult(null);
+    setPublishResult(null);
+    onClose();
+  }
+
+  const style = node === null ? null : STATE_STYLE[node.status];
+
+  return (
+    <Drawer
+      open={node !== null}
+      onClose={close}
+      title={node?.title ?? ''}
+      subtitle={node === null || style === null ? undefined : `${style.label} · ${VISIBILITY_LABEL[node.visibility]}`}
+      width={540}
+    >
+      {node === null || style === null ? null : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Tag tone={style.tone} dot>
+              {style.label}
+            </Tag>
+            <Tag tone={node.visibility === 'public' ? 'neutral' : 'warn'}>{VISIBILITY_LABEL[node.visibility]}</Tag>
+            {node.achievedByCompanyId === null ? null : (
+              <Tag tone="gain">Achieved {node.achievedQuarter === null ? '' : quarterLabel(session.startYear, node.achievedQuarter)}</Tag>
+            )}
+            {node.originalProposerId === null ? null : <Tag tone="brand">Invented in session</Tag>}
+          </div>
+
+          <p className="text-[12px] leading-relaxed text-ink-dim">{node.summary}</p>
+          <p className="text-[10px] text-ink-faint">{style.blurb}</p>
+
+          <div>
+            <SectionHeading rule>Confidence</SectionHeading>
+            <div className="mt-2 space-y-3">
+              <Meter value={node.publicConfidence * 100} label="What the world believes" />
+              {ownConfidence === undefined ? (
+                <p className="text-[10px] text-ink-faint">
+                  {company.name} holds no private view on this node. The public figure is the only one you have.
+                </p>
+              ) : (
+                <>
+                  <Meter value={ownConfidence * 100} label={`What ${company.name} believes`} tone="brand" benchmark={node.publicConfidence * 100} benchmarkLabel="Public" />
+                  <p className="text-[10px] text-ink-faint">
+                    {ownConfidence > node.publicConfidence
+                      ? `You are ${Math.round((ownConfidence - node.publicConfidence) * 100)} points ahead of the consensus. That gap is the edge a research bet is made on.`
+                      : ownConfidence < node.publicConfidence
+                        ? `You are ${Math.round((node.publicConfidence - ownConfidence) * 100)} points behind the consensus. The market is pricing something you do not believe.`
+                        : 'Your view and the market’s are the same. There is no informational edge here.'}
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <SectionHeading rule>Programme shape</SectionHeading>
+            <div className="mt-2">
+              <KeyValueGrid
+                columns={2}
+                items={[
+                  { label: 'Arrival window', value: `${node.estimatedWindow[0]}–${node.estimatedWindow[1]}` },
+                  { label: 'Compute intensity', value: node.computeIntensity.toFixed(2) },
+                  { label: 'Cost estimate (low)', value: formatMoney(node.researchCostRange[0]) },
+                  { label: 'Cost estimate (high)', value: formatMoney(node.researchCostRange[1]) },
+                  { label: 'Novelty', value: node.novelty.toFixed(2), hint: 'Distance from what the world already believes' },
+                  { label: 'Plausibility', value: node.plausibility.toFixed(2), hint: 'Coherence with physics, economics and the frontier' },
+                ]}
+              />
+            </div>
+          </div>
+
+          <div>
+            <SectionHeading rule>Capability required</SectionHeading>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {node.talentRequirements.length === 0 ? (
+                <span className="text-[11px] text-ink-faint">No specific capability area is named.</span>
+              ) : (
+                node.talentRequirements.map((area) => {
+                  const strength = company.techCapabilities[area] ?? 0;
+                  return (
+                    <Tag key={area} tone={strength >= 0.5 ? 'gain' : strength >= 0.25 ? 'warn' : 'loss'} title={`Your strength: ${strength.toFixed(2)}`}>
+                      {area.replace(/_/g, ' ')} · {strength.toFixed(2)}
+                    </Tag>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {node.dependencies.length === 0 && node.possibleUnlocks.length === 0 ? null : (
+            <div>
+              <SectionHeading rule>Position on the map</SectionHeading>
+              <div className="mt-2 space-y-2">
+                {node.dependencies.length === 0 ? null : (
+                  <div>
+                    <div className="label-caps-faint mb-1">Depends on</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {node.dependencies.map((id) => (
+                        <button key={id} type="button" className="btn btn-sm" onClick={() => onSelect(id)}>
+                          {titles.get(id) ?? id}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {node.possibleUnlocks.length === 0 ? null : (
+                  <div>
+                    <div className="label-caps-faint mb-1">Would make credible</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {node.possibleUnlocks.map((id) => (
+                        <button key={id} type="button" className="btn btn-sm" onClick={() => onSelect(id)}>
+                          {titles.get(id) ?? id}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {existing === null ? (
+            <div>
+              <SectionHeading rule>Start a programme</SectionHeading>
+              <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
+                <label className="block">
+                  <span className="label-caps-faint mb-1 block">Budget / quarter</span>
+                  <input className="field" type="number" min={0} step="50000" value={budget} onChange={(event) => setBudget(event.target.value)} />
+                </label>
+                <label className="block">
+                  <span className="label-caps-faint mb-1 block">Compute units</span>
+                  <input className="field" type="number" min={0} step={1} value={computeUnits} onChange={(event) => setComputeUnits(event.target.value)} />
+                </label>
+                <label className="block">
+                  <span className="label-caps-faint mb-1 block">Researchers</span>
+                  <input className="field" type="number" min={0} step={1} value={researchers} onChange={(event) => setResearchers(event.target.value)} />
+                </label>
+              </div>
+
+              <label className="mt-2.5 flex items-start gap-2">
+                <input type="checkbox" checked={secret} onChange={(event) => setSecret(event.target.checked)} className="mt-0.5" />
+                <span className="text-[11px] text-ink-dim">
+                  Keep the programme secret.
+                  <span className="block text-[10px] text-ink-faint">
+                    A secret setback stays out of the share price unless it leaks; a secret success surprises the market.
+                  </span>
+                </span>
+              </label>
+
+              <div className="mt-2.5 flex justify-end">
+                <button type="button" className="btn btn-primary btn-sm" onClick={startProject}>
+                  Queue programme
+                </button>
+              </div>
+
+              {startResult === null && startPreview !== null ? (
+                <div className="mt-2">
+                  <ValidationBanner result={startPreview} compact />
+                </div>
+              ) : null}
+              {startResult === null ? null : (
+                <div className="mt-2">
+                  <ValidationBanner result={startResult} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <SectionHeading rule>Your programme</SectionHeading>
+              <div className="mt-2 space-y-2.5">
+                <ProgressBar
+                  label="Progress to demonstration"
+                  value={existing.progress}
+                  tone="brand"
+                  valueLabel={`${formatPct(existing.progress, 0)} · ${existing.quartersElapsed}/${existing.expectedQuarters} quarters`}
+                />
+                <Meter value={existing.internalConfidence * 100} label="Internal confidence" tone="info" />
+                <KeyValueGrid
+                  columns={2}
+                  items={[
+                    { label: 'Budget', value: `${formatMoney(existing.budgetQuarterly)} / quarter` },
+                    { label: 'Compute', value: `${existing.computeAllocated} units` },
+                    { label: 'Researchers', value: existing.talentAllocated.toString() },
+                    { label: 'Spent to date', value: formatMoney(existing.cumulativeSpendUsd) },
+                    { label: 'Setbacks', value: existing.setbacks.toString(), tone: existing.setbacks > 0 ? 'warn' : undefined },
+                    { label: 'Status', value: existing.status, mono: false },
+                  ]}
+                />
+                {existing.isSecret ? <Tag tone="warn" dot>Secret programme</Tag> : <Tag tone="neutral" dot>Publicly known</Tag>}
+              </div>
+            </div>
+          )}
+
+          {!owns ? null : (
+            <div>
+              <SectionHeading rule>Publish</SectionHeading>
+              <p className="mt-1.5 text-[10px] text-ink-faint">
+                Publication buys reputation and hands rivals the method. An open-weights release is a governance matter and goes to the board.
+              </p>
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <label className="min-w-0 flex-1">
+                  <span className="label-caps-faint mb-1 block">Mode</span>
+                  <select className="field" value={publishMode} onChange={(event) => setPublishMode(event.target.value as PublicationMode)}>
+                    {PUBLICATION_MODES.filter((mode) => mode !== 'leak').map((mode) => (
+                      <option key={mode} value={mode}>
+                        {PUBLICATION_LABEL[mode]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className="btn btn-sm" onClick={publish}>
+                  Queue publication
+                </button>
+              </div>
+              {publishResult === null ? null : (
+                <div className="mt-2">
+                  <ValidationBanner result={publishResult} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Drawer>
+  );
+}

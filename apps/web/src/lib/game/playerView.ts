@@ -198,7 +198,12 @@ export function projectPlayerView(session: SessionState): PlayerView {
     board: session.boards.find((board) => board.id === company.boardId) ?? null,
     boardProposals: session.boardProposals.filter((proposal) => proposal.companyId === company.id),
     opportunities: visibleOpportunities(session, company.id),
-    contracts: session.governmentContracts.filter((contract) => contract.companyId === company.id),
+    contracts: session.governmentContracts.filter(
+      (contract) =>
+        contract.primeCompanyId === company.id ||
+        contract.consortiumMemberIds.includes(company.id) ||
+        contract.subcontractors.some((sub) => sub.companyId === company.id),
+    ),
     deals: session.deals.filter((deal) => deal.proposerId === company.id || deal.counterpartyId === company.id),
     leaderboards: session.leaderboards,
     objectives: session.objectives.filter((objective) => objective.playerId === null || objective.playerId === PLAYER_ID),

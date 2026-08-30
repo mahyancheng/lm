@@ -1,0 +1,427 @@
+'use client';
+
+/**
+ * Propose an innovation.
+ *
+ * Three steps, in this order, with no shortcuts: **write → review → queue.**
+ *
+ * The player writes a thesis in their own words. The Innovation Interpreter
+ * turns it into a typed `InnovationProposal`, which is rendered here field by
+ * field for review — never as prose to be skimmed and never as a node that has
+ * already happened. Queuing it submits a `propose_innovation` action; the engine
+ * assesses plausibility, cost and duration itself and may refuse it outright.
+ *
+ * When no model is configured the interpreter declines by design, and the
+ * guided form below is the deterministic path: the same fields, stated by the
+ * player. Either route produces the same object.
+ */
+
+import { useMemo, useState } from 'react';
+import type {
+  ActionValidationResult,
+  Company,
+  InnovationProposal,
+  SessionState,
+  TechGraph,
+} from '@frontier/contracts';
+import { assessCostUsd, assessPlausibility, reachableCapitalUsd } from '@frontier/simulation';
+import { formatMoney } from '@frontier/shared';
+import {
+  DeltaBadge,
+  EmptyState,
+  KeyValueGrid,
+  Panel,
+  SectionHeading,
+  Tag,
+  ValidationBanner,
+} from '@/components/ui';
+import { useGameActions, useLlm } from '@/lib/game';
+import { buildInnovationInput, requestInnovation } from './innovationClient';
+
+export interface InnovationPanelProps {
+  readonly session: SessionState;
+  readonly company: Company;
+  /** The reduced map. Never `session.techGraph`. */
+  readonly graph: TechGraph;
+  readonly researchEnvelopeUsd: number;
+  readonly computeUnits: number;
+}
+
+type Mode = 'write' | 'form' | 'review';
+
+const EMPTY_FORM = {
+  title: '',
+  summary: '',
+  novelty: 0.6,
+  plausibility: 0.5,
+  capabilities: '',
+  estimatedCost: '250000000',
+  estimatedQuarters: 8,
+  visibility: 'company_private' as 'company_private' | 'public',
+  rationale: '',
+};
+
+export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, computeUnits }: InnovationPanelProps): React.JSX.Element {
+  const { queueAction, validateIntent } = useGameActions();
+  const llm = useLlm();
+
+  const [mode, setMode] = useState<Mode>('write');
+  const [idea, setIdea] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [declined, setDeclined] = useState(false);
+  const [proposal, setProposal] = useState<InnovationProposal | null>(null);
+  const [dependencies, setDependencies] = useState<readonly string[]>([]);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [result, setResult] = useState<ActionValidationResult | null>(null);
+
+  const allowed = session.config.allowPlayerInnovation;
+
+  const assessment = useMemo(() => {
+    if (proposal === null) return null;
+    const known = graph.nodes.filter((node) => proposal.dependencies.includes(node.id));
+    return {
+      plausibility: assessPlausibility(session, proposal, known, company),
+      costUsd: assessCostUsd(proposal),
+      reachableUsd: reachableCapitalUsd(company),
+    };
+  }, [proposal, graph.nodes, session, company]);
+
+  async function interpret(): Promise<void> {
+    if (idea.trim().length === 0) return;
+    setBusy(true);
+    setDeclined(false);
+    try {
+      const input = buildInnovationInput(session, company, graph, idea.trim(), researchEnvelopeUsd, computeUnits);
+      const output = await requestInnovation(input);
+      if (output === null) {
+        setDeclined(true);
+        setForm((current) => ({ ...current, rationale: idea.trim().slice(0, 800) }));
+        setMode('form');
+      } else {
+        setProposal({ ...output, dependencies: output.dependencies.filter((id) => graph.nodes.some((node) => node.id === id)) });
+        setDependencies(output.dependencies);
+        setMode('review');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function buildFromForm(): void {
+    const cost = Number.parseFloat(form.estimatedCost);
+    const built: InnovationProposal = {
+      nodeType: 'player_hypothesis',
+      title: form.title.trim().slice(0, 120),
+      summary: form.summary.trim().slice(0, 1000),
+      novelty: form.novelty,
+      plausibility: form.plausibility,
+      requiredCapabilities: form.capabilities
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+        .slice(0, 8),
+      estimatedCost: Number.isFinite(cost) && cost > 0 ? cost : 0,
+      estimatedQuarters: form.estimatedQuarters,
+      dependencies: [...dependencies],
+      initialVisibility: form.visibility,
+      rationale: form.rationale.trim().slice(0, 800),
+    };
+    setProposal(built);
+    setMode('review');
+  }
+
+  const formValid = form.title.trim().length >= 3 && form.summary.trim().length >= 20 && form.rationale.trim().length >= 20;
+
+  const preview = proposal === null ? null : validateIntent({ type: 'propose_innovation', proposal });
+
+  function submit(): void {
+    if (proposal === null) return;
+    const entry = queueAction({ type: 'propose_innovation', proposal });
+    setResult(entry.validation);
+  }
+
+  function reset(): void {
+    setProposal(null);
+    setResult(null);
+    setDeclined(false);
+    setDependencies([]);
+    setForm(EMPTY_FORM);
+    setMode('write');
+  }
+
+  function toggleDependency(id: string): void {
+    setDependencies((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id].slice(0, 8)));
+  }
+
+  if (!allowed) {
+    return (
+      <Panel title="Propose an innovation">
+        <EmptyState
+          title="Player innovation is disabled"
+          message="This session was created with allowPlayerInnovation off. The Frontier Map changes only through world events and delivered research."
+        />
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel
+      title="Propose an innovation"
+      subtitle="A technology the Frontier Map has never contained"
+      actions={
+        mode === 'write' ? (
+          <Tag tone={llm.available ? 'brand' : 'neutral'} dot>
+            {llm.available ? `Interpreter on ${llm.model ?? 'the configured model'}` : 'Guided form'}
+          </Tag>
+        ) : (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={reset}>
+            Start again
+          </button>
+        )
+      }
+    >
+      {mode === 'write' ? (
+        <div className="space-y-2.5">
+          <p className="text-[11px] text-ink-dim">
+            Write the idea in your own words — the mechanism, not the marketing. It is interpreted into a typed proposal you review before anything is
+            submitted, and the engine assesses it independently of what you claim.
+          </p>
+          <textarea
+            className="field"
+            rows={5}
+            maxLength={1200}
+            placeholder="Millions of agents learning economic behaviour together in persistent simulated environments, so that pricing and negotiation emerge from the population rather than from a reward model…"
+            value={idea}
+            onChange={(event) => setIdea(event.target.value)}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setMode('form')}>
+              State the fields myself
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy || idea.trim().length < 12} onClick={() => void interpret()}>
+              {busy ? 'Interpreting…' : 'Interpret'}
+            </button>
+          </div>
+          {!llm.available ? (
+            <p className="text-[10px] text-ink-faint">
+              No model is configured, so the interpreter will decline and the guided form opens instead. A node is never added to the map without
+              interpretation — stating the fields yourself is that interpretation.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {mode === 'form' ? (
+        <div className="space-y-3">
+          {declined ? (
+            <div className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+              The interpreter declined — no model answered. State the fields yourself; the object you produce is identical.
+            </div>
+          ) : null}
+
+          <label className="block">
+            <span className="label-caps-faint mb-1 block">Title</span>
+            <input className="field" maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
+          </label>
+
+          <label className="block">
+            <span className="label-caps-faint mb-1 block">What it is — two to four sentences</span>
+            <textarea className="field" rows={3} maxLength={1000} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
+          </label>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
+                <span>Novelty</span>
+                <span className="figure text-ink-dim">{form.novelty.toFixed(2)}</span>
+              </span>
+              <input type="range" className="w-full" min={0} max={1} step={0.05} value={form.novelty} onChange={(event) => setForm({ ...form, novelty: Number(event.target.value) })} />
+            </label>
+            <label className="block">
+              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
+                <span>Plausibility</span>
+                <span className="figure text-ink-dim">{form.plausibility.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                className="w-full"
+                min={0}
+                max={1}
+                step={0.05}
+                value={form.plausibility}
+                onChange={(event) => setForm({ ...form, plausibility: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block sm:col-span-2">
+              <span className="label-caps-faint mb-1 block">Capabilities needed, comma separated</span>
+              <input className="field" value={form.capabilities} onChange={(event) => setForm({ ...form, capabilities: event.target.value })} placeholder="agents, training_systems" />
+            </label>
+            <label className="block">
+              <span className="label-caps-faint mb-1 block">Quarters</span>
+              <input
+                className="field"
+                type="number"
+                min={1}
+                max={60}
+                value={form.estimatedQuarters}
+                onChange={(event) => setForm({ ...form, estimatedQuarters: Math.max(1, Math.min(60, Number(event.target.value) || 1)) })}
+              />
+            </label>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="label-caps-faint mb-1 block">Your cost estimate</span>
+              <input className="field" type="number" min={0} step="10000000" value={form.estimatedCost} onChange={(event) => setForm({ ...form, estimatedCost: event.target.value })} />
+            </label>
+            <label className="block">
+              <span className="label-caps-faint mb-1 block">Initial visibility</span>
+              <select className="field" value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value as 'company_private' | 'public' })}>
+                <option value="company_private">Company private — keep the thesis secret</option>
+                <option value="public">Public — announce it, and surrender surprise</option>
+              </select>
+            </label>
+          </div>
+
+          <div>
+            <span className="label-caps-faint mb-1 block">Builds on</span>
+            <div className="flex flex-wrap gap-1.5">
+              {graph.nodes.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  className={`btn btn-sm ${dependencies.includes(node.id) ? 'btn-primary' : ''}`}
+                  onClick={() => toggleDependency(node.id)}
+                >
+                  {node.title}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="block">
+            <span className="label-caps-faint mb-1 block">Why now, given this company and this world</span>
+            <textarea className="field" rows={3} maxLength={800} value={form.rationale} onChange={(event) => setForm({ ...form, rationale: event.target.value })} />
+          </label>
+
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn btn-sm" onClick={() => setMode('write')}>
+              Back
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={!formValid} onClick={buildFromForm}>
+              Review the proposal
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {mode === 'review' && proposal !== null ? (
+        <div className="space-y-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Tag tone="brand">Player hypothesis</Tag>
+              <Tag tone={proposal.initialVisibility === 'public' ? 'info' : 'warn'}>
+                {proposal.initialVisibility === 'public' ? 'Public on acceptance' : 'Company private'}
+              </Tag>
+            </div>
+            <h3 className="mt-2 text-[15px] font-semibold text-ink">{proposal.title}</h3>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink-dim">{proposal.summary}</p>
+          </div>
+
+          <div>
+            <SectionHeading rule>What you claimed</SectionHeading>
+            <div className="mt-2">
+              <KeyValueGrid
+                columns={2}
+                items={[
+                  { label: 'Novelty', value: proposal.novelty.toFixed(2) },
+                  { label: 'Plausibility', value: proposal.plausibility.toFixed(2) },
+                  { label: 'Cost', value: formatMoney(proposal.estimatedCost) },
+                  { label: 'Duration', value: `${proposal.estimatedQuarters} quarters` },
+                  {
+                    label: 'Capabilities',
+                    value: proposal.requiredCapabilities.length === 0 ? 'none named' : proposal.requiredCapabilities.join(', '),
+                    mono: false,
+                    wide: true,
+                  },
+                  {
+                    label: 'Builds on',
+                    value:
+                      proposal.dependencies.length === 0
+                        ? 'nothing on the map'
+                        : proposal.dependencies.map((id) => graph.nodes.find((node) => node.id === id)?.title ?? id).join(' · '),
+                    mono: false,
+                    wide: true,
+                  },
+                ]}
+              />
+            </div>
+          </div>
+
+          {assessment === null ? null : (
+            <div>
+              <SectionHeading rule>What the engine makes of it</SectionHeading>
+              <div className="mt-2 space-y-2">
+                <div className="raised-surface flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span className="text-[11px] text-ink-dim">Plausibility</span>
+                  <span className="figure text-[12px] text-ink">
+                    you {proposal.plausibility.toFixed(2)} <span className="text-ink-faint">→</span> engine {assessment.plausibility.toFixed(2)}
+                  </span>
+                  <DeltaBadge value={assessment.plausibility - proposal.plausibility} format="points" decimals={2} />
+                </div>
+                <div className="raised-surface flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span className="text-[11px] text-ink-dim">Cost</span>
+                  <span className="figure text-[12px] text-ink">
+                    you {formatMoney(proposal.estimatedCost)} <span className="text-ink-faint">→</span> engine {formatMoney(assessment.costUsd)}
+                  </span>
+                  <DeltaBadge
+                    value={proposal.estimatedCost === 0 ? 0 : assessment.costUsd / proposal.estimatedCost - 1}
+                    format="percent"
+                    invert
+                  />
+                </div>
+                <div className="raised-surface flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span className="text-[11px] text-ink-dim">Capital you can reach</span>
+                  <span className="figure text-[12px] text-ink">{formatMoney(assessment.reachableUsd)}</span>
+                  <Tag tone={assessment.reachableUsd >= assessment.costUsd ? 'gain' : 'warn'} dot>
+                    {assessment.reachableUsd >= assessment.costUsd ? 'Within reach' : 'Beyond this company'}
+                  </Tag>
+                </div>
+                <p className="text-[10px] text-ink-faint">
+                  The engine reassesses all three at resolution and returns the adjusted figures with its decision. Duration is assessed there too:
+                  a proposal is accepted, adjusted or refused, and the reasons are given in player-readable language.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <SectionHeading rule>Rationale</SectionHeading>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{proposal.rationale}</p>
+          </div>
+
+          <p className="text-[11px] text-warn">No binding action has been submitted yet.</p>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn btn-sm" onClick={() => setMode('form')}>
+              Edit
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={submit}>
+              Queue proposal
+            </button>
+          </div>
+
+          {result === null && preview !== null ? <ValidationBanner result={preview} compact /> : null}
+          {result === null ? null : <ValidationBanner result={result} />}
+
+          {assessment !== null && assessment.plausibility < 0.35 ? (
+            <p className="text-[10px] text-ink-faint">A low-plausibility proposal is not refused outright: it becomes a speculative node that is expensive to prove.</p>
+          ) : null}
+        </div>
+      ) : null}
+    </Panel>
+  );
+}

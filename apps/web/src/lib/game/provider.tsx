@@ -54,6 +54,7 @@ import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import { llmHealth, requestNpcBundle, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
 import {
   DEMO_SEED,
+  PLAYER_ID,
   buildSubmittedAction,
   createSession,
   getEngine,
@@ -385,7 +386,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   const validateIntent = useCallback((intent: ActionIntent): ActionValidationResult => {
     const current = stateRef.current;
-    return getEngine().validator.validate(current.session, intent, current.session.players[0]?.playerId ?? null);
+    return getEngine().validator.validate(current.session, intent, PLAYER_ID);
   }, []);
 
   const queueAction = useCallback<GameStoreActions['queueAction']>((intent, options) => {

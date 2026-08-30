@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
@@ -15,6 +15,7 @@ import {
 } from '@/lib/game';
 import { cx } from '@/components/ui';
 import { SettingsDrawer } from './SettingsDrawer';
+import { type SettingsSection, onOpenSettings } from './settingsBus';
 
 interface ReadingProps {
   readonly label: string;
@@ -67,6 +68,17 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
   const connection = useConnection();
   const llm = useLlm();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFocus, setSettingsFocus] = useState<SettingsSection | null>(null);
+
+  /** Anything anywhere that explains offline mode can open this sheet at the credential. */
+  useEffect(
+    () =>
+      onOpenSettings((section) => {
+        setSettingsFocus(section);
+        setSettingsOpen(true);
+      }),
+    [],
+  );
 
   const alerts = view.alerts.length;
   const cash = company.financials.cash;
@@ -121,21 +133,32 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
         <span className="hidden sm:inline">alerts</span>
       </Link>
 
-      <span
-        className="mr-1 hidden items-center gap-1.5 rounded-pill border border-hair bg-panel px-2.5 py-1.5 text-[10px] font-semibold text-ink-dim md:flex"
+      {/* Not a readout: "Offline" is the one status in this bar the player can
+          actually do something about, so it is the button that opens Settings
+          at the paste field rather than a chip that states a fact and stops. */}
+      <button
+        type="button"
+        onClick={() => {
+          setSettingsFocus('ai');
+          setSettingsOpen(true);
+        }}
+        className="press-pop mr-1 hidden items-center gap-1.5 rounded-pill border border-hair bg-panel px-2.5 py-1.5 text-[10px] font-semibold text-ink-dim hover:bg-raised md:flex"
         title={
           llm.available
-            ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter.`
-            : 'No model configured. Every role uses its deterministic fallback; the game plays in full.'
+            ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter. Open Settings to test or change the credential.`
+            : 'No model configured. Every role uses its deterministic fallback and the game plays in full — click to paste a Claude token.'
         }
       >
         <span className={cx('inline-block size-1.5 rounded-full', llm.available ? 'bg-gain pulse-dot' : 'bg-ink-faint')} />
         {llm.available ? 'Live' : 'Offline'}
-      </span>
+      </button>
 
       <button
         type="button"
-        onClick={() => setSettingsOpen(true)}
+        onClick={() => {
+          setSettingsFocus(null);
+          setSettingsOpen(true);
+        }}
         className="btn btn-ghost tap-target mr-1.5 shrink-0"
         aria-label="Session settings and save"
         aria-expanded={settingsOpen}
@@ -145,7 +168,14 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
       </button>
     </header>
 
-    <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    <SettingsDrawer
+      open={settingsOpen}
+      focus={settingsFocus}
+      onClose={() => {
+        setSettingsOpen(false);
+        setSettingsFocus(null);
+      }}
+    />
     </>
   );
 }

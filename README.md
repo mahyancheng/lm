@@ -35,14 +35,30 @@ Open http://localhost:3000. Demo mode runs a fully local, deterministic
 single-player session: the real engine, seeded world, rule-based NPC rivals,
 and every screen live — no Supabase project or Anthropic key needed.
 
+### Turning on the live model without editing a file
+
+Run `claude setup-token`, then open **Settings → AI · Claude** (the gear in the
+status bar, or the "Offline" chip beside it) and paste the token. The status
+dot flips to **Live · sonnet** and every role — World Director, Chief of Staff,
+NPC rivals, characters — runs on Sonnet from that moment. **Test connection**
+spends one real call to prove it; **Disconnect** falls back to whatever the
+environment supplies.
+
+The pasted token lives in that one server process and is never written to disk
+or stored in the browser, so it is the right path for `pnpm dev` and
+`pnpm start` on your own machine. A multi-instance deployment (Vercel) starts
+each instance empty — set `CLAUDE_CODE_OAUTH_TOKEN` in the environment there.
+
 ## Full stack setup
 
 1. **Supabase**: create a project, then `supabase db push` (or apply
    `supabase/migrations/*.sql` in order) and load `supabase/seed.sql`.
 2. **Claude (OAuth, no API key)**: run `claude setup-token` with your Claude
-   subscription and put the result in `CLAUDE_CODE_OAUTH_TOKEN`. Every
-   in-game LLM role (World Director, Chief of Staff, NPC rivals, characters)
-   runs as a Claude Code session on **Sonnet** through the Claude Agent SDK.
+   subscription and put the result in `CLAUDE_CODE_OAUTH_TOKEN` — or paste it
+   into **Settings → AI · Claude** in the running app, which needs no restart
+   but lives only in that server process. Every in-game LLM role (World
+   Director, Chief of Staff, NPC rivals, characters) runs as a Claude Code
+   session on **Sonnet** through the Claude Agent SDK.
 3. **Env**: copy `.env.example` to `apps/web/.env.local` and fill in the
    Supabase URL/keys and the OAuth token; set `NEXT_PUBLIC_DEMO_MODE=false`.
 4. **Vercel**: import the repo, set the root directory to `apps/web`, add the

@@ -33,6 +33,7 @@ import {
   readTranscript,
   type TranscriptEntry,
 } from '@/components/screens/chief-of-staff/transcript';
+import { openSettings } from '@/components/shell/settingsBus';
 import { requestChiefOfStaff } from '@/lib/llm/client';
 import {
   PLAYER_ID,
@@ -140,9 +141,16 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
         subtitle="Say what you want in your own words. What comes back is a proposal with the validator's answer already on it — nothing here executes."
         actions={
           <div className="flex items-center gap-2">
-            <Tag tone={llm.available ? 'gain' : 'neutral'} dot>
-              {llm.available ? `Live · ${llm.model ?? llm.transportKind}` : 'Deterministic fallback'}
-            </Tag>
+            {llm.available ? (
+              <Tag tone="gain" dot>{`Live · ${llm.model ?? llm.transportKind}`}</Tag>
+            ) : (
+              // Offline is a state the player can leave, so this says how.
+              <button type="button" className="press-pop rounded-pill" onClick={() => openSettings('ai')} title="Connect a Claude token in Settings">
+                <Tag tone="neutral" dot>
+                  Deterministic fallback
+                </Tag>
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-sm"
@@ -233,11 +241,16 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
                   }}
                 />
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[10px] text-ink-faint">
-                    {llm.available
-                      ? 'Interpreted by a model, validated by the engine, approved by you.'
-                      : 'No model configured: the instruction is echoed back as a question and nothing is translated.'}
-                  </span>
+                  {llm.available ? (
+                    <span className="text-[10px] text-ink-faint">Interpreted by a model, validated by the engine, approved by you.</span>
+                  ) : (
+                    <span className="text-[10px] text-ink-faint">
+                      No model configured: the instruction is echoed back as a question and nothing is translated.{' '}
+                      <button type="button" className="font-semibold text-brand underline underline-offset-2" onClick={() => openSettings('ai')}>
+                        Connect Claude
+                      </button>
+                    </span>
+                  )}
                   <button type="button" className="btn btn-primary btn-sm" disabled={sending || message.trim().length === 0} onClick={() => void send()}>
                     {sending ? 'Interpreting…' : 'Interpret'}
                   </button>

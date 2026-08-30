@@ -14,15 +14,45 @@
  * Import validates before it writes — a file that will not parse never replaces
  * one that does — and a replay that does not finish leaves the stored file
  * exactly as it was.
+ *
+ * The third, and the reason this sheet is now the first thing an "Offline" chip
+ * points at: **the Claude credential**. `claude setup-token` prints a token,
+ * and until it could be pasted here the only way to give it to the game was to
+ * edit a dotfile and restart a dev server — a step that quietly decided most
+ * players would never see a live model at all. The token goes to the server and
+ * never comes back; what this sheet shows is its last four characters.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Drawer, Tag, cx } from '@/components/ui';
 import { useGame, useGameActions, useLlm, useLoading, useSettings } from '@/lib/game';
+import {
+  type TokenFetch,
+  type TokenStatus,
+  connectToken,
+  disconnectToken,
+  fetchTokenStatus,
+  testToken,
+  tokenDraftIssue,
+} from '@/lib/llm/token';
+import { resetLlmHealth } from '@/lib/llm/client';
+import type { SettingsSection } from './settingsBus';
+import {
+  NO_SERVER_LINE,
+  credentialLine,
+  refusalLine,
+  sourceChip,
+  statusHeadline,
+  testResultLine,
+  tokenPanelState,
+  transportLabel,
+} from './tokenSetup';
 
 export interface SettingsDrawerProps {
   readonly open: boolean;
   readonly onClose: () => void;
+  /** Which section to scroll to on open. Set when the sheet was opened from an "Offline" affordance. */
+  readonly focus?: SettingsSection | null;
 }
 
 function Toggle({
@@ -77,7 +107,234 @@ function Toggle({
   );
 }
 
-export function SettingsDrawer({ open, onClose }: SettingsDrawerProps): React.JSX.Element {
+/** Tone of the one-line outcome under the Claude controls. */
+type NoticeTone = 'gain' | 'loss' | 'neutral';
+
+const NOTICE_CLASS: Record<NoticeTone, string> = {
+  gain: 'border-gain/25 bg-gain-wash text-gain',
+  loss: 'border-loss/25 bg-loss-wash text-loss',
+  neutral: 'border-hair bg-raised text-ink-dim',
+};
+
+/** The three steps, written for somebody who has never opened a terminal for this app. */
+const SETUP_STEPS: readonly { readonly step: string; readonly detail: string }[] = [
+  { step: 'Install Claude Code', detail: 'npm i -g @anthropic-ai/claude-code — then sign in with your Claude subscription.' },
+  { step: 'Run claude setup-token', detail: 'It prints one long token. That token is the whole credential.' },
+  { step: 'Paste it below', detail: 'It goes straight to this server and is never stored in the browser or written to disk.' },
+];
+
+/**
+ * The Claude credential, end to end: what is in force, how to get one, and how
+ * to prove it works.
+ *
+ * Every write goes to the server and the server answers with a descriptor, so
+ * this component never holds a credential for longer than the keystrokes it
+ * takes to paste one. `resetLlmHealth()` after every mutation is what makes the
+ * status-bar dot change without a reload.
+ */
+function ClaudeSection({
+  focus,
+  onChanged,
+}: {
+  readonly focus: boolean;
+  readonly onChanged: () => void;
+}): React.JSX.Element {
+  const [fetched, setFetched] = useState<TokenFetch<TokenStatus> | null>(null);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState<'connect' | 'disconnect' | 'test' | null>(null);
+  const [notice, setNotice] = useState<{ readonly tone: NoticeTone; readonly text: string } | null>(null);
+  const anchor = useRef<HTMLDivElement | null>(null);
+
+  const load = useCallback(async () => {
+    setFetched(await fetchTokenStatus());
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (focus) anchor.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [focus]);
+
+  /** Every mutation ends the same way: re-read the descriptor, drop the health memo. */
+  const settle = useCallback(async () => {
+    resetLlmHealth();
+    await load();
+    onChanged();
+  }, [load, onChanged]);
+
+  const panel = tokenPanelState(fetched);
+  const status = panel.status;
+  const trimmed = draft.trim();
+  const draftIssue = tokenDraftIssue(draft);
+
+  async function connect(): Promise<void> {
+    if (trimmed.length === 0 || draftIssue !== null || busy !== null) return;
+    setBusy('connect');
+    setNotice(null);
+    const result = await connectToken(trimmed);
+    if (result.kind === 'ok' && result.value.ok) {
+      setDraft('');
+      setNotice({ tone: 'gain', text: `Connected. Roles now run on the ${transportLabel(result.value.transportKind)}.` });
+      await settle();
+    } else if (result.kind === 'refused') {
+      setNotice({ tone: 'loss', text: refusalLine(result.status, result.reason) });
+    } else {
+      setNotice({ tone: 'loss', text: NO_SERVER_LINE });
+    }
+    setBusy(null);
+  }
+
+  async function disconnect(): Promise<void> {
+    if (busy !== null) return;
+    setBusy('disconnect');
+    setNotice(null);
+    const result = await disconnectToken();
+    if (result.kind === 'ok' && result.value.ok) {
+      setNotice({ tone: 'neutral', text: 'Disconnected. Whatever the environment supplies takes over again.' });
+      await settle();
+    } else if (result.kind === 'refused') {
+      setNotice({ tone: 'loss', text: refusalLine(result.status, result.reason) });
+    } else {
+      setNotice({ tone: 'loss', text: NO_SERVER_LINE });
+    }
+    setBusy(null);
+  }
+
+  async function test(): Promise<void> {
+    if (busy !== null) return;
+    setBusy('test');
+    setNotice(null);
+    const result = await testToken();
+    if (result.kind === 'ok') {
+      setNotice({ tone: result.value.ok ? 'gain' : 'loss', text: testResultLine(result.value) });
+      resetLlmHealth();
+      onChanged();
+    } else if (result.kind === 'refused') {
+      setNotice({ tone: 'loss', text: refusalLine(result.status, result.reason) });
+    } else {
+      setNotice({ tone: 'loss', text: NO_SERVER_LINE });
+    }
+    setBusy(null);
+  }
+
+  const chip = status === null ? null : sourceChip(status.source);
+
+  return (
+    <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
+      <div className="label-caps">AI · Claude</div>
+
+      {/* --- what is in force -------------------------------------------- */}
+      <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
+            <span
+              aria-hidden="true"
+              className={cx('inline-block size-1.5 rounded-full', status?.available === true ? 'bg-gain pulse-dot' : 'bg-ink-faint')}
+            />
+            {panel.phase === 'loading' ? 'Checking…' : statusHeadline(status)}
+          </span>
+          {status === null ? null : <Tag tone={status.available ? 'gain' : 'neutral'}>{transportLabel(status.transportKind)}</Tag>}
+        </div>
+        {status === null ? null : (
+          <div className="flex items-center justify-between gap-2">
+            <span className="figure truncate text-[10.5px] text-ink-dim">{credentialLine(status)}</span>
+            {chip === null ? null : <Tag tone={status.source === 'runtime' ? 'brand' : 'neutral'}>{chip}</Tag>}
+          </div>
+        )}
+      </div>
+
+      {/* --- the phases --------------------------------------------------- */}
+      {panel.phase === 'no-server' || panel.phase === 'restricted' ? (
+        <p className="px-1 text-[10.5px] leading-relaxed text-ink-faint">{panel.message}</p>
+      ) : null}
+
+      {panel.phase === 'unconfigured' ? (
+        <>
+          <ol className="flex flex-col gap-1.5">
+            {SETUP_STEPS.map((entry, index) => (
+              <li key={entry.step} className="flex items-start gap-2.5">
+                <span className="figure mt-px flex size-4 shrink-0 items-center justify-center rounded-pill bg-brand-wash text-[9px] font-bold text-brand">
+                  {index + 1}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[11.5px] font-semibold text-ink">{entry.step}</span>
+                  <span className="block text-[10px] leading-relaxed text-ink-faint">{entry.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <label className="block">
+            <span className="label-caps-faint">Paste the token</span>
+            <input
+              type="password"
+              className="field mt-1 font-mono text-[10px]"
+              value={draft}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="sk-ant-oat01-…"
+              aria-label="Claude credential"
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void connect();
+              }}
+            />
+          </label>
+          {draftIssue === null ? null : <p className="px-1 text-[10px] text-warn">{draftIssue}</p>}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={trimmed.length === 0 || draftIssue !== null || busy !== null}
+              onClick={() => void connect()}
+            >
+              {busy === 'connect' ? 'Connecting…' : 'Connect'}
+            </button>
+            <span className="text-[10px] text-ink-faint">An sk-ant-api… key switches to the metered API instead.</span>
+          </div>
+        </>
+      ) : null}
+
+      {panel.phase === 'configured' ? (
+        <div className="flex flex-wrap gap-1.5">
+          <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void test()}>
+            {busy === 'test' ? 'Testing…' : 'Test connection'}
+          </button>
+          {status?.source === 'runtime' ? (
+            <button type="button" className="btn btn-sm btn-danger" disabled={busy !== null} onClick={() => void disconnect()}>
+              {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
+            </button>
+          ) : null}
+          <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void load()}>
+            Re-check
+          </button>
+        </div>
+      ) : null}
+
+      {panel.phase === 'configured' && status?.source === 'env' ? (
+        <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+          This credential comes from the server environment. Clear the variable there to change it, or paste a token to override it for
+          this process.
+        </p>
+      ) : null}
+
+      {notice === null ? null : (
+        <p className={cx('rounded-card border px-3.5 py-2.5 text-[10.5px] leading-relaxed', NOTICE_CLASS[notice.tone])}>{notice.text}</p>
+      )}
+
+      {panel.phase === 'configured' || panel.phase === 'unconfigured' ? (
+        <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+          A token pasted here lives in this server process only. That is the right answer for <span className="figure">pnpm dev</span> on
+          your own machine; a multi-instance deployment needs <span className="figure">CLAUDE_CODE_OAUTH_TOKEN</span> in the environment
+          instead.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerProps): React.JSX.Element {
   const { actionLog, saveWritable } = useGame();
   const settings = useSettings();
   const llm = useLlm();
@@ -89,10 +346,13 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps): React.JS
   const [showImport, setShowImport] = useState(false);
 
   return (
-    <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Preferences and the save file, both local to this browser">
+    <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Claude, preferences and the save file">
       <div className="flex flex-col gap-4">
+        {/* --- the credential ----------------------------------------------- */}
+        {open ? <ClaudeSection focus={focus === 'ai'} onChanged={() => void refreshLlmHealth()} /> : null}
+
         {/* --- preferences ------------------------------------------------- */}
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-2 border-t border-hair pt-3.5">
           <div className="label-caps">Preferences</div>
           <Toggle
             label="Use the live model"

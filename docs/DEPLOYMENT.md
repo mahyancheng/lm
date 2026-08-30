@@ -192,6 +192,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 # your Claude subscription OAuth token (not metered API billing).
 # Generate with:  claude setup-token
 LLM_TRANSPORT=claude-session        # claude-session | api | none
+# Optional — can also be pasted in-app under Settings -> AI. See below.
 CLAUDE_CODE_OAUTH_TOKEN=
 # All in-game roles use Sonnet.
 LLM_MODEL=sonnet
@@ -219,6 +220,51 @@ MARKET_DATA_API_KEY=             # provider credential, server-only
 LLM_QUARTER_BUDGET=40            # hard ceiling on model calls per resolution
 LLM_ROLES_DISABLED=              # comma-separated AgentRole list to force fallback
 ```
+
+### 5.1 Setting the Claude credential in-app
+
+`claude setup-token` prints a token, and **Settings → AI · Claude** in the
+running app accepts it directly: paste, Connect, and the live-Sonnet roles
+switch on with no restart and no dotfile. `Test connection` spends one real
+model call — the only route in the app that does so, and only on an explicit
+click. `Disconnect` drops it and falls back to the environment.
+
+`/api/llm/token` is the route behind it. `GET` returns a descriptor only —
+kind, the last four characters, and when it was set. The value is never
+returned, never logged, and never stored in the browser.
+
+**Precedence.** The environment is the baseline; a pasted token overrides it
+for that process, including `LLM_TRANSPORT` (an `sk-ant-api…` key selects the
+metered `api` transport, anything else the default `claude-session` one);
+clearing it falls back to the baseline. The gateway is rebuilt on every change.
+
+**Authority.**
+
+| Deployment | Who may POST/DELETE |
+|---|---|
+| Supabase configured | A verified JWT whose `profiles.is_admin` is true, read server-side. `GET` reports `authGate: "admin"`. |
+| No Supabase (demo/local) | The existing per-browser anonymous cookie principal. `GET` reports `authGate: "open-local"`. |
+
+Either posture is additionally capped at **5 credential writes per principal
+per minute**, on top of the ordinary 20/min LLM route window.
+
+**Lifetime, stated plainly.** The pasted credential lives in **one server
+process's memory, for the life of that process**. Nothing is written to disk
+and nothing is shared between processes. That is the correct trade for the
+deployment this exists for — `pnpm dev` or `pnpm start` on the owner's machine
+— and it is not persistence:
+
+- **Restart the server** and the token is gone; the environment variable takes
+  over again.
+- **Vercel, or any multi-instance serverless host**, runs many instances and
+  recycles them. A token pasted into one instance is unknown to the next
+  request's instance, so the in-app path is unreliable there by construction.
+  On serverless, `CLAUDE_CODE_OAUTH_TOKEN` in the project environment is the
+  durable answer, and the in-app path is for local and self-hosted
+  single-process runs.
+
+The same caveat applies to the conversation-key secret and the rate limiter, which
+are process-local for the same reason (§ `_identity.ts`).
 
 ## 6. Demo mode versus the full stack
 

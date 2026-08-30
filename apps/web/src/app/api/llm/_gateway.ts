@@ -45,6 +45,7 @@ import {
   MAX_BODY_BYTES,
   type Principal,
   RATE_LIMIT_COOKIELESS_PER_WINDOW,
+  type RateDecision,
   conversationKeySecret,
   createRateLimiter,
   declaresOversizeBody,
@@ -52,29 +53,55 @@ import {
   originKey,
   resolvePrincipal,
 } from './_identity';
+import { type LlmEnv, TOKEN_WRITE_RATE_LIMIT, createGenerationCache, resolveLlmEnv } from './_runtime';
 
 /** Every LLM route runs on Node and is never cached. */
 export const LLM_ROUTE_RUNTIME = 'nodejs';
 
-let cached: LlmGateway | null = null;
-
-/** The process-wide gateway, built from `process.env`. */
-export function gateway(): LlmGateway {
-  if (cached === null) cached = createGateway(process.env);
-  return cached;
+/**
+ * The environment every read below answers from: `process.env` as the
+ * baseline, with a credential pasted into Settings laid over it.
+ *
+ * Every function in this section resolves it afresh rather than closing over a
+ * snapshot, because the override can change between two requests in one
+ * process and a cached view of it would report the old answer.
+ */
+export function llmEnv(): LlmEnv {
+  return resolveLlmEnv(process.env);
 }
 
-/** The transport configured for this deployment. */
+/**
+ * The process-wide gateway.
+ *
+ * Cached, because building one starts a session store; rebuilt whenever the
+ * runtime credential generation moves, because a gateway holds its transport —
+ * and therefore its credential — from the moment it is constructed. The cache
+ * key is a monotonic counter rather than a timestamp, which keeps this free of
+ * the clock and correct for two changes inside one millisecond.
+ *
+ * A rebuild takes the dialogue session store with it, and that is the right
+ * answer rather than an oversight: the stored ids name Claude sessions opened
+ * under the *previous* credential, and resuming one of those on a new account
+ * is at best a failed call. A changed credential starts fresh threads.
+ */
+const cachedGateway = createGenerationCache<LlmGateway>(() => createGateway(llmEnv()));
+
+export function gateway(): LlmGateway {
+  return cachedGateway();
+}
+
+/** The transport in force: the pasted credential's, or the environment's. */
 export function transportKind(): LlmTransportKind {
-  return resolveTransportKind(process.env.LLM_TRANSPORT);
+  return resolveTransportKind(llmEnv()['LLM_TRANSPORT']);
 }
 
 /** The model each role will run on, or null when there is no transport. */
 export function modelName(): string | null {
-  const kind = transportKind();
+  const env = llmEnv();
+  const kind = resolveTransportKind(env['LLM_TRANSPORT']);
   if (kind === 'none') return null;
-  if (kind === 'api') return process.env.ANTHROPIC_MODEL ?? DEFAULT_API_MODEL;
-  return process.env.LLM_MODEL ?? DEFAULT_CLAUDE_SESSION_MODEL;
+  if (kind === 'api') return env['ANTHROPIC_MODEL'] ?? DEFAULT_API_MODEL;
+  return env['LLM_MODEL'] ?? DEFAULT_CLAUDE_SESSION_MODEL;
 }
 
 function hasValue(value: string | undefined): boolean {
@@ -95,10 +122,11 @@ function hasValue(value: string | undefined): boolean {
  * opts in.
  */
 export function transportAvailable(): boolean {
-  const kind = transportKind();
+  const env = llmEnv();
+  const kind = resolveTransportKind(env['LLM_TRANSPORT']);
   if (kind === 'none') return false;
-  if (kind === 'api') return hasValue(process.env.ANTHROPIC_API_KEY);
-  return hasValue(process.env.CLAUDE_CODE_OAUTH_TOKEN) || hasValue(process.env.LLM_TRANSPORT);
+  if (kind === 'api') return hasValue(env['ANTHROPIC_API_KEY']);
+  return hasValue(env['CLAUDE_CODE_OAUTH_TOKEN']) || hasValue(env['LLM_TRANSPORT']);
 }
 
 export interface RolePayload<T> {
@@ -130,6 +158,24 @@ const limiter = createRateLimiter();
  * the window above never binds.
  */
 const cookielessLimiter = createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_WINDOW });
+
+/**
+ * A third, much tighter bucket for writing the Claude credential.
+ *
+ * It sits *on top of* `admit()`'s window rather than replacing it. Setting a
+ * token is configuration, not play: nobody legitimately does it five times a
+ * minute, and the endpoint is the one place in the app where guessing is worth
+ * an attacker's time.
+ */
+const tokenWriteLimiter = createRateLimiter({ limit: TOKEN_WRITE_RATE_LIMIT });
+
+/** Charge one credential write to this principal. */
+export function takeTokenWriteBudget(principalId: string, now: number = Date.now()): RateDecision {
+  return tokenWriteLimiter.take(principalId, now);
+}
+
+/** Headers every route in this folder answers with. */
+export const NO_STORE_HEADERS: Readonly<Record<string, string>> = NO_STORE;
 
 /** What a route needs once it has been let in. */
 export interface Admission {

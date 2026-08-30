@@ -31,6 +31,7 @@ import { formatMoney, formatPct, formatScore } from '@frontier/shared';
 import {
   AccessBadge,
   EmptyState,
+  Icon,
   Meter,
   Panel,
   PersonChip,
@@ -125,20 +126,27 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
   }
 
   return (
-    <Panel title="Executives" subtitle="Who holds a post here, and the two ways that changes">
+    <Panel title="Executives" iconName="briefcase" subtitle="Who holds a post here, and the two ways that changes">
       <SectionHeading rule>In post</SectionHeading>
       <div className="mt-2 space-y-1.5">
         {ownStaff.length === 0 ? (
-          <EmptyState compact title="No named leadership" message="Nobody in this session holds a C-suite post at this company." />
+          <EmptyState compact icon="briefcase" title="No named leadership" message="Nobody in this session holds a C-suite post at this company." />
         ) : (
           ownStaff.map((character) => (
             <PersonChip
               key={character.id}
               character={character}
+              className="tap-target"
               subtitle={character.title}
               right={
                 <div className="flex items-center gap-2">
-                  <span className="figure text-[10px] text-ink-faint">CL {formatScore(character.connectionLevel)}</span>
+                  <span
+                    className="figure flex items-center gap-1 text-[11px] text-ink-faint"
+                    title={`Connection level ${formatScore(character.connectionLevel)}`}
+                  >
+                    <Icon name="network" size={13} accent="current" />
+                    {formatScore(character.connectionLevel)}
+                  </span>
                   {character.id === company.ceoCharacterId ? <Tag tone="brand">CEO</Tag> : null}
                 </div>
               }
@@ -149,14 +157,14 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
 
       <div className="mt-4 border-t border-hair pt-3">
         <SectionHeading>Approach someone</SectionHeading>
-        <p className="mt-1.5 text-[10px] text-ink-faint">
+        <p className="mt-1.5 text-[11.5px] text-ink-faint">
           An approach, not an appointment. The target decides, from their traits, their relationships and their memory of how you have behaved.
         </p>
 
         <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
           <label className="block">
             <span className="label-caps-faint mb-1 block">Target</span>
-            <select className="field" value={targetId} onChange={(event) => setTargetId(event.target.value)}>
+            <select className="field tap-target" value={targetId} onChange={(event) => setTargetId(event.target.value)}>
               <option value="">Select a person…</option>
               {candidates.map((character) => (
                 <option key={character.id} value={character.id}>
@@ -167,7 +175,7 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
           </label>
           <label className="block">
             <span className="label-caps-faint mb-1 block">Approach</span>
-            <select className="field" value={approach} onChange={(event) => setApproach(event.target.value as Approach)}>
+            <select className="field tap-target" value={approach} onChange={(event) => setApproach(event.target.value as Approach)}>
               <option value="private">Private — discreet and slower</option>
               <option value="public">Public — faster, and a fight</option>
             </select>
@@ -179,7 +187,15 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
             <span>Compensation premium</span>
             <span className="figure text-ink-dim">{formatPct(premium, 0)}</span>
           </span>
-          <input className="w-full" type="range" min={0} max={2} step={0.05} value={premium} onChange={(event) => setPremium(Number(event.target.value))} />
+          <input
+            className="tap-target w-full"
+            type="range"
+            min={0}
+            max={2}
+            step={0.05}
+            value={premium}
+            onChange={(event) => setPremium(Number(event.target.value))}
+          />
         </label>
 
         {target === null ? null : (
@@ -190,14 +206,14 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
                 <AccessBadge state={access.allowed ? (access.overrideId === null ? 'open' : 'override') : 'blocked'} gap={Math.round(access.gap)} />
               )}
             </div>
-            {access === null ? null : <p className="mt-2 text-[11px] text-ink-dim">{access.reason}</p>}
+            {access === null ? null : <p className="mt-2 text-[12px] text-ink-dim">{access.reason}</p>}
             {probability === null ? null : (
               <div className="mt-2.5">
                 <Meter value={probability * 100} label="Probability the approach succeeds" />
               </div>
             )}
             {!(access?.allowed ?? true) && approach === 'private' ? (
-              <p className="mt-2 text-[10px] text-warn">
+              <p className="mt-2 text-[11.5px] text-warn">
                 A private approach is out of reach at this connection gap. A public approach is still possible, and their employer will remember it.
               </p>
             ) : null}
@@ -205,7 +221,13 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
         )}
 
         <div className="mt-2.5 flex justify-end">
-          <button type="button" className="btn btn-primary btn-sm" disabled={target === null} onClick={sendApproach}>
+          <button
+            type="button"
+            className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto"
+            disabled={target === null}
+            onClick={sendApproach}
+          >
+            <Icon name="handshake" size={16} accent="current" />
             Queue approach
           </button>
         </div>
@@ -224,14 +246,14 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
 
       <div className="mt-4 border-t border-hair pt-3">
         <SectionHeading>Appoint to a post</SectionHeading>
-        <p className="mt-1.5 text-[10px] text-ink-faint">
+        <p className="mt-1.5 text-[11.5px] text-ink-faint">
           A C-suite appointment is a governance matter. The validator tables it as a board proposal rather than executing it, and the board votes.
         </p>
 
         <div className="mt-2.5 grid gap-2.5 sm:grid-cols-3">
           <label className="block sm:col-span-2">
             <span className="label-caps-faint mb-1 block">Person</span>
-            <select className="field" value={appointId} onChange={(event) => setAppointId(event.target.value)}>
+            <select className="field tap-target" value={appointId} onChange={(event) => setAppointId(event.target.value)}>
               <option value="">Select a person…</option>
               {ownStaff.map((character) => (
                 <option key={character.id} value={character.id}>
@@ -247,7 +269,7 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
           </label>
           <label className="block">
             <span className="label-caps-faint mb-1 block">Post</span>
-            <select className="field" value={appointRole} onChange={(event) => setAppointRole(event.target.value as ExecutiveRole)}>
+            <select className="field tap-target" value={appointRole} onChange={(event) => setAppointRole(event.target.value as ExecutiveRole)}>
               {EXECUTIVE_ROLES.map((role) => (
                 <option key={role} value={role}>
                   {EXEC_ROLE_LABEL[role]}
@@ -259,14 +281,27 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
 
         <label className="mt-2.5 block">
           <span className="label-caps-faint mb-1 block">Annual compensation</span>
-          <input className="field" type="number" min={0} step="10000" value={appointComp} onChange={(event) => setAppointComp(event.target.value)} />
-          <span className="mt-1 block text-[10px] text-ink-faint">
+          <input
+            className="field tap-target"
+            type="number"
+            min={0}
+            step="10000"
+            value={appointComp}
+            onChange={(event) => setAppointComp(event.target.value)}
+          />
+          <span className="mt-1 block text-[11px] text-ink-faint">
             {formatMoney(Number.isFinite(appointCompValue) ? appointCompValue : 0)} a year — the first quarter is charged against uncommitted cash.
           </span>
         </label>
 
         <div className="mt-2.5 flex justify-end">
-          <button type="button" className="btn btn-sm" disabled={appointPreview === null} onClick={sendAppointment}>
+          <button
+            type="button"
+            className="btn tap-target w-full gap-1.5 sm:w-auto"
+            disabled={appointPreview === null}
+            onClick={sendAppointment}
+          >
+            <Icon name="boardTable" size={16} accent="current" />
             Table the appointment
           </button>
         </div>

@@ -221,9 +221,11 @@ to that block.
 - **Places are isometric-lite**: a lit face and one darker side (`build-face` /
   `build-side`), a roof band, glass rectangles for windows. Two tones per
   volume, no more.
-- **Flat icons beat letter monograms** wherever an icon is legible. Draw them as
-  small inline SVG (16–24px viewBox) using tokens for fill and stroke. Keep
-  strokes at 1.6–1.8 with round caps.
+- **Flat icons beat letter monograms — always.** There are no two-letter
+  monograms left in the interface, and there is a drawn mark for every screen,
+  every nav group and every common control. Do not invent one inline: use the
+  set, documented in **§10**. A bespoke illustration is still welcome; a
+  bespoke *icon* is a fork.
 - Give every illustration `role="img"` and a real `aria-label` that says what is
   in it — it is information, not decoration.
 
@@ -307,6 +309,13 @@ because eighteen screens depend on them.
 
 ## 9. Checklist before you hand a surface back
 
+- [ ] Every mark comes from `components/ui/icons.tsx`. No two-letter monograms,
+      no emoji, no one-off inline glyph.
+- [ ] On a filled or tinted surface the mark carries an `icon-knockout-*`
+      class (or comes from `IconChip`, which does it for you).
+- [ ] The phone layout came first: bottom tabs and sub-tabs are not covered,
+      tables that do not fit are `cardMode="auto"`, and a side drawer is a
+      bottom sheet under `sm`.
 - [ ] No hex literal anywhere in the component.
 - [ ] Nothing dark: no `bg-black/*`, no `shadow-black/*`, no `text-white`
       except on a `-strong` fill.
@@ -320,3 +329,119 @@ because eighteen screens depend on them.
 - [ ] `pnpm -C apps/web exec tsc --noEmit --incremental false` is clean and
       `pnpm -C apps/web exec vitest run` is green — the contrast assertions in
       `interaction.test.ts` read the palette straight out of `globals.css`.
+
+---
+
+## 10. The icon set
+
+`src/components/ui/icons.tsx` holds **thirty-six flat marks on a 24×24 grid**,
+drawn in the same language as the people and the places: solid rounded shapes,
+no outlines, no strokes, no emoji, no letter monograms. One component draws all
+of them.
+
+```tsx
+import { Icon, IconChip } from '@/components/ui';
+
+<Icon name="flask" />                        // 20px, brand accent, inherits ink
+<Icon name="gauge" size={16} />              // inline beside a label
+<IconChip name="ledger" tone="info" />       // the mark in a tinted square
+<IconChip name="stamp" tone="brand" variant="solid" size="lg" />
+```
+
+### 10.1 The two colours
+
+Every mark is exactly two flat colours and never more:
+
+- the **base** is `currentColor`, so a mark takes the colour of the text it sits
+  with — ink, `ink-faint`, a tone, or white on a `-strong` fill;
+- the **accent** is *one detail per mark* — a needle, a roof, a liquid, a seam —
+  painted with `var(--fc-icon-accent)`.
+
+`accent` on `<Icon>` takes a `Tone` (default `brand`), `current` (fold the detail
+into the base — a silhouette), or `inherit` (read the property from an
+ancestor).
+
+### 10.2 The knockout rule
+
+> On a plain surface, leave the accent alone. On a **filled** surface, set
+> `--fc-icon-accent` to that surface's own colour and the detail becomes a
+> knockout.
+
+A second colour either vanishes or fights inside a 24px filled chip; a cut-out
+never does. `globals.css` provides the classes — put one on the **filled
+element**, not on the icon:
+
+| Class | For a mark sitting on |
+|---|---|
+| `icon-knockout-panel` | a white card, a tab bar, an empty state |
+| `icon-knockout-raised` | a `bg-raised` chip or row |
+| `icon-knockout-base` | the page ground |
+| `icon-knockout-wash` | a `bg-brand-wash` pill — the active tab |
+| `icon-knockout-brand` | a `bg-brand-strong` square — the active rail item |
+
+```tsx
+<span className="icon-knockout-brand flex size-7 items-center justify-center rounded-chip bg-brand-strong text-white">
+  <Icon name="logo" size={16} accent="inherit" />
+</span>
+```
+
+`IconChip` applies the right one for its `tone` and `variant`, so prefer it for
+a chip and reach for the classes only when you are building the filled surface
+yourself.
+
+Every mark is drawn so that its **silhouette alone reads**: the accent adds
+information, it never carries the shape. That is why the accent always sits
+*inside or across* the base rather than beside it — a knocked-out detail that
+floated outside the silhouette would simply disappear.
+
+### 10.3 Sizes
+
+| Size | Where |
+|---|---|
+| 13–14 | Beside a `label-caps` group heading |
+| 15–16 | Inside a nav row's chip, a status-bar button, a sub-tab |
+| 18–20 | The default: a bottom tab, a button, body text |
+| 20–24 | An empty state, a section heading, a landing card |
+
+Never below 13: these are drawn to be simple, not to be micro-type.
+
+### 10.4 Pairing a mark with a label
+
+- A mark **beside its own label** is decoration: leave `label` off and it is
+  `aria-hidden`, so a screen reader hears the words once.
+- A mark **standing alone** — an icon-only button — needs an accessible name.
+  Put it on the control (`aria-label`) and leave the icon hidden; only pass
+  `Icon`'s own `label` when the mark is the whole content of a non-interactive
+  element.
+- Icon **then** label, `gap-1.5` to `gap-2.5`, both on the same text colour.
+  Never colour a label to match an accent.
+- Every icon-only control still clears 44×44 on a phone: `tap-target px-0`.
+
+### 10.5 The names
+
+Eighteen screens — `gauge` (Command Centre), `building` (Company), `box`
+(Products), `people`, `ledger` (Financials), `flask` (Research), `capitol`
+(Government), `handshake` (Deal Room), `chart` (Markets), `coins` (Capital),
+`boardTable` (Boardroom), `globe` (World), `chat` (Social), `network`,
+`trophy` (Leaderboard), `briefcase` (Chief of Staff), `stamp` (End Quarter),
+`newspaper` (Quarter Resolution).
+
+Five groups — `desk`, `compass`, `vault`, `globe`, `playMark`.
+
+Utility — `settings`, `bell`, `live`, `close`, `chevronRight`, `chevronDown`,
+`check`, `warning`, `search`, `plus`, `save`, `export`, `import`, `back`,
+`menu`, `logo`.
+
+`nav.ts` names one for every screen and every group, and
+`components/shell/nav.test.ts` fails the build if a name it asks for is not
+drawn. `ICON_NAMES` is the full list at runtime; `isIconName` is the guard the
+primitives use so `icon="flask"` and `iconName="flask"` both work on `Panel`,
+`StatCard` and `EmptyState`.
+
+### 10.6 Adding a mark
+
+Add the name to `ICON_NAMES` and the drawing to `SHAPES` — the `Record` is
+exhaustive, so TypeScript will not let you add one without the other. Then:
+build it from rounded rects, circles, ellipses and short filled paths; give it
+one accent detail that sits inside the silhouette; check it at **16px**, in a
+wash chip and on a solid fill before you keep it.

@@ -20,7 +20,7 @@ import type { Company, ResearchProject, SessionState } from '@frontier/contracts
 import { quarterLabel } from '@frontier/contracts';
 import { heldComputeUnits, servingComputeUnits } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
-import { Drawer, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
+import { Drawer, Icon, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
 import { inferenceComputeDemand, researchComputeDemand } from './ComputePosition';
 
 /** Accelerator counts, grouped in threes. Same rendering as the panel. */
@@ -60,10 +60,12 @@ export function ComputeDrawer({ open, onClose, session, company, projects }: Com
       subtitle={`${units(held)} accelerator-equivalents held · ${formatPct(holdings.computeUtilisation)} utilised`}
       footer={
         <>
-          <Link className="btn btn-sm" href="/research">
-            Research programmes
+          <Link className="btn tap-target flex-1 gap-1.5 sm:flex-none" href="/research">
+            <Icon name="flask" size={16} accent="current" />
+            Research
           </Link>
-          <Link className="btn btn-sm btn-primary" href="/products">
+          <Link className="btn btn-primary tap-target flex-1 gap-1.5 sm:flex-none" href="/products">
+            <Icon name="box" size={16} accent="current" />
             Product demand
           </Link>
         </>

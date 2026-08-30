@@ -145,6 +145,12 @@
     --bottombar-height: 60px;
     /* The smallest a tap target may be. Scenes and controls both read it. */
     --tap: 44px;
+    /* The phone's sub-tab strip: the row of sibling screens under the header. */
+    --subtab-height: 46px;
+    /* The one accent detail inside every flat icon. A filled surface overrides
+       it with its own fill (see the .icon-knockout-* utilities) so the detail
+       reads as a cut-out rather than as a second colour that would vanish. */
+    --fc-icon-accent: var(--color-brand);
   }
 
   html {
@@ -511,6 +517,72 @@
     min-width: var(--tap);
     min-height: var(--tap);
   }
+
+  /* --- phone shell -------------------------------------------------------
+     Additive: nothing above changes, and every one of these is inert on a
+     desktop viewport (where env() resolves to 0 and the bars are hidden). */
+
+  /* The fixed bottom tab bar. Its height is the token PLUS whatever the device
+     reserves at the bottom edge, so the tabs sit above the home indicator
+     rather than under it. */
+  .bottom-nav {
+    min-height: var(--bottombar-height);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Anything else that ends at the bottom of a phone viewport: a sheet's
+     footer, a nav sheet. These carry their own padding as well as the inset,
+     because a `pb-*` utility would otherwise win and drop the inset. */
+  .safe-pb-3 {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .safe-pb-4 {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The horizontal strip of sibling screens under the header. It scrolls
+     inside itself — the page body never does. */
+  .subtab-strip {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    max-width: 100%;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .subtab-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .subtab-strip > * {
+    scroll-snap-align: center;
+  }
+
+  /* The scroll region's bottom padding on a phone: clear the fixed tab bar,
+     the home indicator and a comfortable margin. Flat 2rem from `lg`, where
+     the tab bar is gone. */
+  .main-scroll-pad {
+    padding-bottom: calc(var(--bottombar-height) + 2.25rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 1024px) {
+    .main-scroll-pad {
+      padding-bottom: 2rem;
+    }
+  }
+
+  /* The grab affordance at the top of a bottom sheet. Purely visual: the sheet
+     is closed with the button, Escape or the scrim. */
+  .sheet-grip {
+    width: 38px;
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-hair-strong);
+  }
 }
 
 /* ==========================================================================
@@ -542,6 +614,28 @@
   }
   .no-scrollbar {
     scrollbar-width: none;
+  }
+
+  /* --- icon accents ------------------------------------------------------
+     An icon's one accent detail is painted with `--fc-icon-accent`. On a plain
+     surface that is the brand tone and the mark reads as two flat colours. On
+     a FILLED surface a second colour would either vanish or fight, so set the
+     property to the fill itself and the detail becomes a knockout. Put one of
+     these on the filled element (the chip, the tab, the button). */
+  .icon-knockout-panel {
+    --fc-icon-accent: var(--color-panel);
+  }
+  .icon-knockout-raised {
+    --fc-icon-accent: var(--color-raised);
+  }
+  .icon-knockout-base {
+    --fc-icon-accent: var(--color-base);
+  }
+  .icon-knockout-brand {
+    --fc-icon-accent: var(--color-brand-strong);
+  }
+  .icon-knockout-wash {
+    --fc-icon-accent: var(--color-brand-wash);
   }
 
   /* --- motion: transform and opacity only, every one of them cheap ------

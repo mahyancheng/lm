@@ -18,7 +18,7 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionType, ActionValidationResult } from '@frontier/contracts';
-import { ConfirmDialog, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
+import { ConfirmDialog, Icon, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
 import { needsConfirmation, useGameActions, useSession } from '@/lib/game';
 import { describeIntent } from '@/components/screens/end-quarter/intents';
 import type { TranscriptEntry } from './transcript';
@@ -157,7 +157,7 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
 
         {/* --- the rows ---------------------------------------------------- */}
         {rows.length === 0 ? (
-          <p className="rounded-[4px] border border-hair bg-raised px-3 py-2 text-[11px] text-ink-dim">
+          <p className="rounded-card border border-hair bg-raised px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-dim">
             Nothing was translated into an action. That is a real answer, not a failure — an instruction the game has no action for should be
             said plainly rather than approximated.
           </p>
@@ -166,51 +166,63 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
             {rows.map((row) => {
               const done = queued[row.index];
               return (
+                // One instruction, one full-width card: the terms read down the
+                // card on a phone and its two controls sit under them, both
+                // clearing the 44px floor.
                 <li key={row.index} className="raised-surface px-3 py-2.5">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-medium text-ink">{row.description.label}</p>
-                      {row.description.terms.length === 0 ? null : (
-                        <dl className="mt-1.5 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
-                          {row.description.terms.map((entryTerm) => (
-                            <div key={entryTerm.label} className="flex items-baseline justify-between gap-2 border-b border-hair/60 pb-0.5">
-                              <dt className="label-caps-faint shrink-0">{entryTerm.label}</dt>
-                              <dd className="figure truncate text-[11px] text-ink">{entryTerm.value}</dd>
-                            </div>
-                          ))}
-                        </dl>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <p className="min-w-0 flex-1 text-[12.5px] leading-snug font-medium text-ink">{row.description.label}</p>
                       <Tag tone={toneOfStatus((done ?? row.validation).status)} dot>
                         {(done ?? row.validation).clampedAction?.type === 'submit_board_proposal'
                           ? 'Board matter'
                           : labelOfStatus((done ?? row.validation).status)}
                       </Tag>
-                      {done === undefined ? (
-                        <div className="flex items-center gap-1.5">
-                          <Link href={ROUTE_OF_ACTION[row.intent.type]} className="btn btn-ghost btn-sm">
-                            Edit
-                          </Link>
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            onClick={() => {
-                              if (row.needsHuman) setPending({ index: row.index, intent: row.intent });
-                              else queueRow(row.index, row.intent, true);
-                            }}
-                          >
-                            {row.needsHuman ? 'Confirm…' : 'Queue'}
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-ink-faint">queued</span>
-                      )}
                     </div>
+
+                    {row.description.terms.length === 0 ? null : (
+                      <dl className="grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                        {row.description.terms.map((entryTerm) => (
+                          <div key={entryTerm.label} className="flex items-baseline justify-between gap-2 border-b border-hair/60 pb-0.5">
+                            <dt className="label-caps-faint shrink-0">{entryTerm.label}</dt>
+                            <dd className="figure truncate text-[11.5px] text-ink">{entryTerm.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+
+                    {done === undefined ? (
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={ROUTE_OF_ACTION[row.intent.type]}
+                          className="btn btn-ghost tap-target flex-1 sm:flex-none"
+                          title={`Do this by hand at ${ROUTE_OF_ACTION[row.intent.type]}`}
+                        >
+                          <Icon name="chevronRight" size={15} />
+                          Edit
+                        </Link>
+                        <button
+                          type="button"
+                          className="btn tap-target press-pop flex-1 sm:flex-none"
+                          onClick={() => {
+                            if (row.needsHuman) setPending({ index: row.index, intent: row.intent });
+                            else queueRow(row.index, row.intent, true);
+                          }}
+                        >
+                          <Icon name={row.needsHuman ? 'warning' : 'plus'} size={15} accent={row.needsHuman ? 'warn' : 'brand'} />
+                          {row.needsHuman ? 'Confirm…' : 'Queue'}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-[11px] text-gain">
+                        <Icon name="check" size={14} accent="gain" />
+                        queued
+                      </span>
+                    )}
                   </div>
 
                   {row.needsHuman && done === undefined ? (
-                    <p className="mt-1.5 text-[10px] text-warn">
+                    <p className="mt-1.5 text-[10.5px] leading-relaxed text-warn">
                       Always requires an explicit human confirmation, whatever the model or your automation preference says.
                     </p>
                   ) : null}
@@ -228,9 +240,9 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
 
         {/* --- questions and gaps ------------------------------------------ */}
         {interpretation.questions.length > 0 ? (
-          <div className="rounded-[4px] border border-info/25 bg-info-wash px-3 py-2">
+          <div className="rounded-card border border-info/25 bg-info-wash px-3 py-2.5">
             <SectionHeading>Before this is safe to submit</SectionHeading>
-            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[11px] text-ink-dim">
+            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[11.5px] leading-relaxed text-ink-dim">
               {interpretation.questions.map((question, index) => (
                 <li key={index}>{question}</li>
               ))}
@@ -239,14 +251,14 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
         ) : null}
 
         {interpretation.unsupportedRequests.length > 0 ? (
-          <div className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2">
+          <div className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2.5">
             <SectionHeading>Not something the game can do</SectionHeading>
-            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[11px] text-warn">
+            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[11.5px] leading-relaxed text-warn">
               {interpretation.unsupportedRequests.map((request, index) => (
                 <li key={index}>{request}</li>
               ))}
             </ul>
-            <p className="mt-1.5 text-[10px] text-ink-faint">
+            <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-faint">
               Said plainly rather than silently dropped, which would be the worst possible behaviour here.
             </p>
           </div>
@@ -254,25 +266,27 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
 
         {/* --- the mandatory line and the controls -------------------------- */}
         <div className="border-t border-hair pt-3">
-          <p className="text-[12px] font-medium text-ink">No binding action has been submitted yet.</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">
+          <p className="text-[12.5px] font-medium text-ink">No binding action has been submitted yet.</p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-ink-dim">
             Approving queues intents for this quarter. The engine validates them again when the quarter resolves, and its answer is the one
             that counts.
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <button
               type="button"
-              className="btn btn-primary btn-sm"
+              className="btn btn-primary tap-target press-pop w-full sm:w-auto"
               disabled={routine.length === 0}
               onClick={() => {
                 for (const row of routine) queueRow(row.index, row.intent, true);
               }}
             >
+              <Icon name="check" size={16} accent="current" />
               {routine.length === 0 ? 'Nothing left to approve' : `Approve ${routine.length} routine action${routine.length === 1 ? '' : 's'}`}
             </button>
             {outstanding.length > 0 ? (
-              <span className="text-[11px] text-warn">
-                {outstanding.length} action{outstanding.length === 1 ? '' : 's'} need a confirmation of their own.
+              <span className="icon-knockout-panel flex items-center gap-1.5 text-[11.5px] text-warn">
+                <Icon name="warning" size={14} accent="inherit" />
+                {outstanding.length} action{outstanding.length === 1 ? ' needs' : 's need'} a confirmation of its own.
               </span>
             ) : null}
           </div>

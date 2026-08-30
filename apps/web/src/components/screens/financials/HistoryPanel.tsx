@@ -52,7 +52,7 @@ export function HistoryPanel({ view, companyId, startYear, quotes }: HistoryPane
   if (filings.length === 0 && quotes.length === 0) {
     return (
       <EmptyState
-        glyph="HST"
+        icon="chart"
         title="No filed history yet"
         message="Live state carries one quarter of accounts. A per-quarter series appears once the company files earnings on the public record, which begins when it lists — or once its instrument has a rolling quote history."
       />

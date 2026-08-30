@@ -47,9 +47,11 @@ export function Exchange({ entry, founder, startYear }: ExchangeProps): React.JS
   return (
     <div className="flex flex-col gap-3">
       {/* --- what you said -------------------------------------------------- */}
-      <div className="flex items-start justify-end gap-2.5">
-        <SpeechCard side="right" className="max-w-[85%]" bodyClassName="px-3 py-2">
-          <p className="text-[12px] leading-relaxed whitespace-pre-wrap text-ink">{entry.message}</p>
+      <div className="flex min-w-0 items-start justify-end gap-2.5">
+        {/* `min-w-0` is load-bearing: without it a long instruction pushes the
+            row past the column and the whole page scrolls sideways at 390px. */}
+        <SpeechCard side="right" className="min-w-0 max-w-[85%]" bodyClassName="px-3 py-2">
+          <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">{entry.message}</p>
         </SpeechCard>
         <Portrait characterId={founder.id} role={founder.role} size="md" isPlayer decorative className="mt-1" />
       </div>

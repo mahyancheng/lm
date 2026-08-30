@@ -46,7 +46,7 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
       width={560}
     >
       <div className="flex flex-col gap-4">
-        <p className="rounded-[4px] border border-hair bg-raised px-3 py-2 text-[12px] leading-relaxed text-ink">
+        <p className="rounded-card border border-hair bg-raised px-3 py-2.5 text-[12.5px] leading-relaxed text-ink">
           {line.text}
           {line.deltaLabel === null ? null : <span className="figure ml-2 text-ink-dim">{line.deltaLabel}</span>}
         </p>
@@ -69,7 +69,9 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
                   </div>
                 </div>
 
-                <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-0.5">
+                {/* One column on a phone: an id truncated to eight characters
+                    tells nobody anything. Two from `sm`, as before. */}
+                <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
                   <Row label="Quarter" value={quarterLabel(startYear, event.quarter)} />
                   <Row label="Actor" value={event.actorId ?? '—'} />
                   <Row label="Target" value={event.targetId ?? '—'} />
@@ -78,12 +80,12 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
 
                 <div className="mt-2">
                   <div className="label-caps-faint mb-1">Payload</div>
-                  <pre className="scroll-x figure max-h-56 overflow-y-auto rounded-[4px] border border-hair bg-base px-2.5 py-2 text-[10px] leading-relaxed text-ink-dim">
+                  <pre className="scroll-x figure max-h-56 overflow-y-auto rounded-card border border-hair bg-base px-2.5 py-2 text-[10.5px] leading-relaxed text-ink-dim">
                     {JSON.stringify(event.payload, null, 2)}
                   </pre>
                 </div>
 
-                <div className="mt-1.5 grid grid-cols-2 gap-x-4">
+                <div className="mt-1.5 grid grid-cols-1 gap-x-4 sm:grid-cols-2">
                   <Row label="Hash before" value={event.stateHashBefore.slice(0, 16)} />
                   <Row label="Hash after" value={event.stateHashAfter.slice(0, 16)} />
                 </div>

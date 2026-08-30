@@ -16,6 +16,7 @@ import {
   DataTable,
   DeltaBadge,
   EmptyState,
+  Icon,
   KeyValueGrid,
   Meter,
   PageHeader,
@@ -144,7 +145,7 @@ export default function MarketsPage(): React.JSX.Element {
       header: 'Instrument',
       render: (row) => (
         <span className="min-w-0">
-          <span className="block truncate text-[12px] text-ink">{row.companyName}</span>
+          <span className="block truncate text-[13px] text-ink sm:text-[12px]">{row.companyName}</span>
           <span className="block truncate text-[10px] text-ink-faint">
             {humanise(row.instrument.kind)}
             {row.instrument.sectorId === null ? '' : ` · ${humanise(row.instrument.sectorId)}`}
@@ -157,6 +158,7 @@ export default function MarketsPage(): React.JSX.Element {
     {
       key: 'trend',
       header: 'Trend',
+      cardLabel: 'Since listing',
       width: '84px',
       hideOnMobile: true,
       render: (row) =>
@@ -177,6 +179,7 @@ export default function MarketsPage(): React.JSX.Element {
     {
       key: 'return',
       header: 'Quarter',
+      cardLabel: 'This quarter',
       align: 'right',
       render: (row) => (row.quote === null ? '—' : <DeltaBadge value={row.quote.return} format="percent" bare />),
       sortable: true,
@@ -187,6 +190,7 @@ export default function MarketsPage(): React.JSX.Element {
       header: 'Market cap',
       align: 'right',
       hideOnMobile: true,
+      cardHidden: true,
       render: (row) => (row.quote === null || row.quote.marketCapUsd === 0 ? '—' : formatMoney(row.quote.marketCapUsd)),
       sortable: true,
       sortValue: (row) => row.quote?.marketCapUsd ?? 0,
@@ -196,6 +200,7 @@ export default function MarketsPage(): React.JSX.Element {
       header: 'Anchor / share',
       align: 'right',
       hideOnMobile: true,
+      cardHidden: true,
       render: (row) => (row.anchorPerShareUsd === null ? '—' : formatMoney(row.anchorPerShareUsd)),
       sortable: true,
       sortValue: (row) => row.anchorPerShareUsd ?? 0,
@@ -203,6 +208,7 @@ export default function MarketsPage(): React.JSX.Element {
     {
       key: 'premium',
       header: 'Premium',
+      cardLabel: 'Premium to anchor',
       align: 'right',
       render: (row) =>
         row.premiumToAnchor === null ? (
@@ -218,6 +224,7 @@ export default function MarketsPage(): React.JSX.Element {
       header: 'Beta',
       align: 'right',
       hideOnMobile: true,
+      cardHidden: true,
       render: (row) => row.instrument.beta.toFixed(2),
       sortable: true,
       sortValue: (row) => row.instrument.beta,
@@ -240,7 +247,7 @@ export default function MarketsPage(): React.JSX.Element {
         ),
       hideOnMobile: true,
     },
-    { key: 'cost', header: 'Cost basis', align: 'right', render: (row) => formatMoney(row.costBasisUsd), hideOnMobile: true },
+    { key: 'cost', header: 'Cost basis', align: 'right', render: (row) => formatMoney(row.costBasisUsd), hideOnMobile: true, cardHidden: true },
     {
       key: 'value',
       header: 'Value',
@@ -283,27 +290,31 @@ export default function MarketsPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         <StatCard
-          label={aiIndex === null ? 'AI index' : aiIndex.instrument.name}
+          iconName="chart"
+          label="AI index"
           value={aiIndex === null || aiIndex.quote === null ? '—' : aiIndex.quote.price.toFixed(2)}
           delta={aiIndex?.quote?.return}
           spark={aiIndex?.history}
-          hint="Capitalisation-weighted, decomposed like any name"
+          hint={aiIndex === null ? 'Capitalisation-weighted' : aiIndex.instrument.name}
         />
         <StatCard
-          label={semiIndex === null ? 'Compute index' : semiIndex.instrument.name}
+          iconName="network"
+          label="Compute index"
           value={semiIndex === null || semiIndex.quote === null ? '—' : semiIndex.quote.price.toFixed(2)}
           delta={semiIndex?.quote?.return}
           spark={semiIndex?.history}
-          hint="Semiconductors and compute"
+          hint={semiIndex === null ? 'Semiconductors and compute' : semiIndex.instrument.name}
         />
         <StatCard
+          iconName="gauge"
           label="Volatility regime"
           value={formatPct(view.world.capitalMarkets.volatility)}
           hint="Feeds the noise term of every quarterly return"
         />
         <StatCard
+          iconName="coins"
           label="Your valuation"
           value={formatMoney(ownAnchor?.anchorValueUsd ?? 0)}
           hint={company.instrumentId === null ? 'Unlisted — fundamental anchor' : 'Anchor, not price'}
@@ -311,10 +322,18 @@ export default function MarketsPage(): React.JSX.Element {
       </div>
 
       <Panel
+        iconName="chart"
+        iconTone="brand"
         title="Exchange"
         flush
         subtitle="Quarterly closes. Premium is price against the anchor's per-share value."
-        actions={<span className="text-[10px] text-ink-faint">Select a row for the decomposition and the ticket</span>}
+        actions={
+          <span className="flex items-center gap-1.5 text-[11px] text-ink-faint">
+            <Icon name="chevronRight" size={13} accent="current" />
+            <span className="sm:hidden">Tap a name for the working and the ticket</span>
+            <span className="hidden sm:inline">Select a row for the decomposition and the ticket</span>
+          </span>
+        }
       >
         <DataTable
           columns={tapeColumns}
@@ -323,15 +342,42 @@ export default function MarketsPage(): React.JSX.Element {
           onRowClick={(row) => setOpenId(row.instrument.id)}
           isHighlighted={(row) => row.instrument.companyId === company.id}
           dense
+          cardMode="auto"
+          cardTitleKey="name"
           initialSort={{ key: 'cap', direction: 'desc' }}
-          empty={<EmptyState title="No instruments" message="This session has no in-world exchange." />}
+          empty={<EmptyState icon="chart" title="No instruments" message="This session has no in-world exchange." />}
+        />
+      </Panel>
+
+      <Panel
+        iconName="briefcase"
+        title="Your positions"
+        flush
+        subtitle="Every stake held by you or by your company, with the highest ownership threshold each has crossed."
+      >
+        <DataTable
+          columns={positionColumns}
+          rows={positions}
+          rowKey={(row) => row.key}
+          dense
+          cardMode="auto"
+          cardTitleKey="company"
+          initialSort={{ key: 'value', direction: 'desc' }}
+          empty={
+            <EmptyState
+              compact
+              icon="coins"
+              title="No positions outside your own company"
+              message="Accumulating a stake in a rival starts on any row above. Crossing 5% makes the position public."
+            />
+          }
         />
       </Panel>
 
       {company.instrumentId === null ? (
-        <Panel title="Your company is not listed" subtitle="Private companies are marked to their fundamental anchor.">
+        <Panel iconName="building" title="Your company is not listed" subtitle="Private companies are marked to their fundamental anchor.">
           {ownAnchor === null ? (
-            <EmptyState compact title="No anchor yet" message="An anchor is computed for every active company at each resolution." />
+            <EmptyState compact icon="building" title="No anchor yet" message="An anchor is computed for every active company at each resolution." />
           ) : (
             <>
               <KeyValueGrid
@@ -353,7 +399,7 @@ export default function MarketsPage(): React.JSX.Element {
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-[11px] text-ink-faint">
+              <p className="mt-3 text-[12px] text-ink-faint">
                 Listing is a board matter and needs an open window; the world&apos;s listing window currently reads{' '}
                 {formatPct(view.world.capitalMarkets.ipoWindow)}.
               </p>
@@ -362,43 +408,21 @@ export default function MarketsPage(): React.JSX.Element {
         </Panel>
       ) : null}
 
-      <Panel
-        title="Your positions"
-        flush
-        subtitle="Every stake held by you or by your company, with the highest ownership threshold each has crossed."
-      >
-        <DataTable
-          columns={positionColumns}
-          rows={positions}
-          rowKey={(row) => row.key}
-          dense
-          initialSort={{ key: 'value', direction: 'desc' }}
-          empty={
-            <EmptyState
-              compact
-              glyph="POS"
-              title="No positions outside your own company"
-              message="Accumulating a stake in a rival starts on any row above. Crossing 5% makes the position public."
-            />
-          }
-        />
-      </Panel>
-
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Market beliefs" subtitle="The only path from private reality to a share price runs through these.">
+        <Panel iconName="gauge" iconTone="info" title="Market beliefs" subtitle="The only path from private reality to a share price runs through these.">
           {allBeliefs.length === 0 ? (
-            <EmptyState compact title="No live beliefs" message="Beliefs form as disclosures, leaks and results arrive." />
+            <EmptyState compact icon="gauge" title="No live beliefs" message="Beliefs form as disclosures, leaks and results arrive." />
           ) : (
-            <ul className="flex flex-col gap-3">
+            <ul className="flex flex-col gap-3.5">
               {allBeliefs.map((belief) => (
                 <li key={belief.id}>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className="min-w-0 truncate text-[12px] text-ink">
+                    <span className="min-w-0 truncate text-[13px] text-ink sm:text-[12px]">
                       {belief.subjectKind === 'company' ? companyNameOf(view, belief.subjectId) : humanise(belief.subjectId)}
                       <span className="text-ink-faint"> · {humanise(belief.topic)}</span>
                     </span>
                     <span className="flex shrink-0 items-baseline gap-2">
-                      <span className="figure text-[12px] text-ink">{formatPct(belief.probability)}</span>
+                      <span className="figure text-[13px] text-ink sm:text-[12px]">{formatPct(belief.probability)}</span>
                       <DeltaBadge value={belief.probability - belief.priorProbability} format="points" bare invert />
                     </span>
                   </div>
@@ -409,26 +433,26 @@ export default function MarketsPage(): React.JSX.Element {
           )}
         </Panel>
 
-        <Panel title="Public disclosures" subtitle="What has been said on the record, and how much weight the market gives it.">
+        <Panel iconName="newspaper" title="Public disclosures" subtitle="What has been said on the record, and how much weight the market gives it.">
           {recentDisclosures.length === 0 ? (
-            <EmptyState compact title="Nothing published" message="Guidance, earnings, leaks and analyst notes appear here." />
+            <EmptyState compact icon="newspaper" title="Nothing published" message="Guidance, earnings, leaks and analyst notes appear here." />
           ) : (
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col gap-3">
               {recentDisclosures.map((disclosure) => (
-                <li key={disclosure.id} className="border-b border-hair pb-2 last:border-b-0 last:pb-0">
+                <li key={disclosure.id} className="border-b border-hair pb-3 last:border-b-0 last:pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5">
                       <Tag tone={disclosure.kind === 'leak' || disclosure.kind === 'rumour' ? 'warn' : 'neutral'}>
                         {humanise(disclosure.kind)}
                       </Tag>
-                      <span className="text-[10px] text-ink-faint">{companyNameOf(view, disclosure.companyId)}</span>
+                      <span className="text-[11px] text-ink-faint">{companyNameOf(view, disclosure.companyId)}</span>
                     </span>
                     <span className="figure text-[10px] text-ink-faint">
                       {quarterLabel(session.startYear, disclosure.quarter)}
                     </span>
                   </div>
-                  <p className="mt-1 text-[12px] text-ink-dim">{disclosure.headline}</p>
-                  <Meter className="mt-1" label="Credibility" value={disclosure.credibility * 100} />
+                  <p className="mt-1 text-[13px] leading-relaxed text-ink-dim sm:text-[12px]">{disclosure.headline}</p>
+                  <Meter className="mt-1.5" label="Credibility" value={disclosure.credibility * 100} />
                 </li>
               ))}
             </ul>
@@ -438,12 +462,14 @@ export default function MarketsPage(): React.JSX.Element {
 
       {session.config.enableReferenceMarket ? (
         <Panel
+          iconName="globe"
           title="Reference tape"
           subtitle="Real-world instruments. Read-only: no modifier, no event and no action may change them."
           className="border-dashed"
         >
           <EmptyState
             compact
+            icon="globe"
             title="No reference feed connected"
             message="The market-data adapter supplies this panel. It is display-only in every configuration."
           />

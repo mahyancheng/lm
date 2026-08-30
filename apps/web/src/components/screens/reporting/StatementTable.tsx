@@ -56,7 +56,7 @@ export function StatementTable({ rows, valueHeader, secondaryHeader, className }
             <span className="min-w-0 flex-1">
               <span
                 className={cx(
-                  'block truncate',
+                  'block sm:truncate',
                   row.emphasis === true ? 'text-[12px] font-semibold text-ink' : 'text-[12px] text-ink-dim',
                   row.indent === true ? 'pl-3' : '',
                 )}
@@ -83,7 +83,7 @@ export function StatementTable({ rows, valueHeader, secondaryHeader, className }
         );
 
         const rowClasses = cx(
-          'flex w-full items-baseline justify-between gap-3 py-1.5 text-left',
+          'flex w-full items-baseline justify-between gap-3 py-1.5 text-left max-sm:min-h-11 max-sm:items-center',
           row.emphasis === true ? 'border-t border-hair-strong' : 'border-t border-hair/50',
         );
 

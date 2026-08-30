@@ -16,7 +16,7 @@ import Link from 'next/link';
 import type { Company, SessionState } from '@frontier/contracts';
 import { STAFF_ROLES, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { Drawer, EmptyState, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
+import { Drawer, EmptyState, Icon, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
 
 export interface SitesDrawerProps {
   readonly open: boolean;
@@ -38,7 +38,8 @@ export function SitesDrawer({ open, onClose, session, company }: SitesDrawerProp
       title={company.name}
       subtitle={`${company.headquartersCity} · ${company.tier} tier · ${company.isPublic ? `listed as ${company.ticker ?? '—'}` : 'privately held'}`}
       footer={
-        <Link className="btn btn-sm btn-primary" href="/people">
+        <Link className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" href="/people">
+          <Icon name="people" size={16} accent="current" />
           Headcount plan
         </Link>
       }
@@ -78,6 +79,7 @@ export function SitesDrawer({ open, onClose, session, company }: SitesDrawerProp
             {company.offices.length === 0 ? (
               <EmptyState
                 compact
+                icon="building"
                 title="No physical office"
                 message="Headcount growth is uncapped and fixed occupancy cost is zero."
               />

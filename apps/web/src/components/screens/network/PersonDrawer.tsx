@@ -16,7 +16,7 @@ import type { ActionValidationResult, Character } from '@frontier/contracts';
 import { CONNECTION_GAP_RULE, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatScore } from '@frontier/shared';
 import { MIN_INTRODUCTION_PURPOSE_CHARS } from '@frontier/simulation';
-import { AccessBadge, Drawer, KeyValueGrid, Meter, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
+import { AccessBadge, Drawer, Icon, KeyValueGrid, Meter, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions, useSession } from '@/lib/game';
 import { characterName, memoriesAbout, type DirectoryEntry } from './directory';
 
@@ -136,13 +136,16 @@ export function PersonDrawer({
           <SectionHeading rule>Access</SectionHeading>
           <p
             className={cx(
-              'mt-2 rounded-[4px] border px-3 py-2 text-[11px] leading-relaxed',
+              'mt-2 flex items-start gap-2 rounded-card border px-3 py-2.5 text-[12.5px] leading-relaxed',
               decision.allowed ? 'border-gain/25 bg-gain-wash text-ink-dim' : 'border-warn/25 bg-warn-wash text-warn',
             )}
           >
+            <span className="mt-px shrink-0">
+              <Icon name={decision.allowed ? 'check' : 'warning'} size={14} accent="current" />
+            </span>
             {decision.reason}
           </p>
-          <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">{CONNECTION_GAP_RULE.statement}</p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">{CONNECTION_GAP_RULE.statement}</p>
         </div>
 
         {/* --- introduction ------------------------------------------------- */}
@@ -150,7 +153,7 @@ export function PersonDrawer({
           <div>
             <SectionHeading rule>Ask for an introduction</SectionHeading>
             {brokerIds.length === 0 ? (
-              <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">
+              <p className="mt-2 text-[12.5px] leading-relaxed text-ink-dim">
                 Nobody you can reach can reach {target.name} either. Build a relationship with someone in between first — that is the whole
                 route upward.
               </p>
@@ -159,7 +162,7 @@ export function PersonDrawer({
                 <label className="block">
                   <span className="label-caps-faint">Through</span>
                   <select
-                    className="field mt-1"
+                    className="field tap-target mt-1"
                     value={viaId}
                     onChange={(event) => {
                       setVia(event.target.value);
@@ -177,7 +180,7 @@ export function PersonDrawer({
                 <label className="block">
                   <span className="label-caps-faint">What the meeting is for</span>
                   <textarea
-                    className="field mt-1"
+                    className="field mt-1 text-[13px]"
                     rows={3}
                     maxLength={300}
                     value={purpose}
@@ -199,10 +202,17 @@ export function PersonDrawer({
                 <ValidationBanner result={result} compact />
 
                 <div className="flex items-center gap-2">
-                  <button type="button" className="btn btn-sm" onClick={preview} disabled={viaId === ''}>
+                  <button type="button" className="btn tap-target flex-1 sm:flex-none" onClick={preview} disabled={viaId === ''}>
+                    <Icon name="search" size={15} />
                     Check
                   </button>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={ask} disabled={!canAsk || queued}>
+                  <button
+                    type="button"
+                    className="btn btn-primary tap-target icon-knockout-brand flex-[1.4] sm:flex-none"
+                    onClick={ask}
+                    disabled={!canAsk || queued}
+                  >
+                    <Icon name="handshake" size={15} accent="inherit" />
                     {queued ? 'Queued' : 'Queue the request'}
                   </button>
                 </div>
@@ -279,7 +289,7 @@ export function PersonDrawer({
                     <Tag tone={memory.sentiment >= 0 ? 'gain' : 'loss'}>{memory.kind.replace(/_/g, ' ')}</Tag>
                     <span className="figure text-[10px] text-ink-faint">{quarterLabel(startYear, memory.quarter)}</span>
                   </div>
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{memory.summary}</p>
+                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-dim">{memory.summary}</p>
                   <div className="mt-1.5">
                     <Meter value={memory.strength * 100} label="Salience" showValue={false} />
                   </div>

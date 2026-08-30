@@ -32,20 +32,22 @@ import {
   AccessBadge,
   DataTable,
   EmptyState,
+  Icon,
   Meter,
   PageHeader,
   Panel,
   PersonChip,
   SectionHeading,
   StatCard,
-  TabBar,
   Tag,
+  cx,
   type Column,
 } from '@/components/ui';
 import { ConnectionBreakdown } from '@/components/screens/network/ConnectionBreakdown';
 import { PeopleWeb } from '@/components/screens/network/PeopleWeb';
 import { PersonDrawer } from '@/components/screens/network/PersonDrawer';
 import { buildDirectory, characterName, overridesFor, type DirectoryEntry } from '@/components/screens/network/directory';
+import { IconTabs } from '@/components/screens/world/IconTabs';
 import { useLeaderboards, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
 const ROLE_FILTERS: readonly { readonly id: string; readonly label: string }[] = [
@@ -89,16 +91,32 @@ export default function NetworkPage(): React.JSX.Element {
   const selectedEntry = selected === null ? null : (directory.find((entry) => entry.character.id === selected) ?? null);
 
   const filters = (
-    <div className="flex items-center gap-1.5">
-      <select className="field h-7 w-auto py-0 text-[11px]" value={role} onChange={(event) => setRole(event.target.value)} aria-label="Filter by role">
+    <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto">
+      <select
+        className="field tap-target min-w-0 flex-1 sm:w-36 sm:flex-none"
+        value={role}
+        onChange={(event) => setRole(event.target.value)}
+        aria-label="Filter by role"
+      >
         {ROLE_FILTERS.map((filter) => (
           <option key={filter.id} value={filter.id}>
             {filter.label}
           </option>
         ))}
       </select>
-      <button type="button" className="btn btn-sm" onClick={() => setReachOnly((value) => !value)}>
-        {reachOnly ? 'Showing reachable' : 'Show all'}
+      <button
+        type="button"
+        className={cx(
+          'btn tap-target shrink-0',
+          reachOnly ? 'icon-knockout-wash border-brand/30 bg-brand-wash text-brand' : 'icon-knockout-panel',
+        )}
+        aria-pressed={reachOnly}
+        onClick={() => setReachOnly((value) => !value)}
+      >
+        {/* The tick is the state, so it appears only when the filter is on: a
+            check drawn on an unchecked toggle would read as already applied. */}
+        {reachOnly ? <Icon name="check" size={15} accent="inherit" /> : null}
+        Reachable only
       </button>
     </div>
   );
@@ -123,6 +141,7 @@ export default function NetworkPage(): React.JSX.Element {
     {
       key: 'connection',
       header: 'Connection',
+      cardLabel: 'Connection level',
       align: 'right',
       width: '92px',
       render: (row) => formatScore(row.character.connectionLevel),
@@ -142,6 +161,9 @@ export default function NetworkPage(): React.JSX.Element {
       header: 'Your trust',
       width: '110px',
       hideOnMobile: true,
+      // Both directions of the relationship are read honestly in the drawer;
+      // a bar with no number on a card would only be decoration.
+      cardHidden: true,
       render: (row) =>
         row.outbound === null ? <span className="text-[10px] text-ink-faint">—</span> : <Meter value={row.outbound.trust} showValue={false} />,
       sortable: true,
@@ -152,6 +174,7 @@ export default function NetworkPage(): React.JSX.Element {
       header: 'Their respect',
       width: '110px',
       hideOnMobile: true,
+      cardHidden: true,
       render: (row) =>
         row.inbound === null ? <span className="text-[10px] text-ink-faint">—</span> : <Meter value={row.inbound.respect} showValue={false} />,
       sortable: true,
@@ -180,46 +203,61 @@ export default function NetworkPage(): React.JSX.Element {
         subtitle="Who you can reach, who you cannot, and what it would take. Connection level is public; how anyone feels about you is not."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
-          label="Your connection"
+          iconName="network"
+          label="Connection"
           value={formatScore(founder.connectionLevel)}
-          hint={`${founder.name} · ${founder.boardSeatCount} board seat${founder.boardSeatCount === 1 ? '' : 's'}`}
+          hint={`${founder.name} · ${founder.boardSeatCount} seat${founder.boardSeatCount === 1 ? '' : 's'}`}
         />
-        <StatCard label="Reachable now" value={String(open.length)} hint="Within ten points, or below you" tone={open.length > 0 ? 'gain' : undefined} />
-        <StatCard label="Via an override" value={String(viaOverride.length)} hint="A shared board, a live deal, a standing introduction" />
         <StatCard
+          iconName="check"
+          label="Direct"
+          value={String(open.length)}
+          hint="Within ten points of you"
+          tone={open.length > 0 ? 'gain' : undefined}
+        />
+        <StatCard
+          iconName="handshake"
+          label="Via override"
+          value={String(viaOverride.length)}
+          hint="A board, a deal, a favour"
+        />
+        <StatCard
+          iconName="warning"
           label="Out of reach"
           value={String(blocked.length)}
           tone={blocked.length > 0 ? 'warn' : undefined}
-          hint={`${routed.length} of them have a route through someone you know`}
+          iconTone={blocked.length > 0 ? 'warn' : 'neutral'}
+          hint={`${routed.length} have a route in`}
         />
       </div>
 
-      <TabBar
+      <IconTabs
         ariaLabel="How to read the network"
         value={surface}
         onChange={setSurface}
         tabs={[
-          { id: 'web', label: 'The web' },
-          { id: 'list', label: 'List', badge: rows.length },
+          { id: 'web', label: 'The web', icon: 'network' },
+          { id: 'list', label: 'Directory', icon: 'people', badge: rows.length },
         ]}
       />
 
       {surface === 'web' ? (
         <Panel
+          iconName="network"
           title="The people web"
           subtitle={`${rows.length} people, placed by how far away they are. Tap anyone for their card.`}
           actions={filters}
         >
           {rows.length === 0 ? (
-            <EmptyState title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />
+            <EmptyState icon="people" title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />
           ) : (
             <PeopleWeb entries={rows} founder={founder} selectedId={selected} onSelect={setSelected} />
           )}
         </Panel>
       ) : (
-        <Panel title="Directory" subtitle={`${rows.length} of ${directory.length} people`} flush actions={filters}>
+        <Panel iconName="people" title="Directory" subtitle={`${rows.length} of ${directory.length} people`} flush actions={filters}>
           <DataTable
             columns={columns}
             rows={rows}
@@ -227,13 +265,16 @@ export default function NetworkPage(): React.JSX.Element {
             onRowClick={(row) => setSelected(row.character.id)}
             initialSort={{ key: 'connection', direction: 'desc' }}
             dense
-            empty={<EmptyState title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />}
+            cardMode="auto"
+            cardTitleKey="person"
+            empty={<EmptyState icon="people" title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />}
           />
         </Panel>
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
+          iconName="chart"
           title="Connection level"
           subtitle="The ten inputs behind your standing, each a percentile within this session"
           className="lg:col-span-2"
@@ -241,7 +282,7 @@ export default function NetworkPage(): React.JSX.Element {
           <ConnectionBreakdown inputs={inputs} standingLevel={founder.connectionLevel} />
         </Panel>
 
-        <Panel title="Access" subtitle="Who you can open a channel with this quarter">
+        <Panel iconName="handshake" title="Access" subtitle="Who you can open a channel with this quarter">
           <div className="flex flex-col gap-3">
             <AccessGroup title="Reachable" tone="gain" entries={open} onSelect={setSelected} />
             <AccessGroup title="Through an override" tone="info" entries={viaOverride} onSelect={setSelected} />
@@ -256,13 +297,13 @@ export default function NetworkPage(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => setSelected(entry.character.id)}
-                        className="w-full rounded-chip px-1 py-1 text-left transition-colors hover:bg-raised"
+                        className="tap-target flex w-full flex-col justify-center rounded-chip px-2 py-1 text-left transition-colors hover:bg-raised"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-[11px] text-ink">{entry.character.name}</span>
+                          <span className="truncate text-[12.5px] text-ink">{entry.character.name}</span>
                           <span className="figure shrink-0 text-[10px] text-warn">gap {Math.round(entry.decision.gap)}</span>
                         </div>
-                        <div className="truncate text-[10px] text-ink-faint">
+                        <div className="truncate text-[11px] text-ink-faint">
                           {entry.brokerIds.length === 0
                             ? 'No route yet'
                             : `via ${characterName(session, entry.brokerIds[0] ?? '')}${
@@ -303,11 +344,11 @@ export default function NetworkPage(): React.JSX.Element {
         </Panel>
       </div>
 
-      <Panel title="Industry power" subtitle="The network board, recomputed from the ledger every quarter" flush>
+      <Panel iconName="trophy" title="Industry power" subtitle="The network board, recomputed from the ledger every quarter" flush>
         {powerBoard === null ? (
           <div className="p-3.5">
             <EmptyState
-              glyph="—"
+              icon="trophy"
               title="Rankings appear when the first quarter resolves"
               message="Leaderboards are recomputed server-side from committed events. At quarter zero nothing has been committed yet."
               compact
@@ -316,11 +357,13 @@ export default function NetworkPage(): React.JSX.Element {
         ) : (
           <DataTable
             dense
+            cardMode="auto"
+            cardTitleKey="label"
             rows={powerBoard.entries}
             rowKey={(row) => `${row.subjectKind}:${row.subjectId}`}
             isHighlighted={(row) => row.subjectId === founder.id}
             columns={[
-              { key: 'rank', header: '#', width: '48px', align: 'right', render: (row) => String(row.rank) },
+              { key: 'rank', header: '#', cardLabel: 'Rank', width: '48px', align: 'right', render: (row) => String(row.rank) },
               { key: 'label', header: 'Person', render: (row) => <span className="text-[12px] text-ink">{row.label}</span> },
               { key: 'value', header: 'Connection', align: 'right', render: (row) => formatScore(row.value) },
               {
@@ -371,8 +414,9 @@ function AccessGroup({
               <PersonChip
                 character={entry.character}
                 size="sm"
+                className="tap-target"
                 onClick={() => onSelect(entry.character.id)}
-                right={<span className={`figure text-[10px] tone-${tone}`}>{formatScore(entry.character.connectionLevel)}</span>}
+                right={<span className={`figure text-[11px] tone-${tone}`}>{formatScore(entry.character.connectionLevel)}</span>}
               />
             </li>
           ))}

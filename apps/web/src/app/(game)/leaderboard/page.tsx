@@ -19,19 +19,21 @@ import {
   CompanyChip,
   DataTable,
   EmptyState,
+  Icon,
   PageHeader,
   Panel,
   PersonChip,
   ProgressBar,
   StatCard,
-  TabBar,
   Tag,
   cx,
   type Column,
+  type IconName,
 } from '@/components/ui';
 import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { FounderIndexPanel } from '@/components/screens/leaderboard/FounderIndexPanel';
 import { PowerGraph } from '@/components/screens/leaderboard/PowerGraph';
+import { IconTabs } from '@/components/screens/world/IconTabs';
 import { humanise } from '@/components/screens/reporting/util';
 
 type Units = 'money' | 'score' | 'index';
@@ -47,6 +49,27 @@ const BOARD_LABEL: Readonly<Record<LeaderboardBoard, string>> = {
   government: 'Government',
   reputation: 'Reputation',
   founder_index: 'Founder Index',
+};
+
+/**
+ * The mark for each board.
+ *
+ * Ten boards are ten similar phrases in a strip; they are ten distinct shapes
+ * with a mark in front. Each one is what the board measures — a building for
+ * enterprise value, coins for personal wealth, a capitol for government
+ * standing — never a letter pair.
+ */
+const BOARD_ICON: Readonly<Record<LeaderboardBoard, IconName>> = {
+  company_value: 'building',
+  founder_wealth: 'coins',
+  revenue: 'ledger',
+  profit: 'chart',
+  innovation: 'flask',
+  market_influence: 'network',
+  network: 'people',
+  government: 'capitol',
+  reputation: 'newspaper',
+  founder_index: 'trophy',
 };
 
 const BOARD_UNITS: Readonly<Record<LeaderboardBoard, Units>> = {
@@ -112,6 +135,7 @@ export default function LeaderboardPage(): React.JSX.Element {
     {
       key: 'rank',
       header: '#',
+      cardLabel: 'Rank',
       width: '52px',
       align: 'right',
       render: (row) => <span className={cx('figure', mine.has(row.subjectId) ? 'text-brand' : 'text-ink')}>{row.rank}</span>,
@@ -121,6 +145,7 @@ export default function LeaderboardPage(): React.JSX.Element {
     {
       key: 'move',
       header: 'Move',
+      cardLabel: 'Since last quarter',
       width: '84px',
       render: (row) => {
         const move = formatRankMove(row.previousRank, row.rank);
@@ -128,8 +153,10 @@ export default function LeaderboardPage(): React.JSX.Element {
         if (move === 'new') return <Tag tone="info">new</Tag>;
         const improved = row.previousRank !== null && row.previousRank > row.rank;
         return (
-          <span className={cx('figure text-[11px]', improved ? 'tone-gain' : 'tone-loss')}>
-            {improved ? '▲' : '▼'} {move}
+          <span className={cx('inline-flex items-center gap-1', improved ? 'tone-gain' : 'tone-loss')}>
+            {/* One chevron, turned over for a climb: a drawn mark, not a glyph. */}
+            <Icon name="chevronDown" size={12} accent="current" className={improved ? 'rotate-180' : undefined} />
+            <span className="figure text-[11px]">{move}</span>
           </span>
         );
       },
@@ -154,6 +181,7 @@ export default function LeaderboardPage(): React.JSX.Element {
     {
       key: 'value',
       header: 'Value',
+      cardLabel: BOARD_LABEL[board],
       align: 'right',
       render: (row) => formatValue(units, row.value),
       sortable: true,
@@ -195,43 +223,48 @@ export default function LeaderboardPage(): React.JSX.Element {
         subtitle="Ten independent rankings and the composite that sits on top of them. Every figure is recomputed server-side from the ledger."
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
+          iconName="trophy"
           label="Founder Index"
           value={headline.composite === null ? '—' : formatScore(headline.composite.value * 100, 1)}
           hint={headline.composite === null ? 'Computed at the first resolution' : `Rank #${headline.composite.rank} of ${boards.find((entry) => entry.board === 'founder_index')?.entries.length ?? 0}`}
-          delta={headline.composite === null ? undefined : headline.composite.delta * 100}
+          delta={headline.composite === null || headline.composite.delta === 0 ? undefined : headline.composite.delta * 100}
           deltaFormat="number"
         />
         <StatCard
+          iconName="building"
           label="Company value"
           value={headline.value === null ? '—' : formatMoney(headline.value.value)}
           hint={headline.value === null ? 'Computed at the first resolution' : `Rank #${headline.value.rank}`}
-          delta={headline.value === null ? undefined : headline.value.delta}
+          delta={headline.value === null || headline.value.delta === 0 ? undefined : headline.value.delta}
           deltaFormat="money"
         />
         <StatCard
-          label="Founder wealth"
+          iconName="coins"
+          label="Your wealth"
           value={headline.wealth === null ? '—' : formatMoney(headline.wealth.value)}
           hint={headline.wealth === null ? 'Computed at the first resolution' : `Rank #${headline.wealth.rank}`}
-          delta={headline.wealth === null ? undefined : headline.wealth.delta}
+          delta={headline.wealth === null || headline.wealth.delta === 0 ? undefined : headline.wealth.delta}
           deltaFormat="money"
         />
         <StatCard
+          iconName="people"
           label="Network"
           value={headline.network === null ? '—' : formatScore(headline.network.value, 0)}
           hint={headline.network === null ? 'Computed at the first resolution' : `Rank #${headline.network.rank}`}
-          delta={headline.network === null ? undefined : headline.network.delta}
+          delta={headline.network === null || headline.network.delta === 0 ? undefined : headline.network.delta}
           deltaFormat="number"
           href="/network"
         />
       </div>
 
-      <TabBar
+      <IconTabs
         ariaLabel="Leaderboards"
         tabs={LEADERBOARD_BOARDS.map((entry) => ({
           id: entry,
           label: BOARD_LABEL[entry],
+          icon: BOARD_ICON[entry],
           badge: boards.find((item) => item.board === entry)?.entries.length,
         }))}
         value={board}
@@ -239,6 +272,8 @@ export default function LeaderboardPage(): React.JSX.Element {
       />
 
       <Panel
+        iconName={BOARD_ICON[board]}
+        iconTone="brand"
         title={BOARD_LABEL[board]}
         subtitle={BOARD_BLURB[board]}
         flush
@@ -246,7 +281,7 @@ export default function LeaderboardPage(): React.JSX.Element {
       >
         {active === null ? (
           <EmptyState
-            glyph="LB"
+            icon="trophy"
             title="Rankings are computed when a quarter resolves"
             message="Leaderboards are rebuilt from state in the sixteenth phase of every resolution, and the client can never submit a score. Queue your instructions and end the quarter."
           />
@@ -257,19 +292,25 @@ export default function LeaderboardPage(): React.JSX.Element {
             rowKey={(row) => `${board}_${row.subjectId}`}
             isHighlighted={(row) => mine.has(row.subjectId)}
             dense
+            cardMode="auto"
+            cardTitleKey="subject"
             initialSort={{ key: 'rank', direction: 'asc' }}
           />
         )}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Founder Index decomposition" subtitle="Eight weighted percentiles, and the arithmetic that produced the composite.">
+        <Panel
+          iconName="trophy"
+          title="Founder Index decomposition"
+          subtitle="Eight weighted percentiles, and the arithmetic that produced the composite."
+        >
           <FounderIndexPanel session={session} view={view} founderId={founder.id} founderName={founder.name} companyId={company.id} />
         </Panel>
 
-        <Panel title="Board summary" subtitle="Where you stand on every board at once.">
+        <Panel iconName="ledger" title="Board summary" subtitle="Where you stand on every board at once.">
           {boards.length === 0 ? (
-            <EmptyState compact title="No boards yet" message="They appear together after the first resolution." />
+            <EmptyState compact icon="trophy" title="No boards yet" message="They appear together after the first resolution." />
           ) : (
             <div className="flex flex-col gap-2">
               {LEADERBOARD_BOARDS.map((name) => {
@@ -282,13 +323,13 @@ export default function LeaderboardPage(): React.JSX.Element {
                     type="button"
                     onClick={() => setBoard(name)}
                     className={cx(
-                      'flex w-full items-center justify-between gap-3 rounded-chip border-b border-hair px-2 py-2 text-left transition-colors hover:bg-raised',
-                      board === name ? 'bg-raised' : '',
+                      'tap-target flex w-full items-center justify-between gap-3 rounded-chip border-b border-hair px-2 py-2 text-left transition-colors hover:bg-raised',
+                      board === name ? 'icon-knockout-raised bg-raised' : 'icon-knockout-panel',
                     )}
                   >
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12px] text-ink">{BOARD_LABEL[name]}</span>
-                      <span className="block truncate text-[10px] text-ink-faint">{humanise(name)}</span>
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <Icon name={BOARD_ICON[name]} size={16} accent="inherit" />
+                      <span className="block min-w-0 truncate text-[12.5px] text-ink">{BOARD_LABEL[name]}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-3">
                       <span className="figure text-[11px] text-ink-dim">
@@ -307,6 +348,7 @@ export default function LeaderboardPage(): React.JSX.Element {
       </div>
 
       <Panel
+        iconName="network"
         title="Industry power"
         subtitle="Disclosed stakes, board seats and deals. Deterministic layout: the same state always draws the same graph."
       >

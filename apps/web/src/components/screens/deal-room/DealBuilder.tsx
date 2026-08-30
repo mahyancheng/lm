@@ -26,7 +26,7 @@ import type {
 } from '@frontier/contracts';
 import { BOARD_PROPOSAL_KINDS, DEAL_OBLIGATION_KINDS, VOTE_STANCES, quarterLabel } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
-import { ConfirmDialog, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
+import { ConfirmDialog, Icon, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import {
   OBLIGATION_HINTS,
@@ -128,7 +128,7 @@ export function DealBuilder({
         <label className="block">
           <span className="label-caps-faint">Counterparty</span>
           <select
-            className="field mt-1"
+            className="field tap-target mt-1 sm:min-h-0"
             value={counterpartyId}
             onChange={(event) => {
               setCounterpartyId(event.target.value);
@@ -146,7 +146,7 @@ export function DealBuilder({
         <label className="block">
           <span className="label-caps-faint">Offer lapses after</span>
           <select
-            className="field mt-1"
+            className="field tap-target mt-1 sm:min-h-0"
             value={expires}
             onChange={(event) => {
               setExpires(Number(event.target.value));
@@ -162,10 +162,10 @@ export function DealBuilder({
         </label>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
         <button
           type="button"
-          className={cx('btn btn-sm', binding ? 'btn-primary' : '')}
+          className={cx('btn btn-sm tap-target w-full sm:w-auto sm:min-h-0', binding ? 'btn-primary' : '')}
           onClick={() => {
             setBinding((value) => !value);
             setResult(null);
@@ -175,7 +175,7 @@ export function DealBuilder({
         </button>
         <button
           type="button"
-          className={cx('btn btn-sm', confidentiality === 'public' ? 'btn-primary' : '')}
+          className={cx('btn btn-sm tap-target w-full sm:w-auto sm:min-h-0', confidentiality === 'public' ? 'btn-primary' : '')}
           onClick={() => {
             setConfidentiality((value) => (value === 'private' ? 'public' : 'private'));
             setResult(null);
@@ -183,7 +183,7 @@ export function DealBuilder({
         >
           {confidentiality === 'public' ? 'Announced publicly' : 'Confidential'}
         </button>
-        <span className="text-[10px] leading-relaxed text-ink-faint">
+        <span className="col-span-2 text-[12px] leading-relaxed text-ink-faint sm:col-span-1 sm:text-[10px]">
           {binding
             ? 'Obligations are enforced every quarter; failing to deliver is a breach with permanent consequences.'
             : 'Nothing is enforced. The whole agreement is a recorded statement of intent.'}
@@ -226,7 +226,7 @@ export function DealBuilder({
       <label className="block">
         <span className="label-caps-faint">Summary the counterparty reads first</span>
         <textarea
-          className="field mt-1"
+          className="field tap-target mt-1 sm:min-h-0"
           rows={2}
           maxLength={600}
           value={summary}
@@ -243,7 +243,7 @@ export function DealBuilder({
       <label className="block">
         <span className="label-caps-faint">Statements of intent — recorded, never enforced</span>
         <textarea
-          className="field mt-1"
+          className="field tap-target mt-1 sm:min-h-0"
           rows={2}
           value={statements}
           placeholder={'One per line.\nWe intend to support your listing next year.'}
@@ -271,19 +271,45 @@ export function DealBuilder({
 
       <ValidationBanner result={result} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-sm" onClick={check} disabled={!ready}>
-          Check with the validator
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          disabled={!ready || queued || intent === null}
-          onClick={() => setPending(intent)}
-        >
-          {queued ? 'Queued' : 'Propose the deal'}
-        </button>
-        {!ready ? <span className="text-[10px] text-ink-faint">A counterparty, a summary and at least one obligation.</span> : null}
+      {/* The summary bar: what the draft currently says, and the two controls
+          that act on it, in one banded strip at the foot of the form. It is
+          deliberately not `position: sticky` — `Panel` clips its own overflow,
+          which would confine a sticky element to a box that never scrolls and
+          leave it silently static — and it carries no negative margin, because
+          a full-bleed strip inside a grid track widens the track by its own
+          bleed and takes the page sideways with it. Below `lg` it reads as a
+          footer band; from `lg` it collapses back into the plain button row. */}
+      <div className="mt-1 rounded-card border border-hair bg-raised/60 px-3 py-2.5 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint lg:hidden">
+          <span className="flex items-center gap-1.5">
+            <Icon name="export" size={13} accent="current" />
+            {gives.length} given
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Icon name="import" size={13} accent="current" />
+            {gets.length} received
+          </span>
+          <Tag tone={binding ? 'info' : 'warn'}>{binding ? 'binding' : 'intent only'}</Tag>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 lg:mt-0 lg:flex lg:flex-wrap lg:items-center">
+          <button type="button" className="btn btn-sm tap-target w-full lg:w-auto lg:min-h-0" onClick={check} disabled={!ready}>
+            <span className="sm:hidden">Check</span>
+            <span className="hidden sm:inline">Check with the validator</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm tap-target w-full lg:w-auto lg:min-h-0"
+            disabled={!ready || queued || intent === null}
+            onClick={() => setPending(intent)}
+          >
+            {queued ? 'Queued' : 'Propose the deal'}
+          </button>
+          {!ready ? (
+            <span className="col-span-2 text-[11px] text-ink-faint lg:col-span-1 lg:text-[10px]">
+              A counterparty, a summary and at least one obligation.
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <ConfirmDialog
@@ -351,7 +377,7 @@ function ObligationColumn({
       <SectionHeading rule>{title}</SectionHeading>
 
       {obligations.length === 0 ? (
-        <p className="mt-2 text-[11px] text-ink-faint">Nothing on this side yet.</p>
+        <p className="mt-2 text-[13px] text-ink-faint sm:text-[11px]">Nothing on this side yet.</p>
       ) : (
         <ul className="mt-2 flex flex-col gap-2">
           {obligations.map((obligation, index) => (
@@ -360,11 +386,11 @@ function ObligationColumn({
                 <Tag tone="info">{OBLIGATION_LABELS[obligation.kind]}</Tag>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
+                  className="btn btn-ghost btn-sm tap-target px-0 sm:min-h-0"
                   aria-label="Remove obligation"
                   onClick={() => onChange(obligations.filter((_, position) => position !== index))}
                 >
-                  ✕
+                  <Icon name="close" size={14} accent="current" />
                 </button>
               </div>
               <ObligationFields
@@ -375,14 +401,18 @@ function ObligationColumn({
                 techNodes={techNodes}
                 products={products}
               />
-              <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">{OBLIGATION_HINTS[obligation.kind]}</p>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">{OBLIGATION_HINTS[obligation.kind]}</p>
             </li>
           ))}
         </ul>
       )}
 
       <div className="mt-2 flex items-center gap-1.5">
-        <select className="field h-6 w-auto py-0 text-[11px]" value={adding} onChange={(event) => setAdding(event.target.value as ObligationKind)}>
+        <select
+          className="field tap-target min-w-0 flex-1 py-0 text-[12px] sm:h-6 sm:w-auto sm:min-h-0 sm:flex-none sm:text-[11px]"
+          value={adding}
+          onChange={(event) => setAdding(event.target.value as ObligationKind)}
+        >
           {DEAL_OBLIGATION_KINDS.map((kind) => (
             <option key={kind} value={kind}>
               {OBLIGATION_LABELS[kind]}
@@ -391,10 +421,11 @@ function ObligationColumn({
         </select>
         <button
           type="button"
-          className="btn btn-sm"
+          className="btn btn-sm tap-target shrink-0 sm:min-h-0"
           disabled={obligations.length >= 6}
           onClick={() => onChange([...obligations, blankObligation(adding, quarter)])}
         >
+          <Icon name="plus" size={13} accent="current" />
           Add
         </button>
         {obligations.length >= 6 ? <span className="text-[10px] text-ink-faint">Six a side is the limit.</span> : null}
@@ -516,7 +547,7 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
           <label className="block">
             <span className="label-caps-faint">What will be said</span>
             <input
-              className="field mt-1"
+              className="field tap-target mt-1 sm:min-h-0"
               maxLength={400}
               value={obligation.statement}
               onChange={(event) => onChange({ ...obligation, statement: event.target.value })}
@@ -567,7 +598,7 @@ function NumberField({
       <span className="label-caps-faint">{label}</span>
       <input
         type="number"
-        className="field mt-1"
+        className="field tap-target mt-1 sm:min-h-0"
         value={String(value)}
         min={min}
         max={max}
@@ -597,7 +628,7 @@ function SelectField({
   return (
     <label className="block">
       <span className="label-caps-faint">{label}</span>
-      <select className="field mt-1" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select className="field tap-target mt-1 sm:min-h-0" value={value} onChange={(event) => onChange(event.target.value)}>
         {allowEmpty === undefined ? <option value="">Choose…</option> : <option value="">{allowEmpty}</option>}
         {options.map((option) => (
           <option key={option.id} value={option.id}>

@@ -155,8 +155,9 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
   if (!allowed) {
     return (
-      <Panel title="Propose an innovation">
+      <Panel iconName="flask" title="Propose an innovation">
         <EmptyState
+          icon="flask"
           title="Player innovation is disabled"
           message="This session was created with allowPlayerInnovation off. The Frontier Map changes only through world events and delivered research."
         />
@@ -166,6 +167,8 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
   return (
     <Panel
+      iconName="flask"
+      iconTone="brand"
       title="Propose an innovation"
       subtitle="A technology the Frontier Map has never contained"
       actions={
@@ -174,7 +177,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             {llm.available ? `Interpreter on ${llm.model ?? 'the configured model'}` : 'Guided form'}
           </Tag>
         ) : (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={reset}>
+          <button type="button" className="btn btn-ghost btn-sm tap-target sm:min-h-0" onClick={reset}>
             Start again
           </button>
         )
@@ -182,28 +185,33 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
     >
       {mode === 'write' ? (
         <div className="space-y-2.5">
-          <p className="text-[11px] text-ink-dim">
+          <p className="text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">
             Write the idea in your own words — the mechanism, not the marketing. It is interpreted into a typed proposal you review before anything is
             submitted, and the engine assesses it independently of what you claim.
           </p>
           <textarea
-            className="field"
+            className="field tap-target sm:min-h-0"
             rows={5}
             maxLength={1200}
             placeholder="Millions of agents learning economic behaviour together in persistent simulated environments, so that pricing and negotiation emerge from the population rather than from a reward model…"
             value={idea}
             onChange={(event) => setIdea(event.target.value)}
           />
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setMode('form')}>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <button type="button" className="btn btn-ghost btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => setMode('form')}>
               State the fields myself
             </button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={busy || idea.trim().length < 12} onClick={() => void interpret()}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+              disabled={busy || idea.trim().length < 12}
+              onClick={() => void interpret()}
+            >
               {busy ? 'Interpreting…' : 'Interpret'}
             </button>
           </div>
           {!llm.available ? (
-            <p className="text-[10px] text-ink-faint">
+            <p className="text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">
               No model is configured, so the interpreter will decline and the guided form opens instead. A node is never added to the map without
               interpretation — stating the fields yourself is that interpretation.
             </p>
@@ -221,12 +229,12 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
           <label className="block">
             <span className="label-caps-faint mb-1 block">Title</span>
-            <input className="field" maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
+            <input className="field tap-target sm:min-h-0" maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           </label>
 
           <label className="block">
             <span className="label-caps-faint mb-1 block">What it is — two to four sentences</span>
-            <textarea className="field" rows={3} maxLength={1000} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
+            <textarea className="field tap-target sm:min-h-0" rows={3} maxLength={1000} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
           </label>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -235,7 +243,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
                 <span>Novelty</span>
                 <span className="figure text-ink-dim">{form.novelty.toFixed(2)}</span>
               </span>
-              <input type="range" className="w-full" min={0} max={1} step={0.05} value={form.novelty} onChange={(event) => setForm({ ...form, novelty: Number(event.target.value) })} />
+              <input type="range" className="tap-target w-full sm:min-h-0" min={0} max={1} step={0.05} value={form.novelty} onChange={(event) => setForm({ ...form, novelty: Number(event.target.value) })} />
             </label>
             <label className="block">
               <span className="label-caps-faint mb-1 flex items-baseline justify-between">
@@ -244,7 +252,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
               </span>
               <input
                 type="range"
-                className="w-full"
+                className="tap-target w-full sm:min-h-0"
                 min={0}
                 max={1}
                 step={0.05}
@@ -257,12 +265,12 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="block sm:col-span-2">
               <span className="label-caps-faint mb-1 block">Capabilities needed, comma separated</span>
-              <input className="field" value={form.capabilities} onChange={(event) => setForm({ ...form, capabilities: event.target.value })} placeholder="agents, training_systems" />
+              <input className="field tap-target sm:min-h-0" value={form.capabilities} onChange={(event) => setForm({ ...form, capabilities: event.target.value })} placeholder="agents, training_systems" />
             </label>
             <label className="block">
               <span className="label-caps-faint mb-1 block">Quarters</span>
               <input
-                className="field"
+                className="field tap-target sm:min-h-0"
                 type="number"
                 min={1}
                 max={60}
@@ -275,11 +283,11 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="label-caps-faint mb-1 block">Your cost estimate</span>
-              <input className="field" type="number" min={0} step="10000000" value={form.estimatedCost} onChange={(event) => setForm({ ...form, estimatedCost: event.target.value })} />
+              <input className="field tap-target sm:min-h-0" type="number" min={0} step="10000000" value={form.estimatedCost} onChange={(event) => setForm({ ...form, estimatedCost: event.target.value })} />
             </label>
             <label className="block">
               <span className="label-caps-faint mb-1 block">Initial visibility</span>
-              <select className="field" value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value as 'company_private' | 'public' })}>
+              <select className="field tap-target sm:min-h-0" value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value as 'company_private' | 'public' })}>
                 <option value="company_private">Company private — keep the thesis secret</option>
                 <option value="public">Public — announce it, and surrender surprise</option>
               </select>
@@ -293,7 +301,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
                 <button
                   key={node.id}
                   type="button"
-                  className={`btn btn-sm ${dependencies.includes(node.id) ? 'btn-primary' : ''}`}
+                  className={`btn btn-sm tap-target sm:min-h-0 ${dependencies.includes(node.id) ? 'btn-primary' : ''}`}
                   onClick={() => toggleDependency(node.id)}
                 >
                   {node.title}
@@ -304,14 +312,14 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
           <label className="block">
             <span className="label-caps-faint mb-1 block">Why now, given this company and this world</span>
-            <textarea className="field" rows={3} maxLength={800} value={form.rationale} onChange={(event) => setForm({ ...form, rationale: event.target.value })} />
+            <textarea className="field tap-target sm:min-h-0" rows={3} maxLength={800} value={form.rationale} onChange={(event) => setForm({ ...form, rationale: event.target.value })} />
           </label>
 
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn btn-sm" onClick={() => setMode('write')}>
+          <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex sm:justify-end">
+            <button type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => setMode('write')}>
               Back
             </button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={!formValid} onClick={buildFromForm}>
+            <button type="button" className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0" disabled={!formValid} onClick={buildFromForm}>
               Review the proposal
             </button>
           </div>
@@ -328,7 +336,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
               </Tag>
             </div>
             <h3 className="mt-2 text-[15px] font-semibold text-ink">{proposal.title}</h3>
-            <p className="mt-1 text-[12px] leading-relaxed text-ink-dim">{proposal.summary}</p>
+            <p className="mt-1 text-[13px] leading-relaxed text-ink-dim sm:text-[12px]">{proposal.summary}</p>
           </div>
 
           <div>
@@ -400,16 +408,16 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
           <div>
             <SectionHeading rule>Rationale</SectionHeading>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">{proposal.rationale}</p>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">{proposal.rationale}</p>
           </div>
 
-          <p className="text-[11px] text-warn">No binding action has been submitted yet.</p>
+          <p className="text-[13px] text-warn sm:text-[11px]">No binding action has been submitted yet.</p>
 
-          <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" className="btn btn-sm" onClick={() => setMode('form')}>
+          <div className="grid grid-cols-[auto_1fr] gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <button type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => setMode('form')}>
               Edit
             </button>
-            <button type="button" className="btn btn-primary btn-sm" onClick={submit}>
+            <button type="button" className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={submit}>
               Queue proposal
             </button>
           </div>

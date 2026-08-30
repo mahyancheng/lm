@@ -155,7 +155,7 @@ export function WorldStrip({ world, previous, className }: WorldStripProps): Rea
           <div className="flex items-baseline justify-between gap-2">
             <span className="label-caps-faint truncate">{reading.label}</span>
             <span className="flex shrink-0 items-baseline gap-2">
-              <span className="figure text-[12px] text-ink">{reading.value}</span>
+              <span className="figure text-[13px] text-ink">{reading.value}</span>
               {reading.delta === null ? null : (
                 <DeltaBadge value={reading.delta} format={reading.format} invert={reading.invert} bare />
               )}
@@ -167,9 +167,9 @@ export function WorldStrip({ world, previous, className }: WorldStripProps): Rea
 
       <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-hair pt-2">
         <span className="label-caps-faint">Dominant narrative</span>
-        <span className="truncate text-[12px] text-ink">{humanise(world.media.dominantNarrative)}</span>
+        <span className="truncate text-[13px] text-ink">{humanise(world.media.dominantNarrative)}</span>
       </div>
-      <p className="text-[10px] text-ink-faint">
+      <p className="text-[11px] text-ink-faint">
         {previous === null
           ? 'Changes appear once a quarter has resolved in this tab.'
           : 'Change is measured against the world before the last resolution.'}

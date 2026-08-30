@@ -50,7 +50,9 @@ export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.El
 
   return (
     <div className="border-y border-dashed border-hair-strong bg-raised">
-      <div className="scroll-x flex items-stretch gap-2 px-3 py-2.5">
+      {/* Thumb-sized cards that snap: a phone flicks along the tape one
+          instrument at a time, and the strip scrolls inside its own box. */}
+      <div className="scroll-x flex snap-x snap-mandatory items-stretch gap-2 px-3 py-2.5 sm:snap-none">
         {rows.map((row, index) => {
           const up = row.quarterReturn >= 0;
           const notable = Math.abs(row.quarterReturn) >= NOTABLE_MOVE;
@@ -59,7 +61,7 @@ export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.El
               key={row.instrumentId}
               href="/markets"
               className={cx(
-                'animate-pop-in hover-lift press-pop flex min-h-11 w-[152px] shrink-0 flex-col justify-center rounded-card border bg-panel px-3 py-2',
+                'animate-pop-in hover-lift press-pop flex min-h-[76px] w-[168px] shrink-0 snap-start flex-col justify-center rounded-card border bg-panel px-3 py-2.5',
                 row.isOwn ? 'border-brand' : 'border-hair',
               )}
               style={reveal ? { animationDelay: `${Math.min(index * 45, 540)}ms` } : undefined}
@@ -74,11 +76,11 @@ export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.El
                     notable ? 'animate-pulse-soft' : '',
                   )}
                 />
-                <span className="figure min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">{row.symbol}</span>
+                <span className="figure min-w-0 flex-1 truncate text-[11.5px] font-semibold text-ink">{row.symbol}</span>
                 {row.isOwn ? <span className="label-caps-faint shrink-0 text-brand">You</span> : null}
               </div>
-              <div className="mt-1 flex items-baseline justify-between gap-2">
-                <span className="figure text-[13px] leading-none text-ink">{formatMoney(row.price)}</span>
+              <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                <span className="figure text-[13.5px] leading-none text-ink">{formatMoney(row.price)}</span>
                 <CountUp
                   value={row.quarterReturn}
                   from={0}

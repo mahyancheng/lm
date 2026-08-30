@@ -16,7 +16,7 @@
 import { useEffect, useState } from 'react';
 import type { NarratorOutput, ResolutionReport } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { EmptyState, Tag, cx, toneOfLine } from '@/components/ui';
+import { EmptyState, Icon, Tag, cx, toneOfLine } from '@/components/ui';
 import { requestNarrative } from '@/lib/llm/client';
 
 const TONE_CHIP: Readonly<Record<NarratorOutput['tone'], 'gain' | 'neutral' | 'warn' | 'loss'>> = {
@@ -56,7 +56,7 @@ export function QuarterInReview({ report, startYear, focusCompanyId, modelAvaila
   if (report === null) {
     return (
       <EmptyState
-        glyph="QIR"
+        icon="newspaper"
         compact
         title="No quarter has resolved in this tab"
         message="The review is written over the committed resolution report. End a quarter and it appears here."
@@ -83,7 +83,7 @@ export function QuarterInReview({ report, startYear, focusCompanyId, modelAvaila
         )}
       </div>
 
-      <p className="text-[13px] leading-snug font-medium text-ink">{narrative?.headline ?? report.headline}</p>
+      <p className="text-[14px] leading-snug font-semibold text-ink">{narrative?.headline ?? report.headline}</p>
 
       {narrative === null ? null : (
         <div className="flex flex-col gap-2 border-l-2 border-brand/40 pl-3">
@@ -91,7 +91,7 @@ export function QuarterInReview({ report, startYear, focusCompanyId, modelAvaila
             .split(/\n{2,}/)
             .filter((paragraph) => paragraph.trim().length > 0)
             .map((paragraph, index) => (
-              <p key={index} className="text-[12px] leading-relaxed text-ink-dim">
+              <p key={index} className="text-[13px] leading-relaxed text-ink-dim">
                 {paragraph.trim()}
               </p>
             ))}
@@ -104,11 +104,15 @@ export function QuarterInReview({ report, startYear, focusCompanyId, modelAvaila
           return (
             <li
               key={`${line.phase}_${index}`}
-              className="flex items-start justify-between gap-3 border-b border-hair/50 py-1.5 last:border-b-0"
+              className="flex items-start justify-between gap-3 border-b border-hair/50 py-2 last:border-b-0"
             >
               <span className="flex min-w-0 items-start gap-2">
-                <span className={cx('figure shrink-0 text-[11px]', `tone-${tone}`)}>{line.tone === 'warning' ? '!' : '✓'}</span>
-                <span className="text-[12px] leading-snug text-ink-dim">{line.text}</span>
+                {/* A committed line either warns or it does not: the mark says
+                    which, and the tone colours it. Never a typographic tick. */}
+                <span className={cx('mt-px shrink-0', `tone-${tone}`)}>
+                  <Icon name={line.tone === 'warning' ? 'warning' : 'check'} size={13} accent="current" />
+                </span>
+                <span className="text-[13px] leading-snug text-ink-dim">{line.text}</span>
               </span>
               {line.deltaLabel === null ? null : (
                 <span className={cx('figure shrink-0 text-[11px]', `tone-${tone}`)}>{line.deltaLabel}</span>

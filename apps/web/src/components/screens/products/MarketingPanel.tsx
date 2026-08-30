@@ -16,7 +16,7 @@ import type { ActionValidationResult, Company, ProductSegment, SubmittedAction }
 import { PRODUCT_SEGMENTS } from '@frontier/contracts';
 import { marketingPlan } from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
-import { BarChart, Panel, Tag, ValidationBanner } from '@/components/ui';
+import { BarChart, Icon, Panel, Tag, ValidationBanner } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { SEGMENT_LABEL } from './labels';
 
@@ -77,7 +77,9 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
 
   return (
     <Panel
-      title="Marketing allocation"
+      title="Marketing"
+      iconName="chat"
+      iconTone={plan.stated ? 'brand' : 'neutral'}
       subtitle={`${formatMoney(plan.recurringUsd)} recurring${plan.oneOffUsd > 0 ? ` · ${formatMoney(plan.oneOffUsd)} one-off` : ''} this quarter`}
       actions={
         plan.stated ? (
@@ -92,7 +94,7 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
       }
     >
       {planData.length === 0 ? (
-        <p className="text-[11px] text-ink-faint">No marketing spend is planned for this quarter.</p>
+        <p className="text-[12px] text-ink-faint">No marketing spend is planned for this quarter.</p>
       ) : (
         <BarChart data={planData} formatValue={(value) => formatMoney(value)} />
       )}
@@ -100,17 +102,20 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
       <div className="mt-4 border-t border-hair pt-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="label-caps">Reallocate</span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={prefillFromPlan}>
+          <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={prefillFromPlan}>
+            <Icon name="import" size={15} accent="current" />
             Start from the current plan
           </button>
         </div>
 
-        <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+        {/* Two per row on a phone: four money fields stacked full-width is a
+            page of scrolling for four numbers that are read together. */}
+        <div className="mt-2.5 grid grid-cols-2 gap-2.5">
           {PRODUCT_SEGMENTS.map((segment) => (
             <label key={segment} className="min-w-0">
-              <span className="label-caps-faint mb-1 block">{SEGMENT_LABEL[segment]}</span>
+              <span className="label-caps-faint mb-1 block truncate">{SEGMENT_LABEL[segment]}</span>
               <input
-                className="field"
+                className="field tap-target"
                 type="number"
                 min={0}
                 step="1000"
@@ -123,12 +128,13 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
           ))}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] text-ink-dim">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="min-w-0 flex-1 text-[12px] text-ink-dim">
             Total <span className="figure text-ink">{formatMoney(total)}</span>
             <span className="text-ink-faint"> · unlisted segments are set to zero</span>
           </div>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!touched} onClick={apply}>
+          <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" disabled={!touched} onClick={apply}>
+            <Icon name="check" size={16} accent="current" />
             Queue allocation
           </button>
         </div>

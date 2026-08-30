@@ -33,6 +33,7 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  Icon,
   KeyValueGrid,
   Meter,
   PageHeader,
@@ -152,6 +153,7 @@ export default function CompanyPage(): React.JSX.Element {
     {
       key: 'leaving',
       header: 'Leaving next quarter',
+      cardLabel: 'Leaving next quarter',
       align: 'right',
       render: (row) => Math.round(row.headcount * employees.attrition),
       sortable: true,
@@ -181,34 +183,39 @@ export default function CompanyPage(): React.JSX.Element {
           frame pans sideways and the page body does not move. */}
       <Panel
         title="Headquarters"
+        iconName="building"
+        iconTone="brand"
         subtitle="Every room is drawn from committed state, and every room opens the screen that operates it."
         actions={
-          <span className="hidden text-[10px] text-ink-faint sm:inline">
+          <Tag tone="neutral">
             {headcount} people · morale {formatScore(employees.morale)}
-          </span>
+          </Tag>
         }
         flush
       >
         <OfficeScene onOpenDrawer={setOpenDrawer} onOpenCharacter={setOpenExecutive} className="rounded-t-none" />
       </Panel>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Headcount" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} href="/people" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Headcount" iconName="people" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} href="/people" />
         <StatCard
           label="Morale"
+          iconName="gauge"
           value={formatScore(employees.morale)}
           tone={employees.morale >= 70 ? 'gain' : employees.morale >= 45 ? undefined : 'warn'}
           hint={`Attrition ${formatPct(employees.attrition)} per quarter`}
           href="/people"
         />
         <StatCard
-          label="Quarterly payroll"
+          label="Payroll"
+          iconName="coins"
           value={formatMoney(company.financials.payroll)}
           hint={`Average comp ${formatMoney(employees.avgComp)}`}
           href="/financials"
         />
         <StatCard
           label="Runway"
+          iconName="vault"
           value={metrics === null ? '—' : formatQuarterCount(metrics.runwayQuarters)}
           tone={metrics !== null && metrics.runwayQuarters < 6 ? 'loss' : undefined}
           hint={metrics === null ? 'Computed when the first quarter resolves' : `Burn ${formatMoney(Math.abs(company.financials.quarterlyBurn))} a quarter`}
@@ -218,7 +225,7 @@ export default function CompanyPage(): React.JSX.Element {
 
       {/* --- the drill-down layer -------------------------------------------- */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Charter" subtitle={ARCHETYPE_BLURB[company.archetype]}>
+        <Panel title="Charter" iconName="stamp" subtitle={ARCHETYPE_BLURB[company.archetype]}>
           <KeyValueGrid
             columns={1}
             items={[
@@ -243,12 +250,12 @@ export default function CompanyPage(): React.JSX.Element {
           />
         </Panel>
 
-        <Panel title="Reputation" subtitle="Five audiences, five separate reputations">
-          <div className="space-y-3">
+        <Panel title="Reputation" iconName="people" iconTone="info" subtitle="Five audiences, five separate reputations">
+          <div className="flex flex-col gap-3.5">
             {REPUTATION_AUDIENCES.map((audience) => (
               <div key={audience.key}>
                 <Meter value={company.reputation[audience.key]} label={audience.label} />
-                <p className="mt-1 text-[10px] text-ink-faint">{audience.blurb}</p>
+                <p className="mt-1 text-[11px] text-ink-faint">{audience.blurb}</p>
               </div>
             ))}
           </div>
@@ -260,6 +267,7 @@ export default function CompanyPage(): React.JSX.Element {
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           title="Organisation"
+          iconName="desk"
           subtitle={`${headcount} people across ${STAFF_ROLES.length} functions`}
           className="lg:col-span-2"
           flush
@@ -270,11 +278,13 @@ export default function CompanyPage(): React.JSX.Element {
             rowKey={(row) => row.role}
             onRowClick={(row) => setOpenRole(row.role)}
             initialSort={{ key: 'headcount', direction: 'desc' }}
+            cardMode="auto"
+            cardTitleKey="role"
             dense
           />
         </Panel>
 
-        <Panel title="Culture" subtitle="What the org feels, and what it costs">
+        <Panel title="Culture" iconName="people" subtitle="What the org feels, and what it costs">
           <div className="space-y-3">
             <Meter value={employees.morale} label="Morale" benchmark={70} benchmarkLabel="Healthy band" />
             <ProgressBar
@@ -302,6 +312,7 @@ export default function CompanyPage(): React.JSX.Element {
                   <PersonChip
                     key={character.id}
                     character={character}
+                    className="tap-target"
                     subtitle={character.title}
                     onClick={() => setOpenExecutive(character.id)}
                     right={
@@ -322,15 +333,17 @@ export default function CompanyPage(): React.JSX.Element {
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel
           title="Offices"
+          iconName="building"
           subtitle={`${company.offices.length} site${company.offices.length === 1 ? '' : 's'} · ${formatMoney(siteCost)} a quarter`}
           actions={
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpenDrawer('sites')}>
+            <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setOpenDrawer('sites')}>
+              <Icon name="building" size={15} accent="current" />
               Open sites
             </button>
           }
         >
           {company.offices.length === 0 ? (
-            <EmptyState title="No sites" message="This company has no physical office. Headcount growth is uncapped and fixed cost is zero." />
+            <EmptyState icon="building" title="No sites" message="This company has no physical office. Headcount growth is uncapped and fixed cost is zero." />
           ) : (
             <div className="grid gap-2.5 sm:grid-cols-2">
               {company.offices.map((office) => {
@@ -340,9 +353,14 @@ export default function CompanyPage(): React.JSX.Element {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="truncate text-[13px] font-medium text-ink">{office.city}</div>
-                        <div className="text-[10px] text-ink-faint">Opened {quarterLabel(session.startYear, office.openedQuarter)}</div>
+                        <div className="text-[11px] text-ink-faint">Opened {quarterLabel(session.startYear, office.openedQuarter)}</div>
                       </div>
-                      {office.isHeadquarters ? <Tag tone="brand">HQ</Tag> : null}
+                      {office.isHeadquarters ? (
+                        <Tag tone="brand" className="gap-1">
+                          <Icon name="building" size={11} accent="current" />
+                          Head office
+                        </Tag>
+                      ) : null}
                     </div>
                     <div className="mt-2.5">
                       <ProgressBar
@@ -363,22 +381,24 @@ export default function CompanyPage(): React.JSX.Element {
           )}
         </Panel>
 
-        <Panel title="Technical capability" subtitle="Strength by area, 0 absent to 1 world leading">
+        <Panel title="Technical capability" iconName="flask" subtitle="Strength by area, 0 absent to 1 world leading">
           {capabilities.length === 0 ? (
-            <EmptyState title="No capability recorded" message="Capability accrues from delivered research and hired specialists." />
+            <EmptyState icon="flask" title="No capability recorded" message="Capability accrues from delivered research and hired specialists." />
           ) : (
             <BarChart data={capabilities} max={1} formatValue={(value) => value.toFixed(2)} />
           )}
         </Panel>
       </div>
 
-      <Panel title="Group structure" subtitle="Subsidiaries and parents, as the public register shows them">
+      <Panel title="Group structure" iconName="network" subtitle="Subsidiaries and parents, as the public register shows them">
         {parent === null && subsidiaries.length === 0 ? (
           <EmptyState
+            icon="handshake"
             title="No group companies"
             message="Nothing has been acquired and this company is nobody's subsidiary. An acquisition that clears the board appears here as a subsidiary the quarter it completes."
             action={
-              <Link className="btn btn-sm" href="/deal-room">
+              <Link className="btn tap-target gap-1.5" href="/deal-room">
+                <Icon name="handshake" size={16} accent="current" />
                 Open the Deal Room
               </Link>
             }
@@ -435,7 +455,8 @@ export default function CompanyPage(): React.JSX.Element {
         title={drawerRole === null ? '' : ROLE_LABEL[drawerRole.role]}
         subtitle={drawerRole === null ? undefined : ROLE_BLURB[drawerRole.role]}
         footer={
-          <Link className="btn btn-primary btn-sm" href="/people">
+          <Link className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" href="/people">
+            <Icon name="people" size={16} accent="current" />
             Open the headcount plan
           </Link>
         }

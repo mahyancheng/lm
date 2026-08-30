@@ -19,7 +19,9 @@ import type { Company, ResearchProject, SessionState } from '@frontier/contracts
 import { quarterLabel } from '@frontier/contracts';
 import { customersPerUnit, heldComputeUnits, servingComputeUnits } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { KeyValueGrid, Panel, ProgressBar, Tag } from '@/components/ui';
+import type { ReactNode } from 'react';
+import { Panel, ProgressBar, Tag, cx } from '@/components/ui';
+import type { Tone } from '@/components/ui';
 
 export interface ComputePositionProps {
   readonly session: SessionState;
@@ -52,6 +54,34 @@ export function inferenceComputeDemand(session: SessionState, company: Company):
  */
 const units = (value: number): string => String(Math.round(Math.max(0, value))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 
+/**
+ * One reading of the position, as a card.
+ *
+ * Two to a row at every width. This panel is a third of the page from `lg` and
+ * the whole of it on a phone; a label-left / figure-right row wraps
+ * "Reservation expiry" over three lines in the narrow case, and stacking the
+ * label over the figure holds in both.
+ */
+function Fact({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly hint?: ReactNode;
+  readonly tone?: Tone;
+}): React.JSX.Element {
+  return (
+    <div className="raised-surface flex flex-col px-3 py-2.5">
+      <span className="label-caps-faint">{label}</span>
+      <span className={cx('figure mt-1 text-[15px] leading-tight', tone === undefined ? 'text-ink' : `tone-${tone}`)}>{value}</span>
+      {hint === undefined ? null : <span className="mt-1 text-[11px] text-ink-faint">{hint}</span>}
+    </div>
+  );
+}
+
 export function ComputePosition({ session, company, projects }: ComputePositionProps): React.JSX.Element {
   const holdings = company.compute;
   const held = heldComputeUnits(session, company);
@@ -72,6 +102,8 @@ export function ComputePosition({ session, company, projects }: ComputePositionP
   return (
     <Panel
       title="Compute position"
+      iconName="network"
+      iconTone={servingShort ? 'loss' : trainingShort ? 'warn' : 'neutral'}
       subtitle={`${units(held)} accelerator-equivalents held`}
       actions={
         holdings.reservedAccelerators > 0 && quartersToExpiry !== null && quartersToExpiry <= 2 ? (
@@ -81,22 +113,19 @@ export function ComputePosition({ session, company, projects }: ComputePositionP
         ) : undefined
       }
     >
-      <KeyValueGrid
-        columns={2}
-        items={[
-          { label: 'Owned', value: units(holdings.ownedAccelerators), hint: 'Depreciating capital, immune to spot price' },
-          { label: 'Reserved', value: units(holdings.reservedAccelerators), hint: 'Held under multi-quarter reservation' },
-          {
-            label: 'Reservation expiry',
-            value: expiry === null ? 'None held' : quarterLabel(session.startYear, expiry),
-            tone: expiryTone,
-            hint: quartersToExpiry === null ? 'Nothing reserved' : `${Math.max(0, quartersToExpiry)} quarters remaining`,
-          },
-          { label: 'Cloud spend', value: formatMoney(holdings.cloudSpendQuarterly), hint: `≈ ${units(cloudUnits)} units at spot` },
-          { label: 'Utilisation', value: formatPct(holdings.computeUtilisation), hint: 'Fraction of held capacity in use' },
-          { label: 'Training share', value: formatPct(holdings.trainingAllocation), hint: 'Serving takes the remainder' },
-        ]}
-      />
+      <div className="grid grid-cols-2 gap-2.5">
+        <Fact label="Owned" value={units(holdings.ownedAccelerators)} hint="Depreciating capital, immune to spot price" />
+        <Fact label="Reserved" value={units(holdings.reservedAccelerators)} hint="Held under multi-quarter reservation" />
+        <Fact
+          label="Reservation expiry"
+          value={expiry === null ? 'None held' : quarterLabel(session.startYear, expiry)}
+          tone={expiryTone}
+          hint={quartersToExpiry === null ? 'Nothing reserved' : `${Math.max(0, quartersToExpiry)} quarters remaining`}
+        />
+        <Fact label="Cloud spend" value={formatMoney(holdings.cloudSpendQuarterly)} hint={`≈ ${units(cloudUnits)} units at spot`} />
+        <Fact label="Utilisation" value={formatPct(holdings.computeUtilisation)} hint="Fraction of held capacity in use" />
+        <Fact label="Training share" value={formatPct(holdings.trainingAllocation)} hint="Serving takes the remainder" />
+      </div>
 
       <div className="mt-4 space-y-3">
         <ProgressBar

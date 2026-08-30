@@ -148,17 +148,19 @@ export default function GovernmentPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         <StatCard
-          label="Past performance"
+          iconName="stamp"
+          label="Record"
           value={formatScore(company.governmentPastPerformance)}
           tone={company.governmentPastPerformance >= 55 ? 'gain' : 'warn'}
-          hint="An evaluation input on every future bid"
+          hint="Past performance — an input on every future bid"
         />
-        <StatCard label="Open competitions" value={openOpportunities.length} hint={`${ownBids.length} bid${ownBids.length === 1 ? '' : 's'} on file`} />
-        <StatCard label="Contracted backlog" value={formatMoney(backlog)} hint={`${contracts.length} live contract${contracts.length === 1 ? '' : 's'}`} href="/financials" />
+        <StatCard iconName="capitol" label="Competitions" value={openOpportunities.length} hint={`${ownBids.length} bid${ownBids.length === 1 ? '' : 's'} on file`} />
+        <StatCard iconName="ledger" label="Backlog" value={formatMoney(backlog)} hint={`${contracts.length} live contract${contracts.length === 1 ? '' : 's'}`} href="/financials" />
         <StatCard
-          label="Compliance burden"
+          iconName="warning"
+          label="Compliance"
           value={formatMoney(compliance)}
           unit="/ quarter"
           deltaInvert
@@ -167,9 +169,10 @@ export default function GovernmentPage(): React.JSX.Element {
         />
       </div>
 
-      <Panel title="Opportunities" subtitle="What is open, how it will be judged, and whether this company qualifies" bodyClassName="space-y-3.5">
+      <Panel iconName="capitol" iconTone="brand" title="Opportunities" subtitle="What is open, how it will be judged, and whether this company qualifies" bodyClassName="space-y-3.5">
         {openOpportunities.length === 0 ? (
           <EmptyState
+            icon="capitol"
             title="No open competition"
             message="Agencies open competitions from their quarterly budget and the world's procurement conditions. Nothing is biddable this quarter."
           />
@@ -190,7 +193,7 @@ export default function GovernmentPage(): React.JSX.Element {
       </Panel>
 
       {ownBids.length === 0 ? null : (
-        <Panel title="Bids on file" subtitle="Submitted, and what the evaluators did with them" flush>
+        <Panel iconName="stamp" title="Bids on file" subtitle="Submitted, and what the evaluators did with them" flush>
           <DataTable
             columns={[
               {
@@ -218,19 +221,24 @@ export default function GovernmentPage(): React.JSX.Element {
             rows={ownBids}
             rowKey={(row) => row.id}
             dense
+            cardMode="auto"
+            cardTitleKey="programme"
           />
         </Panel>
       )}
 
-      <Panel title="Active contracts" subtitle="Milestones, performance and the standing cost of delivery" flush>
+      <Panel iconName="handshake" title="Active contracts" subtitle="Milestones, performance and the standing cost of delivery" flush>
         <DataTable
           columns={contractColumns}
           rows={contracts}
           rowKey={(row) => row.id}
           dense
+          cardMode="auto"
+          cardTitleKey="programme"
           empty={
             <div className="p-4">
               <EmptyState
+                icon="handshake"
                 title="No contract in flight"
                 message="An award creates backlog, not revenue: revenue is recognised milestone by milestone, and each milestone moves the past-performance score in one direction or the other."
               />
@@ -255,12 +263,12 @@ export default function GovernmentPage(): React.JSX.Element {
                 <SectionHeading rule>Milestones</SectionHeading>
                 <div className="mt-2 space-y-1.5">
                   {contract.milestones.length === 0 ? (
-                    <p className="text-[11px] text-ink-faint">No milestones are recorded on this contract.</p>
+                    <p className="text-[13px] text-ink-faint sm:text-[11px]">No milestones are recorded on this contract.</p>
                   ) : (
                     contract.milestones.map((milestone) => (
                       <div key={milestone.id} className="raised-surface flex flex-wrap items-center justify-between gap-2 px-2.5 py-2">
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[11px] text-ink">{milestone.label}</div>
+                          <div className="truncate text-[13px] text-ink sm:text-[11px]">{milestone.label}</div>
                           <div className="text-[10px] text-ink-faint">
                             due {quarterLabel(session.startYear, milestone.dueQuarter)} · {milestone.computeRequiredUnits} units required
                           </div>
@@ -299,11 +307,11 @@ export default function GovernmentPage(): React.JSX.Element {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Contractor record" subtitle="Slow to build, quick to damage">
+        <Panel iconName="trophy" title="Contractor record" subtitle="Slow to build, quick to damage">
           {aggregate === null ? (
             <>
               <Meter value={company.governmentPastPerformance} label="Government-wide past performance" />
-              <p className="mt-2 text-[11px] text-ink-faint">
+              <p className="mt-2 text-[13px] leading-relaxed text-ink-faint sm:text-[11px]">
                 No procurement record has been opened for this company yet. The first bid creates one, and the first delivered milestone starts moving
                 it. Until then the score on file is the company&apos;s own starting figure.
               </p>
@@ -344,7 +352,7 @@ export default function GovernmentPage(): React.JSX.Element {
           )}
         </Panel>
 
-        <Panel title="Agencies" subtitle="What each buyer is for, and who you can reach">
+        <Panel iconName="building" title="Agencies" subtitle="What each buyer is for, and who you can reach">
           <div className="space-y-3">
             {session.agencies.map((agency) => {
               const contacts = agency.contactCharacterIds
@@ -354,14 +362,14 @@ export default function GovernmentPage(): React.JSX.Element {
                 <div key={agency.id} className="raised-surface p-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-[12px] font-medium text-ink">{agency.name}</div>
+                      <div className="text-[13px] font-semibold text-ink sm:text-[12px]">{agency.name}</div>
                       <div className="text-[10px] text-ink-faint">
                         {agency.shortName} · {agency.jurisdiction.replace(/_/g, ' ')}
                       </div>
                     </div>
                     {agency.clearanceAuthority ? <Tag tone="info">sponsors clearances</Tag> : null}
                   </div>
-                  <p className="mt-1.5 text-[11px] text-ink-dim">{agency.mission}</p>
+                  <p className="mt-1.5 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">{agency.mission}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {agency.priorities.map((priority) => (
                       <Tag key={priority}>{priority.replace(/_/g, ' ')}</Tag>

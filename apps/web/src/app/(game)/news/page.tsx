@@ -29,20 +29,23 @@ import { formatPct, formatScore } from '@frontier/shared';
 import {
   AiLabel,
   EmptyState,
+  Icon,
+  IconChip,
   KeyValueGrid,
   Meter,
   PageHeader,
   Panel,
   ProgressBar,
   StatCard,
-  TabBar,
   Tag,
   cx,
+  type IconName,
   type Tone,
 } from '@/components/ui';
 import { useGame, useLlm, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { WorldMap } from '@/components/scenes/map';
 import { QuarterInReview } from '@/components/screens/news/QuarterInReview';
+import { IconTabs } from '@/components/screens/world/IconTabs';
 import { bandLabel, companyNameOf, formatCount, humanise } from '@/components/screens/reporting/util';
 
 type RecordKind = 'event' | 'story' | 'disclosure';
@@ -81,8 +84,12 @@ const KIND_TONE: Readonly<Record<RecordKind, Tone>> = {
   disclosure: 'neutral',
 };
 
-/** The filter selects sit in a panel header, which is shorter than a form row. */
-const FILTER_STYLE: React.CSSProperties = { height: 24, width: 'auto', paddingTop: 0, paddingBottom: 0, fontSize: 11 };
+/** The mark for each kind of record: a shock, a story, a filing. */
+const KIND_ICON: Readonly<Record<RecordKind, IconName>> = {
+  event: 'warning',
+  story: 'newspaper',
+  disclosure: 'stamp',
+};
 
 export default function WorldPage(): React.JSX.Element {
   const session = useSession();
@@ -256,52 +263,77 @@ export default function WorldPage(): React.JSX.Element {
         title="World"
         eyebrow={`${quarterLabel(session.startYear, session.quarter)} · the public record`}
         subtitle="The map is the economy as a place. Below it, everything said on the record. Private facts do not appear here until somebody publishes them."
-        actions={
-          <Tag tone="neutral">
-            {counts.event} events · {counts.story} stories · {counts.disclosure} disclosures
-          </Tag>
-        }
       />
 
+      {/* The map is the hero: on a phone it is the first thing under the title,
+          in its own pan frame, with the zoom stops sized for a thumb. */}
       <div ref={mapRef} className="scroll-mt-4">
         <Panel
+          iconName="globe"
+          iconTone="info"
           title="The world this quarter"
-          subtitle="Tap a head office, an agency, a district or an event pin. Everything here is public information."
+          subtitle="Tap a head office, an agency, a district or an event pin. Drag to pan; the stops zoom."
           flush
         >
           <WorldMap className="rounded-none" focusEventId={focusEventId} onFocusHandled={() => setFocusEventId(null)} />
         </Panel>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Two up on a phone: four readings of the same press cycle, side by side,
+          rather than four full-width cards nobody scrolls past. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
-          label="Dominant narrative"
-          value={humanise(media.dominantNarrative)}
-          hint="Biases how every new event is interpreted"
+          iconName="newspaper"
+          label="Narrative"
+          // Two up on a phone the card is 150px wide: the narrative is a phrase,
+          // not a figure, so it is set at prose size rather than figure size.
+          value={<span className="text-[15px] leading-tight">{humanise(media.dominantNarrative)}</span>}
+          hint="Frames every new event"
         />
-        <StatCard label="Attention" value={formatPct(media.attentionLevel)} hint="Share of the news cycle the industry occupies" />
         <StatCard
+          iconName="chart"
+          label="Attention"
+          value={formatPct(media.attentionLevel)}
+          hint="Share of the news cycle"
+        />
+        <StatCard
+          iconName="warning"
           label="Controversy"
           value={bandLabel(media.controversyIntensity, ['Quiet', 'Simmering', 'Active', 'Hot', 'Incendiary'])}
           tone={media.controversyIntensity >= 0.6 ? 'warn' : undefined}
+          iconTone={media.controversyIntensity >= 0.6 ? 'warn' : 'neutral'}
           hint={`Intensity ${formatPct(media.controversyIntensity)}`}
         />
         <StatCard
-          label="Institutional trust"
+          iconName="capitol"
+          label="Trust"
           value={formatPct(media.institutionalTrust)}
-          hint="Low trust makes rumours travel further than corrections"
+          hint="Rumours outrun corrections"
         />
       </div>
 
+      <Panel
+        iconName="newspaper"
+        title="Quarter in review"
+        subtitle="Written over the committed report, never over anything else."
+      >
+        <QuarterInReview
+          report={lastOutcome?.report ?? null}
+          startYear={session.startYear}
+          focusCompanyId={company.id}
+          modelAvailable={llm.available}
+        />
+      </Panel>
+
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
-          <TabBar
+          <IconTabs
             ariaLabel="Record kind"
             tabs={[
-              { id: 'all', label: 'Everything', badge: items.length },
-              { id: 'event', label: 'World events', badge: counts.event },
-              { id: 'story', label: 'Press', badge: counts.story },
-              { id: 'disclosure', label: 'Disclosures', badge: counts.disclosure },
+              { id: 'all', label: 'Everything', icon: 'globe', badge: items.length },
+              { id: 'event', label: 'Events', icon: 'warning', badge: counts.event },
+              { id: 'story', label: 'Press', icon: 'newspaper', badge: counts.story },
+              { id: 'disclosure', label: 'Disclosures', icon: 'stamp', badge: counts.disclosure },
             ]}
             value={kind}
             onChange={(id) => {
@@ -311,11 +343,19 @@ export default function WorldPage(): React.JSX.Element {
           />
 
           <Panel
+            iconName="ledger"
             title="The chronicle"
             subtitle={`${filtered.length} item${filtered.length === 1 ? '' : 's'} matching the current filter.`}
             actions={
-              <>
-                <select className="field" style={FILTER_STYLE} value={quarter} onChange={(event) => setQuarter(event.target.value)}>
+              // Both selects clear the touch floor and, on a phone, take half
+              // the header row each rather than shrinking to a 24px sliver.
+              <div className="flex w-full min-w-0 gap-1.5 sm:w-auto">
+                <select
+                  aria-label="Filter by quarter"
+                  className="field tap-target min-w-0 flex-1 sm:w-36 sm:flex-none"
+                  value={quarter}
+                  onChange={(event) => setQuarter(event.target.value)}
+                >
                   <option value="all">All quarters</option>
                   {quarters.map((entry) => (
                     <option key={entry} value={String(entry)}>
@@ -323,7 +363,12 @@ export default function WorldPage(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
-                <select className="field" style={FILTER_STYLE} value={topic} onChange={(event) => setTopic(event.target.value)}>
+                <select
+                  aria-label="Filter by topic"
+                  className="field tap-target min-w-0 flex-1 sm:w-40 sm:flex-none"
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                >
                   <option value="all">All topics</option>
                   {topics.map((entry) => (
                     <option key={entry} value={entry}>
@@ -331,12 +376,12 @@ export default function WorldPage(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
-              </>
+              </div>
             }
           >
             {grouped.length === 0 ? (
               <EmptyState
-                glyph="NW"
+                icon="globe"
                 title="Nothing on the record for this filter"
                 message="The world publishes as it resolves: events fire, the press picks them up and companies file. Quarter 0 opens with only what the seed world has already said."
               />
@@ -353,34 +398,37 @@ export default function WorldPage(): React.JSX.Element {
                         const parent = item.causalParentId === null ? null : eventsById.get(item.causalParentId) ?? null;
                         const disclosure = item.kind === 'disclosure' ? disclosureMetrics(item) : null;
                         return (
-                          <li key={item.id} className="raised-surface px-3 py-2.5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Tag tone={KIND_TONE[item.kind]} dot>
-                                {KIND_LABEL[item.kind]}
-                              </Tag>
-                              <Tag>{humanise(item.topic)}</Tag>
-                              {item.severity === null ? null : (
-                                <span className="figure text-[10px] text-ink-faint">severity {formatScore(item.severity * 100)}</span>
-                              )}
-                              {item.durationQuarters === null ? null : (
-                                <span className="figure text-[10px] text-ink-faint">
-                                  {item.durationQuarters}q active
-                                </span>
-                              )}
-                              {item.authorIsAi ? <AiLabel /> : null}
-                              {item.mapEventId === null ? null : (
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-ghost ml-auto"
-                                  onClick={() => showOnMap(item.mapEventId ?? '')}
-                                >
-                                  {item.kind === 'event' ? 'Show on map' : 'Source on map'}
-                                </button>
-                              )}
+                          <li key={item.id} className="raised-surface px-3 py-3">
+                            <div className="flex items-start gap-2.5">
+                              <IconChip name={KIND_ICON[item.kind]} tone={KIND_TONE[item.kind]} />
+                              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                                <Tag tone={KIND_TONE[item.kind]} dot>
+                                  {KIND_LABEL[item.kind]}
+                                </Tag>
+                                <Tag>{humanise(item.topic)}</Tag>
+                                {item.severity === null ? null : (
+                                  <span className="figure text-[10px] text-ink-faint">severity {formatScore(item.severity * 100)}</span>
+                                )}
+                                {item.durationQuarters === null ? null : (
+                                  <span className="figure text-[10px] text-ink-faint">{item.durationQuarters}q active</span>
+                                )}
+                                {item.authorIsAi ? <AiLabel /> : null}
+                              </div>
                             </div>
 
-                            <p className={cx('mt-1.5 text-[13px] leading-snug font-medium', `tone-${item.tone}`)}>{item.title}</p>
-                            <p className="mt-1 text-[12px] leading-relaxed text-ink-dim">{item.body}</p>
+                            <p className={cx('mt-2 text-[14px] leading-snug font-semibold', `tone-${item.tone}`)}>{item.title}</p>
+                            <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">{item.body}</p>
+
+                            {item.mapEventId === null ? null : (
+                              <button
+                                type="button"
+                                className="btn tap-target mt-2 w-full sm:w-auto"
+                                onClick={() => showOnMap(item.mapEventId ?? '')}
+                              >
+                                <Icon name="globe" size={15} />
+                                {item.kind === 'event' ? 'Show on map' : 'Source on map'}
+                              </button>
+                            )}
 
                             {parent === null ? null : (
                               <p className="mt-1.5 border-l-2 border-hair-strong pl-2 text-[11px] text-ink-faint">
@@ -451,19 +499,11 @@ export default function WorldPage(): React.JSX.Element {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Panel title="Quarter in review" subtitle="Written over the committed report, never over anything else.">
-            <QuarterInReview
-              report={lastOutcome?.report ?? null}
-              startYear={session.startYear}
-              focusCompanyId={company.id}
-              modelAvailable={llm.available}
-            />
-          </Panel>
-
-          <Panel title="Press wire" subtitle="The loudest coverage, most recent first.">
+          <Panel iconName="live" title="Press wire" subtitle="The loudest coverage, most recent first.">
             {wire.length === 0 ? (
               <EmptyState
                 compact
+                icon="newspaper"
                 title="The wire is quiet"
                 message="Stories are written when something happens and the press decides it matters. Resolve a quarter and the newsroom follows."
               />
@@ -484,16 +524,17 @@ export default function WorldPage(): React.JSX.Element {
                         </span>
                         {author === null || !author.isPlayer ? <AiLabel /> : null}
                       </div>
-                      <p className="mt-1 text-[12px] leading-snug font-medium text-ink">{story.headline}</p>
+                      <p className="mt-1 text-[13px] leading-snug font-medium text-ink">{story.headline}</p>
                       <p className="mt-0.5 text-[10px] text-ink-faint">
                         {author?.name ?? 'Wire coverage'} · reach {formatCount(story.reach)}
                       </p>
                       {mapped && story.sourceEventId !== null ? (
                         <button
                           type="button"
-                          className="btn btn-sm btn-ghost mt-1.5"
+                          className="btn tap-target mt-2 w-full sm:w-auto"
                           onClick={() => showOnMap(story.sourceEventId ?? '')}
                         >
+                          <Icon name="globe" size={15} />
                           Source on map
                         </button>
                       ) : null}
@@ -504,10 +545,11 @@ export default function WorldPage(): React.JSX.Element {
             )}
           </Panel>
 
-          <Panel title="Causal chains" subtitle="One cause, several consequences.">
+          <Panel iconName="network" title="Causal chains" subtitle="One cause, several consequences.">
             {chains.length === 0 ? (
               <EmptyState
                 compact
+                icon="network"
                 title="No cascades in flight"
                 message="An event that raises the odds of another creates a parent-child chain rather than two unrelated shocks."
               />
@@ -521,8 +563,13 @@ export default function WorldPage(): React.JSX.Element {
                         <p className="text-[10px] text-ink-faint">{quarterLabel(session.startYear, chain.root.quarter)}</p>
                       </div>
                       {mappedEventIds.has(chain.root.id) ? (
-                        <button type="button" className="btn btn-sm btn-ghost shrink-0" onClick={() => showOnMap(chain.root.id)}>
-                          Map
+                        <button
+                          type="button"
+                          className="btn btn-ghost tap-target shrink-0 px-0"
+                          aria-label={`Show ${chain.root.title} on the map`}
+                          onClick={() => showOnMap(chain.root.id)}
+                        >
+                          <Icon name="globe" size={16} />
                         </button>
                       ) : null}
                     </div>
@@ -540,7 +587,7 @@ export default function WorldPage(): React.JSX.Element {
             )}
           </Panel>
 
-          <Panel title="Newsroom conditions" subtitle="What the press is like this quarter.">
+          <Panel iconName="chat" title="Newsroom conditions" subtitle="What the press is like this quarter.">
             <KeyValueGrid
               columns={1}
               items={[

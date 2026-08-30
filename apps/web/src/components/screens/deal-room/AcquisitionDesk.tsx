@@ -77,14 +77,14 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
   return (
     <div className="flex flex-col gap-3">
       {targets.length === 0 ? (
-        <p className="text-[11px] text-ink-faint">No company in this session is available to bid for.</p>
+        <p className="text-[13px] text-ink-faint sm:text-[11px]">No company in this session is available to bid for.</p>
       ) : (
         <>
           <div className="grid gap-2.5 sm:grid-cols-2">
             <label className="block">
               <span className="label-caps-faint">Target</span>
               <select
-                className="field mt-1"
+                className="field tap-target mt-1 sm:min-h-0"
                 value={targetId}
                 onChange={(event) => {
                   setTargetId(event.target.value);
@@ -103,7 +103,7 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
               <span className="label-caps-faint">Offer value (USD)</span>
               <input
                 type="number"
-                className="field mt-1"
+                className="field tap-target mt-1 sm:min-h-0"
                 min={0}
                 step={1_000_000}
                 value={String(offer)}
@@ -123,7 +123,7 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             </span>
             <input
               type="range"
-              className="mt-2 w-full accent-[color:var(--color-brand)]"
+              className="tap-target mt-2 w-full accent-[color:var(--color-brand)] sm:min-h-0"
               min={0}
               max={100}
               step={5}
@@ -136,8 +136,11 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             />
           </label>
 
+          {/* One column: this desk is the narrow half of the row on a desktop,
+              and "Market capitalisation" beside a nine-character figure does
+              not fit two to a line at that width. */}
           <KeyValueGrid
-            columns={2}
+            columns={1}
             items={[
               { label: 'Market capitalisation', value: target === null ? '—' : formatMoney(target.marketCapUsd) },
               { label: 'Premium offered', value: premium === null ? '—' : formatPct(premium), tone: premium !== null && premium > 0.6 ? 'warn' : undefined },
@@ -147,29 +150,37 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
           />
 
           {hasBoard ? (
-            <p className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+            <p className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-[13px] leading-relaxed text-warn sm:text-[11px]">
               Your company has a board, so this will be tabled as an acquisition matter rather than executed. Directors negotiate hardest
               over the stock component — that is what the slider above is really setting.
             </p>
           ) : (
-            <p className="rounded-card border border-hair bg-raised px-3 py-2 text-[11px] text-ink-dim">
+            <p className="rounded-card border border-hair bg-raised px-3 py-2 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">
               No board sits over this company yet, so an offer executes on its own terms. That freedom ends at the first priced round.
             </p>
           )}
 
           <ValidationBanner result={result} />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className="btn btn-sm" onClick={check} disabled={intent === null}>
-              Check with the validator
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+            <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={check} disabled={intent === null}>
+              <span className="sm:hidden">Check</span>
+              <span className="hidden sm:inline">Check with the validator</span>
             </button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={intent === null || queued} onClick={() => setPending(intent)}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+              disabled={intent === null || queued}
+              onClick={() => setPending(intent)}
+            >
               {queued ? 'Queued' : 'Make the offer'}
             </button>
             {cashNeeded > availableCashUsd ? (
-              <Tag tone="loss" dot>
-                Cash component exceeds uncommitted cash
-              </Tag>
+              <span className="col-span-2 sm:col-span-1">
+                <Tag tone="loss" dot>
+                  Cash component exceeds uncommitted cash
+                </Tag>
+              </span>
             ) : null}
           </div>
         </>

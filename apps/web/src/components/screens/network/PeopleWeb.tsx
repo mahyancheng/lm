@@ -14,19 +14,38 @@
  * validator will accept for `request_introduction`. Tapping either end opens
  * their card, where that request is one control away.
  *
+ * **On a phone the rings are a list.** The stage is a 640px constellation and
+ * 390px cannot hold it: scaled down the faces stop being faces, and left at size
+ * the player pans a picture whose meaning is *distance*, seeing a third of it at
+ * a time. So below `sm` the default is the same three rings as three grouped
+ * card lists — reachable, one introduction away, out of reach — in the order the
+ * picture places them, with the picture itself one tap behind a toggle for
+ * anyone who wants to look at the shape. From `sm` up the picture is the
+ * surface, unchanged.
+ *
  * Two boundaries are kept, exactly as on the rest of the screen: connection
  * level is public, so everybody is on the web; relationships are private and
  * directional, so only edges incident to the player are drawn — how two other
  * people feel about each other is not on this picture.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Character } from '@frontier/contracts';
 import { formatScore } from '@frontier/shared';
-import { Tag } from '@/components/ui';
+import { Icon, Tag, cx } from '@/components/ui';
 import { Portrait, moodFromScore } from '@/components/scenes/people';
-import type { DirectoryEntry } from './directory';
-import { RING_GEOMETRY, RING_LABEL, RING_ORDER, RING_TONE, layoutRings, type Ring, type WebNode } from './rings';
+import { characterName, type DirectoryEntry } from './directory';
+import {
+  RING_GEOMETRY,
+  RING_LABEL,
+  RING_ORDER,
+  RING_TONE,
+  groupByRing,
+  layoutRings,
+  type Ring,
+  type WebNode,
+} from './rings';
+import { useSession } from '@/lib/game';
 
 export interface PeopleWebProps {
   readonly entries: readonly DirectoryEntry[];
@@ -42,9 +61,21 @@ function edgeColour(node: WebNode): string {
   return 'var(--color-hair-strong)';
 }
 
+/** What each ring says about the way in. */
+const RING_HINT: Readonly<Record<Ring, string>> = {
+  inner: 'You can open a channel with these people this quarter.',
+  middle: 'The gap refuses direct contact, but somebody you know can make the call.',
+  outer: 'Nobody you can reach can reach them either. Build the middle ring first.',
+};
+
 export function PeopleWeb({ entries, founder, selectedId, onSelect }: PeopleWebProps): React.JSX.Element {
+  const session = useSession();
   const nodes = useMemo(() => layoutRings(entries), [entries]);
+  const groups = useMemo(() => groupByRing(entries), [entries]);
   const positions = useMemo(() => new Map(nodes.map((node) => [node.entry.character.id, node])), [nodes]);
+
+  /** Phone only: the picture instead of the lists. Inert from `sm` up. */
+  const [picture, setPicture] = useState(false);
 
   const counts = useMemo(() => {
     const map = new Map<Ring, number>(RING_ORDER.map((ring) => [ring, 0]));
@@ -54,133 +85,223 @@ export function PeopleWeb({ entries, founder, selectedId, onSelect }: PeopleWebP
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="scene-frame border border-hair bg-base">
-        <div className="scroll-x">
-          <div className="relative min-w-[640px]" style={{ aspectRatio: '4 / 3' }}>
-            {/* The rings and the edges. `preserveAspectRatio="none"` makes the
-                viewBox percent-space so the geometry here and the buttons
-                positioned on top of it are the same coordinates; every stroke is
-                non-scaling so the distortion never reaches a line width. */}
-            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 size-full" role="presentation" aria-hidden="true">
-              {RING_ORDER.map((ring) => (
-                <ellipse
-                  key={ring}
-                  cx="50"
-                  cy="50"
-                  rx={RING_GEOMETRY[ring].rx}
-                  ry={RING_GEOMETRY[ring].ry}
-                  fill="none"
-                  stroke="var(--color-hair)"
-                  strokeWidth="1"
-                  strokeDasharray="3 4"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
+      {/* --- the toggle, phone only ---------------------------------------- */}
+      <button
+        type="button"
+        className="btn tap-target w-full sm:hidden"
+        aria-pressed={picture}
+        onClick={() => setPicture((shown) => !shown)}
+      >
+        <Icon name={picture ? 'people' : 'network'} size={15} />
+        {picture ? 'Show the groups' : 'Show the ring picture'}
+      </button>
 
-              {/* You to everybody you can reach. Thickness is the relationship. */}
-              {nodes
-                .filter((node) => node.ring === 'inner')
-                .map((node) => (
-                  <line
-                    key={`edge-${node.entry.character.id}`}
-                    x1="50"
-                    y1="50"
-                    x2={node.xPct}
-                    y2={node.yPct}
-                    className="fc-edge"
-                    stroke={edgeColour(node)}
-                    strokeWidth={(0.9 + node.strength * 3.4).toFixed(2)}
-                    strokeOpacity={node.strength > 0 ? 0.85 : 0.5}
+      {/* --- the groups: the phone's default -------------------------------- */}
+      <div className={cx('flex flex-col gap-4', picture ? 'hidden' : '', 'sm:hidden')}>
+        {groups.map((group) => (
+          <section key={group.ring}>
+            <div className="mb-1.5 flex items-center justify-between gap-2 border-b border-hair pb-1.5">
+              <Tag tone={RING_TONE[group.ring]} dot>
+                {RING_LABEL[group.ring]}
+              </Tag>
+              <span className="figure text-[11px] text-ink-faint">{group.entries.length}</span>
+            </div>
+            {group.entries.length === 0 ? (
+              <p className="text-[12px] text-ink-faint">Nobody.</p>
+            ) : (
+              <>
+                <p className="mb-2 text-[11px] leading-relaxed text-ink-faint">{RING_HINT[group.ring]}</p>
+                <ul className="flex flex-col gap-1.5">
+                  {group.entries.map((entry) => {
+                    const node = positions.get(entry.character.id);
+                    const broker = entry.brokerIds[0];
+                    return (
+                      <li key={entry.character.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelect(entry.character.id)}
+                          aria-current={entry.character.id === selectedId ? 'true' : undefined}
+                          className={cx(
+                            'press-pop tap-target flex w-full items-center gap-2.5 rounded-card border px-2.5 py-2 text-left transition-colors',
+                            entry.character.id === selectedId ? 'border-brand/30 bg-brand-wash' : 'border-hair bg-panel',
+                          )}
+                        >
+                          <Portrait
+                            characterId={entry.character.id}
+                            role={entry.character.role}
+                            size="sm"
+                            decorative
+                            ring={node?.hostile === true ? 'loss' : RING_TONE[group.ring]}
+                            mood={
+                              entry.inbound === null
+                                ? 'content'
+                                : moodFromScore(entry.inbound.trust - entry.inbound.hostility / 2)
+                            }
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-semibold text-ink">{entry.character.name}</span>
+                            <span className="block truncate text-[11px] text-ink-faint">
+                              {group.ring === 'inner'
+                                ? entry.character.title
+                                : broker === undefined
+                                  ? 'No route yet'
+                                  : `via ${characterName(session, broker)}${
+                                      entry.brokerIds.length > 1 ? ` +${entry.brokerIds.length - 1}` : ''
+                                    }`}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 flex-col items-end">
+                            <span className={cx('figure text-[13px]', `tone-${RING_TONE[group.ring]}`)}>
+                              {formatScore(entry.character.connectionLevel)}
+                            </span>
+                            {group.ring === 'inner' ? null : (
+                              <span className="figure text-[10px] text-ink-faint">gap {Math.round(entry.decision.gap)}</span>
+                            )}
+                          </span>
+                          <span className="shrink-0 text-ink-faint">
+                            <Icon name="chevronRight" size={13} accent="current" />
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </section>
+        ))}
+      </div>
+
+      {/* --- the picture ---------------------------------------------------- */}
+      <div className={cx(picture ? '' : 'hidden', 'sm:block')}>
+        <div className="scene-frame border border-hair bg-base">
+          <div className="scroll-x">
+            <div className="relative min-w-[640px]" style={{ aspectRatio: '4 / 3' }}>
+              {/* The rings and the edges. `preserveAspectRatio="none"` makes the
+                  viewBox percent-space so the geometry here and the buttons
+                  positioned on top of it are the same coordinates; every stroke is
+                  non-scaling so the distortion never reaches a line width. */}
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 size-full" role="presentation" aria-hidden="true">
+                {RING_ORDER.map((ring) => (
+                  <ellipse
+                    key={ring}
+                    cx="50"
+                    cy="50"
+                    rx={RING_GEOMETRY[ring].rx}
+                    ry={RING_GEOMETRY[ring].ry}
+                    fill="none"
+                    stroke="var(--color-hair)"
+                    strokeWidth="1"
+                    strokeDasharray="3 4"
                     vectorEffect="non-scaling-stroke"
                   />
                 ))}
 
-              {/* The route in: broker to target, for everybody one introduction away. */}
-              {nodes
-                .filter((node) => node.ring === 'middle')
-                .map((node) => {
-                  const broker = positions.get(node.entry.brokerIds[0] ?? '');
-                  if (broker === undefined) return null;
-                  return (
+                {/* You to everybody you can reach. Thickness is the relationship. */}
+                {nodes
+                  .filter((node) => node.ring === 'inner')
+                  .map((node) => (
                     <line
-                      key={`route-${node.entry.character.id}`}
-                      x1={broker.xPct}
-                      y1={broker.yPct}
+                      key={`edge-${node.entry.character.id}`}
+                      x1="50"
+                      y1="50"
                       x2={node.xPct}
                       y2={node.yPct}
                       className="fc-edge"
-                      stroke="var(--color-info)"
-                      strokeWidth="1.3"
-                      strokeDasharray="4 3"
-                      strokeOpacity="0.7"
+                      stroke={edgeColour(node)}
+                      strokeWidth={(0.9 + node.strength * 3.4).toFixed(2)}
+                      strokeOpacity={node.strength > 0 ? 0.85 : 0.5}
                       vectorEffect="non-scaling-stroke"
                     />
-                  );
-                })}
-            </svg>
+                  ))}
 
-            {/* --- you ------------------------------------------------------ */}
-            <div
-              className="fc-seat w-[104px]"
-              data-self="true"
-              style={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)', cursor: 'default' }}
-            >
-              <Portrait characterId={founder.id} role={founder.role} size="xl" idle decorative isPlayer />
-              <span className="w-full truncate text-[11px] font-semibold text-ink">{founder.name}</span>
-              <span className="figure text-[10px] text-brand">connection {formatScore(founder.connectionLevel)}</span>
+                {/* The route in: broker to target, for everybody one introduction away. */}
+                {nodes
+                  .filter((node) => node.ring === 'middle')
+                  .map((node) => {
+                    const broker = positions.get(node.entry.brokerIds[0] ?? '');
+                    if (broker === undefined) return null;
+                    return (
+                      <line
+                        key={`route-${node.entry.character.id}`}
+                        x1={broker.xPct}
+                        y1={broker.yPct}
+                        x2={node.xPct}
+                        y2={node.yPct}
+                        className="fc-edge"
+                        stroke="var(--color-info)"
+                        strokeWidth="1.3"
+                        strokeDasharray="4 3"
+                        strokeOpacity="0.7"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    );
+                  })}
+              </svg>
+
+              {/* --- you ------------------------------------------------------ */}
+              <div
+                className="fc-seat w-[104px]"
+                data-self="true"
+                style={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)', cursor: 'default' }}
+              >
+                <Portrait characterId={founder.id} role={founder.role} size="xl" idle decorative isPlayer />
+                <span className="w-full truncate text-[11px] font-semibold text-ink">{founder.name}</span>
+                <span className="figure text-[10px] text-brand">connection {formatScore(founder.connectionLevel)}</span>
+              </div>
+
+              {/* --- everybody else ------------------------------------------- */}
+              {nodes.map((node, index) => {
+                const character = node.entry.character;
+                const tone = RING_TONE[node.ring];
+                return (
+                  <button
+                    key={character.id}
+                    type="button"
+                    className="fc-seat animate-pop-in w-[76px]"
+                    style={{
+                      left: `${node.xPct}%`,
+                      top: `${node.yPct}%`,
+                      transform: 'translate(-50%, -50%)',
+                      animationDelay: `${Math.min(index, 8) * 40}ms`,
+                    }}
+                    data-selected={character.id === selectedId}
+                    data-reach={node.entry.state === 'blocked' ? 'blocked' : 'open'}
+                    onClick={() => onSelect(character.id)}
+                    title={`${character.name} — ${character.title}`}
+                    aria-label={`${character.name}, ${character.title}. ${RING_LABEL[node.ring]}, connection ${formatScore(
+                      character.connectionLevel,
+                    )}. Open their card.`}
+                  >
+                    <Portrait
+                      characterId={character.id}
+                      role={character.role}
+                      size="md"
+                      decorative
+                      ring={node.hostile ? 'loss' : node.ring === 'inner' ? 'gain' : node.ring === 'middle' ? 'info' : undefined}
+                      mood={node.entry.inbound === null ? 'content' : moodFromScore(node.entry.inbound.trust - node.entry.inbound.hostility / 2)}
+                    />
+                    <span className="w-full truncate text-[10px] font-semibold text-ink">{character.name.split(' ')[0]}</span>
+                    <span className={`figure text-[9px] tone-${tone}`}>{formatScore(character.connectionLevel)}</span>
+                  </button>
+                );
+              })}
             </div>
-
-            {/* --- everybody else ------------------------------------------- */}
-            {nodes.map((node, index) => {
-              const character = node.entry.character;
-              const tone = RING_TONE[node.ring];
-              return (
-                <button
-                  key={character.id}
-                  type="button"
-                  className="fc-seat animate-pop-in w-[76px]"
-                  style={{
-                    left: `${node.xPct}%`,
-                    top: `${node.yPct}%`,
-                    transform: 'translate(-50%, -50%)',
-                    animationDelay: `${Math.min(index, 8) * 40}ms`,
-                  }}
-                  data-selected={character.id === selectedId}
-                  data-reach={node.entry.state === 'blocked' ? 'blocked' : 'open'}
-                  onClick={() => onSelect(character.id)}
-                  title={`${character.name} — ${character.title}`}
-                  aria-label={`${character.name}, ${character.title}. ${RING_LABEL[node.ring]}, connection ${formatScore(
-                    character.connectionLevel,
-                  )}. Open their card.`}
-                >
-                  <Portrait
-                    characterId={character.id}
-                    role={character.role}
-                    size="md"
-                    decorative
-                    ring={node.hostile ? 'loss' : node.ring === 'inner' ? 'gain' : node.ring === 'middle' ? 'info' : undefined}
-                    mood={node.entry.inbound === null ? 'content' : moodFromScore(node.entry.inbound.trust - node.entry.inbound.hostility / 2)}
-                  />
-                  <span className="w-full truncate text-[10px] font-semibold text-ink">{character.name.split(' ')[0]}</span>
-                  <span className={`figure text-[9px] tone-${tone}`}>{formatScore(character.connectionLevel)}</span>
-                </button>
-              );
-            })}
           </div>
         </div>
-      </div>
 
-      {/* --- what the picture means ----------------------------------------- */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        {RING_ORDER.map((ring) => (
-          <Tag key={ring} tone={RING_TONE[ring]} dot>
-            {RING_LABEL[ring]} · {counts.get(ring) ?? 0}
-          </Tag>
-        ))}
-        <span className="text-[10px] text-ink-faint">
-          Line thickness is how much you and they have actually dealt with each other; a dashed line is the introduction that would open a
-          channel. Red is hostility, in either direction.
-        </span>
+        {/* --- what the picture means --------------------------------------- */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {RING_ORDER.map((ring) => (
+            <Tag key={ring} tone={RING_TONE[ring]} dot>
+              {RING_LABEL[ring]} · {counts.get(ring) ?? 0}
+            </Tag>
+          ))}
+          <span className="text-[11px] text-ink-faint">
+            Line thickness is how much you and they have actually dealt with each other; a dashed line is the introduction that would open a
+            channel. Red is hostility, in either direction.
+          </span>
+        </div>
       </div>
     </div>
   );

@@ -109,7 +109,7 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
               <span className="figure text-ink-dim">{intensity.toFixed(2)}</span>
             </span>
             <input
-              className="w-full"
+              className="tap-target w-full"
               type="range"
               min={0.05}
               max={1}
@@ -124,7 +124,15 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
               <span>Target quality</span>
               <span className="figure text-ink-dim">{quality.toFixed(2)}</span>
             </span>
-            <input className="w-full" type="range" min={0.05} max={1} step={0.05} value={quality} onChange={(event) => setQuality(Number(event.target.value))} />
+            <input
+              className="tap-target w-full"
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={quality}
+              onChange={(event) => setQuality(Number(event.target.value))}
+            />
             <span className="mt-1 block text-[10px] text-ink-faint">Discounted by real capability and by how rushed the launch is.</span>
           </label>
         </div>

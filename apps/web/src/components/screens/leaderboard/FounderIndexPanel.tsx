@@ -61,7 +61,7 @@ export function FounderIndexPanel({
   if (breakdown === null) {
     return (
       <EmptyState
-        glyph="FI"
+        icon="trophy"
         title="The composite has not been computed yet"
         message="Leaderboards are rebuilt from state in the sixteenth phase of every resolution. Resolve a quarter and the eight components appear here."
       />
@@ -89,7 +89,7 @@ export function FounderIndexPanel({
         {components.map((component) => (
           <div key={component.key}>
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="text-[12px] text-ink">{COMPONENT_LABEL[component.key]}</span>
+              <span className="text-[13px] font-medium text-ink">{COMPONENT_LABEL[component.key]}</span>
               <span className="flex items-baseline gap-3">
                 <span className="figure text-[10px] text-ink-faint">weight {formatPct(component.weight, 0)}</span>
                 <span className="figure text-[12px] text-ink">{formatPct(component.percentile, 0)}</span>
@@ -106,7 +106,7 @@ export function FounderIndexPanel({
 
       <div className="border-t border-hair pt-3">
         <SectionHeading>What is holding you back</SectionHeading>
-        <p className="mt-1 text-[12px] text-ink-dim">
+        <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
           {weakest === null
             ? 'No component is scored yet.'
             : `${COMPONENT_LABEL[weakest.key]} sits at the ${formatPct(weakest.percentile, 0)} percentile and carries ${formatPct(

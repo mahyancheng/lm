@@ -32,6 +32,7 @@ import {
   KeyValueGrid,
   Meter,
   PageHeader,
+  Icon,
   Panel,
   PersonChip,
   ProgressBar,
@@ -101,6 +102,7 @@ export default function BoardroomPage(): React.JSX.Element {
         />
         <Panel>
           <EmptyState
+            icon="boardTable"
             title={`${company.name} has no board`}
             message="A company too small to have a board needs no approval for anything — the founder's brief, precious freedom before the first priced round. A board arrives with the first investor seat."
           />
@@ -145,17 +147,19 @@ export default function BoardroomPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Seats filled" value={`${board.directors.length} / ${board.seatsAuthorised}`} hint={`${independentCount} independent`} />
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+        <StatCard iconName="boardTable" label="Seats filled" value={`${board.directors.length} / ${board.seatsAuthorised}`} hint={`${independentCount} independent`} />
         <StatCard
-          label="Mean relationship"
+          iconName="people"
+          label="Board mood"
           value={formatScore(meanRelationship)}
           tone={meanRelationship >= 40 ? 'gain' : meanRelationship >= 0 ? 'warn' : 'loss'}
           hint="How the room feels about the chief executive, on a -100 to 100 scale"
         />
-        <StatCard label="Ordinary threshold" value={formatPct(rule.passThresholdFraction, 0)} hint={`Supermajority ${formatPct(rule.supermajorityThresholdFraction, 0)}`} />
+        <StatCard iconName="stamp" label="Pass threshold" value={formatPct(rule.passThresholdFraction, 0)} hint={`Supermajority ${formatPct(rule.supermajorityThresholdFraction, 0)}`} />
         <StatCard
-          label="Live commitments"
+          iconName="handshake"
+          label="Commitments"
           value={commitments.filter((commitment) => commitment.status === 'active').length}
           hint="Structured promises the engine will check"
         />
@@ -163,6 +167,8 @@ export default function BoardroomPage(): React.JSX.Element {
 
       {/* --- the room ------------------------------------------------------- */}
       <Panel
+        iconName="boardTable"
+        iconTone="brand"
         title="The room"
         subtitle={
           headProposal === null
@@ -172,6 +178,7 @@ export default function BoardroomPage(): React.JSX.Element {
         actions={
           openMatters.length > 1 ? (
             <TabBar
+              className="[&>button]:min-h-11 sm:[&>button]:min-h-0"
               variant="segmented"
               ariaLabel="Matter under discussion"
               value={headProposal?.id ?? ''}
@@ -195,18 +202,30 @@ export default function BoardroomPage(): React.JSX.Element {
           onOpenProposal={setOpenProposalId}
         />
 
-        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-hair pt-3">
-          <button type="button" className="btn btn-sm" onClick={() => scrollTo('propose')}>
+        {/* The room's controls, in thumb reach directly under the table: a
+            two-up grid of full-height targets on a phone, the compact inline
+            strip it has always been from `sm` up. */}
+        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-hair pt-3 sm:flex sm:flex-wrap sm:items-center sm:gap-1.5">
+          <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => scrollTo('propose')}>
+            <Icon name="plus" size={15} accent="current" />
             Table a matter
           </button>
-          <button type="button" className="btn btn-sm" onClick={() => scrollTo('lobby')} disabled={openMatters.length === 0}>
+          <button
+            type="button"
+            className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+            onClick={() => scrollTo('lobby')}
+            disabled={openMatters.length === 0}
+          >
+            <Icon name="chat" size={15} accent="current" />
             Lobby a director
           </button>
-          <button type="button" className="btn btn-sm" onClick={() => scrollTo('commitments')}>
-            Commitments ledger
+          <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => scrollTo('commitments')}>
+            <Icon name="ledger" size={15} accent="current" />
+            Commitments
           </button>
           {headProposal === null ? null : (
-            <button type="button" className="btn btn-sm" onClick={() => setOpenProposalId(headProposal.id)}>
+            <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => setOpenProposalId(headProposal.id)}>
+              <Icon name="chart" size={15} accent="current" />
               Full tally
             </button>
           )}
@@ -221,10 +240,11 @@ export default function BoardroomPage(): React.JSX.Element {
       </div>
 
       {/* --- decided matters ------------------------------------------------ */}
-      <Panel title="Minutes" subtitle="Matters the board has already settled, with the vote as it was taken" bodyClassName="space-y-2.5">
+      <Panel iconName="newspaper" title="Minutes" subtitle="Matters the board has already settled, with the vote as it was taken" bodyClassName="space-y-2.5">
         {decided.length === 0 ? (
           <EmptyState
             compact
+            icon="boardTable"
             title="Nothing has been decided yet"
             message="A matter tabled this quarter is voted in the board-resolution phase. Its minutes appear here afterwards, with every director's vote and their reasoning."
           />
@@ -268,10 +288,11 @@ export default function BoardroomPage(): React.JSX.Element {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div id="commitments" className="flex min-w-0 scroll-mt-4 flex-col">
-          <Panel title="Commitments ledger" subtitle="What directors have promised, and whether it still binds">
+          <Panel iconName="ledger" title="Commitments ledger" subtitle="What directors have promised, and whether it still binds">
             {commitments.length === 0 ? (
               <EmptyState
                 compact
+                icon="handshake"
                 title="No commitments recorded"
                 message="A conversation that reaches something concrete leaves a structured promise here. Most conversations do not."
               />
@@ -311,7 +332,7 @@ export default function BoardroomPage(): React.JSX.Element {
                           </Tag>
                         </div>
                       </div>
-                      <p className="mt-1 text-[11px] text-ink-dim">
+                      <p className="mt-1 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">
                         Will {commitment.stance} a {PROPOSAL_KIND_LABEL[commitment.proposalKind].toLowerCase()} {commitmentText(commitment.conditions)}.
                       </p>
                       <p className="mt-1 text-[10px] text-ink-faint">
@@ -326,7 +347,7 @@ export default function BoardroomPage(): React.JSX.Element {
           </Panel>
         </div>
 
-        <Panel title="Governance rules" subtitle="One screen, and no surprises later">
+        <Panel iconName="stamp" title="Governance rules" subtitle="One screen, and no surprises later">
           <KeyValueGrid
             columns={2}
             items={[
@@ -394,7 +415,7 @@ export default function BoardroomPage(): React.JSX.Element {
                 ) : (
                   <button
                     type="button"
-                    className="btn btn-primary btn-sm mt-2"
+                    className="btn btn-primary btn-sm tap-target mt-2 sm:min-h-0"
                     onClick={() => {
                       setLobbyFocus({ directorId: openDirector.characterId, proposalId: headProposal?.id ?? null });
                       setOpenDirectorId(null);
@@ -461,7 +482,7 @@ export default function BoardroomPage(): React.JSX.Element {
       >
         {openProposal === null || openTally === null ? null : (
           <div className="space-y-4">
-            <p className="text-[12px] leading-relaxed text-ink-dim">{openProposal.summary}</p>
+            <p className="text-[13px] leading-relaxed text-ink-dim sm:text-[12px]">{openProposal.summary}</p>
 
             <KeyValueGrid
               columns={2}

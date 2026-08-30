@@ -69,6 +69,7 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
       header: 'Fully diluted',
       align: 'right',
       hideOnMobile: true,
+      cardHidden: true,
       render: (row) => formatPct(row.fullyDilutedPct, 2),
       sortable: true,
       sortValue: (row) => row.fullyDilutedPct,
@@ -78,6 +79,7 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
       header: 'Value',
       align: 'right',
       hideOnMobile: true,
+      cardLabel: 'Marked value',
       render: (row) => (pricePerShare <= 0 ? '—' : formatMoney(row.shares * pricePerShare)),
       sortable: true,
       sortValue: (row) => row.shares * pricePerShare,
@@ -99,8 +101,12 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
 
   return (
     <div className="flex flex-col gap-3">
+      {/* The ownership band scales to whatever width it is given — it is a
+          percentage stack, so a phone gets the same picture as a desktop, just
+          shorter. The legend below it is the readable half on a phone, so it
+          stacks one band per line rather than wrapping mid-name. */}
       <div>
-        <div className="flex h-7 w-full overflow-hidden rounded-pill border border-hair">
+        <div className="flex h-8 w-full overflow-hidden rounded-pill border border-hair sm:h-7">
           {bands.map((band) => (
             <div
               key={band.key}
@@ -117,25 +123,25 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
             />
           ) : null}
         </div>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+        <ul className="mt-2 flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:gap-x-4 sm:gap-y-1">
           {bands.map((band) => (
-            <span key={band.key} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-              <span className={cx('inline-block size-2.5 rounded-pill')} style={{ backgroundColor: TONE_VAR[band.tone] }} />
-              <span className="truncate">{band.label}</span>
-              <span className="figure text-ink-faint">{formatPct(band.pct, 1)}</span>
-            </span>
+            <li key={band.key} className="flex items-center gap-2 text-[12.5px] text-ink-dim sm:text-[11px]">
+              <span className={cx('inline-block size-2.5 shrink-0 rounded-pill')} style={{ backgroundColor: TONE_VAR[band.tone] }} />
+              <span className="min-w-0 flex-1 truncate sm:flex-none">{band.label}</span>
+              <span className="figure shrink-0 text-ink-faint">{formatPct(band.pct, 1)}</span>
+            </li>
           ))}
           {poolPct > 0 ? (
-            <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-              <span className="inline-block size-2.5 rounded-pill bg-raised" />
-              Option pool
-              <span className="figure text-ink-faint">{formatPct(poolPct, 1)}</span>
-            </span>
+            <li className="flex items-center gap-2 text-[12.5px] text-ink-dim sm:text-[11px]">
+              <span className="inline-block size-2.5 shrink-0 rounded-pill border border-hair bg-raised" />
+              <span className="min-w-0 flex-1 truncate sm:flex-none">Option pool</span>
+              <span className="figure shrink-0 text-ink-faint">{formatPct(poolPct, 1)}</span>
+            </li>
           ) : null}
-        </div>
+        </ul>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-5 gap-y-1 border-y border-hair py-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-5 gap-y-1.5 border-y border-hair py-2.5 sm:grid-cols-4">
         <div className="flex items-baseline justify-between gap-2">
           <span className="label-caps-faint">Issued</span>
           <span className="figure text-[12px] text-ink">{formatCount(issued)}</span>
@@ -156,7 +162,15 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
         </div>
       </div>
 
-      <DataTable columns={columns} rows={rows} rowKey={(row) => row.holdingId} dense initialSort={{ key: 'economic', direction: 'desc' }} />
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.holdingId}
+        dense
+        cardMode="auto"
+        cardTitleKey="holder"
+        initialSort={{ key: 'economic', direction: 'desc' }}
+      />
     </div>
   );
 }

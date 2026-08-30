@@ -14,16 +14,19 @@ import { useMemo, useState } from 'react';
 import type { SimEventType } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
+import type { ReactNode } from 'react';
 import {
   DataTable,
   EmptyState,
-  KeyValueGrid,
+  Icon,
   PageHeader,
   Panel,
   ProgressBar,
   StatCard,
   Tag,
+  cx,
   type Column,
+  type Tone,
 } from '@/components/ui';
 import { useCompanyMetrics, useGame, usePlayerCompany, usePlayerView, useQuotes, useSession } from '@/lib/game';
 import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
@@ -46,6 +49,35 @@ const SELECTIONS = {
 } as const satisfies Record<string, LedgerSelection>;
 
 type SelectionKey = keyof typeof SELECTIONS;
+
+/**
+ * One fact, as a card.
+ *
+ * The debt schedule and the backlog are nine and four label/value pairs each.
+ * A label-left / value-right row squeezed into a 170px phone column is
+ * unreadable, so on a phone they are small tinted cards two to a row — label
+ * over figure over working — and they widen into three or four to a row from
+ * `lg`. Same figures, same order, no restatement.
+ */
+function FactCard({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly hint?: ReactNode;
+  readonly tone?: Tone;
+}): React.JSX.Element {
+  return (
+    <div className="raised-surface flex flex-col px-3 py-2.5">
+      <span className="label-caps-faint">{label}</span>
+      <span className={cx('figure mt-1 text-[15px] leading-tight', tone === undefined ? 'text-ink' : `tone-${tone}`)}>{value}</span>
+      {hint === undefined ? null : <span className="mt-1 text-[11px] text-ink-faint">{hint}</span>}
+    </div>
+  );
+}
 
 export default function FinancialsPage(): React.JSX.Element {
   const session = useSession();
@@ -230,41 +262,47 @@ export default function FinancialsPage(): React.JSX.Element {
             <Tag tone={sheet.reconciles ? 'gain' : 'loss'} dot title="Assets less liabilities must equal equity within one dollar.">
               {sheet.reconciles ? 'Balance sheet reconciles' : 'Reconciliation failed'}
             </Tag>
-            <Link href="/capital" className="btn btn-sm">
+            <Link href="/capital" className="btn tap-target gap-1.5">
+              <Icon name="coins" size={16} accent="current" />
               Capital
             </Link>
           </>
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Revenue" value={formatMoney(pnl.revenue)} delta={metrics?.revenueGrowthYoY} hint="Recognised this quarter" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <StatCard label="Revenue" iconName="coins" value={formatMoney(pnl.revenue)} delta={metrics?.revenueGrowthYoY} hint="Recognised this quarter" />
         <StatCard
           label="Gross profit"
+          iconName="ledger"
           value={formatMoney(pnl.grossProfit)}
           tone={pnl.grossProfit >= 0 ? undefined : 'loss'}
           hint={`Margin ${formatPct(pnl.grossMarginPct)}`}
         />
         <StatCard
-          label="Operating income"
+          label="Operating"
+          iconName="chart"
           value={formatMoney(pnl.operatingIncome)}
           tone={pnl.operatingIncome >= 0 ? 'gain' : 'loss'}
           hint={`Margin ${formatPct(pnl.operatingMarginPct)}`}
         />
         <StatCard
-          label="Result before tax"
+          label="Before tax"
+          iconName="stamp"
           value={formatMoney(pnl.preTaxIncome)}
           tone={pnl.preTaxIncome >= 0 ? 'gain' : 'loss'}
           hint="After interest"
         />
         <StatCard
           label="Cash movement"
+          iconName="vault"
           value={formatMoney(company.financials.quarterlyBurn)}
           tone={company.financials.quarterlyBurn >= 0 ? 'gain' : 'loss'}
           hint={`Closing cash ${formatMoney(company.financials.cash)}`}
         />
         <StatCard
           label="Runway"
+          iconName="gauge"
           value={metrics === null ? '—' : formatQuarterCount(metrics.runwayQuarters)}
           tone={metrics === null ? undefined : metrics.runwayQuarters < 6 ? 'warn' : undefined}
           hint={metrics === null ? 'Computed at the first resolution' : 'At the current burn'}
@@ -272,12 +310,17 @@ export default function FinancialsPage(): React.JSX.Element {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Profit and loss" subtitle={`Quarter ${quarterLabel(session.startYear, session.quarter)} · figures in dollars`}>
+        <Panel
+          title="Profit and loss"
+          iconName="ledger"
+          subtitle={`Quarter ${quarterLabel(session.startYear, session.quarter)} · figures in dollars`}
+        >
           <StatementTable rows={pnlRows} valueHeader="Amount" secondaryHeader="Margin" />
         </Panel>
 
         <Panel
           title="Balance sheet"
+          iconName="boardTable"
           subtitle="Assets less liabilities must equal equity within one dollar, or the quarter does not commit."
           actions={
             <Tag tone={sheet.reconciles ? 'gain' : 'loss'} dot>
@@ -286,72 +329,77 @@ export default function FinancialsPage(): React.JSX.Element {
           }
         >
           <StatementTable rows={balanceRows} valueHeader="Amount" />
-          <p className="mt-3 text-[10px] text-ink-faint">
+          <p className="mt-3 text-[11px] text-ink-faint">
             Residual assets − liabilities − equity: <span className="figure text-ink-dim">{formatMoney(sheet.discrepancy, 'full')}</span>
           </p>
         </Panel>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Cash flow" subtitle="Movement over the quarter, as reported.">
+        <Panel title="Cash flow" iconName="vault" subtitle="Movement over the quarter, as reported.">
           <StatementTable rows={cashRows} valueHeader="Amount" />
         </Panel>
 
-        <Panel title="Debt schedule" className="lg:col-span-2" subtitle="Outstanding principal, its cost and how well it is covered.">
+        <Panel
+          title="Debt schedule"
+          iconName="coins"
+          iconTone={coverage !== null && coverage < 1 ? 'loss' : 'neutral'}
+          className="lg:col-span-2"
+          subtitle="Outstanding principal, its cost and how well it is covered."
+        >
           {company.financials.debt <= 0 ? (
             <EmptyState
               compact
-              glyph="DBT"
+              icon="coins"
               title="No interest-bearing debt"
               message="Nothing is drawn. A debt issue can be attempted from the Capital screen; the rate clears against the world's credit spreads and debt availability."
               action={
-                <Link href="/capital" className="btn btn-sm">
+                <Link href="/capital" className="btn tap-target gap-1.5">
+                  <Icon name="coins" size={16} accent="current" />
                   Open Capital
                 </Link>
               }
             />
           ) : (
-            <KeyValueGrid
-              columns={3}
-              items={[
-                { label: 'Principal outstanding', value: formatMoney(company.financials.debt) },
-                { label: 'Interest this quarter', value: formatMoney(company.financials.interestExpense) },
-                {
-                  label: 'Implied annual rate',
-                  value: impliedRate === null ? '—' : formatPct(impliedRate, 2),
-                  hint: 'Quarterly interest annualised over principal.',
-                },
-                {
-                  label: 'Interest coverage',
-                  value: coverage === null ? '—' : `${coverage.toFixed(2)}×`,
-                  tone: coverage === null ? undefined : coverage >= 2 ? 'gain' : coverage >= 1 ? 'warn' : 'loss',
-                  hint: 'Operating income over interest expense.',
-                },
-                { label: 'Debt on balance sheet', value: formatMoney(company.balanceSheet.liabilities.debt) },
-                {
-                  label: 'Net cash',
-                  value: formatMoney(company.financials.cash - company.financials.debt),
-                  tone: company.financials.cash - company.financials.debt >= 0 ? 'gain' : 'loss',
-                },
-                {
-                  label: 'Credit spreads (world)',
-                  value: formatPct(view.world.macro.creditSpreads, 2),
-                  hint: 'Over the policy rate; widening spreads reprice every future issue.',
-                },
-                { label: 'Policy rate (world)', value: formatPct(view.world.macro.policyRate, 2) },
-                {
-                  label: 'Debt availability',
-                  value: formatPct(view.world.capitalMarkets.debtAvailability),
-                  hint: 'Lender willingness to extend credit to AI companies.',
-                },
-              ]}
-            />
+            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
+              <FactCard label="Principal outstanding" value={formatMoney(company.financials.debt)} />
+              <FactCard label="Interest this quarter" value={formatMoney(company.financials.interestExpense)} />
+              <FactCard
+                label="Implied annual rate"
+                value={impliedRate === null ? '—' : formatPct(impliedRate, 2)}
+                hint="Quarterly interest annualised over principal."
+              />
+              <FactCard
+                label="Interest coverage"
+                value={coverage === null ? '—' : `${coverage.toFixed(2)}×`}
+                tone={coverage === null ? undefined : coverage >= 2 ? 'gain' : coverage >= 1 ? 'warn' : 'loss'}
+                hint="Operating income over interest expense."
+              />
+              <FactCard label="Debt on balance sheet" value={formatMoney(company.balanceSheet.liabilities.debt)} />
+              <FactCard
+                label="Net cash"
+                value={formatMoney(company.financials.cash - company.financials.debt)}
+                tone={company.financials.cash - company.financials.debt >= 0 ? 'gain' : 'loss'}
+              />
+              <FactCard
+                label="Credit spreads (world)"
+                value={formatPct(view.world.macro.creditSpreads, 2)}
+                hint="Over the policy rate; widening spreads reprice every future issue."
+              />
+              <FactCard label="Policy rate (world)" value={formatPct(view.world.macro.policyRate, 2)} />
+              <FactCard
+                label="Debt availability"
+                value={formatPct(view.world.capitalMarkets.debtAvailability)}
+                hint="Lender willingness to extend credit to AI companies."
+              />
+            </div>
           )}
         </Panel>
       </div>
 
       <Panel
         title="Product lines"
+        iconName="box"
         flush
         subtitle="Unit economics per line. Recognised revenue is reported at company level, so no line here restates it."
       >
@@ -360,38 +408,37 @@ export default function FinancialsPage(): React.JSX.Element {
           rows={activeProducts}
           rowKey={(row) => row.id}
           rowHref={() => '/products'}
+          cardMode="auto"
+          cardTitleKey="name"
           dense
-          empty={<EmptyState compact title="No active products" message="Launch a product from the Products screen." />}
+          empty={<EmptyState compact icon="box" title="No active products" message="Launch a product from the Products screen." />}
         />
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Contracted revenue" subtitle="What is billed but not earned, and what is won but not billed.">
-          <KeyValueGrid
-            columns={1}
-            items={[
-              {
-                label: 'Deferred revenue',
-                value: formatMoney(company.financials.deferredRevenue),
-                hint: 'Collected for work not yet delivered.',
-              },
-              {
-                label: 'Backlog',
-                value: formatMoney(company.financials.backlogUsd),
-                hint: 'Contracted future revenue not yet billed.',
-              },
-              {
-                label: 'Awarded, not recognised',
-                value: formatMoney(contractedRemaining),
-                hint: 'Across every live government contract.',
-              },
-              {
-                label: 'Government revenue share',
-                value: metrics === null ? '—' : formatPct(metrics.governmentRevenueShare),
-                hint: 'Stability and constraint arrive together.',
-              },
-            ]}
-          />
+        <Panel title="Contracted revenue" iconName="stamp" subtitle="What is billed but not earned, and what is won but not billed.">
+          <div className="grid grid-cols-2 gap-2.5">
+            <FactCard
+              label="Deferred revenue"
+              value={formatMoney(company.financials.deferredRevenue)}
+              hint="Collected for work not yet delivered."
+            />
+            <FactCard
+              label="Backlog"
+              value={formatMoney(company.financials.backlogUsd)}
+              hint="Contracted future revenue not yet billed."
+            />
+            <FactCard
+              label="Awarded, not recognised"
+              value={formatMoney(contractedRemaining)}
+              hint="Across every live government contract."
+            />
+            <FactCard
+              label="Government revenue share"
+              value={metrics === null ? '—' : formatPct(metrics.governmentRevenueShare)}
+              hint="Stability and constraint arrive together."
+            />
+          </div>
           {company.financials.backlogUsd > 0 ? (
             <ProgressBar
               className="mt-3"
@@ -406,10 +453,12 @@ export default function FinancialsPage(): React.JSX.Element {
 
         <Panel
           title="Government contracts"
+          iconName="capitol"
           className="lg:col-span-2"
           flush
           actions={
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelection('contracts')}>
+            <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setSelection('contracts')}>
+              <Icon name="ledger" size={15} accent="current" />
               Ledger
             </button>
           }
@@ -419,11 +468,13 @@ export default function FinancialsPage(): React.JSX.Element {
             rows={view.contracts}
             rowKey={(row) => row.id}
             rowHref={() => '/government'}
+            cardMode="auto"
+            cardTitleKey="id"
             dense
             empty={
               <EmptyState
                 compact
-                glyph="GOV"
+                icon="capitol"
                 title="No contracts in flight"
                 message="Awards create backlog before they create revenue. Open procurements are on the Government screen."
               />
@@ -432,7 +483,7 @@ export default function FinancialsPage(): React.JSX.Element {
         </Panel>
       </div>
 
-      <Panel title="History" subtitle="Per-quarter series, from the public record and the tape.">
+      <Panel title="History" iconName="chart" subtitle="Per-quarter series, from the public record and the tape.">
         <HistoryPanel view={view} companyId={company.id} startYear={session.startYear} quotes={quotes} />
       </Panel>
 

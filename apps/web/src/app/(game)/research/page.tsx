@@ -25,6 +25,7 @@ import {
   DataTable,
   DeltaBadge,
   EmptyState,
+  Icon,
   Meter,
   PageHeader,
   Panel,
@@ -297,22 +298,25 @@ export default function ResearchPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Your programmes" value={ownProjects.filter((p) => p.status === 'active').length} unit="active" hint={`${ownProjects.length} on the books`} />
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+        <StatCard iconName="flask" label="Programmes" value={ownProjects.filter((p) => p.status === 'active').length} unit="active" hint={`${ownProjects.length} of yours on the books`} />
         <StatCard
-          label="Research envelope"
+          iconName="coins"
+          label="Envelope"
           value={formatMoney(envelope)}
           hint={queued.some((action) => action.intent.type === 'set_research_budget') ? 'Stated by a queued action' : 'Archetype policy share of revenue'}
         />
         <StatCard
-          label="Researchers committed"
+          iconName="people"
+          label="Researchers"
           value={`${committedResearchers} / ${company.employees.researchers}`}
           tone={committedResearchers > company.employees.researchers ? 'loss' : undefined}
           hint="The binding constraint, more often than money"
           href="/people"
         />
         <StatCard
-          label="Your informational edge"
+          iconName="compass"
+          label="Your edge"
           value={edgeNodes.length}
           unit="nodes"
           hint="Where your confidence differs from the market's"
@@ -321,10 +325,13 @@ export default function ResearchPage(): React.JSX.Element {
       </div>
 
       <Panel
+        iconName="network"
+        iconTone="brand"
         title="The map"
         subtitle="Layered by dependency depth and ordered to minimise crossings, so it reads left to right. The same graph always lays out the same way. Point at a node to light its dependencies."
         actions={
           <TabBar
+            className="[&>button]:min-h-11 sm:[&>button]:min-h-0"
             variant="segmented"
             ariaLabel="Map filter"
             value={filter}
@@ -339,7 +346,7 @@ export default function ResearchPage(): React.JSX.Element {
         }
       >
         {graph.nodes.length === 0 ? (
-          <EmptyState title="The map is empty" message="No technology is visible to this company yet." />
+          <EmptyState icon="network" title="The map is empty" message="No technology is visible to this company yet." />
         ) : (
           <FrontierMap
             graph={graph}
@@ -351,6 +358,14 @@ export default function ResearchPage(): React.JSX.Element {
           />
         )}
 
+        {/* The map is 900px of graph in a frame that a phone can only show a
+            slice of, so say so once rather than leaving the pan to be
+            discovered. */}
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-faint sm:hidden">
+          <Icon name="back" size={13} accent="current" />
+          Drag the map to explore it. Tap a technology for its card.
+        </p>
+
         <div className="mt-3 border-t border-hair pt-3">
           <div className="label-caps mb-2">Epistemic state</div>
           <div className="flex flex-wrap gap-1.5">
@@ -360,7 +375,7 @@ export default function ResearchPage(): React.JSX.Element {
               </Tag>
             ))}
           </div>
-          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-ink-faint">
+          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] leading-relaxed text-ink-faint sm:text-[10px]">
             {Object.entries(EDGE_STYLE).map(([kind, style]) => (
               <span key={kind}>
                 <span className="text-ink-dim">{style.label}</span> — {style.blurb}
@@ -377,7 +392,7 @@ export default function ResearchPage(): React.JSX.Element {
       </Panel>
 
       {moves.length === 0 ? null : (
-        <Panel title="Belief moved" subtitle="What the last resolved quarter did to the map">
+        <Panel iconName="gauge" iconTone="info" title="Belief moved" subtitle="What the last resolved quarter did to the map">
           <div className="space-y-1.5">
             {moves.map((move) => (
               <button
@@ -386,7 +401,7 @@ export default function ResearchPage(): React.JSX.Element {
                 onClick={() => setSelectedId(move.nodeId)}
                 className="raised-surface flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:border-hair-strong"
               >
-                <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{move.title}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-ink sm:text-[12px]">{move.title}</span>
                 <span className="figure text-[11px] text-ink-dim">
                   {formatPct(move.previous, 0)} <span className="text-ink-faint">→</span> {formatPct(move.next, 0)}
                 </span>
@@ -409,7 +424,7 @@ export default function ResearchPage(): React.JSX.Element {
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Research programmes" subtitle="Yours, secret ones included" className="lg:col-span-2" flush>
+        <Panel iconName="flask" title="Research programmes" subtitle="Yours, secret ones included" className="lg:col-span-2" flush>
           <DataTable
             columns={ownColumns}
             rows={ownProjects}
@@ -417,9 +432,12 @@ export default function ResearchPage(): React.JSX.Element {
             onRowClick={(row) => setSelectedId(row.targetNodeId)}
             initialSort={{ key: 'progress', direction: 'desc' }}
             dense
+            cardMode="auto"
+            cardTitleKey="target"
             empty={
               <div className="p-4">
                 <EmptyState
+                  icon="flask"
                   title="No programme is running"
                   message="Open a node on the map and start one. Researchers are usually the binding constraint, not money."
                 />
@@ -428,10 +446,10 @@ export default function ResearchPage(): React.JSX.Element {
           />
         </Panel>
 
-        <Panel title="Allocation" subtitle="What research can draw on this quarter">
+        <Panel iconName="gauge" title="Allocation" subtitle="What research can draw on this quarter">
           <div className="space-y-3">
             <ProgressBar
-              label="Compute committed to programmes"
+              label="Compute committed"
               value={Math.min(committedCompute, Math.max(held, committedCompute, 1))}
               max={Math.max(held, committedCompute, 1)}
               tone={committedCompute > held * company.compute.trainingAllocation ? 'warn' : 'brand'}
@@ -445,7 +463,7 @@ export default function ResearchPage(): React.JSX.Element {
               <span className="label-caps-faint mb-1 block">Research budget this quarter</span>
               <div className="flex items-end gap-2">
                 <input
-                  className="field"
+                  className="field tap-target min-w-0 flex-1 sm:min-h-0"
                   type="number"
                   min={0}
                   step="50000"
@@ -453,12 +471,12 @@ export default function ResearchPage(): React.JSX.Element {
                   value={budgetText}
                   onChange={(event) => setBudgetText(event.target.value)}
                 />
-                <button type="button" className="btn btn-primary btn-sm" onClick={applyBudget}>
+                <button type="button" className="btn btn-primary btn-sm tap-target shrink-0 px-4 sm:min-h-0" onClick={applyBudget}>
                   Set
                 </button>
               </div>
             </label>
-            <p className="mt-1 text-[10px] text-ink-faint">
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
               Currently {formatMoney(envelope)}. Individual programmes draw from this envelope in priority order.
             </p>
             {budgetResult === null ? null : (
@@ -476,7 +494,7 @@ export default function ResearchPage(): React.JSX.Element {
               </span>
               <input
                 type="range"
-                className="w-full"
+                className="tap-target w-full sm:min-h-0"
                 min={0}
                 max={1}
                 step={0.05}
@@ -484,12 +502,12 @@ export default function ResearchPage(): React.JSX.Element {
                 onChange={(event) => setTrainingSplit(Number(event.target.value))}
               />
             </label>
-            <p className="mt-1 text-[10px] text-ink-faint">
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
               Serving takes the remainder. Currently {formatPct(company.compute.trainingAllocation, 0)} — pivoting compute out of training into
               inference is how a company survives a shortage.
             </p>
             <div className="mt-2 flex justify-end">
-              <button type="button" className="btn btn-sm" onClick={applySplit}>
+              <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={applySplit}>
                 Queue reallocation
               </button>
             </div>
@@ -503,7 +521,7 @@ export default function ResearchPage(): React.JSX.Element {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Published rival programmes" subtitle="A secret programme is absent here, not redacted" flush>
+        <Panel iconName="globe" title="Published rival programmes" subtitle="A secret programme is absent here, not redacted" flush>
           <DataTable
             columns={rivalColumns}
             rows={rivalProjects}
@@ -511,9 +529,12 @@ export default function ResearchPage(): React.JSX.Element {
             onRowClick={(row) => setSelectedId(row.targetNodeId)}
             initialSort={{ key: 'progress', direction: 'desc' }}
             dense
+            cardMode="auto"
+            cardTitleKey="company"
             empty={
               <div className="p-4">
                 <EmptyState
+                  icon="globe"
                   title="Nobody has published a programme"
                   message="Rivals may still be running work you cannot see. Secret programmes do not appear on this list at all — that is the point of keeping one."
                 />

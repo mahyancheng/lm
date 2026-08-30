@@ -109,7 +109,7 @@ export function InstrumentDrawer({
               height={150}
             />
           ) : (
-            <p className="mt-2 text-[11px] text-ink-faint">
+            <p className="mt-2 text-[13px] text-ink-faint sm:text-[11px]">
               One close on the tape so far. A second quarter draws the series.
             </p>
           )}
@@ -133,6 +133,37 @@ export function InstrumentDrawer({
           />
         </div>
 
+        {/* --- position and ticket -------------------------------------------
+            The action sits directly under the price on purpose: on a phone the
+            drawer is a bottom sheet, and the one control a player came here to
+            use should be inside the first thumb-reach, not eight sections
+            down. */}
+        {security === null || !security.isTradable ? (
+          <p className="text-[13px] leading-relaxed text-ink-faint sm:text-[11px]">
+            This instrument has no tradable security attached, so there is nothing to buy or sell here.
+          </p>
+        ) : (
+          <div>
+            <KeyValueGrid
+              columns={2}
+              items={[
+                { label: 'Your position', value: formatCount(heldShares) },
+                { label: 'Stake', value: issued === 0 ? '—' : formatPct(heldShares / issued, 2) },
+              ]}
+            />
+            <div className="mt-4">
+              <TradeTicket
+                securityId={security.id}
+                companyName={row.companyName}
+                symbol={row.instrument.symbol}
+                lastPrice={row.quote?.price ?? 0}
+                heldShares={heldShares}
+                issuedShares={issued}
+              />
+            </div>
+          </div>
+        )}
+
         {/* --- decomposition ----------------------------------------------- */}
         <div>
           <SectionHeading rule>Why it moved</SectionHeading>
@@ -140,7 +171,7 @@ export function InstrumentDrawer({
             <EmptyState
               compact
               className="mt-2"
-              glyph="Σ"
+              icon="chart"
               title="No priced quarter in this tab"
               message="The seven components of a move are read from the market_priced ledger row. Resolve a quarter and the whole explanation appears here."
             />
@@ -184,7 +215,7 @@ export function InstrumentDrawer({
         <div>
           <SectionHeading rule>Valuation anchor</SectionHeading>
           {anchor === null ? (
-            <p className="mt-2 text-[11px] text-ink-faint">
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint sm:text-[11px]">
               No anchor is published for this instrument. Anchors are derived from what a company files; a private rival does not
               file.
             </p>
@@ -222,7 +253,7 @@ export function InstrumentDrawer({
         <div>
           <SectionHeading rule>What the market believes</SectionHeading>
           {beliefs.length === 0 ? (
-            <p className="mt-2 text-[11px] text-ink-faint">
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint sm:text-[11px]">
               No live belief is attached to this name. Markets price beliefs, so a name with none is priced on factors and
               fundamentals alone.
             </p>
@@ -231,7 +262,7 @@ export function InstrumentDrawer({
               {beliefs.map((belief) => (
                 <li key={belief.id}>
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[12px] text-ink">{humanise(belief.topic)}</span>
+                    <span className="text-[13px] text-ink sm:text-[12px]">{humanise(belief.topic)}</span>
                     <span className="flex items-baseline gap-2">
                       <span className="figure text-[12px] text-ink">{formatPct(belief.probability)}</span>
                       <DeltaBadge value={belief.probability - belief.priorProbability} format="points" bare invert />
@@ -259,7 +290,7 @@ export function InstrumentDrawer({
         <div>
           <SectionHeading rule>On the record</SectionHeading>
           {disclosures.length === 0 ? (
-            <p className="mt-2 text-[11px] text-ink-faint">Nothing has been published about this name yet.</p>
+            <p className="mt-2 text-[13px] text-ink-faint sm:text-[11px]">Nothing has been published about this name yet.</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {disclosures.map((disclosure) => {
@@ -277,7 +308,7 @@ export function InstrumentDrawer({
                         {quarterLabel(session.startYear, disclosure.quarter)}
                       </span>
                     </div>
-                    <p className="mt-1 text-[12px] text-ink">{disclosure.headline}</p>
+                    <p className="mt-1 text-[13px] leading-relaxed text-ink sm:text-[12px]">{disclosure.headline}</p>
                     <div className="mt-1.5 flex items-center gap-2">
                       <span className="label-caps-faint shrink-0">Credibility</span>
                       <Meter className="flex-1" value={disclosure.credibility * 100} showValue />
@@ -295,32 +326,6 @@ export function InstrumentDrawer({
           )}
         </div>
 
-        {/* --- position and ticket -------------------------------------------- */}
-        {security === null || !security.isTradable ? (
-          <p className="text-[11px] text-ink-faint">
-            This instrument has no tradable security attached, so there is nothing to buy or sell here.
-          </p>
-        ) : (
-          <div>
-            <KeyValueGrid
-              columns={2}
-              items={[
-                { label: 'Your position', value: formatCount(heldShares) },
-                { label: 'Stake', value: issued === 0 ? '—' : formatPct(heldShares / issued, 2) },
-              ]}
-            />
-            <div className="mt-4">
-              <TradeTicket
-                securityId={security.id}
-                companyName={row.companyName}
-                symbol={row.instrument.symbol}
-                lastPrice={row.quote?.price ?? 0}
-                heldShares={heldShares}
-                issuedShares={issued}
-              />
-            </div>
-          </div>
-        )}
       </div>
     </Drawer>
   );

@@ -1,8 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, type ReactNode } from 'react';
 import { EmptyState } from './EmptyState';
+import { Icon } from './icons';
 import { cx, isActivationKey } from './tokens';
 
 export interface Column<T> {
@@ -21,6 +23,14 @@ export interface Column<T> {
   readonly mono?: boolean;
   /** Hide below the `md` breakpoint, for columns a phone does not need. */
   readonly hideOnMobile?: boolean;
+  /**
+   * The label this column's value carries in card mode. Defaults to `header` —
+   * set it where the header is an abbreviation that only reads above a column
+   * of figures.
+   */
+  readonly cardLabel?: ReactNode;
+  /** Leave this column out of the card entirely. */
+  readonly cardHidden?: boolean;
 }
 
 export interface DataTableProps<T> {
@@ -40,6 +50,21 @@ export interface DataTableProps<T> {
   readonly className?: string;
   /** Cap the height and scroll the body under a sticky header. */
   readonly maxHeight?: number;
+  /**
+   * `auto` — below `sm` each row is drawn as a stacked label/value card, and
+   * the table itself only appears from `sm` up. Six columns of figures do not
+   * fit across a 390px phone, and a table that has to be scrolled sideways to
+   * be read is a table nobody reads.
+   *
+   * `off` (the default) keeps the table at every width, inside its own
+   * horizontal scroller.
+   */
+  readonly cardMode?: 'auto' | 'off';
+  /**
+   * The column whose cell titles the card. Defaults to the first column that
+   * is not `cardHidden`.
+   */
+  readonly cardTitleKey?: string;
 }
 
 /**
@@ -61,6 +86,8 @@ export function DataTable<T>({
   empty,
   className,
   maxHeight,
+  cardMode = 'off',
+  cardTitleKey,
 }: DataTableProps<T>): React.JSX.Element {
   const router = useRouter();
   const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(initialSort ?? null);
@@ -90,94 +117,177 @@ export function DataTable<T>({
     });
   }
 
+  const cards = cardMode === 'auto' ? columns.filter((column) => column.cardHidden !== true) : [];
+  const titleColumn = cards.find((column) => column.key === cardTitleKey) ?? cards[0] ?? null;
+
   return (
-    <div
-      className={cx('scroll-x', maxHeight !== undefined ? 'overflow-y-auto' : '', className)}
-      style={maxHeight !== undefined ? { maxHeight } : undefined}
-    >
-      <table className={cx('data-table', dense ? 'dense' : '')}>
-        <thead>
-          <tr>
-            {columns.map((column) => {
-              const active = sort !== null && sort.key === column.key;
-              return (
-                <th
-                  key={column.key}
-                  style={column.width === undefined ? undefined : { width: column.width }}
-                  className={cx(
-                    column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left',
-                    column.hideOnMobile === true ? 'hidden md:table-cell' : '',
-                  )}
-                >
-                  {column.sortable === true ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(column.key)}
-                      className={cx('inline-flex items-center gap-1 hover:text-ink', active ? 'text-ink' : '')}
-                    >
-                      {column.header}
-                      <span className="text-[8px] opacity-70">{active ? (sort.direction === 'desc' ? '▼' : '▲') : '↕'}</span>
-                    </button>
-                  ) : (
-                    column.header
-                  )}
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
+    <>
+      {cardMode === 'auto' ? (
+        // The phone presentation. Same rows, same order, same handlers — the
+        // row simply stops being a row and becomes a stack of label/value
+        // pairs under whatever names it.
+        <ul
+          className={cx('flex flex-col gap-2 p-3 sm:hidden', maxHeight !== undefined ? 'overflow-y-auto' : '')}
+          style={maxHeight !== undefined ? { maxHeight } : undefined}
+        >
           {sorted.map((row, index) => {
             const href = rowHref?.(row) ?? null;
-            const clickable = href !== null || onRowClick !== undefined;
-            // A clickable row is a control, so it takes focus, answers Enter and
-            // Space, and says what it is. Twelve tables across eight screens
-            // navigate from a row — on Markets it is the only way to reach the
-            // trade ticket at all — and a bare `onClick` on a `<tr>` is
-            // unreachable without a pointer.
-            const activate = (): void => {
-              if (href !== null) router.push(href);
-              else onRowClick?.(row);
-            };
+            const highlighted = isHighlighted?.(row) === true;
+            const body = (
+              <>
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="min-w-0 flex-1 text-[12.5px] font-semibold text-ink">
+                    {titleColumn === null ? null : titleColumn.render(row, index)}
+                  </div>
+                  {href !== null || onRowClick !== undefined ? (
+                    <span className="shrink-0 text-ink-faint">
+                      <Icon name="chevronRight" size={13} accent="current" />
+                    </span>
+                  ) : null}
+                </div>
+                <dl className="mt-1.5 flex flex-col gap-1">
+                  {cards
+                    .filter((column) => column.key !== titleColumn?.key)
+                    .map((column) => (
+                      <div key={column.key} className="flex items-baseline justify-between gap-3">
+                        <dt className="label-caps-faint shrink-0">{column.cardLabel ?? column.header}</dt>
+                        <dd
+                          className={cx(
+                            'min-w-0 text-right text-[12px] text-ink',
+                            (column.mono ?? column.align === 'right') ? 'figure' : '',
+                          )}
+                        >
+                          {column.render(row, index)}
+                        </dd>
+                      </div>
+                    ))}
+                </dl>
+              </>
+            );
+            const shell = cx(
+              'tap-target block w-full rounded-card border px-3 py-2.5 text-left',
+              highlighted ? 'border-brand/25 bg-brand-wash' : 'border-hair bg-panel',
+            );
+            if (href !== null) {
+              return (
+                <li key={rowKey(row, index)}>
+                  <Link href={href} className={cx(shell, 'press-pop')}>
+                    {body}
+                  </Link>
+                </li>
+              );
+            }
+            if (onRowClick !== undefined) {
+              return (
+                <li key={rowKey(row, index)}>
+                  <button type="button" onClick={() => onRowClick(row)} className={cx(shell, 'press-pop')}>
+                    {body}
+                  </button>
+                </li>
+              );
+            }
             return (
-              <tr
-                key={rowKey(row, index)}
-                data-clickable={clickable ? 'true' : 'false'}
-                // The highlight paints the cells, not the row: zebra striping
-                // sets a `td` background, and a `tr` background would sit under
-                // it. `.data-table` orders stripe < highlight < hover.
-                data-highlight={isHighlighted?.(row) === true ? 'true' : undefined}
-                role={clickable ? (href !== null ? 'link' : 'button') : undefined}
-                tabIndex={clickable ? 0 : undefined}
-                onClick={clickable ? activate : undefined}
-                onKeyDown={
-                  clickable
-                    ? (event) => {
-                        if (!isActivationKey(event.key)) return;
-                        // Space would otherwise scroll the page under the row.
-                        event.preventDefault();
-                        activate();
-                      }
-                    : undefined
-                }
-              >
-                {columns.map((column) => (
-                  <td
+              <li key={rowKey(row, index)} className={shell}>
+                {body}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <div
+        className={cx(
+          'scroll-x',
+          cardMode === 'auto' ? 'hidden sm:block' : '',
+          maxHeight !== undefined ? 'overflow-y-auto' : '',
+          className,
+        )}
+        style={maxHeight !== undefined ? { maxHeight } : undefined}
+      >
+        <table className={cx('data-table', dense ? 'dense' : '')}>
+          <thead>
+            <tr>
+              {columns.map((column) => {
+                const active = sort !== null && sort.key === column.key;
+                return (
+                  <th
                     key={column.key}
+                    style={column.width === undefined ? undefined : { width: column.width }}
                     className={cx(
                       column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left',
-                      (column.mono ?? column.align === 'right') ? 'figure' : '',
                       column.hideOnMobile === true ? 'hidden md:table-cell' : '',
                     )}
                   >
-                    {column.render(row, index)}
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                    {column.sortable === true ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(column.key)}
+                        className={cx('inline-flex items-center gap-1 hover:text-ink', active ? 'text-ink' : '')}
+                      >
+                        {column.header}
+                        <span className="text-[8px] opacity-70">{active ? (sort.direction === 'desc' ? '▼' : '▲') : '↕'}</span>
+                      </button>
+                    ) : (
+                      column.header
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row, index) => {
+              const href = rowHref?.(row) ?? null;
+              const clickable = href !== null || onRowClick !== undefined;
+              // A clickable row is a control, so it takes focus, answers Enter and
+              // Space, and says what it is. Twelve tables across eight screens
+              // navigate from a row — on Markets it is the only way to reach the
+              // trade ticket at all — and a bare `onClick` on a `<tr>` is
+              // unreachable without a pointer.
+              const activate = (): void => {
+                if (href !== null) router.push(href);
+                else onRowClick?.(row);
+              };
+              return (
+                <tr
+                  key={rowKey(row, index)}
+                  data-clickable={clickable ? 'true' : 'false'}
+                  // The highlight paints the cells, not the row: zebra striping
+                  // sets a `td` background, and a `tr` background would sit under
+                  // it. `.data-table` orders stripe < highlight < hover.
+                  data-highlight={isHighlighted?.(row) === true ? 'true' : undefined}
+                  role={clickable ? (href !== null ? 'link' : 'button') : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={clickable ? activate : undefined}
+                  onKeyDown={
+                    clickable
+                      ? (event) => {
+                          if (!isActivationKey(event.key)) return;
+                          // Space would otherwise scroll the page under the row.
+                          event.preventDefault();
+                          activate();
+                        }
+                      : undefined
+                  }
+                >
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={cx(
+                        column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left',
+                        (column.mono ?? column.align === 'right') ? 'figure' : '',
+                        column.hideOnMobile === true ? 'hidden md:table-cell' : '',
+                      )}
+                    >
+                      {column.render(row, index)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+            </tbody>
+        </table>
+      </div>
+    </>
   );
 }

@@ -18,7 +18,7 @@
 import { useMemo, useState } from 'react';
 import type { PlayerView, SessionState } from '@frontier/contracts';
 import { formatPct } from '@frontier/shared';
-import { EmptyState, Tag, TONE_VAR, initialsOf } from '@/components/ui';
+import { EmptyState, Icon, Tag, TONE_VAR, type IconName } from '@/components/ui';
 import { holderLabel, humanise, issuedSharesOf } from '../reporting/util';
 
 type EdgeKind = 'holding' | 'board' | 'deal';
@@ -26,11 +26,42 @@ type EdgeKind = 'holding' | 'board' | 'deal';
 interface GraphNode {
   readonly id: string;
   readonly label: string;
-  readonly badge: string;
+  /** The ticker, where one is public. A node without one carries its mark alone. */
+  readonly badge: string | null;
+  /** The drawn mark inside the node: a building, a person, a stack of coins. */
+  readonly mark: IconName;
   readonly kind: 'company' | 'holder';
   readonly own: boolean;
   readonly x: number;
   readonly y: number;
+}
+
+/**
+ * A mark placed inside the graph.
+ *
+ * `Icon` draws on a 24×24 grid, so it is nested as its own `<svg>` at the
+ * requested size and translated into place — the same mark the rest of the
+ * interface uses, at graph scale. The accent is folded into the base: a second
+ * colour inside a 26px node would fight the node's own tone.
+ */
+function GraphMark({
+  name,
+  x,
+  y,
+  size,
+  colour,
+}: {
+  readonly name: IconName;
+  readonly x: number;
+  readonly y: number;
+  readonly size: number;
+  readonly colour: string;
+}): React.JSX.Element {
+  return (
+    <g transform={`translate(${x - size / 2}, ${y - size / 2})`} style={{ color: colour }}>
+      <Icon name={name} size={size} accent="current" />
+    </g>
+  );
 }
 
 interface GraphEdge {
@@ -73,10 +104,9 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
 
     const companyLabel = (id: string): string =>
       id === view.ownCompany.id ? view.ownCompany.name : view.visibleCompanies.find((entry) => entry.id === id)?.name ?? id;
-    const companyBadge = (id: string): string => {
-      const ticker = id === view.ownCompany.id ? view.ownCompany.ticker : view.visibleCompanies.find((entry) => entry.id === id)?.ticker ?? null;
-      return ticker ?? initialsOf(companyLabel(id));
-    };
+    /** The ticker when the company has published one; otherwise nothing at all. */
+    const companyBadge = (id: string): string | null =>
+      (id === view.ownCompany.id ? view.ownCompany.ticker : view.visibleCompanies.find((entry) => entry.id === id)?.ticker ?? null) ?? null;
 
     const rawEdges: GraphEdge[] = [];
     const holderIds = new Set<string>();
@@ -149,6 +179,7 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
         id,
         label: companyLabel(id),
         badge: companyBadge(id),
+        mark: 'building',
         kind: 'company',
         own: id === view.ownCompany.id,
         x: CX + Math.cos(angle) * R_INNER,
@@ -161,7 +192,10 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
       placed.push({
         id,
         label: holderLabel(session, id, character === null ? 'fund' : 'character'),
-        badge: initialsOf(holderLabel(session, id, character === null ? 'fund' : 'character')),
+        badge: null,
+        // A person is drawn as a person and a fund as money. Neither is ever a
+        // pair of initials.
+        mark: character === null ? 'coins' : 'people',
         kind: 'holder',
         own: character?.isPlayer === true,
         x: CX + Math.cos(angle) * R_OUTER,
@@ -191,14 +225,16 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="scroll-x">
-        <svg
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          width="100%"
-          role="img"
-          aria-label="Industry power graph: disclosed holdings, board seats and deals"
-          className="min-w-[560px]"
-        >
+      {/* The graph pans inside its own frame; the page body never moves. */}
+      <div className="scene-frame border border-hair bg-base">
+        <div className="scroll-x">
+          <svg
+            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+            width="100%"
+            role="img"
+            aria-label="Industry power graph: disclosed holdings, board seats and deals"
+            className="min-w-[560px]"
+          >
           {edges.map((edge) => {
             const from = positions.get(edge.from);
             const to = positions.get(edge.to);
@@ -235,26 +271,35 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
                   style={{ cursor: 'default' }}
                 >
                   <rect
-                    x={node.x - 30}
-                    y={node.y - 13}
-                    width={60}
-                    height={26}
-                    rx={9}
+                    x={node.x - 34}
+                    y={node.y - 14}
+                    width={68}
+                    height={28}
+                    rx={10}
                     fill={node.own ? 'var(--color-brand-wash)' : 'var(--color-raised)'}
                     stroke={node.own ? TONE_VAR.brand : 'var(--color-hair-strong)'}
                     strokeWidth={node.own ? 2 : 1.2}
                   />
-                  <text
-                    x={node.x}
-                    y={node.y + 4}
-                    textAnchor="middle"
-                    fontSize="11"
-                    fontFamily="var(--font-mono)"
-                    fill={node.own ? TONE_VAR.brand : 'var(--color-ink)'}
-                  >
-                    {node.badge}
-                  </text>
-                  <text x={node.x} y={node.y + 26} textAnchor="middle" fontSize="9" fill="var(--color-ink-faint)">
+                  <GraphMark
+                    name={node.mark}
+                    x={node.badge === null ? node.x : node.x - 20}
+                    y={node.y}
+                    size={16}
+                    colour={node.own ? TONE_VAR.brand : 'var(--color-ink-dim)'}
+                  />
+                  {node.badge === null ? null : (
+                    <text
+                      x={node.x + 22}
+                      y={node.y + 4}
+                      textAnchor="end"
+                      fontSize="11"
+                      fontFamily="var(--font-mono)"
+                      fill={node.own ? TONE_VAR.brand : 'var(--color-ink)'}
+                    >
+                      {node.badge}
+                    </text>
+                  )}
+                  <text x={node.x} y={node.y + 27} textAnchor="middle" fontSize="9.5" fill="var(--color-ink-faint)">
                     {node.label.length > 20 ? `${node.label.slice(0, 19)}…` : node.label}
                   </text>
                   <title>{node.label}</title>
@@ -272,29 +317,27 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
                 <circle
                   cx={node.x}
                   cy={node.y}
-                  r={13}
+                  r={14}
                   fill={node.own ? 'var(--color-brand-wash)' : 'var(--color-raised)'}
                   stroke={node.own ? TONE_VAR.brand : 'var(--color-hair-strong)'}
                   strokeWidth={node.own ? 2 : 1.2}
                 />
-                <text
+                <GraphMark
+                  name={node.mark}
                   x={node.x}
-                  y={node.y + 3.5}
-                  textAnchor="middle"
-                  fontSize="9"
-                  fontFamily="var(--font-mono)"
-                  fill={node.own ? TONE_VAR.brand : 'var(--color-ink-dim)'}
-                >
-                  {node.badge}
-                </text>
-                <text x={node.x} y={node.y + 26} textAnchor="middle" fontSize="9" fill="var(--color-ink-faint)">
+                  y={node.y}
+                  size={15}
+                  colour={node.own ? TONE_VAR.brand : 'var(--color-ink-dim)'}
+                />
+                <text x={node.x} y={node.y + 27} textAnchor="middle" fontSize="9.5" fill="var(--color-ink-faint)">
                   {node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label}
                 </text>
                 <title>{node.label}</title>
               </g>
             );
           })}
-        </svg>
+          </svg>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">

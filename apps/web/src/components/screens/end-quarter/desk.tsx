@@ -203,46 +203,11 @@ export function DeskScene({ className }: { readonly className?: string }): React
   );
 }
 
-/** A small flat glyph for a document group. */
-export function FolderGlyph(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A folder of documents">
-      <path d="M2.5 5.5A1.6 1.6 0 0 1 4.1 4h3.5l1.6 1.9h6.7a1.6 1.6 0 0 1 1.6 1.6v7A1.6 1.6 0 0 1 15.9 16H4.1a1.6 1.6 0 0 1-1.6-1.6Z" fill="currentColor" />
-      <rect x="5.5" y="8.4" width="9" height="1.6" rx="0.8" fill="var(--color-panel)" />
-      <rect x="5.5" y="11.4" width="6" height="1.6" rx="0.8" fill="var(--color-panel)" />
-    </svg>
-  );
-}
-
-/** A small flat glyph for the cash column. */
-export function CoinGlyph(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A stack of coins">
-      <ellipse cx="10" cy="6" rx="6.5" ry="2.8" fill="currentColor" />
-      <path d="M3.5 6v4c0 1.55 2.91 2.8 6.5 2.8s6.5-1.25 6.5-2.8V6" fill="currentColor" opacity="0.55" />
-      <path d="M3.5 10.5V14c0 1.55 2.91 2.8 6.5 2.8s6.5-1.25 6.5-2.8v-3.5" fill="currentColor" opacity="0.32" />
-    </svg>
-  );
-}
-
-/** A small flat glyph for the pipeline column. */
-export function PipelineGlyph(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A pipeline of stages">
-      <circle cx="4" cy="10" r="2.6" fill="currentColor" />
-      <circle cx="10" cy="10" r="2.6" fill="currentColor" opacity="0.6" />
-      <circle cx="16" cy="10" r="2.6" fill="currentColor" opacity="0.32" />
-    </svg>
-  );
-}
-
-/** A small flat glyph for the board column. */
-export function GavelGlyph(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A gavel">
-      <rect x="2.5" y="14.5" width="15" height="2.6" rx="1.3" fill="currentColor" />
-      <rect x="8.4" y="3" width="3.2" height="10" rx="1.6" fill="currentColor" transform="rotate(-35 10 8)" />
-      <rect x="10.5" y="2.4" width="7" height="4.6" rx="2.3" fill="currentColor" transform="rotate(-35 14 4.7)" />
-    </svg>
-  );
-}
+/*
+ * The four one-off panel glyphs that used to live here — a folder, a coin
+ * stack, a pipeline and a gavel — are gone. Every mark beside a heading now
+ * comes from `components/ui/icons.tsx` (`ledger`, `coins`, `network`,
+ * `boardTable`, `warning`, `stamp`), so the screen is drawn in the same hand as
+ * the rest of the interface and there is one place to change a mark. The desk
+ * furniture below is illustration, not iconography, which is why it stays.
+ */

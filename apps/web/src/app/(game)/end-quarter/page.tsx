@@ -30,6 +30,7 @@ import { formatMoney, formatPct } from '@frontier/shared';
 import {
   ConfirmDialog,
   EmptyState,
+  Icon,
   PageHeader,
   Panel,
   ProgressBar,
@@ -41,16 +42,7 @@ import {
   toneOfStatus,
 } from '@/components/ui';
 import { cashEffectOf, describeIntent, phaseOfIntent, titleise } from '@/components/screens/end-quarter/intents';
-import {
-  CoinGlyph,
-  DeskScene,
-  FolderGlyph,
-  GavelGlyph,
-  PaperSheet,
-  PipelineGlyph,
-  SealStamp,
-  StickyNote,
-} from '@/components/screens/end-quarter/desk';
+import { DeskScene, PaperSheet, SealStamp, StickyNote } from '@/components/screens/end-quarter/desk';
 import {
   useGameActions,
   useLlm,
@@ -74,6 +66,10 @@ export default function EndQuarterPage(): React.JSX.Element {
   const { confirmAction, unqueueAction, clearQueue, endQuarter } = useGameActions();
 
   const [arming, setArming] = useState(false);
+
+  // The floating action-queue tray is on screen whenever something is queued,
+  // which on this screen is nearly always. The commitment bar lifts above it.
+  const trayLifted = queue.length > 0 && !resolving;
 
   const blocked = queue.filter((entry) => entry.blocked);
   const rejected = queue.filter((entry) => entry.validation.status === 'rejected');
@@ -156,33 +152,34 @@ export default function EndQuarterPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Two up on a phone: four readings a thumb can take in at a glance. */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label="Queued"
-          icon={<FolderGlyph />}
+          iconName="ledger"
           iconTone="brand"
           value={String(queue.length)}
           hint={`${clamped.length} clamped · ${rejected.length} rejected`}
         />
         <StatCard
           label="Blocked"
-          icon={<GavelGlyph />}
+          iconName="warning"
           value={String(blocked.length)}
           tone={blocked.length > 0 ? 'loss' : undefined}
           iconTone={blocked.length > 0 ? 'loss' : 'neutral'}
-          hint={blocked.length > 0 ? 'Submission is refused while any remain' : 'Nothing is waiting on a confirmation'}
+          hint={blocked.length > 0 ? 'Submission is refused while any remain' : 'Nothing waits on a confirmation'}
         />
         <StatCard
-          label="Cash committed"
-          icon={<CoinGlyph />}
+          label="Committed"
+          iconName="coins"
           iconTone={overCommitted ? 'loss' : 'warn'}
           value={formatMoney(cash.outflow)}
           tone={overCommitted ? 'loss' : undefined}
           hint={`${formatPct(Math.min(committedShare, 9.99))} of ${formatMoney(available)} on hand`}
         />
         <StatCard
-          label="Cash sought"
-          icon={<CoinGlyph />}
+          label="Sought"
+          iconName="coins"
           iconTone="gain"
           value={formatMoney(cash.inflow)}
           hint="Attempts, not receipts: the market decides"
@@ -191,7 +188,7 @@ export default function EndQuarterPage(): React.JSX.Element {
 
       {/* --- notes stuck to the desk ---------------------------------------- */}
       {blocked.length > 0 || rejected.length > 0 || overCommitted ? (
-        <Panel title="Before you submit" subtitle="Notes stuck to the desk, in the order they matter" icon={<GavelGlyph />} iconTone="warn">
+        <Panel title="Before you submit" subtitle="Notes stuck to the desk, in the order they matter" iconName="warning" iconTone="warn">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {blocked.length > 0 ? (
               <StickyNote tone="loss" title="Needs your hand">
@@ -222,7 +219,7 @@ export default function EndQuarterPage(): React.JSX.Element {
           {queue.length === 0 ? (
             <Panel>
               <EmptyState
-                glyph="EQ"
+                icon="stamp"
                 title="Nothing queued for this quarter"
                 message="A quarter with no instructions is legal and sometimes correct: the world still moves, rivals still act, and your company still trades. But you probably meant to do something."
                 action={
@@ -238,7 +235,7 @@ export default function EndQuarterPage(): React.JSX.Element {
                 key={group.phase}
                 title={titleise(group.phase)}
                 subtitle={`${group.entries.length} instruction${group.entries.length === 1 ? '' : 's'} consumed in this phase`}
-                icon={<FolderGlyph />}
+                iconName="ledger"
                 iconTone="brand"
                 bodyClassName="bg-raised/50"
               >
@@ -293,15 +290,7 @@ export default function EndQuarterPage(): React.JSX.Element {
                                     onClick={() => unqueueAction(entry.action.actionId)}
                                     aria-label={`Remove ${description.label}`}
                                   >
-                                    <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
-                                      <path
-                                        d="M4 4l8 8M12 4l-8 8"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="1.8"
-                                        strokeLinecap="round"
-                                      />
-                                    </svg>
+                                    <Icon name="close" size={15} accent="current" />
                                   </button>
                                 </div>
                               </div>
@@ -330,8 +319,10 @@ export default function EndQuarterPage(): React.JSX.Element {
         </div>
 
         {/* --- the right rail ------------------------------------------------ */}
-        <div className="flex flex-col gap-4">
-          <Panel title="Cash impact" subtitle="Estimated from the validator's affordability model" icon={<CoinGlyph />} iconTone="warn">
+        {/* `min-w-0`: without it this column's min-content width widens the
+            implicit grid track and the page scrolls sideways at 390px. */}
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel title="Cash impact" subtitle="Estimated from the validator's affordability model" iconName="coins" iconTone="warn">
             <ProgressBar
               label="Committed against cash on hand"
               value={Math.min(cash.outflow, available)}
@@ -363,7 +354,7 @@ export default function EndQuarterPage(): React.JSX.Element {
             </p>
           </Panel>
 
-          <Panel title="Board matters" subtitle="Clamped, not refused" icon={<GavelGlyph />} iconTone="info">
+          <Panel title="Board matters" subtitle="Clamped, not refused" iconName="boardTable" iconTone="info">
             {boardMatters.length === 0 ? (
               <p className="text-[11px] text-ink-faint">
                 Nothing you have queued needs the board's morning. Financing, listing, M&amp;A, buybacks, major awards and large
@@ -391,7 +382,7 @@ export default function EndQuarterPage(): React.JSX.Element {
             </Link>
           </Panel>
 
-          <Panel title="How this quarter resolves" subtitle="What is driving the world and your rivals" icon={<PipelineGlyph />} iconTone="info">
+          <Panel title="How this quarter resolves" subtitle="What is driving the world and your rivals" iconName="globe" iconTone="info">
             <div className="flex flex-col gap-2 text-[11px] leading-relaxed text-ink-dim">
               <p className="flex items-start gap-2">
                 <span className={cx('mt-1.5 inline-block size-1.5 shrink-0 rounded-pill', llm.available ? 'bg-gain' : 'bg-ink-faint')} />
@@ -410,7 +401,7 @@ export default function EndQuarterPage(): React.JSX.Element {
           <Panel
             title="The pipeline"
             subtitle="Eighteen phases, in the order that makes causality work"
-            icon={<PipelineGlyph />}
+            iconName="network"
             iconTone="neutral"
           >
             <ol className="flex flex-col gap-0.5">
@@ -443,18 +434,20 @@ export default function EndQuarterPage(): React.JSX.Element {
       <Panel
         title="Lock the quarter"
         subtitle="The moment the world moves"
-        icon={<DeskSealGlyph />}
+        iconName="stamp"
         iconTone={canSubmit ? 'brand' : 'neutral'}
         className={cx(canSubmit ? 'border-brand/40' : '')}
       >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
           {/* the desk */}
           <div className="scene-frame min-w-0 flex-1 bg-sky/50 px-3 py-3">
-            <DeskScene className="mx-auto h-[96px] w-full max-w-[280px]" />
+            <DeskScene className="mx-auto h-[84px] w-full max-w-[280px] sm:h-[96px]" />
           </div>
 
-          {/* the seal */}
-          <div className="flex shrink-0 flex-col items-center gap-2">
+          {/* The seal is the desk's own control, from `sm` up. On a phone the
+              commitment is the bar pinned to the bottom of the viewport — the
+              same button, in thumb reach, opening the same gate. */}
+          <div className="hidden shrink-0 flex-col items-center gap-2 sm:flex">
             <SealStamp
               quarter={quarterLabel(session.startYear, session.quarter)}
               disabled={!canSubmit}
@@ -467,26 +460,67 @@ export default function EndQuarterPage(): React.JSX.Element {
         </div>
 
         <div className="mt-4 flex flex-col gap-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
             <SubmitReading label="Instructions" value={String(queue.length)} />
             <SubmitReading label="Blocked" value={String(blocked.length)} tone={blocked.length > 0 ? 'loss' : undefined} />
-            <SubmitReading label="Cash committed" value={formatMoney(cash.outflow)} tone={overCommitted ? 'loss' : undefined} />
+            <SubmitReading
+              label="Cash committed"
+              value={formatMoney(cash.outflow)}
+              tone={overCommitted ? 'loss' : undefined}
+              className="col-span-2 sm:col-span-1"
+            />
           </div>
 
           {resolving ? (
             <div className="rounded-card border border-brand/30 bg-brand-wash px-3 py-2.5">
               <div className="label-caps text-brand">Resolving</div>
-              <p className="mt-1 text-[12px] text-ink">{status === '' ? 'Working' : status}</p>
+              <p className="mt-1 text-[12.5px] text-ink">{status === '' ? 'Working' : status}</p>
             </div>
           ) : null}
 
-          <p className="text-[11px] leading-relaxed text-ink-dim">
+          <p className="text-[11.5px] leading-relaxed text-ink-dim">
             {canSubmit
               ? `${quarterLabel(session.startYear, session.quarter)} closes and ${quarterLabel(session.startYear, session.quarter + 1)} opens. A quarter cannot resolve twice.`
               : 'Confirm the blocked actions first, or remove them.'}
           </p>
         </div>
       </Panel>
+
+      {/* --- the phone's commitment ---------------------------------------
+          Pinned above the tab bar, clear of the floating action queue, and
+          wired to exactly the same gate as the seal: it opens `ConfirmDialog`,
+          which still requires the typed word, and a blocked action still
+          refuses the submission. */}
+      <div
+        className="sticky z-10 -mx-3 border-t border-hair bg-base/95 px-3 pt-2.5 pb-3 backdrop-blur sm:hidden"
+        style={{ bottom: 'calc(var(--bottombar-height) + env(safe-area-inset-bottom, 0px))' }}
+      >
+        <button
+          type="button"
+          className="icon-knockout-brand btn btn-primary btn-lg press-pop w-full"
+          disabled={!canSubmit}
+          onClick={() => setArming(true)}
+          aria-label={`Resolve ${quarterLabel(session.startYear, session.quarter)} — opens a confirmation you must complete`}
+        >
+          <Icon name="stamp" size={19} accent="inherit" />
+          {resolving ? 'Resolving…' : `Resolve ${quarterLabel(session.startYear, session.quarter)}`}
+        </button>
+        <p className="mt-1.5 text-center text-[10.5px] leading-relaxed text-ink-faint">
+          {canSubmit
+            ? `${queue.length} instruction${queue.length === 1 ? '' : 's'} · you type the word to confirm`
+            : `${blocked.length} action${blocked.length === 1 ? '' : 's'} still need your confirmation`}
+        </p>
+
+        {/* Room under the bar for the floating action queue, which is on screen
+            whenever something is queued. The bar keeps the bottom edge; the
+            tray floats over its surface instead of over the button. */}
+        {trayLifted ? <div className="h-14" aria-hidden="true" /> : null}
+      </div>
+
+      {/* The scroll region's foot padding exceeds the bar's offset by this
+          much, so the bar comes to rest exactly on the tab bar rather than a
+          little above it. */}
+      <div className="h-5 sm:hidden" aria-hidden="true" />
 
       <ConfirmDialog
         open={arming}
@@ -513,13 +547,15 @@ function SubmitReading({
   label,
   value,
   tone,
+  className,
 }: {
   readonly label: string;
   readonly value: string;
   readonly tone?: 'loss';
+  readonly className?: string;
 }): React.JSX.Element {
   return (
-    <div className="raised-surface px-3 py-2">
+    <div className={cx('raised-surface px-3 py-2', className)}>
       <div className="label-caps-faint">{label}</div>
       {/* The key replays the arrival animation whenever the reading changes. */}
       <div
@@ -529,16 +565,5 @@ function SubmitReading({
         {value}
       </div>
     </div>
-  );
-}
-
-/** A wax seal, flat: the glyph in the "Lock the quarter" panel header. */
-function DeskSealGlyph(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A wax seal">
-      <circle cx="10" cy="10" r="7.5" fill="currentColor" />
-      <circle cx="10" cy="10" r="4.6" fill="none" stroke="var(--color-panel)" strokeWidth="1.4" />
-      <circle cx="10" cy="10" r="1.7" fill="var(--color-panel)" />
-    </svg>
   );
 }

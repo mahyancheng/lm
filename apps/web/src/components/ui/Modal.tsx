@@ -2,6 +2,7 @@
 
 import { useId, type ReactNode, type RefObject } from 'react';
 import { useDialogFocus } from './focusTrap';
+import { Icon } from './icons';
 import { cx } from './tokens';
 
 export interface ModalProps {
@@ -77,7 +78,7 @@ export function Modal({
           </div>
           {dismissible ? (
             <button type="button" onClick={onClose} className="btn btn-ghost tap-target -mr-1.5 shrink-0" aria-label="Close">
-              ✕
+              <Icon name="close" size={14} accent="current" />
             </button>
           ) : null}
         </header>

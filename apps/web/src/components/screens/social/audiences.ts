@@ -12,6 +12,9 @@
 import type { Audience, NetworkArchetype, PostIntent, SocialAccount } from '@frontier/contracts';
 import { AUDIENCES } from '@frontier/contracts';
 import { INTENT_PROFILES, NETWORK_PROFILES, REFERENCE_REACH } from '@frontier/simulation';
+// Relative, like `network/rings.ts`: this module carries no 'use client' and
+// must stay loadable by a plain unit test, which runs without the path alias.
+import type { IconName } from '../../ui/icons';
 
 export { REFERENCE_REACH };
 
@@ -99,6 +102,27 @@ const NETWORK_LABELS: Readonly<Record<NetworkArchetype, string>> = {
 
 export function networkLabel(network: NetworkArchetype): string {
   return NETWORK_LABELS[network];
+}
+
+/**
+ * The mark for each synthetic platform.
+ *
+ * Six networks read as six similar words in a tab strip; they read instantly as
+ * six different shapes. The mapping is what the room *is* — a broadcast dot for
+ * the fast feed, a brief for the professional network, a flask for the technical
+ * forum, a crowd for the community, a play button for video, coins for finance.
+ */
+const NETWORK_ICONS: Readonly<Record<NetworkArchetype, IconName>> = {
+  fast_feed: 'live',
+  professional: 'briefcase',
+  technical_forum: 'flask',
+  community: 'people',
+  video: 'playMark',
+  finance: 'coins',
+};
+
+export function networkIcon(network: NetworkArchetype): IconName {
+  return NETWORK_ICONS[network];
 }
 
 /**

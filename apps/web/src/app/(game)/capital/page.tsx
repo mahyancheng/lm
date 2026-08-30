@@ -92,10 +92,10 @@ export default function CapitalPage(): React.JSX.Element {
       sortValue: (row) => row.closedQuarter,
     },
     { key: 'amount', header: 'Raised', align: 'right', render: (row) => formatMoney(row.amount), sortable: true, sortValue: (row) => row.amount },
-    { key: 'pre', header: 'Pre-money', align: 'right', render: (row) => formatMoney(row.preMoney), hideOnMobile: true },
+    { key: 'pre', header: 'Pre-money', align: 'right', render: (row) => formatMoney(row.preMoney), hideOnMobile: true, cardHidden: true },
     { key: 'post', header: 'Post-money', align: 'right', render: (row) => formatMoney(row.postMoney), sortable: true, sortValue: (row) => row.postMoney },
     { key: 'dilution', header: 'Dilution', align: 'right', render: (row) => formatPct(row.dilution, 2), sortable: true, sortValue: (row) => row.dilution },
-    { key: 'price', header: 'Per share', align: 'right', render: (row) => formatMoney(row.pricePerShareUsd), hideOnMobile: true },
+    { key: 'price', header: 'Per share', align: 'right', render: (row) => formatMoney(row.pricePerShareUsd), hideOnMobile: true, cardHidden: true },
     {
       key: 'lead',
       header: 'Lead',
@@ -106,7 +106,7 @@ export default function CapitalPage(): React.JSX.Element {
         return <span className="text-[11px] text-ink-dim">{lead?.name ?? row.leadInvestorCharacterId}</span>;
       },
     },
-    { key: 'seats', header: 'Seats', align: 'right', render: (row) => String(row.boardSeatsGranted), hideOnMobile: true },
+    { key: 'seats', header: 'Seats', align: 'right', render: (row) => String(row.boardSeatsGranted), hideOnMobile: true, cardLabel: 'Board seats granted' },
     {
       key: 'status',
       header: 'Status',
@@ -130,38 +130,42 @@ export default function CapitalPage(): React.JSX.Element {
         subtitle="Ownership, financing and treasury. Control is not percentage — economic and voting stakes are shown side by side."
         actions={
           <>
-            <Link href="/financials" className="btn btn-sm">
+            <Link href="/financials" className="btn btn-sm tap-target sm:min-h-0">
               Financials
             </Link>
-            <Link href="/boardroom" className="btn btn-sm">
+            <Link href="/boardroom" className="btn btn-sm tap-target sm:min-h-0">
               Boardroom
             </Link>
           </>
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Cash" value={formatMoney(company.financials.cash)} tone={company.financials.cash <= 0 ? 'loss' : undefined} hint="End of quarter" />
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <StatCard iconName="vault" label="Cash" value={formatMoney(company.financials.cash)} tone={company.financials.cash <= 0 ? 'loss' : undefined} hint="End of quarter" />
         <StatCard
+          iconName="gauge"
           label="Quarterly burn"
           value={formatMoney(company.financials.quarterlyBurn)}
           tone={company.financials.quarterlyBurn >= 0 ? 'gain' : 'loss'}
           hint={company.financials.quarterlyBurn >= 0 ? 'Cash generative' : 'Net cash consumed'}
         />
         <StatCard
+          iconName="live"
           label="Runway"
           value={runwayFromCash === null ? '∞' : formatQuarterCount(runwayFromCash)}
           tone={runwayFromCash === null ? 'gain' : runwayFromCash < 3 ? 'loss' : runwayFromCash < 6 ? 'warn' : undefined}
           hint={metrics === null ? 'Cash over burn' : `Engine metric ${formatQuarterCount(metrics.runwayQuarters)}`}
         />
-        <StatCard label="Debt" value={formatMoney(company.financials.debt)} hint={`Interest ${formatMoney(company.financials.interestExpense)} this quarter`} />
+        <StatCard iconName="ledger" label="Debt" value={formatMoney(company.financials.debt)} hint={`Interest ${formatMoney(company.financials.interestExpense)} this quarter`} />
         <StatCard
+          iconName="chart"
           label="Valuation"
           value={formatMoney(marketCap)}
           hint={company.instrumentId === null ? 'Fundamental anchor — unlisted' : 'Market capitalisation'}
           href="/markets"
         />
         <StatCard
+          iconName="coins"
           label="Your stake"
           value={issued === 0 ? '—' : formatPct(founderShares / issued, 2)}
           hint={`${formatCount(founderShares)} shares · ${formatPct(founderRow?.votingPct ?? 0, 2)} of votes`}
@@ -169,6 +173,8 @@ export default function CapitalPage(): React.JSX.Element {
       </div>
 
       <Panel
+        iconName="people"
+        iconTone="brand"
         title="Cap table"
         subtitle={`As at ${quarterLabel(session.startYear, table.lastUpdatedQuarter)} · ${table.shareClasses.length} class${table.shareClasses.length === 1 ? '' : 'es'}`}
         actions={
@@ -178,22 +184,22 @@ export default function CapitalPage(): React.JSX.Element {
         }
       >
         {table.holdings.length === 0 ? (
-          <EmptyState compact title="No shares issued" message="This company has not issued equity yet." />
+          <EmptyState compact icon="people" title="No shares issued" message="This company has not issued equity yet." />
         ) : (
           <CapTableVisual session={session} table={table} pricePerShare={price.value} priceBasis={price.basis} />
         )}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Share classes" subtitle="Votes per share is the number that decides board fights.">
+        <Panel iconName="stamp" title="Share classes" subtitle="Votes per share is the number that decides board fights.">
           {table.shareClasses.length === 0 ? (
-            <EmptyState compact title="No classes" message="Classes are created when equity is first issued." />
+            <EmptyState compact icon="stamp" title="No classes" message="Classes are created when equity is first issued." />
           ) : (
             <div className="flex flex-col gap-3">
               {table.shareClasses.map((shareClass) => (
                 <div key={shareClass.id} className="border-b border-hair pb-2 last:border-b-0 last:pb-0">
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[12px] text-ink">{shareClass.label}</span>
+                    <span className="text-[13px] font-medium text-ink sm:text-[12px]">{shareClass.label}</span>
                     <Tag tone={shareClass.kind === 'founder_super_voting' ? 'brand' : 'neutral'}>{humanise(shareClass.kind)}</Tag>
                   </div>
                   <KeyValueGrid
@@ -223,7 +229,7 @@ export default function CapitalPage(): React.JSX.Element {
           )}
         </Panel>
 
-        <Panel title="Treasury" className="lg:col-span-2" subtitle="The runway arithmetic, shown rather than asserted.">
+        <Panel iconName="vault" title="Treasury" className="lg:col-span-2" subtitle="The runway arithmetic, shown rather than asserted.">
           <KeyValueGrid
             columns={3}
             items={[
@@ -256,13 +262,14 @@ export default function CapitalPage(): React.JSX.Element {
             <Meter label="Debt availability" value={view.world.capitalMarkets.debtAvailability * 100} />
             <Meter label="Listing window" value={view.world.capitalMarkets.ipoWindow * 100} />
           </div>
-          <p className="mt-2 text-[10px] text-ink-faint">
+          <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
             These three world readings decide whether a financing clears at all. They are shared by every participant.
           </p>
         </Panel>
       </div>
 
       <Panel
+        iconName="ledger"
         title="Financing history"
         flush
         subtitle={
@@ -277,11 +284,13 @@ export default function CapitalPage(): React.JSX.Element {
           rows={rounds}
           rowKey={(row) => row.id}
           dense
+          cardMode="auto"
+          cardTitleKey="stage"
           isHighlighted={(row) => row.status === 'open'}
           empty={
             <EmptyState
               compact
-              glyph="RND"
+              icon="coins"
               title="No financings yet"
               message="Rounds appear here once one closes, fails or is forced. A bridge round the engine forces on a cash shortfall shows as open."
             />
@@ -290,11 +299,11 @@ export default function CapitalPage(): React.JSX.Element {
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Financing tickets" subtitle="Every one of these is a board matter and requires an explicit confirmation.">
+        <Panel iconName="coins" iconTone="brand" title="Financing tickets" subtitle="Every one of these is a board matter and requires an explicit confirmation.">
           <CapitalTickets fullyDilutedShares={table.fullyDilutedShares} cash={company.financials.cash} pricePerShare={price.value} />
         </Panel>
 
-        <Panel title="What a round would cost you" subtitle="Client-side arithmetic. Nothing is submitted.">
+        <Panel iconName="gauge" title="What a round would cost you" subtitle="Client-side arithmetic. Nothing is submitted.">
           <DilutionCalculator
             fullyDilutedShares={Math.max(1, table.fullyDilutedShares)}
             founderShares={founderShares}

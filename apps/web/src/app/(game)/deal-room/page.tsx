@@ -168,7 +168,7 @@ export default function DealRoomPage(): React.JSX.Element {
         return (
           <div className="min-w-0">
             <div className="truncate text-[12px] text-ink">{nameOf(otherId)}</div>
-            <div className="text-[10px] text-ink-faint">{row.proposerId === company.id ? 'you proposed' : 'they proposed'}</div>
+            <div className="text-[11px] text-ink-faint">{row.proposerId === company.id ? 'you proposed' : 'they proposed'}</div>
           </div>
         );
       },
@@ -178,7 +178,8 @@ export default function DealRoomPage(): React.JSX.Element {
     {
       key: 'summary',
       header: 'Terms',
-      render: (row) => <span className="text-[11px] text-ink-dim">{row.summary}</span>,
+      cardLabel: 'What is on the table',
+      render: (row) => <span className="text-[12.5px] leading-relaxed text-ink-dim sm:text-[11px]">{row.summary}</span>,
     },
     {
       key: 'status',
@@ -223,30 +224,39 @@ export default function DealRoomPage(): React.JSX.Element {
         subtitle="Eight obligation kinds, two sides, and a hard line between what is contracted and what was merely said."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Awaiting your answer" value={String(inbound.length)} tone={inbound.length > 0 ? 'warn' : undefined} hint="Offers made to you" />
-        <StatCard label="Out with counterparties" value={String(outbound.length)} hint="Your offers, unanswered" />
-        <StatCard label="Live binding deals" value={String(live.length)} hint="Re-checked every quarter, not just on signature" />
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+        <StatCard iconName="bell" label="To answer" value={String(inbound.length)} tone={inbound.length > 0 ? 'warn' : undefined} hint="Offers made to you, unanswered" />
+        <StatCard iconName="export" label="Outstanding" value={String(outbound.length)} hint="Your offers, out with counterparties" />
+        <StatCard iconName="handshake" label="Live deals" value={String(live.length)} hint="Binding, re-checked every quarter" />
         <StatCard
-          label="Lapsing this quarter"
+          iconName="warning"
+          label="Lapsing"
           value={String(lapsing.length)}
           tone={lapsing.length > 0 ? 'loss' : undefined}
           hint="An unanswered offer expires; silence is an answer"
         />
       </div>
 
-      <Panel title="Deals" subtitle={`${deals.length} agreement${deals.length === 1 ? '' : 's'} you are party to`} flush>
+      <Panel
+        iconName="handshake"
+        iconTone="brand"
+        title="Deals"
+        subtitle={`${deals.length} agreement${deals.length === 1 ? '' : 's'} you are party to`}
+        flush
+      >
         <DataTable
           columns={columns}
           rows={deals}
           rowKey={(row) => row.id}
           onRowClick={(row) => setSelected(row.id)}
           dense
+          cardMode="auto"
+          cardTitleKey="counterparty"
           initialSort={{ key: 'expires', direction: 'asc' }}
           empty={
             <div className="p-3.5">
               <EmptyState
-                glyph="—"
+                icon="handshake"
                 title="No deals yet"
                 message="Nothing has been proposed to you and you have proposed nothing. Build one below: a deal is a set of typed obligations, and only an accepted binding one enters the ledger."
               />
@@ -258,6 +268,7 @@ export default function DealRoomPage(): React.JSX.Element {
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           className="lg:col-span-2"
+          iconName="stamp"
           title="Build a deal"
           subtitle="What you contract is enforced. What you say is recorded and is not."
         >
@@ -273,8 +284,11 @@ export default function DealRoomPage(): React.JSX.Element {
           />
         </Panel>
 
-        <div className="flex flex-col gap-4">
-          <Panel title="M&A desk" subtitle="An offer is an attempt; the board and the target both get a say">
+        {/* `min-w-0` is load-bearing: without it this column's min-content
+            widens the single implicit track a phone collapses the grid into,
+            and the whole page starts scrolling sideways. */}
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel iconName="briefcase" title="M&A desk" subtitle="An offer is an attempt; the board and the target both get a say">
             <AcquisitionDesk
               targets={targets}
               preselectedId={radarPick}
@@ -283,9 +297,10 @@ export default function DealRoomPage(): React.JSX.Element {
             />
           </Panel>
 
-          <Panel title="Distress radar" subtitle="Built only from what a listed company discloses">
+          <Panel iconName="search" title="Distress radar" subtitle="Built only from what a listed company discloses">
             {distress.length === 0 ? (
               <EmptyState
+                icon="search"
                 title="Nobody is visibly in trouble"
                 message="This radar reads filed posture, filed cash against filed burn, and the public analyst record. A private company discloses none of it."
                 compact
@@ -310,14 +325,14 @@ export default function DealRoomPage(): React.JSX.Element {
                     />
                     <ul className="mt-1 flex flex-col gap-0.5 pl-1">
                       {row.signals.map((signal, index) => (
-                        <li key={index} className="text-[10px] leading-relaxed text-ink-faint">
+                        <li key={index} className="text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">
                           {signal}
                         </li>
                       ))}
                     </ul>
                     <button
                       type="button"
-                      className="btn btn-sm mt-1.5"
+                      className="btn btn-sm tap-target mt-2 w-full sm:w-auto sm:min-h-0"
                       onClick={() => setRadarPick(row.company.id ?? null)}
                     >
                       Take it to the M&amp;A desk
@@ -329,7 +344,7 @@ export default function DealRoomPage(): React.JSX.Element {
             <SectionHeading className="mt-3.5" rule>
               What this cannot see
             </SectionHeading>
-            <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
+            <p className="mt-1.5 text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">
               A private rival files nothing, so it never appears here however badly it is doing. Secret research, unannounced rounds and
               internal forecasts are absent by construction rather than hidden by the interface.
             </p>

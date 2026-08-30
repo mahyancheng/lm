@@ -16,7 +16,7 @@
 import Link from 'next/link';
 import type { Character } from '@frontier/contracts';
 import { formatMoney, formatScore } from '@frontier/shared';
-import { Drawer, KeyValueGrid, Meter, PersonChip, SectionHeading, Tag } from '@/components/ui';
+import { Drawer, Icon, KeyValueGrid, Meter, PersonChip, SectionHeading, Tag } from '@/components/ui';
 
 /** The five stable traits, in the order every surface shows them. */
 const TRAITS = [
@@ -42,7 +42,8 @@ export function ExecutiveDrawer({ open, onClose, character, isCeo }: ExecutiveDr
       title={character?.name ?? ''}
       subtitle={character?.title}
       footer={
-        <Link className="btn btn-sm btn-primary" href="/network">
+        <Link className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" href="/network">
+          <Icon name="network" size={16} accent="current" />
           Open in Network
         </Link>
       }

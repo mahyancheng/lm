@@ -118,6 +118,7 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
   return (
     <div className="flex flex-col gap-3">
       <TabBar
+        className="[&>button]:min-h-11 sm:[&>button]:min-h-0"
         variant="segmented"
         ariaLabel="Financing"
         tabs={TABS.map((entry) => ({ id: entry.id, label: entry.label }))}
@@ -132,7 +133,7 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block">
             <span className="label-caps-faint">Stage</span>
-            <select className="field mt-1" value={stage} onChange={(event) => setStage(event.target.value as FundingStage)}>
+            <select className="field tap-target mt-1 sm:min-h-0" value={stage} onChange={(event) => setStage(event.target.value as FundingStage)}>
               {FUNDING_STAGES.map((entry) => (
                 <option key={entry} value={entry}>
                   {titleise(entry)}
@@ -142,12 +143,12 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
           </label>
           <label className="block">
             <span className="label-caps-faint">Target (USD)</span>
-            <input className="field mt-1" inputMode="numeric" value={raiseAmount} onChange={(event) => setRaiseAmount(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={raiseAmount} onChange={(event) => setRaiseAmount(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(numberOf(raiseAmount))}</span>
           </label>
           <label className="block">
             <span className="label-caps-faint">Max dilution (%)</span>
-            <input className="field mt-1" inputMode="decimal" value={maxDilution} onChange={(event) => setMaxDilution(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxDilution} onChange={(event) => setMaxDilution(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">
               Post-money {formatMoney(impliedPostMoney)} · {formatCount(newShares)} new shares
             </span>
@@ -159,17 +160,17 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block">
             <span className="label-caps-faint">Principal (USD)</span>
-            <input className="field mt-1" inputMode="numeric" value={debtAmount} onChange={(event) => setDebtAmount(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={debtAmount} onChange={(event) => setDebtAmount(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(numberOf(debtAmount))}</span>
           </label>
           <label className="block">
             <span className="label-caps-faint">Max coupon (%)</span>
-            <input className="field mt-1" inputMode="decimal" value={maxRate} onChange={(event) => setMaxRate(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxRate} onChange={(event) => setMaxRate(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(quarterlyInterest)} interest per quarter</span>
           </label>
           <label className="block">
             <span className="label-caps-faint">Term (quarters)</span>
-            <input className="field mt-1" inputMode="numeric" value={term} onChange={(event) => setTerm(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={term} onChange={(event) => setTerm(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">The issue fails rather than clearing above your ceiling.</span>
           </label>
         </div>
@@ -179,32 +180,37 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="label-caps-faint">Budget (USD)</span>
-            <input className="field mt-1" inputMode="numeric" value={budget} onChange={(event) => setBudget(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={budget} onChange={(event) => setBudget(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">
               {formatMoney(numberOf(budget))} of {formatMoney(cash)} cash
             </span>
           </label>
           <label className="block">
             <span className="label-caps-faint">Max price per share</span>
-            <input className="field mt-1" inputMode="decimal" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} />
+            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatCount(buybackShares)} shares at the ceiling</span>
           </label>
         </div>
       ) : null}
 
       {preCheck === null ? (
-        <p className="text-[11px] text-ink-faint">Enter the terms to run the validator.</p>
+        <p className="text-[13px] text-ink-faint sm:text-[11px]">Enter the terms to run the validator.</p>
       ) : (
         <ValidationBanner result={preCheck} compact />
       )}
 
       {queued === null ? null : (
-        <div className="rounded-card border border-brand/25 bg-brand-wash px-3 py-2 text-[11px] text-brand">
+        <div className="rounded-card border border-brand/25 bg-brand-wash px-3 py-2 text-[13px] leading-relaxed text-brand sm:text-[11px]">
           Queued for this quarter. Review it on End Quarter before you submit.
         </div>
       )}
 
-      <button type="button" className="btn btn-sm btn-primary self-start" disabled={intent === null} onClick={() => setPending(intent)}>
+      <button
+        type="button"
+        className="btn btn-primary tap-target w-full sm:w-auto sm:self-start sm:min-h-0"
+        disabled={intent === null}
+        onClick={() => setPending(intent)}
+      >
         Review {tab === 'raise' ? 'round' : tab === 'debt' ? 'issue' : 'buyback'}
       </button>
 

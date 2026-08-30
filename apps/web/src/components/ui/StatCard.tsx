@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import type { DeltaFormat } from '@frontier/shared';
 import { DeltaBadge } from './DeltaBadge';
 import { Sparkline } from './Charts';
+import { IconChip, isIconName, type IconName } from './icons';
 import { TONE_CHIP, cx, type Tone } from './tokens';
 
 export interface StatCardProps {
@@ -30,6 +31,11 @@ export interface StatCardProps {
    * Optional and additive: a card without one keeps its old shape.
    */
   readonly icon?: ReactNode;
+  /**
+   * The usual way to give a card its mark: a name from the icon set. Takes
+   * precedence over `icon` when both are given.
+   */
+  readonly iconName?: IconName;
   /** Tint for the icon chip. Defaults to the card's `tone`, then neutral. */
   readonly iconTone?: Tone;
   /** Makes the whole card a link to the screen that explains this number. */
@@ -56,18 +62,24 @@ export function StatCard({
   tone,
   hint,
   icon,
+  iconName,
   iconTone,
   href,
   onClick,
   className,
 }: StatCardProps): React.JSX.Element {
   const interactive = href !== undefined || onClick !== undefined;
+  // `icon` takes a node for the cards drawn before the set existed; a bare
+  // name from the set is understood too.
+  const mark = iconName ?? (isIconName(icon) ? icon : undefined);
 
   const body = (
     <>
       <div className="flex items-start justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
-          {icon !== undefined ? (
+          {mark !== undefined ? (
+            <IconChip name={mark} tone={iconTone ?? tone ?? 'neutral'} size="sm" />
+          ) : icon !== undefined ? (
             <span
               aria-hidden="true"
               className={cx(
@@ -78,7 +90,7 @@ export function StatCard({
               {icon}
             </span>
           ) : null}
-          <span className="label-caps truncate">{label}</span>
+          <span className="label-caps sm:truncate">{label}</span>
         </span>
         {delta !== undefined ? <DeltaBadge value={delta} format={deltaFormat} invert={deltaInvert} bare /> : null}
       </div>

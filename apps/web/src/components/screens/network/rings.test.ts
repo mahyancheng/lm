@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { createSession } from '../../../lib/game/engine';
 import { projectPlayerView } from '../../../lib/game/playerView';
 import { buildDirectory } from './directory';
-import { RING_GEOMETRY, edgeStrength, isHostile, layoutRings, ringOf } from './rings';
+import { RING_GEOMETRY, RING_ORDER, edgeStrength, groupByRing, isHostile, layoutRings, ringOf } from './rings';
 
 const session = createSession();
 const view = projectPlayerView(session);
@@ -73,6 +73,29 @@ describe('the layout is deterministic and contained', () => {
     expect(RING_GEOMETRY.middle.rx).toBeLessThan(RING_GEOMETRY.outer.rx);
     expect(RING_GEOMETRY.inner.ry).toBeLessThan(RING_GEOMETRY.middle.ry);
     expect(RING_GEOMETRY.middle.ry).toBeLessThan(RING_GEOMETRY.outer.ry);
+  });
+});
+
+describe('the phone reads the same rings as a list', () => {
+  it('keeps every ring, in order, even when one is empty', () => {
+    const groups = groupByRing(directory);
+    expect(groups.map((group) => group.ring)).toEqual([...RING_ORDER]);
+  });
+
+  it('lists everybody exactly once, in the ring the picture would place them', () => {
+    const groups = groupByRing(directory);
+    expect(groups.reduce((total, group) => total + group.entries.length, 0)).toBe(directory.length);
+    for (const group of groups) {
+      for (const entry of group.entries) expect(ringOf(entry)).toBe(group.ring);
+    }
+  });
+
+  it('orders a ring the way the picture sweeps it, so switching view never reshuffles anybody', () => {
+    const nodes = layoutRings(directory);
+    for (const group of groupByRing(directory)) {
+      const drawn = nodes.filter((node) => node.ring === group.ring).map((node) => node.entry.character.id);
+      expect(group.entries.map((entry) => entry.character.id)).toEqual(drawn);
+    }
   });
 });
 

@@ -582,7 +582,7 @@ function LegendChip({
       type="button"
       onClick={onClick}
       className={cx(
-        'press-pop inline-flex items-center gap-1 rounded-pill border px-2 py-px text-[10px] font-semibold',
+        'press-pop inline-flex items-center gap-1 rounded-pill border px-2 py-px text-[10px] font-semibold max-sm:min-h-11 max-sm:px-3',
         TONE_CHIP[tone],
       )}
     >

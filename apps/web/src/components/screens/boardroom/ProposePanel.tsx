@@ -90,11 +90,11 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
 
   return (
     <>
-      <Panel title="Table a matter" subtitle="Drafted here, voted in the board-resolution phase">
+      <Panel iconName="stamp" title="Table a matter" subtitle="Drafted here, voted in the board-resolution phase">
         <div className="grid gap-2.5 sm:grid-cols-2">
           <label className="block">
             <span className="label-caps-faint mb-1 block">Kind</span>
-            <select className="field" value={kind} onChange={(event) => setKind(event.target.value as BoardProposalKind)}>
+            <select className="field tap-target sm:min-h-0" value={kind} onChange={(event) => setKind(event.target.value as BoardProposalKind)}>
               {BOARD_PROPOSAL_KINDS.map((option) => (
                 <option key={option} value={option}>
                   {PROPOSAL_KIND_LABEL[option]}
@@ -104,20 +104,20 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
           </label>
           <label className="block">
             <span className="label-caps-faint mb-1 block">Headline amount</span>
-            <input className="field" type="number" min={0} step="1000000" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="none" />
+            <input className="field tap-target sm:min-h-0" type="number" min={0} step="1000000" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="none" />
           </label>
         </div>
-        <p className="mt-1.5 text-[10px] text-ink-faint">{PROPOSAL_KIND_BLURB[kind]}</p>
+        <p className="mt-1.5 text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">{PROPOSAL_KIND_BLURB[kind]}</p>
 
         <label className="mt-2.5 block">
           <span className="label-caps-faint mb-1 block">Agenda line</span>
-          <input className="field" maxLength={140} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Authorise a Series A financing" />
+          <input className="field tap-target sm:min-h-0" maxLength={140} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Authorise a Series A financing" />
         </label>
 
         <label className="mt-2.5 block">
           <span className="label-caps-faint mb-1 block">The case</span>
           <textarea
-            className="field"
+            className="field tap-target sm:min-h-0"
             rows={3}
             maxLength={1200}
             value={summary}
@@ -129,7 +129,7 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
         <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
           <label className="block">
             <span className="label-caps-faint mb-1 block">Target company</span>
-            <select className="field" value={targetCompanyId} onChange={(event) => setTargetCompanyId(event.target.value)}>
+            <select className="field tap-target sm:min-h-0" value={targetCompanyId} onChange={(event) => setTargetCompanyId(event.target.value)}>
               <option value="">None</option>
               {view.visibleCompanies.map((rival) => (
                 <option key={rival.id} value={rival.id}>
@@ -139,13 +139,20 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
             </select>
           </label>
           <div>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={useStock} onChange={(event) => setUseStock(event.target.checked)} />
+            {/* The whole row is the target: a label activates its own input,
+                so the finger gets 44px even though the box stays a box. */}
+            <label className="tap-target flex cursor-pointer items-center gap-2.5 sm:min-h-0">
+              <input
+                type="checkbox"
+                className="size-5 shrink-0 accent-[color:var(--color-brand-strong)] sm:size-4"
+                checked={useStock}
+                onChange={(event) => setUseStock(event.target.checked)}
+              />
               <span className="label-caps-faint">Stock component</span>
             </label>
             {useStock ? (
               <>
-                <input type="range" className="mt-1.5 w-full" min={0} max={1} step={0.05} value={stockPct} onChange={(event) => setStockPct(Number(event.target.value))} />
+                <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0} max={1} step={0.05} value={stockPct} onChange={(event) => setStockPct(Number(event.target.value))} />
                 <span className="figure text-[11px] text-ink-dim">{formatPct(stockPct, 0)} in stock</span>
               </>
             ) : (
@@ -199,13 +206,18 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
             })}
           </div>
 
-          <p className="mt-2 text-[10px] text-ink-faint">
+          <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
             A projection from state, not a promise. The vote is taken in the board-resolution phase against the numbers as they stand then.
           </p>
         </div>
 
         <div className="mt-3 flex justify-end">
-          <button type="button" className="btn btn-primary btn-sm" disabled={intent === null} onClick={() => setConfirming(true)}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+            disabled={intent === null}
+            onClick={() => setConfirming(true)}
+          >
             Review and table
           </button>
         </div>

@@ -96,28 +96,36 @@ export default function PeoplePage(): React.JSX.Element {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Headcount" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Headcount" iconName="people" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} />
         <StatCard
           label="Attrition"
+          iconName="warning"
           value={formatPct(employees.attrition)}
           deltaInvert
           tone={employees.attrition > 0.06 ? 'loss' : employees.attrition > 0.035 ? 'warn' : 'gain'}
           hint={`≈ ${Math.round(headcount * employees.attrition)} people next quarter`}
         />
         <StatCard
-          label="Average compensation"
+          label="Average pay"
+          iconName="coins"
           value={formatMoney(employees.avgComp)}
           hint={`Market ${formatMoney(marketComp)} · ${formatPct(competitiveness - 1)} against it`}
           tone={competitiveness >= 1 ? 'gain' : 'warn'}
         />
-        <StatCard label="Quarterly payroll" value={formatMoney(company.financials.payroll)} hint="Includes the loaded cost of open roles" href="/financials" />
+        <StatCard
+          label="Payroll"
+          iconName="ledger"
+          value={formatMoney(company.financials.payroll)}
+          hint="Includes the loaded cost of open roles"
+          href="/financials"
+        />
       </div>
 
       <HeadcountPlan session={session} company={company} />
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Compensation against the market" subtitle="What the talent market charges this company">
+        <Panel title="Compensation against the market" iconName="coins" subtitle="What the talent market charges this company">
           <KeyValueGrid
             columns={1}
             items={[
@@ -143,12 +151,12 @@ export default function PeoplePage(): React.JSX.Element {
             <Meter value={session.world.talent.immigrationAccess * 100} label="Immigration access" />
             <Meter value={talentReputation} label="Standing with the talent market" benchmark={50} benchmarkLabel="Industry midpoint" />
           </div>
-          <p className="mt-2 text-[10px] text-ink-faint">
+          <p className="mt-2 text-[11px] text-ink-faint">
             The talent audience is 45% developer reputation, 35% public and 20% investor. It multiplies every fill rate on this screen.
           </p>
         </Panel>
 
-        <Panel title="Attrition, decomposed" subtitle="The engine's own coefficients, term by term">
+        <Panel title="Attrition, decomposed" iconName="chart" iconTone="warn" subtitle="The engine's own coefficients, term by term">
           <BarChart
             data={[
               { label: 'Baseline', value: drivers.base, tone: 'neutral' },
@@ -162,19 +170,19 @@ export default function PeoplePage(): React.JSX.Element {
           <div className="mt-3 border-t border-hair pt-2.5">
             <div className="flex items-baseline justify-between">
               <span className="label-caps-faint">Priced for next quarter</span>
-              <span className="figure text-[15px] text-ink">{formatPct(drivers.modelled)}</span>
+              <span className="figure text-[16px] text-ink">{formatPct(drivers.modelled)}</span>
             </div>
             <div className="mt-1 flex items-baseline justify-between">
               <span className="label-caps-faint">Currently stored</span>
-              <span className="figure text-[12px] text-ink-dim">{formatPct(employees.attrition)}</span>
+              <span className="figure text-[13px] text-ink-dim">{formatPct(employees.attrition)}</span>
             </div>
-            <p className="mt-2 text-[10px] text-ink-faint">
+            <p className="mt-2 text-[11px] text-ink-faint">
               The stored rate is what this quarter&apos;s leavers were priced at. A queued reduction adds its own term when the quarter resolves.
             </p>
           </div>
         </Panel>
 
-        <Panel title="Attrition outlook" subtitle="Headcount at today's rate, with no hiring">
+        <Panel title="Attrition outlook" iconName="gauge" subtitle="Headcount at today's rate, with no hiring">
           <LineChart
             series={[{ id: 'headcount', label: 'Headcount', values: outlook, tone: 'warn', dashed: true }]}
             xLabels={outlook.map((_, index) => quarterLabel(session.startYear, session.quarter + index))}
@@ -188,7 +196,7 @@ export default function PeoplePage(): React.JSX.Element {
           </div>
           <div className="mt-3 flex items-center gap-2 border-t border-hair pt-2.5">
             <DeltaBadge value={-(headcount - (outlook[outlook.length - 1] ?? headcount)) / Math.max(1, headcount)} format="percent" />
-            <span className="text-[11px] text-ink-dim">of the company over four quarters if nothing is replaced</span>
+            <span className="text-[12px] text-ink-dim">of the company over four quarters if nothing is replaced</span>
           </div>
         </Panel>
       </div>

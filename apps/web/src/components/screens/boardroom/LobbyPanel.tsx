@@ -121,7 +121,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
 
   if (open.length === 0) {
     return (
-      <Panel title="Lobby a director">
+      <Panel iconName="chat" title="Lobby a director">
         <EmptyState
           title="Nothing is before the board"
           message="A director can only be lobbied on a matter that has been tabled. Table one first, and the whip count will tell you who needs the conversation."
@@ -131,11 +131,11 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
   }
 
   return (
-    <Panel title="Lobby a director" subtitle="A conversation produces a testable promise, never a changed number">
+    <Panel iconName="chat" iconTone="brand" title="Lobby a director" subtitle="A conversation produces a testable promise, never a changed number">
       <div className="grid gap-2.5 sm:grid-cols-2">
         <label className="block">
           <span className="label-caps-faint mb-1 block">Director</span>
-          <select className="field" value={directorId} onChange={(event) => setDirectorId(event.target.value)}>
+          <select className="field tap-target sm:min-h-0" value={directorId} onChange={(event) => setDirectorId(event.target.value)}>
             <option value="">Select…</option>
             {board.directors
               .filter((entry) => entry.characterId !== founder.id)
@@ -148,7 +148,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
         </label>
         <label className="block">
           <span className="label-caps-faint mb-1 block">Matter</span>
-          <select className="field" value={proposalId} onChange={(event) => setProposalId(event.target.value)}>
+          <select className="field tap-target sm:min-h-0" value={proposalId} onChange={(event) => setProposalId(event.target.value)}>
             <option value="">Select…</option>
             {open.map((proposal) => (
               <option key={proposal.id} value={proposal.id}>
@@ -174,7 +174,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
             <Meter value={seat.safetyOrientation} label="Safety orientation" />
           </div>
           {commitments.length === 0 ? (
-            <p className="mt-2.5 text-[10px] text-ink-faint">No live commitment from this director.</p>
+            <p className="mt-2.5 text-[12px] text-ink-faint sm:text-[10px]">No live commitment from this director.</p>
           ) : (
             <div className="mt-2.5 space-y-1.5">
               <div className="label-caps-faint">Live commitments</div>
@@ -196,7 +196,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
         <SectionHeading
           rule
           actions={
-            <button type="button" className="btn btn-ghost btn-sm" disabled={rows.length >= 4} onClick={() => setRows((current) => [...current, EMPTY_ROW])}>
+            <button type="button" className="btn btn-ghost btn-sm tap-target sm:min-h-0" disabled={rows.length >= 4} onClick={() => setRows((current) => [...current, EMPTY_ROW])}>
               Add term
             </button>
           }
@@ -207,7 +207,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
           {rows.map((row, index) => (
             <div key={index} className="grid gap-2 sm:grid-cols-[1fr_auto_1fr_auto]">
               <select
-                className="field"
+                className="field tap-target sm:min-h-0"
                 value={row.field}
                 onChange={(event) =>
                   setRows((current) => current.map((entry, i) => (i === index ? { ...entry, field: event.target.value as CommitmentField } : entry)))
@@ -220,7 +220,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
                 ))}
               </select>
               <select
-                className="field w-auto"
+                className="field tap-target w-auto sm:min-h-0"
                 value={row.comparator}
                 onChange={(event) =>
                   setRows((current) =>
@@ -235,7 +235,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
                 ))}
               </select>
               <input
-                className="field"
+                className="field tap-target sm:min-h-0"
                 type="number"
                 step="any"
                 value={row.value}
@@ -244,7 +244,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
               />
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-sm tap-target w-full sm:w-auto sm:min-h-0"
                 onClick={() => setRows((current) => (current.length === 1 ? current : current.filter((_, i) => i !== index)))}
               >
                 Remove
@@ -261,15 +261,20 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
 
       <label className="mt-3 block">
         <span className="label-caps-faint mb-1 block">What you say</span>
-        <textarea className="field" rows={3} maxLength={600} value={message} onChange={(event) => setMessage(event.target.value)} />
-        <span className="mt-1 block text-[10px] text-ink-faint">
+        <textarea className="field tap-target sm:min-h-0" rows={3} maxLength={600} value={message} onChange={(event) => setMessage(event.target.value)} />
+        <span className="mt-1 block text-[11px] leading-relaxed text-ink-faint">
           Their reply comes from their traits, their mandate and their memory of you — not from how persuasive the text is.
         </span>
       </label>
 
-      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] text-warn">A conversation creates a commitment. It never edits a support score.</p>
-        <button type="button" className="btn btn-primary btn-sm" disabled={intent === null} onClick={send}>
+      <div className="mt-2.5 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <p className="text-[11px] leading-relaxed text-warn">A conversation creates a commitment. It never edits a support score.</p>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+          disabled={intent === null}
+          onClick={send}
+        >
           Queue conversation
         </button>
       </div>

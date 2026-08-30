@@ -21,19 +21,19 @@ import { formatPct } from '@frontier/shared';
 import {
   AiLabel,
   EmptyState,
+  Icon,
   Meter,
   PageHeader,
   Panel,
   ProgressBar,
   SectionHeading,
   StatCard,
-  TabBar,
   Tag,
-  type TabItem,
 } from '@/components/ui';
 import { ComposeModal } from '@/components/screens/social/ComposeModal';
 import { PostCard } from '@/components/screens/social/PostCard';
-import { audienceLabel, countLabel, networkLabel, networkProfile } from '@/components/screens/social/audiences';
+import { audienceLabel, countLabel, networkIcon, networkLabel, networkProfile } from '@/components/screens/social/audiences';
+import { IconTabs, type IconTabItem } from '@/components/screens/world/IconTabs';
 import { useLlm, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 
 const NARRATIVE_COPY: Readonly<Record<string, string>> = {
@@ -96,11 +96,19 @@ export default function SocialPage(): React.JSX.Element {
   const ownFollowing = ownAccounts.reduce((total, account) => total + account.followers, 0);
   const media = session.world.media;
 
-  const tabs: readonly TabItem[] = NETWORK_ARCHETYPES.map((archetype) => ({
+  const tabs: readonly IconTabItem[] = NETWORK_ARCHETYPES.map((archetype) => ({
     id: archetype,
     label: networkLabel(archetype),
+    icon: networkIcon(archetype),
     badge: (byNetwork.get(archetype) ?? []).length || undefined,
   }));
+
+  const compose = (
+    <>
+      <Icon name="plus" size={16} accent="inherit" />
+      Compose a post
+    </>
+  );
 
   return (
     <>
@@ -109,62 +117,83 @@ export default function SocialPage(): React.JSX.Element {
         eyebrow={quarterLabel(session.startYear, session.quarter)}
         subtitle="Six networks, seven audiences and a press cycle that decides which of them hears you."
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setComposing(true)}>
-            Compose a post
+          // From `sm` the action belongs beside the title; on a phone it is the
+          // full-width bar below, where a thumb already is.
+          <button
+            type="button"
+            className="btn btn-primary tap-target icon-knockout-brand hidden sm:inline-flex"
+            onClick={() => setComposing(true)}
+          >
+            {compose}
           </button>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
-          label="Your following"
+          iconName="people"
+          label="Following"
           value={countLabel(ownFollowing)}
           unit="followers"
-          hint={`${ownAccounts.length} account${ownAccounts.length === 1 ? '' : 's'} across ${new Set(ownAccounts.map((a) => a.network)).size} network${
+          hint={`${ownAccounts.length} account${ownAccounts.length === 1 ? '' : 's'} · ${new Set(ownAccounts.map((a) => a.network)).size} network${
             new Set(ownAccounts.map((a) => a.network)).size === 1 ? '' : 's'
           }`}
         />
         <StatCard
-          label="Media attention"
+          iconName="chart"
+          label="Attention"
           value={formatPct(media.attentionLevel, 0)}
-          hint="Share of the news cycle the industry occupies"
+          hint="Share of the news cycle"
           tone={media.attentionLevel > 0.7 ? 'warn' : undefined}
         />
         <StatCard
+          iconName="warning"
           label="Controversy"
           value={formatPct(media.controversyIntensity, 0)}
-          hint="High heat turns a leak into a story"
+          hint="Heat turns a leak into a story"
           tone={media.controversyIntensity > 0.6 ? 'warn' : undefined}
         />
         <StatCard
-          label="Institutional trust"
+          iconName="capitol"
+          label="Trust"
           value={formatPct(media.institutionalTrust, 0)}
-          hint="Low trust lets a rumour outrun its correction"
+          hint="Rumours outrun corrections"
           tone={media.institutionalTrust < 0.45 ? 'loss' : undefined}
         />
       </div>
 
-      <TabBar tabs={tabs} value={network} onChange={(id) => setNetwork(id as NetworkArchetype)} ariaLabel="Networks" />
+      <IconTabs tabs={tabs} value={network} onChange={(id) => setNetwork(id as NetworkArchetype)} ariaLabel="Networks" />
+
+      {/* The action, directly above the room it posts into. */}
+      <button
+        type="button"
+        className="btn btn-primary btn-lg icon-knockout-brand w-full sm:hidden"
+        onClick={() => setComposing(true)}
+      >
+        {compose}
+      </button>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           className="lg:col-span-2"
-          title={`${networkLabel(network)} feed`}
+          iconName={networkIcon(network)}
+          iconTone="brand"
+          title={networkLabel(network)}
           subtitle={`${networkProfile(network).virality.toFixed(2)}x resharing · press affinity ${formatPct(
             networkProfile(network).pressAffinity,
             0,
           )}`}
           flush
-          maxBodyHeight={720}
         >
           {feed.length === 0 ? (
             <div className="p-3.5">
               <EmptyState
-                glyph="—"
+                icon={networkIcon(network)}
                 title={`Nothing has been posted on ${networkLabel(network).toLowerCase()} yet`}
                 message="Posts appear here once the social phase of a quarter has resolved. Compose one and it is queued for this quarter."
                 action={
-                  <button type="button" className="btn btn-sm" onClick={() => setComposing(true)}>
+                  <button type="button" className="btn tap-target" onClick={() => setComposing(true)}>
+                    <Icon name="plus" size={15} />
                     Compose a post
                   </button>
                 }
@@ -187,13 +216,13 @@ export default function SocialPage(): React.JSX.Element {
         </Panel>
 
         <div className="flex flex-col gap-4">
-          <Panel title="Trending narrative" subtitle="The frame every new event is read through">
+          <Panel iconName="newspaper" title="Trending narrative" subtitle="The frame every new event is read through">
             <div className="flex flex-col gap-3">
               <div>
                 <Tag tone="info" size="md">
                   {media.dominantNarrative.replace(/_/g, ' ')}
                 </Tag>
-                <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-dim">
                   {NARRATIVE_COPY[media.dominantNarrative] ?? 'The press has settled on a frame for the quarter.'}
                 </p>
               </div>
@@ -213,15 +242,15 @@ export default function SocialPage(): React.JSX.Element {
             </div>
           </Panel>
 
-          <Panel title="Your accounts" subtitle="Credibility is built by being right in public">
+          <Panel iconName="chat" title="Your accounts" subtitle="Credibility is built by being right in public">
             {ownAccounts.length === 0 ? (
-              <EmptyState title="No accounts" message="Neither you nor the company holds an active account on any network." compact />
+              <EmptyState icon="chat" title="No accounts" message="Neither you nor the company holds an active account on any network." compact />
             ) : (
               <ul className="flex flex-col gap-3">
                 {ownAccounts.map((account) => (
                   <li key={account.id}>
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-[12px] font-medium text-ink">{account.handle}</span>
+                      <span className="text-[13px] font-semibold text-ink">{account.handle}</span>
                       <span className="figure text-[10px] text-ink-faint">{networkLabel(account.network)}</span>
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-[10px] text-ink-faint">
@@ -247,9 +276,10 @@ export default function SocialPage(): React.JSX.Element {
             )}
           </Panel>
 
-          <Panel title="Media stories" subtitle="How a private matter becomes a price">
+          <Panel iconName="newspaper" title="Media stories" subtitle="How a private matter becomes a price">
             {stories.length === 0 ? (
               <EmptyState
+                icon="newspaper"
                 title="The press has not run anything yet"
                 message="Stories are generated in the social phase from posts and world events. The first ones appear after a quarter resolves."
                 compact
@@ -261,7 +291,7 @@ export default function SocialPage(): React.JSX.Element {
                   return (
                     <li key={story.id}>
                       <div className="flex items-start justify-between gap-2">
-                        <p className="text-[12px] leading-snug font-medium text-ink">{story.headline}</p>
+                        <p className="text-[13px] leading-snug font-medium text-ink">{story.headline}</p>
                         <span className="figure shrink-0 text-[10px] text-ink-faint">{quarterLabel(session.startYear, story.quarter)}</span>
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -289,14 +319,14 @@ export default function SocialPage(): React.JSX.Element {
             )}
           </Panel>
 
-          <Panel title="Who is on each network" subtitle="Published composition from the social subsystem">
+          <Panel iconName="people" title="Who is on each network" subtitle="Published composition from the social subsystem">
             <SectionHeading>{networkLabel(network)}</SectionHeading>
             <ul className="mt-2 flex flex-col gap-1">
               {Object.entries(networkProfile(network).audienceMix)
                 .filter(([, share]) => share > 0)
                 .sort((a, b) => b[1] - a[1])
                 .map(([audience, share]) => (
-                  <li key={audience} className="flex items-center justify-between gap-3 text-[11px]">
+                  <li key={audience} className="flex items-center justify-between gap-3 text-[12.5px]">
                     <span className="text-ink-dim">{audienceLabel(audience as Audience)}</span>
                     <span className="figure text-ink">{formatPct(share, 0)}</span>
                   </li>

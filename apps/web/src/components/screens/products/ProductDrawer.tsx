@@ -22,6 +22,7 @@ import { formatMoney, formatPct } from '@frontier/shared';
 import {
   DeltaBadge,
   Drawer,
+  Icon,
   KeyValueGrid,
   LineChart,
   Meter,
@@ -131,16 +132,16 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
             <div className="mt-2 space-y-3">
               <Meter value={product.qualityScore * 100} label="Quality against the market frontier" />
               <div className="grid grid-cols-2 gap-3">
-                <div>
+                <div className="raised-surface px-3 py-2">
                   <div className="label-caps-faint">Gross additions</div>
-                  <div className="figure text-[15px] text-ink">{formatPct(product.growthQuarterly)}</div>
+                  <div className="figure text-[16px] text-ink">{formatPct(product.growthQuarterly)}</div>
                 </div>
-                <div>
+                <div className="raised-surface px-3 py-2">
                   <div className="label-caps-faint">Churn</div>
-                  <div className="figure text-[15px] text-ink">{formatPct(product.churnQuarterly)}</div>
+                  <div className="figure text-[16px] text-ink">{formatPct(product.churnQuarterly)}</div>
                 </div>
               </div>
-              <p className="text-[10px] text-ink-faint">{SEGMENT_BLURB[product.segment]}</p>
+              <p className="text-[11px] text-ink-faint">{SEGMENT_BLURB[product.segment]}</p>
             </div>
           </div>
 
@@ -164,10 +165,10 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
           <div>
             <SectionHeading rule>Reprice</SectionHeading>
             <div className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="min-w-0 flex-1">
+              <label className="w-full min-w-0 sm:flex-1">
                 <span className="label-caps-faint mb-1 block">New price ({SEGMENT_UNIT[product.segment]})</span>
                 <input
-                  className="field"
+                  className="field tap-target"
                   type="number"
                   min={0}
                   step="1"
@@ -177,7 +178,13 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                   onChange={(event) => setPriceText(event.target.value)}
                 />
               </label>
-              <button type="button" className="btn btn-primary" disabled={!hasPrice} onClick={applyPrice}>
+              <button
+                type="button"
+                className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto"
+                disabled={!hasPrice}
+                onClick={applyPrice}
+              >
+                <Icon name="check" size={16} accent="current" />
                 Queue reprice
               </button>
             </div>
@@ -186,9 +193,13 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
               <div className="raised-surface mt-2.5 px-3 py-2.5">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="label-caps-faint">Demand multiplier</span>
-                  <span className="figure text-[13px] text-ink">
+                  <span className="figure flex items-center gap-1.5 text-[13px] text-ink">
                     {preview.current.toFixed(2)}
-                    {hasPrice ? <span className="text-ink-faint"> → </span> : null}
+                    {hasPrice ? (
+                      <span className="text-ink-faint">
+                        <Icon name="chevronRight" size={12} accent="current" />
+                      </span>
+                    ) : null}
                     {hasPrice ? preview.next.toFixed(2) : null}
                   </span>
                 </div>
@@ -224,9 +235,9 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
               A shorter wind-down saves cost and damages enterprise and developer reputation. Sunset products keep their history for comparatives.
             </p>
             <div className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="min-w-0 flex-1">
+              <label className="w-full min-w-0 sm:flex-1">
                 <span className="label-caps-faint mb-1 block">Wind-down</span>
-                <select className="field" value={windDown} onChange={(event) => setWindDown(Number(event.target.value))}>
+                <select className="field tap-target" value={windDown} onChange={(event) => setWindDown(Number(event.target.value))}>
                   {[1, 2, 3, 4, 6, 8].map((quarters) => (
                     <option key={quarters} value={quarters}>
                       {quarters} quarter{quarters === 1 ? '' : 's'}
@@ -234,7 +245,13 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                   ))}
                 </select>
               </label>
-              <button type="button" className="btn btn-danger" disabled={!product.isActive} onClick={applySunset}>
+              <button
+                type="button"
+                className="btn btn-danger tap-target w-full gap-1.5 sm:w-auto"
+                disabled={!product.isActive}
+                onClick={applySunset}
+              >
+                <Icon name="warning" size={16} accent="current" />
                 Queue sunset
               </button>
             </div>

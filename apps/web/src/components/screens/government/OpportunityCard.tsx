@@ -18,7 +18,7 @@ import type { ActionValidationResult, Company, PlayerView, ProcurementOpportunit
 import { quarterLabel } from '@frontier/contracts';
 import { CLEARANCE_STAFF_REQUIREMENT, recordPastPerformance } from '@frontier/simulation';
 import { formatMoney, formatPct, formatScore } from '@frontier/shared';
-import { BarChart, ProgressBar, SectionHeading, Tag, ValidationBanner } from '@/components/ui';
+import { BarChart, Icon, ProgressBar, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { EVALUATION_AXIS_LABEL } from './bidModel';
 
@@ -144,7 +144,7 @@ export function OpportunityCard({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="label-caps-faint">{agencyName}</div>
-          <h3 className="mt-0.5 text-[14px] font-semibold text-ink">{opportunity.programme}</h3>
+          <h3 className="mt-0.5 text-[15px] font-semibold text-ink sm:text-[14px]">{opportunity.programme}</h3>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Tag tone={opportunity.contractForm === 'cost_plus' ? 'info' : 'neutral'}>{opportunity.contractForm.replace(/_/g, ' ')}</Tag>
@@ -155,82 +155,115 @@ export function OpportunityCard({
         </div>
       </div>
 
-      <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{opportunity.description}</p>
+      <p className="mt-2 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">{opportunity.description}</p>
 
-      <div className="mt-2.5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div>
+      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 rounded-card bg-raised px-3 py-2.5 sm:grid-cols-4">
+        <div className="flex items-baseline justify-between gap-2 sm:block">
           <div className="label-caps-faint">Ceiling</div>
-          <div className="figure text-[13px] text-ink">{formatMoney(opportunity.maxValue)}</div>
+          <div className="figure text-[14px] text-ink sm:text-[13px]">{formatMoney(opportunity.maxValue)}</div>
         </div>
-        <div>
+        <div className="flex items-baseline justify-between gap-2 sm:block">
           <div className="label-caps-faint">Term</div>
-          <div className="figure text-[13px] text-ink">{opportunity.durationQuarters}q</div>
+          <div className="figure text-[14px] text-ink sm:text-[13px]">{opportunity.durationQuarters}q</div>
         </div>
-        <div>
+        <div className="flex items-baseline justify-between gap-2 sm:block">
           <div className="label-caps-faint">Your record</div>
-          <div className={`figure text-[13px] ${record >= requirements.minimumPastPerformance ? 'text-gain' : 'text-loss'}`}>{formatScore(record)}</div>
+          <div className={`figure text-[14px] sm:text-[13px] ${record >= requirements.minimumPastPerformance ? 'text-gain' : 'text-loss'}`}>
+            {formatScore(record)}
+          </div>
         </div>
-        <div>
+        <div className="flex items-baseline justify-between gap-2 sm:block">
           <div className="label-caps-faint">Floor</div>
-          <div className="figure text-[13px] text-ink">{formatScore(requirements.minimumPastPerformance)}</div>
+          <div className="figure text-[14px] text-ink sm:text-[13px]">{formatScore(requirements.minimumPastPerformance)}</div>
         </div>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <div>
-          <SectionHeading rule>Evaluation weights</SectionHeading>
+      {/* The checklist leads on a phone: whether this company can bid at all is
+          the first question, and the weights only matter once it can. */}
+      <div className="mt-3 grid gap-3.5 lg:grid-cols-2">
+        <div className="lg:order-2">
+          <SectionHeading rule>Can you bid</SectionHeading>
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {gates.map((gate) => (
+              <li key={gate.label} className="flex items-start gap-2">
+                <span
+                  className={cx(
+                    'mt-px flex size-5 shrink-0 items-center justify-center rounded-pill',
+                    gate.met ? 'icon-knockout-wash bg-gain-wash text-gain' : 'icon-knockout-wash bg-loss-wash text-loss',
+                  )}
+                >
+                  <Icon name={gate.met ? 'check' : 'close'} size={13} accent="inherit" />
+                </span>
+                <span className="min-w-0">
+                  <span className={cx('text-[13px] sm:text-[11px]', gate.met ? 'text-ink-dim' : 'font-semibold text-loss')}>{gate.label}</span>
+                  <span className="block text-[11px] leading-relaxed text-ink-faint sm:text-[10px]">{gate.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-3">
+            <div className="label-caps-faint mb-1.5">The bid must commit</div>
+            <ul className="flex flex-col gap-1.5">
+              {commitments.map((item) => (
+                <li key={item.label} className="flex items-start gap-2">
+                  <span
+                    className={cx(
+                      'mt-px flex size-5 shrink-0 items-center justify-center rounded-pill',
+                      item.met ? 'icon-knockout-raised bg-raised text-ink-faint' : 'icon-knockout-wash bg-warn-wash text-warn',
+                    )}
+                  >
+                    <Icon name={item.met ? 'check' : 'warning'} size={13} accent="inherit" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="text-[13px] text-ink-dim sm:text-[11px]">{item.label}</span>
+                    <span className="block text-[11px] leading-relaxed text-ink-faint sm:text-[10px]">{item.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        <div className="lg:order-1">
+          <SectionHeading rule>How it will be judged</SectionHeading>
           <div className="mt-2">
             <BarChart data={weights} max={1} formatValue={(value) => formatPct(value, 0)} />
           </div>
         </div>
-
-        <div>
-          <SectionHeading rule>Gates</SectionHeading>
-          <div className="mt-2 space-y-1">
-            {gates.map((gate) => (
-              <div key={gate.label} className="flex items-start gap-2 text-[11px]">
-                <span className={`mt-1.5 inline-block size-1.5 shrink-0 rounded-full ${gate.met ? 'bg-gain' : 'bg-loss'}`} />
-                <span className="min-w-0">
-                  <span className={gate.met ? 'text-ink-dim' : 'text-loss'}>{gate.label}</span>
-                  <span className="block text-[10px] text-ink-faint">{gate.detail}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-2.5">
-            <div className="label-caps-faint mb-1">The bid must commit</div>
-            <div className="space-y-1">
-              {commitments.map((item) => (
-                <div key={item.label} className="flex items-start gap-2 text-[11px]">
-                  <span className={`mt-1.5 inline-block size-1.5 shrink-0 rounded-full ${item.met ? 'bg-ink-faint' : 'bg-warn'}`} />
-                  <span className="min-w-0">
-                    <span className="text-ink-dim">{item.label}</span>
-                    <span className="block text-[10px] text-ink-faint">{item.detail}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-hair pt-3">
-        <div className="text-[10px] text-ink-faint">
+      <div className="mt-3 border-t border-hair pt-3">
+        <div className="flex items-center gap-1.5 text-[11px] text-ink-faint">
+          <Icon name={blocked.length === 0 ? 'check' : 'warning'} size={13} accent={blocked.length === 0 ? 'gain' : 'warn'} />
           {blocked.length === 0 ? 'This company clears every eligibility gate.' : `${blocked.length} gate${blocked.length === 1 ? '' : 's'} blocking a bid.`}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {opportunity.allowsConsortium ? (
-            <button type="button" className="btn btn-sm" onClick={() => setPanel(panel === 'consortium' ? 'none' : 'consortium')}>
-              Form consortium
-            </button>
-          ) : null}
-          <button type="button" className="btn btn-sm" onClick={() => setPanel(panel === 'decline' ? 'none' : 'decline')}>
-            Decline
-          </button>
-          <button type="button" className={blocked.length > 0 ? 'btn btn-sm' : 'btn btn-primary btn-sm'} onClick={() => onCompose(opportunity)}>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end sm:gap-1.5">
+          <button
+            type="button"
+            className={cx('btn btn-sm tap-target w-full sm:order-3 sm:w-auto sm:min-h-0', blocked.length > 0 ? '' : 'btn-primary')}
+            onClick={() => onCompose(opportunity)}
+          >
             {blocked.length > 0 ? 'Inspect requirements' : 'Compose bid'}
           </button>
+          <div className={cx('grid gap-2 sm:contents', opportunity.allowsConsortium ? 'grid-cols-2' : 'grid-cols-1')}>
+            {opportunity.allowsConsortium ? (
+              <button
+                type="button"
+                className="btn btn-sm tap-target sm:order-1 sm:min-h-0"
+                onClick={() => setPanel(panel === 'consortium' ? 'none' : 'consortium')}
+              >
+                Form consortium
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-sm tap-target sm:order-2 sm:min-h-0"
+              onClick={() => setPanel(panel === 'decline' ? 'none' : 'decline')}
+            >
+              Decline
+            </button>
+          </div>
         </div>
       </div>
 
@@ -238,11 +271,13 @@ export function OpportunityCard({
         <div className="mt-2.5 border-t border-hair pt-2.5">
           <label className="block">
             <span className="label-caps-faint mb-1 block">Reason</span>
-            <input className="field" maxLength={300} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this is not a fit." />
+            <input className="field tap-target sm:min-h-0" maxLength={300} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this is not a fit." />
           </label>
-          <p className="mt-1 text-[10px] text-ink-faint">Declining an invited opportunity is noted by the agency and mildly reduces future invitations.</p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+            Declining an invited opportunity is noted by the agency and mildly reduces future invitations.
+          </p>
           <div className="mt-2 flex justify-end">
-            <button type="button" className="btn btn-sm" onClick={decline}>
+            <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={decline}>
               Queue decline
             </button>
           </div>
@@ -258,7 +293,7 @@ export function OpportunityCard({
                 <button
                   key={partner.id}
                   type="button"
-                  className={`btn btn-sm ${invitees.includes(partner.id ?? '') ? 'btn-primary' : ''}`}
+                  className={`btn btn-sm tap-target sm:min-h-0 ${invitees.includes(partner.id ?? '') ? 'btn-primary' : ''}`}
                   onClick={() =>
                     setInvitees((current) =>
                       current.includes(partner.id ?? '') ? current.filter((entry) => entry !== partner.id) : [...current, partner.id ?? ''].slice(0, 5),
@@ -273,7 +308,7 @@ export function OpportunityCard({
           <div className="grid gap-2.5 sm:grid-cols-2">
             <label className="block">
               <span className="label-caps-faint mb-1 block">Prime contractor</span>
-              <select className="field" value={lead} onChange={(event) => setLead(event.target.value)}>
+              <select className="field tap-target sm:min-h-0" value={lead} onChange={(event) => setLead(event.target.value)}>
                 <option value={company.id}>{company.name} (us)</option>
                 {partners
                   .filter((partner) => invitees.includes(partner.id ?? ''))
@@ -290,14 +325,19 @@ export function OpportunityCard({
                 <span className="figure text-ink-dim">{formatPct(share, 0)}</span>
               </span>
               <ProgressBar value={share} tone="brand" />
-              <input type="range" className="mt-1.5 w-full" min={0.05} max={1} step={0.05} value={share} onChange={(event) => setShare(Number(event.target.value))} />
+              <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0.05} max={1} step={0.05} value={share} onChange={(event) => setShare(Number(event.target.value))} />
             </div>
           </div>
-          <p className="text-[10px] text-ink-faint">
+          <p className="text-[11px] leading-relaxed text-ink-faint">
             Each invitee must accept through the deal system before the consortium is real. The prime is accountable for the whole programme.
           </p>
           <div className="flex justify-end">
-            <button type="button" className="btn btn-sm" disabled={invitees.length === 0} onClick={formConsortium}>
+            <button
+              type="button"
+              className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+              disabled={invitees.length === 0}
+              onClick={formConsortium}
+            >
               Queue consortium
             </button>
           </div>

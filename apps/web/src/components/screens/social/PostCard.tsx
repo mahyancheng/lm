@@ -43,7 +43,7 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
         <span className="figure shrink-0 text-[10px] text-ink-faint">{quarterLabelText}</span>
       </header>
 
-      <p className="mt-2 text-[12px] leading-relaxed whitespace-pre-wrap text-ink">{post.text}</p>
+      <p className="mt-2 text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink">{post.text}</p>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Tag tone="neutral">{post.intent}</Tag>
@@ -53,12 +53,12 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
       </div>
 
       {engagement === null ? (
-        <p className="mt-2 text-[10px] text-ink-faint">
+        <p className="mt-2 text-[11px] text-ink-faint">
           Queued. Reach and every consequence are computed in the social phase when the quarter resolves.
         </p>
       ) : (
         <div className="mt-2.5 flex flex-col gap-2">
-          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5">
             <Figure label="Reach" value={countLabel(engagement.reach)} />
             <Figure label="Engagement" value={formatPct(engagement.engagementScore)} />
             <Figure label="Virality" value={`${formatScore(engagement.viralityFactor, 2)}x`} />

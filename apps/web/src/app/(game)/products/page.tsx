@@ -21,10 +21,12 @@ import {
   DataTable,
   DeltaBadge,
   EmptyState,
+  Icon,
   Meter,
   PageHeader,
   Panel,
   ProgressBar,
+  Sparkline,
   StatCard,
   Tag,
   type Column,
@@ -37,6 +39,7 @@ import {
   productGrossProfit,
   productRevenue,
   productServingUnits,
+  projectCustomers,
 } from '@/components/screens/products/labels';
 import { usePlayerCompany, useQueuedActions, useSession } from '@/lib/game';
 
@@ -71,12 +74,31 @@ export default function ProductsPage(): React.JSX.Element {
       width: '22%',
       render: (row) => (
         <div className="min-w-0">
-          <div className="truncate text-[12px] font-medium text-ink">{row.name}</div>
-          <div className="text-[10px] text-ink-faint">{SEGMENT_LABEL[row.segment]}</div>
+          <div className="truncate text-[12.5px] font-medium text-ink">{row.name}</div>
+          <div className="text-[10.5px] text-ink-faint">{SEGMENT_LABEL[row.segment]}</div>
         </div>
       ),
       sortable: true,
       sortValue: (row) => row.name,
+    },
+    {
+      // The shape of the line, on the card and in the table: four quarters of
+      // seats at exactly today's gross additions and churn. A projection, and
+      // labelled as one — the drawer says so at length.
+      key: 'trend',
+      header: 'Seats',
+      cardLabel: 'Seat projection, 4q',
+      align: 'center',
+      width: '84px',
+      render: (row) => (
+        <Sparkline
+          values={projectCustomers(row, 4)}
+          width={64}
+          height={20}
+          className="inline-block align-middle"
+          ariaLabel={`${row.name} seat projection at today's rates`}
+        />
+      ),
     },
     {
       key: 'price',
@@ -154,18 +176,26 @@ export default function ProductsPage(): React.JSX.Element {
         eyebrow={`${quarterLabel(session.startYear, session.quarter)} · ${company.name}`}
         subtitle="Pricing, customers and unit economics. Every ticket on this screen is an intent: the engine validates, clamps and resolves."
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setLaunchOpen(true)}>
+          <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
+            <Icon name="plus" size={16} accent="current" />
             Launch product
           </button>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Product revenue" value={formatMoney(revenue)} hint={`${active.length} active line${active.length === 1 ? '' : 's'}`} href="/financials" />
-        <StatCard label="Gross profit" value={formatMoney(grossProfit)} hint={`Blended margin ${formatPct(blendedMargin)}`} tone="gain" />
-        <StatCard label="Customers" value={customers.toString()} unit="seats" hint={`Blended churn ${formatPct(blendedChurn)}`} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
-          label="Serving headroom"
+          label="Revenue"
+          iconName="coins"
+          value={formatMoney(revenue)}
+          hint={`${active.length} active line${active.length === 1 ? '' : 's'}`}
+          href="/financials"
+        />
+        <StatCard label="Gross profit" iconName="ledger" value={formatMoney(grossProfit)} hint={`Blended margin ${formatPct(blendedMargin)}`} tone="gain" />
+        <StatCard label="Customers" iconName="people" value={customers.toString()} unit="seats" hint={`Blended churn ${formatPct(blendedChurn)}`} />
+        <StatCard
+          label="Headroom"
+          iconName="box"
           value={`${headroom >= 0 ? '+' : ''}${headroom.toFixed(1)}`}
           unit="units"
           tone={headroom < 0 ? 'loss' : headroom < servingCapacity * 0.1 ? 'warn' : 'gain'}
@@ -176,6 +206,8 @@ export default function ProductsPage(): React.JSX.Element {
 
       <Panel
         title="Serving capacity"
+        iconName="gauge"
+        iconTone={headroom < 0 ? 'loss' : 'neutral'}
         subtitle="Selling past capacity is a churn event, not a warning"
         actions={
           headroom < 0 ? (
@@ -195,29 +227,33 @@ export default function ProductsPage(): React.JSX.Element {
           ghostValue={servingCapacity}
           tone={headroom < 0 ? 'loss' : 'gain'}
           height={10}
-          label="Inference demand against the serving split"
-          valueLabel={`${servingDemand.toFixed(1)} / ${servingCapacity.toFixed(1)} units`}
+          label="Demand vs capacity"
+          valueLabel={`${servingDemand.toFixed(1)} / ${servingCapacity.toFixed(1)}u`}
         />
-        <p className="mt-2 text-[10px] text-ink-faint">
+        <p className="mt-2 text-[11px] text-ink-faint">
           Capacity is held compute times the serving share of the training split. Change the split on Research, or buy capacity from the compute
           controls, before a launch pushes demand past it.
         </p>
       </Panel>
 
-      <Panel title="Product lines" subtitle="Select a row to open its economics, reprice it or sunset it" flush>
+      <Panel title="Product lines" iconName="box" subtitle="Select a line to open its economics, reprice it or sunset it" flush>
         <DataTable
           columns={columns}
           rows={active}
           rowKey={(row) => row.id}
           onRowClick={(row) => setOpenProductId(row.id)}
           initialSort={{ key: 'revenue', direction: 'desc' }}
+          cardMode="auto"
+          cardTitleKey="name"
           empty={
             <div className="p-4">
               <EmptyState
+                icon="box"
                 title="No active products"
                 message="Nothing is being sold. A company with no product line books no revenue and churns nobody."
                 action={
-                  <button type="button" className="btn btn-primary btn-sm" onClick={() => setLaunchOpen(true)}>
+                  <button type="button" className="btn btn-primary tap-target gap-1.5" onClick={() => setLaunchOpen(true)}>
+                    <Icon name="plus" size={16} accent="current" />
                     Launch the first product
                   </button>
                 }
@@ -225,20 +261,30 @@ export default function ProductsPage(): React.JSX.Element {
             </div>
           }
         />
+        {active.length === 0 ? null : (
+          // The ticket sits under the thing it acts on, where a thumb already
+          // is, rather than only in the page header a scroll away.
+          <div className="border-t border-hair p-3">
+            <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
+              <Icon name="plus" size={16} accent="current" />
+              Launch another product
+            </button>
+          </div>
+        )}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <MarketingPanel company={company} queued={queued} />
 
-        <Panel title="Portfolio quality" subtitle="Where each line sits against the market frontier">
+        <Panel title="Portfolio quality" iconName="trophy" subtitle="Where each line sits against the market frontier">
           {active.length === 0 ? (
-            <EmptyState compact title="Nothing to compare" message="Quality is measured against the segment frontier once a product is live." />
+            <EmptyState compact icon="trophy" title="Nothing to compare" message="Quality is measured against the segment frontier once a product is live." />
           ) : (
             <div className="space-y-3.5">
               {active.map((product) => (
                 <div key={product.id}>
                   <Meter value={product.qualityScore * 100} label={`${product.name} — ${SEGMENT_LABEL[product.segment]}`} />
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-ink-faint">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
                     <span>
                       Revenue per customer{' '}
                       <span className="figure text-ink-dim">
@@ -260,12 +306,14 @@ export default function ProductsPage(): React.JSX.Element {
       </div>
 
       {sunset.length === 0 ? null : (
-        <Panel title="Sunset lines" subtitle="Kept for financial comparatives" flush>
+        <Panel title="Sunset lines" iconName="ledger" subtitle="Kept for financial comparatives" flush>
           <DataTable
             columns={columns}
             rows={sunset}
             rowKey={(row) => row.id}
             onRowClick={(row) => setOpenProductId(row.id)}
+            cardMode="auto"
+            cardTitleKey="name"
             dense
           />
         </Panel>

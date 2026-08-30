@@ -8,7 +8,7 @@ import { formatMoney } from '@frontier/shared';
 import { DEMO_SEED, readSaveFile, useGame, useGameActions, useLlm, useLoading } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
-import { Panel, Tag, cx } from '@/components/ui';
+import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
 
 const DIFFICULTY_BLURB: Readonly<Record<SessionDifficulty, string>> = {
   sandbox: 'A quiet world. Two events a quarter at most, and rivals that rarely reach for your throat.',
@@ -81,9 +81,12 @@ function CompanyTown(): React.JSX.Element {
           <rect x="126" y="176" width="44" height="20" rx="5" opacity="0.75" />
         </g>
         <rect x="140" y="212" width="32" height="40" rx="8" fill="var(--color-panel)" opacity="0.9" />
-        <text x="156" y="90" textAnchor="middle" fontSize="13" fontWeight="700" fill="var(--color-panel)" fontFamily="var(--font-mono)">
-          FC
-        </text>
+        {/* The house mark on the roof band — the same silhouette the app logo
+            draws, not a two-letter monogram. */}
+        <g transform="translate(148.4 77) scale(0.62)" fill="var(--color-panel)">
+          <path d="M1.8 20.4 8 9.8a1.7 1.7 0 0 1 2.9 0l2.2 3.7 1.6-2.7a1.7 1.7 0 0 1 2.9 0l4 9.6H1.8Z" />
+          <circle cx="17.6" cy="5.4" r="3" />
+        </g>
         {/* the flag on the roof */}
         <g className="animate-sway" style={{ transformOrigin: '156px 72px' }}>
           <rect x="154" y="40" width="3" height="34" rx="1.5" fill="var(--color-ink-faint)" />
@@ -171,49 +174,34 @@ function CompanyTown(): React.JSX.Element {
   );
 }
 
-/** A flat glyph for a feature card. Shapes only — no letter monograms. */
-function FlatIcon({ name }: { readonly name: 'engine' | 'people' | 'market' }): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true" fill="none">
-      {name === 'engine' ? (
-        <>
-          <rect x="3" y="4" width="18" height="16" rx="5" fill="var(--color-brand-wash)" stroke="var(--color-brand)" strokeWidth="1.6" />
-          <circle cx="12" cy="12" r="3.2" fill="var(--color-brand)" />
-          <path d="M12 4v2.4M12 17.6V20M3 12h2.4M18.6 12H21" stroke="var(--color-brand)" strokeWidth="1.6" strokeLinecap="round" />
-        </>
-      ) : null}
-      {name === 'people' ? (
-        <>
-          <circle cx="9" cy="8.5" r="3.4" fill="var(--color-pop-5)" />
-          <circle cx="16.5" cy="9.5" r="2.6" fill="var(--color-pop-2)" />
-          <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="var(--color-pop-5)" strokeWidth="1.8" strokeLinecap="round" />
-          <path d="M15 19c0-2.2 1.6-3.6 3.4-3.6 1.3 0 2.1.5 2.1.5" stroke="var(--color-pop-2)" strokeWidth="1.8" strokeLinecap="round" />
-        </>
-      ) : null}
-      {name === 'market' ? (
-        <>
-          <rect x="3" y="14" width="4" height="6" rx="2" fill="var(--color-gain)" />
-          <rect x="10" y="10" width="4" height="10" rx="2" fill="var(--color-info)" />
-          <rect x="17" y="5" width="4" height="15" rx="2" fill="var(--color-warn)" />
-        </>
-      ) : null}
-    </svg>
-  );
-}
-
-const FEATURES = [
+/**
+ * The three promises.
+ *
+ * Each carries a mark from the set — no bespoke glyph, no monogram. The tone is
+ * the chip's tint, so the row reads as three different things rather than three
+ * shades of the same thing.
+ */
+const FEATURES: readonly {
+  readonly icon: IconName;
+  readonly tone: 'brand' | 'info' | 'gain';
+  readonly title: string;
+  readonly body: string;
+}[] = [
   {
-    icon: 'engine' as const,
+    icon: 'settings',
+    tone: 'brand',
     title: 'One deterministic engine',
     body: 'Same state, same decisions, same seed — the same quarter, every time. Models propose; only the engine makes reality.',
   },
   {
-    icon: 'people' as const,
+    icon: 'people',
+    tone: 'info',
     title: 'Everyone wants something',
     body: 'Sixteen people with goals, memory and agency. Directors you have to keep, rivals who take the opening you leave.',
   },
   {
-    icon: 'market' as const,
+    icon: 'chart',
+    tone: 'gain',
     title: 'Markets price belief',
     body: 'What you know is not what the tape knows. The gap between the two is where the whole game is played.',
   },
@@ -273,11 +261,16 @@ export default function LandingPage(): React.JSX.Element {
 
   return (
     <div className="min-h-dvh bg-base">
-      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-10 px-5 py-10 sm:py-14">
+      {/* The phone reads this top to bottom in one column, in the order a
+          visitor decides things: who this is, what it is, how to start (or
+          resume), then why, then what is inside. `order` puts the entry cards
+          above the three promises on a phone and restores the desktop
+          composition from `lg`. */}
+      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-8 px-4 py-8 sm:px-5 sm:py-12 lg:gap-10">
         {/* --- masthead ---------------------------------------------------- */}
-        <header className="flex items-center gap-3">
-          <span className="figure flex size-9 items-center justify-center rounded-chip bg-brand-strong text-[12px] font-bold text-white shadow-card">
-            FC
+        <header className="order-1 flex items-center gap-3">
+          <span className="icon-knockout-brand flex size-9 items-center justify-center rounded-chip bg-brand-strong text-white shadow-card">
+            <Icon name="logo" size={20} accent="inherit" />
           </span>
           <div>
             <div className="text-[14px] font-extrabold tracking-tight text-ink">Frontier Capital</div>
@@ -286,87 +279,99 @@ export default function LandingPage(): React.JSX.Element {
         </header>
 
         {/* --- hero -------------------------------------------------------- */}
-        <section className="grid items-center gap-8 lg:grid-cols-[1.05fr_1fr]">
+        <section className="order-2 grid items-center gap-6 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
           <div className="animate-pop-in flex min-w-0 flex-col gap-4">
             <span className="label-caps inline-flex w-fit items-center rounded-pill bg-brand-wash px-3 py-1 text-brand">
               2027 Q1 · eight people · one thesis
             </span>
-            <h1 className="max-w-2xl text-[32px] leading-[1.1] font-extrabold tracking-tight text-ink sm:text-[42px]">
+            <h1 className="max-w-2xl text-[30px] leading-[1.1] font-extrabold tracking-tight text-ink sm:text-[42px]">
               Found a company. Outthink everybody else in the industry.
             </h1>
-            <p className="max-w-2xl text-[14px] leading-relaxed text-ink-dim">
+            <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-dim sm:text-[14px]">
               You start with <span className="figure font-semibold text-ink">{formatMoney(4_000_000)}</span>, eight people and one thesis,
               on connection level <span className="figure font-semibold text-ink">24</span> — in a world where the sovereign fund&rsquo;s
               chief investment officer sits on <span className="figure font-semibold text-ink">93</span>. Everything this game is about is
               visible in that gap on the very first screen.
             </p>
 
-            <div className="mt-1 flex flex-wrap items-center gap-3">
-              <button type="button" className="btn btn-primary btn-lg press-pop" onClick={startNewGame}>
-                Start a new company
-              </button>
+            {/* Thumb buttons: full width on a phone, stacked in intent order —
+                a saved session is what a returning player came for. */}
+            <div className="mt-1 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
               {save !== null ? (
                 <button
                   type="button"
-                  className="btn btn-lg press-pop"
+                  className="icon-knockout-brand btn btn-primary btn-lg press-pop w-full sm:w-auto"
                   onClick={() => void continueGame()}
                   disabled={resuming || loading}
                 >
+                  <Icon name="playMark" size={18} accent="inherit" />
                   {resuming || loading ? 'Replaying…' : `Continue ${quarterLabel(2027, save.savedQuarter)}`}
                 </button>
               ) : null}
+              <button
+                type="button"
+                className={cx('btn btn-lg press-pop w-full sm:w-auto', save === null ? 'btn-primary' : '')}
+                onClick={startNewGame}
+              >
+                <Icon name="plus" size={18} accent={save === null ? 'current' : 'brand'} />
+                Start a new company
+              </button>
             </div>
 
-            <p className="text-[11.5px] text-ink-faint">
+            <p className="text-[11.5px] leading-relaxed text-ink-faint">
               Seven companies, sixteen people, a seventeen-node Frontier Map and two open procurements — all running locally in this
               browser. No sign-up needed.
             </p>
           </div>
 
           <div className="animate-pop-in stagger-2 min-w-0">
-            <div className="scene-frame panel-surface p-3">
+            <div className="scene-frame panel-surface p-2 sm:p-3">
               <CompanyTown />
             </div>
           </div>
         </section>
 
         {/* --- three promises ---------------------------------------------- */}
-        <section className="grid gap-4 sm:grid-cols-3">
+        <section className="order-4 grid gap-3 sm:grid-cols-3 sm:gap-4 lg:order-3">
           {FEATURES.map((feature, index) => (
             <div
               key={feature.title}
               className={cx('panel-surface animate-pop-in hover-lift p-4', `stagger-${index + 1}`)}
             >
-              <span className="flex size-9 items-center justify-center rounded-chip bg-raised">
-                <FlatIcon name={feature.icon} />
-              </span>
+              <IconChip name={feature.icon} tone={feature.tone} size="lg" />
               <h2 className="mt-3 text-[14px] font-bold text-ink">{feature.title}</h2>
-              <p className="mt-1 text-[12px] leading-relaxed text-ink-dim">{feature.body}</p>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-ink-dim">{feature.body}</p>
             </div>
           ))}
         </section>
 
         {/* --- entry points ------------------------------------------------ */}
-        <div className="grid gap-4 lg:grid-cols-3">
-          <Panel title="Session setup" subtitle="The two dials that decide what world you get" className="lg:col-span-2">
+        <div className="order-3 grid gap-4 lg:order-4 lg:grid-cols-3">
+          <Panel
+            title="Session setup"
+            subtitle="The two dials that decide what world you get"
+            iconName="settings"
+            iconTone="brand"
+            className={cx(save === null ? 'order-1' : 'order-2', 'lg:order-1 lg:col-span-2')}
+          >
             <div className="grid gap-4 sm:grid-cols-[170px_1fr]">
               <label className="block">
                 <span className="label-caps-faint">Seed</span>
                 <input
-                  className="field mt-1"
+                  className="field mt-1 min-h-11 sm:min-h-0"
                   value={seedText}
                   onChange={(event) => setSeedText(event.target.value.replace(/[^\d-]/g, ''))}
                   inputMode="numeric"
                   aria-label="Session seed"
                 />
-                <span className="mt-1.5 block text-[10px] text-ink-faint">
+                <span className="mt-1.5 block text-[10.5px] text-ink-faint">
                   The same seed and the same decisions always produce the same world.
                 </span>
               </label>
 
               <fieldset className="min-w-0">
                 <legend className="label-caps-faint">Difficulty</legend>
-                <div className="mt-1 flex flex-wrap gap-2">
+                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                   {SESSION_DIFFICULTIES.map((option) => (
                     <button
                       key={option}
@@ -374,32 +379,34 @@ export default function LandingPage(): React.JSX.Element {
                       aria-pressed={difficulty === option}
                       onClick={() => setDifficulty(option)}
                       className={cx(
-                        'btn press-pop capitalize',
-                        difficulty === option ? 'border-brand bg-brand-wash text-brand' : '',
+                        'btn tap-target press-pop capitalize',
+                        difficulty === option ? 'icon-knockout-wash border-brand bg-brand-wash text-brand' : '',
                       )}
                     >
+                      {difficulty === option ? <Icon name="check" size={15} accent="inherit" /> : null}
                       {option}
                     </button>
                   ))}
                 </div>
-                <p className="mt-2.5 text-[11.5px] leading-relaxed text-ink-dim">{DIFFICULTY_BLURB[difficulty]}</p>
+                <p className="mt-2.5 text-[12px] leading-relaxed text-ink-dim">{DIFFICULTY_BLURB[difficulty]}</p>
               </fieldset>
             </div>
 
-            <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-hair pt-4">
-              <button type="button" className="btn btn-primary press-pop" onClick={startNewGame}>
+            <div className="mt-5 flex flex-col gap-2 border-t border-hair pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+              <button type="button" className="btn btn-primary tap-target press-pop w-full sm:w-auto" onClick={startNewGame}>
+                <Icon name="plus" size={16} accent="current" />
                 Found Player Ventures — 2027 Q1
               </button>
               <span className="text-[11px] text-ink-faint">Seed {seed}, {difficulty} world.</span>
             </div>
           </Panel>
 
-          <div className="flex flex-col gap-4">
-            <Panel title="Continue">
+          <div className={cx('flex flex-col gap-4 lg:order-2', save === null ? 'order-2' : 'order-1')}>
+            <Panel title="Continue" iconName="playMark" iconTone={save === null ? 'neutral' : 'brand'}>
               {!hydrated ? (
-                <p className="text-[12px] text-ink-faint">Checking this browser for a saved session…</p>
+                <p className="text-[12.5px] text-ink-faint">Checking this browser for a saved session…</p>
               ) : save === null ? (
-                <p className="text-[12px] text-ink-faint">
+                <p className="text-[12.5px] leading-relaxed text-ink-faint">
                   No saved session in this browser. A session saves itself after every quarter you resolve.
                 </p>
               ) : (
@@ -407,30 +414,31 @@ export default function LandingPage(): React.JSX.Element {
                   <dl className="space-y-2">
                     <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
                       <dt className="label-caps-faint">Quarter</dt>
-                      <dd className="figure text-[12px] font-semibold text-ink">{quarterLabel(2027, save.savedQuarter)}</dd>
+                      <dd className="figure text-[12.5px] font-semibold text-ink">{quarterLabel(2027, save.savedQuarter)}</dd>
                     </div>
                     <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
                       <dt className="label-caps-faint">Seed</dt>
-                      <dd className="figure text-[12px] font-semibold text-ink">{save.seed}</dd>
+                      <dd className="figure text-[12.5px] font-semibold text-ink">{save.seed}</dd>
                     </div>
                     <div className="flex items-baseline justify-between gap-2">
                       <dt className="label-caps-faint">Difficulty</dt>
-                      <dd className="text-[12px] font-semibold text-ink capitalize">{save.difficulty}</dd>
+                      <dd className="text-[12.5px] font-semibold text-ink capitalize">{save.difficulty}</dd>
                     </div>
                   </dl>
                   <button
                     type="button"
-                    className="btn press-pop mt-3.5 w-full"
+                    className="icon-knockout-brand btn btn-primary tap-target press-pop mt-3.5 w-full"
                     onClick={() => void continueGame()}
                     disabled={resuming || loading}
                   >
+                    {resuming || loading ? null : <Icon name="playMark" size={16} accent="inherit" />}
                     {resuming || loading
                       ? progress === null
                         ? 'Replaying…'
                         : `Replaying quarter ${progress.quarter} — ${progress.completed} of ${progress.total}`
                       : `Resume — replays ${replayDepth} quarter${replayDepth === 1 ? '' : 's'}`}
                   </button>
-                  <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
+                  <p className="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
                     Saves store the seed, your decisions and what the model contributed — not the world. Loading re-resolves them from the
                     last checkpoint.
                   </p>
@@ -438,30 +446,36 @@ export default function LandingPage(): React.JSX.Element {
               )}
             </Panel>
 
-            <Panel title="Multiplayer">
-              <div className="flex items-center justify-between gap-2">
+            <Panel title="Multiplayer" iconName="network" iconTone={supabaseReady ? 'gain' : 'neutral'}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <Tag tone={supabaseReady ? 'gain' : 'neutral'} dot>
                   {supabaseReady ? 'Supabase configured' : 'Not configured'}
                 </Tag>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowMultiplayer((value) => !value)}>
+                <button
+                  type="button"
+                  className="btn btn-ghost tap-target press-pop"
+                  aria-expanded={showMultiplayer}
+                  onClick={() => setShowMultiplayer((value) => !value)}
+                >
+                  <Icon name={showMultiplayer ? 'chevronDown' : 'chevronRight'} size={15} />
                   {showMultiplayer ? 'Hide' : 'Setup'}
                 </button>
               </div>
 
               {supabaseReady ? (
                 <div className="mt-3 flex flex-col gap-2">
-                  <p className="text-[11.5px] text-ink-dim">Sign in to join a shared world with other founders.</p>
-                  <div className="flex gap-2">
-                    <Link href="/sign-in" className="btn flex-1">
+                  <p className="text-[12px] leading-relaxed text-ink-dim">Sign in to join a shared world with other founders.</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Link href="/sign-in" className="btn tap-target flex-1">
                       Sign in
                     </Link>
-                    <Link href="/sign-up" className="btn btn-primary flex-1">
+                    <Link href="/sign-up" className="btn btn-primary tap-target flex-1">
                       Sign up
                     </Link>
                   </div>
                 </div>
               ) : (
-                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-dim">
+                <p className="mt-3 text-[12px] leading-relaxed text-ink-dim">
                   Demo mode runs the full game locally — same engine, same invariants. Shared sessions need a Supabase project.
                 </p>
               )}
@@ -469,12 +483,12 @@ export default function LandingPage(): React.JSX.Element {
               {showMultiplayer ? (
                 <div className="animate-rise mt-3 rounded-card border border-hair bg-raised p-3">
                   <p className="label-caps-faint mb-1.5">Set in .env.local</p>
-                  <pre className="figure overflow-x-auto text-[10px] leading-relaxed text-ink-dim">
+                  <pre className="figure scroll-x text-[10px] leading-relaxed text-ink-dim">
 {`NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=`}
                   </pre>
-                  <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
+                  <p className="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
                     Then apply <span className="figure">supabase/migrations</span> and seed with{' '}
                     <span className="figure">supabase/seed.sql</span>, which loads this same world.
                   </p>
@@ -485,19 +499,29 @@ SUPABASE_SERVICE_ROLE_KEY=`}
         </div>
 
         {/* --- what is in there -------------------------------------------- */}
-        <section className="flex flex-col gap-3">
-          <h2 className="text-[16px] font-extrabold tracking-tight text-ink">Eighteen screens, one company</h2>
+        <section className="order-5 flex flex-col gap-3">
+          <h2 className="text-[17px] font-extrabold tracking-tight text-ink">Eighteen screens, one company</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {NAV_GROUPS.map((group) => (
-              <div key={group.id} className="panel-surface hover-lift p-4">
-                <div className="label-caps mb-2.5 text-brand">{group.label}</div>
-                <ul className="space-y-2">
+              <div key={group.id} className="panel-surface hover-lift min-w-0 p-3.5 sm:p-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <IconChip name={group.icon} tone="brand" size="sm" />
+                  <span className="label-caps text-brand">{group.label}</span>
+                </div>
+                <ul>
                   {group.items.map((item) => (
                     <li key={item.href} className="min-w-0">
-                      <Link href={item.href} className="block truncate text-[12.5px] font-semibold text-ink hover:text-brand">
-                        {item.label}
+                      {/* A whole row is the target, and it clears 44px. */}
+                      <Link
+                        href={item.href}
+                        className="icon-knockout-panel flex min-h-11 min-w-0 items-center gap-2.5 rounded-chip px-1.5 py-1.5 text-ink hover:bg-raised hover:text-brand"
+                      >
+                        <Icon name={item.icon} size={17} accent="inherit" className="text-ink-faint" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12.5px] font-semibold">{item.label}</span>
+                          <span className="block truncate text-[10.5px] text-ink-faint">{item.blurb}</span>
+                        </span>
                       </Link>
-                      <span className="block truncate text-[10.5px] text-ink-faint">{item.blurb}</span>
                     </li>
                   ))}
                 </ul>
@@ -507,10 +531,10 @@ SUPABASE_SERVICE_ROLE_KEY=`}
         </section>
 
         {/* --- footer ------------------------------------------------------ */}
-        <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-hair pt-4 text-[10.5px] text-ink-faint">
+        <footer className="order-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-hair pt-4 text-[10.5px] text-ink-faint">
           <span>Engine: deterministic, in-browser, {session.companies.length} companies loaded.</span>
           <span className="flex items-center gap-1.5">
-            <span className={cx('inline-block size-2 rounded-pill', llm.available ? 'bg-gain' : 'bg-ink-faint')} />
+            <Icon name="live" size={13} accent={llm.available ? 'gain' : 'neutral'} />
             {llm.available
               ? `Live model configured (${llm.transportKind}${llm.model === null ? '' : `, ${llm.model}`}).`
               : 'No model configured — every role falls back deterministically and the game plays in full.'}

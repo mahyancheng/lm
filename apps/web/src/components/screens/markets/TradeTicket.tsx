@@ -68,6 +68,7 @@ export function TradeTicket({
       <SectionHeading rule>Trade ticket</SectionHeading>
 
       <TabBar
+        className="[&>button]:min-h-11 sm:[&>button]:min-h-0"
         variant="segmented"
         ariaLabel="Side"
         tabs={[
@@ -85,7 +86,7 @@ export function TradeTicket({
         <label className="block">
           <span className="label-caps-faint">Shares</span>
           <input
-            className="field mt-1"
+            className="field tap-target mt-1 sm:min-h-0"
             inputMode="numeric"
             value={shares}
             onChange={(event) => {
@@ -97,7 +98,7 @@ export function TradeTicket({
         <label className="block">
           <span className="label-caps-faint">{side === 'buy' ? 'Max price' : 'Min price'}</span>
           <input
-            className="field mt-1"
+            className="field tap-target mt-1 sm:min-h-0"
             inputMode="decimal"
             value={limit}
             onChange={(event) => {
@@ -108,43 +109,45 @@ export function TradeTicket({
         </label>
       </div>
 
-      <dl className="raised-surface divide-y divide-hair px-3 py-1 text-[11px]">
-        <div className="flex items-baseline justify-between gap-3 py-1.5">
+      <dl className="raised-surface divide-y divide-hair px-3 py-1 text-[12px]">
+        <div className="flex items-baseline justify-between gap-3 py-2">
           <dt className="label-caps-faint">Consideration</dt>
           <dd className="figure text-ink">{formatMoney(consideration)}</dd>
         </div>
-        <div className="flex items-baseline justify-between gap-3 py-1.5">
+        <div className="flex items-baseline justify-between gap-3 py-2">
           <dt className="label-caps-faint">Stake now</dt>
           <dd className="figure text-ink-dim">{formatPct(stakeNow, 2)}</dd>
         </div>
-        <div className="flex items-baseline justify-between gap-3 py-1.5">
+        <div className="flex items-baseline justify-between gap-3 py-2">
           <dt className="label-caps-faint">Stake if filled</dt>
           <dd className="figure text-ink">{formatPct(stakeAfter, 2)}</dd>
         </div>
       </dl>
 
       {preCheck === null ? (
-        <p className="text-[11px] text-ink-faint">Enter a share count to run the validator.</p>
+        <p className="text-[13px] text-ink-faint sm:text-[11px]">Enter a share count to run the validator.</p>
       ) : (
         <ValidationBanner result={preCheck} compact />
       )}
 
       {queued === null ? null : (
-        <div className="rounded-card border border-brand/25 bg-brand-wash px-3 py-2 text-[11px] text-brand">
+        <div className="rounded-card border border-brand/25 bg-brand-wash px-3 py-2 text-[13px] text-brand sm:text-[11px]">
           Queued for this quarter. It resolves in the market phase.
         </div>
       )}
 
+      {/* The one control this ticket exists for: full width and a full thumb
+          tall on a phone, the compact button from `sm` up. */}
       <button
         type="button"
-        className="btn btn-sm btn-primary"
+        className="btn btn-primary tap-target w-full sm:w-auto sm:min-h-0"
         disabled={shareCount <= 0 || limitPrice <= 0}
         onClick={() => setPending(intent)}
       >
         {side === 'buy' ? 'Review purchase' : 'Review sale'}
       </button>
 
-      <p className="text-[10px] text-ink-faint">
+      <p className="text-[11px] leading-relaxed text-ink-faint">
         Accumulating past 5% makes the position public knowledge, which is usually the moment the target notices.
       </p>
 

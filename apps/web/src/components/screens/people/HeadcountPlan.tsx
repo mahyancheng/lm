@@ -18,7 +18,7 @@ import type { ActionValidationResult, Company, CompBand, SessionState, StaffRole
 import { COMP_BANDS, STAFF_ROLES } from '@frontier/contracts';
 import { HIRING_CASH_COVER_QUARTERS, fillRate, offerCompUsd, quarterlyHireCostUsd, requiredCompUsd } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, Panel, ProgressBar, Tag, ValidationBanner } from '@/components/ui';
+import { ConfirmDialog, Icon, Panel, ProgressBar, Tag, ValidationBanner } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { BAND_BLURB, BAND_LABEL, ROLE_BLURB, ROLE_LABEL, headcountOf } from './labels';
 
@@ -96,18 +96,28 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
     <>
       <Panel
         title="Headcount plan"
+        iconName="people"
+        iconTone="brand"
         subtitle={`${headcount} people · ${company.employees.openRoles} roles already open`}
         actions={
-          <select className="field h-6 w-auto text-[11px]" value={band} onChange={(event) => setBand(event.target.value as CompBand)}>
-            {COMP_BANDS.map((option) => (
-              <option key={option} value={option}>
-                {BAND_LABEL[option]}
-              </option>
-            ))}
-          </select>
+          <label className="flex min-w-0 items-center gap-1.5">
+            <span className="label-caps-faint shrink-0">Band</span>
+            <select
+              className="field tap-target w-auto"
+              aria-label="Compensation band for new requisitions"
+              value={band}
+              onChange={(event) => setBand(event.target.value as CompBand)}
+            >
+              {COMP_BANDS.map((option) => (
+                <option key={option} value={option}>
+                  {BAND_LABEL[option]}
+                </option>
+              ))}
+            </select>
+          </label>
         }
       >
-        <p className="text-[10px] text-ink-faint">{BAND_BLURB[band]}</p>
+        <p className="text-[12px] text-ink-faint">{BAND_BLURB[band]}</p>
 
         <div className="mt-3 grid gap-2.5 lg:grid-cols-2">
           {bandPreview.map((entry) => {
@@ -118,14 +128,14 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
             const cashNeeded = entry.perQuarterUsd * HIRING_CASH_COVER_QUARTERS * count;
 
             return (
-              <div key={role} className="raised-surface p-3">
+              <div key={role} className="raised-surface flex flex-col p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-ink">{ROLE_LABEL[role]}</div>
-                    <div className="text-[10px] text-ink-faint">{ROLE_BLURB[role]}</div>
+                    <div className="text-[13.5px] font-semibold text-ink">{ROLE_LABEL[role]}</div>
+                    <div className="text-[11px] text-ink-faint">{ROLE_BLURB[role]}</div>
                   </div>
-                  <div className="text-right">
-                    <div className="figure text-[15px] text-ink">{company.employees[role]}</div>
+                  <div className="shrink-0 text-right">
+                    <div className="figure text-[16px] text-ink">{company.employees[role]}</div>
                     <div className="label-caps-faint">in post</div>
                   </div>
                 </div>
@@ -139,7 +149,7 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                   />
                 </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-ink-faint">
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-ink-faint">
                   <div>
                     Offer <span className="figure text-ink-dim">{formatMoney(entry.offerAnnualUsd)}</span> a year
                   </div>
@@ -148,40 +158,51 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                   </div>
                 </div>
 
-                <div className="mt-2.5 flex flex-wrap items-end gap-2">
-                  <label className="min-w-0 flex-1">
-                    <span className="label-caps-faint mb-1 block">People</span>
-                    <input
-                      className="field"
-                      type="number"
-                      min={0}
-                      step={1}
-                      inputMode="numeric"
-                      placeholder="0"
-                      value={counts[role] ?? ''}
-                      onChange={(event) => setCounts((current) => ({ ...current, [role]: event.target.value }))}
-                    />
-                  </label>
-                  <button type="button" className="btn btn-primary btn-sm" disabled={count <= 0} onClick={() => hire(role)}>
-                    Hire
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    disabled={count <= 0 || company.employees[role] <= 0}
-                    onClick={() => askLayoff(role)}
-                  >
-                    Reduce
-                  </button>
-                </div>
-
                 {count > 0 ? (
-                  <p className="mt-1.5 text-[10px] text-ink-faint">
+                  <p className="mt-2 text-[11px] text-ink-faint">
                     {count} hire{count === 1 ? '' : 's'} reserves{' '}
                     <span className="figure text-ink-dim">{formatMoney(cashNeeded)}</span> of uncommitted cash —{' '}
                     {HIRING_CASH_COVER_QUARTERS} quarters of cover per requisition.
                   </p>
                 ) : null}
+
+                {/* The ticket sits at the foot of the card it acts on: the
+                    count, then the two things that can be done with it, all at
+                    thumb size and all in one row a phone can reach. */}
+                <div className="mt-auto flex items-end gap-2 pt-2.5">
+                  <label className="w-20 shrink-0 sm:w-auto sm:flex-1">
+                    <span className="label-caps-faint mb-1 block">People</span>
+                    <input
+                      className="field tap-target"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      placeholder="0"
+                      aria-label={`People to hire or reduce in ${ROLE_LABEL[role]}`}
+                      value={counts[role] ?? ''}
+                      onChange={(event) => setCounts((current) => ({ ...current, [role]: event.target.value }))}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-primary tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
+                    disabled={count <= 0}
+                    onClick={() => hire(role)}
+                  >
+                    <Icon name="plus" size={15} accent="current" />
+                    Hire
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
+                    disabled={count <= 0 || company.employees[role] <= 0}
+                    onClick={() => askLayoff(role)}
+                  >
+                    <Icon name="warning" size={15} accent="current" />
+                    Reduce
+                  </button>
+                </div>
 
                 {result === null && hireIntent !== null ? (
                   <div className="mt-2">
@@ -198,18 +219,26 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
           })}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-hair pt-3">
-          <span className="label-caps-faint">Severance on a reduction</span>
-          <select className="field h-6 w-auto text-[11px]" value={severance} onChange={(event) => setSeverance(Number(event.target.value))}>
-            {[0, 1, 2, 3, 4].map((quarters) => (
-              <option key={quarters} value={quarters}>
-                {quarters} quarter{quarters === 1 ? '' : 's'} of pay
-              </option>
-            ))}
-          </select>
-          <Tag tone={severance >= 2 ? 'gain' : 'warn'} dot>
-            {severance >= 2 ? 'Protects some morale' : 'Cheap now, expensive in morale'}
-          </Tag>
+        <div className="mt-3 border-t border-hair pt-3">
+          <label className="block">
+            <span className="label-caps-faint mb-1 block">Severance on a reduction</span>
+            <select
+              className="field tap-target sm:w-64"
+              value={severance}
+              onChange={(event) => setSeverance(Number(event.target.value))}
+            >
+              {[0, 1, 2, 3, 4].map((quarters) => (
+                <option key={quarters} value={quarters}>
+                  {quarters} quarter{quarters === 1 ? '' : 's'} of pay
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mt-2">
+            <Tag tone={severance >= 2 ? 'gain' : 'warn'} dot>
+              {severance >= 2 ? 'Protects some morale' : 'Cheap now, expensive in morale'}
+            </Tag>
+          </div>
         </div>
       </Panel>
 

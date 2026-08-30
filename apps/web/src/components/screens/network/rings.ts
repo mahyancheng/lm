@@ -88,6 +88,34 @@ export function isHostile(entry: DirectoryEntry): boolean {
   return (entry.outbound?.hostility ?? 0) >= 50 || (entry.inbound?.hostility ?? 0) >= 50;
 }
 
+/** The order people are read in, inside any ring: furthest up the ladder first. */
+function byStanding(a: DirectoryEntry, b: DirectoryEntry): number {
+  const byConnection = b.character.connectionLevel - a.character.connectionLevel;
+  return byConnection !== 0 ? byConnection : a.character.id.localeCompare(b.character.id);
+}
+
+export interface RingGroup {
+  readonly ring: Ring;
+  readonly entries: readonly DirectoryEntry[];
+}
+
+/**
+ * The same three rings, as three lists.
+ *
+ * A phone is 390px wide and the web is a picture whose whole meaning is the
+ * distance between two faces; squeezed to that width the rings collapse into a
+ * pile and read as nothing. The list says exactly what the picture says —
+ * reachable, one introduction away, out of reach — in the order the picture
+ * places them, so moving between the two never reshuffles anybody.
+ *
+ * Empty rings are kept: "nobody is out of your reach" is information.
+ */
+export function groupByRing(entries: readonly DirectoryEntry[]): RingGroup[] {
+  const byRing = new Map<Ring, DirectoryEntry[]>(RING_ORDER.map((ring) => [ring, []]));
+  for (const entry of entries) byRing.get(ringOf(entry))?.push(entry);
+  return RING_ORDER.map((ring) => ({ ring, entries: (byRing.get(ring) ?? []).slice().sort(byStanding) }));
+}
+
 /**
  * Lay the whole directory out around the player.
  *
@@ -101,10 +129,7 @@ export function layoutRings(entries: readonly DirectoryEntry[]): WebNode[] {
 
   const nodes: WebNode[] = [];
   for (const ring of RING_ORDER) {
-    const members = (byRing.get(ring) ?? []).slice().sort((a, b) => {
-      const byConnection = b.character.connectionLevel - a.character.connectionLevel;
-      return byConnection !== 0 ? byConnection : a.character.id.localeCompare(b.character.id);
-    });
+    const members = (byRing.get(ring) ?? []).slice().sort(byStanding);
     const geometry = RING_GEOMETRY[ring];
     for (const [index, entry] of members.entries()) {
       const step = 360 / Math.max(1, members.length);

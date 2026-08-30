@@ -7,20 +7,28 @@
  * matters, the world you are exposed to, and everything currently asking for an
  * answer. Every number is committed state or documented arithmetic over it;
  * every alert links to the screen that resolves it.
+ *
+ * **Portrait first.** On a phone the screen reads straight down in the order a
+ * player checks things: the floor, the eight figures two-up, what is asking for
+ * an answer, the tape, the objectives, then the world and the jump-off cards.
+ * From `lg` the same blocks fall into the two-thirds / one-third split the
+ * desktop layout has always had.
  */
 
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { ObjectiveMetric } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import {
   EmptyState,
+  Icon,
   PageHeader,
   Panel,
   ProgressBar,
   StatCard,
   Tag,
+  type IconName,
 } from '@/components/ui';
 import {
   useCompanyMetrics,
@@ -52,14 +60,14 @@ function objectiveReading(metric: ObjectiveMetric, current: number, target: numb
   return `${formatMoney(current)} of ${formatMoney(target)}`;
 }
 
-const QUICK_LINKS = [
-  { href: '/financials', label: 'Financials', blurb: 'P&L, balance sheet, cash flow' },
-  { href: '/markets', label: 'Markets', blurb: 'Tape, anchors, return decomposition' },
-  { href: '/capital', label: 'Capital', blurb: 'Cap table, rounds, treasury' },
-  { href: '/leaderboard', label: 'Leaderboard', blurb: 'Ten boards and the power graph' },
-  { href: '/news', label: 'News', blurb: 'The public record' },
-  { href: '/end-quarter', label: 'End Quarter', blurb: 'Review and lock the submission' },
-] as const;
+const QUICK_LINKS: readonly { href: string; label: string; blurb: string; icon: IconName }[] = [
+  { href: '/financials', label: 'Financials', blurb: 'P&L, balance sheet, cash flow', icon: 'ledger' },
+  { href: '/markets', label: 'Markets', blurb: 'Tape, anchors, return decomposition', icon: 'chart' },
+  { href: '/capital', label: 'Capital', blurb: 'Cap table, rounds, treasury', icon: 'coins' },
+  { href: '/leaderboard', label: 'Leaderboard', blurb: 'Ten boards and the power graph', icon: 'trophy' },
+  { href: '/news', label: 'News', blurb: 'The public record', icon: 'newspaper' },
+  { href: '/end-quarter', label: 'End Quarter', blurb: 'Review and lock the submission', icon: 'stamp' },
+];
 
 export default function CommandCentrePage(): React.JSX.Element {
   const session = useSession();
@@ -75,6 +83,11 @@ export default function CommandCentrePage(): React.JSX.Element {
   // company is given an empty series rather than everyone else's prices.
   const tape = useQuotes(company.instrumentId ?? undefined);
   const ownQuotes = company.instrumentId === null ? [] : tape;
+
+  // The world panel is ten readings deep. On a phone that is a screenful of
+  // detail sitting between the tape and the jump-off cards, so it collapses to
+  // its own heading until asked for. From `lg` it is simply open.
+  const [worldOpen, setWorldOpen] = useState(false);
 
   const blocked = queued.filter((entry) => entry.blocked).length;
   const feed = useMemo(() => buildFeed(session, view, lastOutcome, blocked), [session, view, lastOutcome, blocked]);
@@ -96,10 +109,12 @@ export default function CommandCentrePage(): React.JSX.Element {
         subtitle={`${humanise(company.archetype)} · ${humanise(company.sectorId)} · ${company.headquartersCity} · posture ${humanise(company.posture).toLowerCase()}`}
         actions={
           <>
-            <Link href="/chief-of-staff" className="btn btn-sm">
+            <Link href="/chief-of-staff" className="btn tap-target flex-1 gap-1.5 sm:flex-none">
+              <Icon name="briefcase" size={16} accent="current" />
               Chief of Staff
             </Link>
-            <Link href="/end-quarter" className="btn btn-sm btn-primary">
+            <Link href="/end-quarter" className="btn btn-primary tap-target flex-1 gap-1.5 sm:flex-none">
+              <Icon name="stamp" size={16} accent="current" />
               End quarter{queued.length > 0 ? ` (${queued.length})` : ''}
             </Link>
           </>
@@ -107,17 +122,22 @@ export default function CommandCentrePage(): React.JSX.Element {
       />
 
       {/* --- the office, then the eight figures --------------------------------
-          The scene takes the hero slot beside the stat cards: the company as a
-          place — headcount, the mood on the floor, the glow off the racks —
-          before the company as a set of numbers. It is a link, not a control
-          surface; the Company screen is where the rooms are operable. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          The scene takes the hero slot above (phone) or beside (desktop) the
+          stat cards: the company as a place — headcount, the mood on the floor,
+          the glow off the racks — before the company as a set of numbers. It is
+          a link, not a control surface; the Company screen is where the rooms
+          are operable. The figures sit two-up on a phone: eight full-width
+          cards is eight screenfuls of scrolling for eight numbers. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Panel
           title="The floor"
           subtitle={`${company.name} · ${company.headquartersCity}`}
-          className="sm:col-span-2 lg:row-span-2"
+          iconName="building"
+          iconTone="brand"
+          className="col-span-2 lg:row-span-2"
           actions={
-            <Link href="/company" className="btn btn-ghost btn-sm">
+            <Link href="/company" className="btn btn-ghost tap-target gap-1.5 px-2">
+              <Icon name="building" size={15} accent="current" />
               Open office
             </Link>
           }
@@ -127,6 +147,7 @@ export default function CommandCentrePage(): React.JSX.Element {
 
         <StatCard
           label="Market cap"
+          iconName="chart"
           value={formatMoney(marketCap)}
           delta={listed && lastQuote !== null ? lastQuote.return : undefined}
           spark={listed ? ownQuotes.map((quote) => quote.price) : undefined}
@@ -135,6 +156,7 @@ export default function CommandCentrePage(): React.JSX.Element {
         />
         <StatCard
           label="Revenue"
+          iconName="coins"
           value={formatMoney(company.financials.revenueQuarterly)}
           delta={metrics === null ? undefined : metrics.revenueGrowthYoY}
           hint={metrics === null ? 'This quarter' : `Year on year · ${formatMoney(metrics.revenueTtm)} trailing`}
@@ -142,6 +164,7 @@ export default function CommandCentrePage(): React.JSX.Element {
         />
         <StatCard
           label="Cash"
+          iconName="vault"
           value={formatMoney(company.financials.cash)}
           delta={cashDelta ?? undefined}
           tone={company.financials.cash <= 0 ? 'loss' : undefined}
@@ -150,6 +173,7 @@ export default function CommandCentrePage(): React.JSX.Element {
         />
         <StatCard
           label="Runway"
+          iconName="gauge"
           value={runway === null ? '—' : formatQuarterCount(runway)}
           tone={runway === null ? undefined : runway < 3 ? 'loss' : runway < 6 ? 'warn' : undefined}
           hint={runway === null ? 'Computed at the first resolution' : 'At the current burn'}
@@ -158,12 +182,14 @@ export default function CommandCentrePage(): React.JSX.Element {
 
         <StatCard
           label="Employees"
+          iconName="people"
           value={formatScore(headcount)}
           hint={`${company.employees.openRoles} open roles · morale ${Math.round(company.employees.morale)}`}
           href="/people"
         />
         <StatCard
           label="Connection"
+          iconName="network"
           value={formatScore(connection)}
           tone={connection >= 70 ? 'gain' : connection < 30 ? 'warn' : undefined}
           hint={`${founder.name} · ${founder.boardSeatCount} board seat${founder.boardSeatCount === 1 ? '' : 's'}`}
@@ -171,54 +197,123 @@ export default function CommandCentrePage(): React.JSX.Element {
         />
         <StatCard
           label="Gov. rating"
+          iconName="capitol"
           value={formatScore(company.governmentPastPerformance)}
           hint="Procurement past performance, 0–100"
           href="/government"
         />
         <StatCard
           label="Gross margin"
+          iconName="ledger"
           value={metrics === null ? '—' : formatPct(metrics.grossMarginPct)}
           hint={metrics === null ? 'Computed at the first resolution' : `Operating margin ${formatPct(metrics.operatingMarginPct)}`}
           href="/financials"
         />
       </div>
 
-      {/* --- feed, world, tape ------------------------------------------------ */}
+      {/* --- what is asking for an answer, then the context --------------------
+          DOM order is the phone's reading order: today, tape, objectives, then
+          the world, the clock and the jump-off cards. From `lg` the first three
+          take two thirds and the rest take the last third. */}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <Panel
             title="Today"
+            iconName="bell"
+            iconTone={blocked > 0 ? 'warn' : 'neutral'}
             subtitle="Everything in committed state that is currently asking for an answer."
             actions={<Tag tone={blocked > 0 ? 'warn' : 'neutral'}>{feed.length === 1 ? '1 line' : `${feed.length} lines`}</Tag>}
           >
             <AlertFeed items={feed} />
           </Panel>
 
-          <Panel title="Tape" subtitle="Your company and the largest listed names." actions={<Link href="/markets" className="btn btn-ghost btn-sm">Open markets</Link>}>
+          <Panel
+            title="Tape"
+            iconName="chart"
+            subtitle="Your company and the largest listed names."
+            actions={
+              <Link href="/markets" className="btn btn-ghost tap-target gap-1.5 px-2">
+                <Icon name="chart" size={15} accent="current" />
+                Open markets
+              </Link>
+            }
+            flush
+          >
             <TapeStrip session={session} view={view} />
+          </Panel>
+
+          <Panel title="Objectives" iconName="trophy" subtitle="Explicit goals. There is no fixed victory screen.">
+            {view.objectives.length === 0 ? (
+              <EmptyState compact icon="trophy" title="No objectives set" message="This session was created without explicit objectives." />
+            ) : (
+              <div className="flex flex-col gap-3.5">
+                {view.objectives.map((objective) => (
+                  <div key={objective.id}>
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                      <span className="text-[13px] font-medium text-ink">{objective.label}</span>
+                      <span className="figure text-[11.5px] text-ink-dim">
+                        {objectiveReading(objective.metric, objective.currentValue, objective.targetValue)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11.5px] text-ink-faint">{objective.description}</p>
+                    <ProgressBar
+                      className="mt-1.5"
+                      value={objective.progress}
+                      tone={objective.completedQuarter !== null ? 'gain' : 'brand'}
+                      valueLabel={formatPct(objective.progress, 0)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </Panel>
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Panel title="World" subtitle="The readings this company is exposed to.">
-            <WorldStrip world={view.world} previous={previousWorld} />
+          <Panel
+            title="World"
+            iconName="globe"
+            iconTone="info"
+            subtitle="The readings this company is exposed to."
+            actions={
+              <button
+                type="button"
+                onClick={() => setWorldOpen((open) => !open)}
+                aria-expanded={worldOpen}
+                className="btn btn-ghost tap-target gap-1.5 px-2 lg:hidden"
+              >
+                {worldOpen ? 'Hide' : 'Show ten readings'}
+                <span className={worldOpen ? 'rotate-180' : ''}>
+                  <Icon name="chevronDown" size={14} accent="current" />
+                </span>
+              </button>
+            }
+          >
+            <div className={worldOpen ? '' : 'hidden lg:block'}>
+              <WorldStrip world={view.world} previous={previousWorld} />
+            </div>
+            {worldOpen ? null : (
+              <p className="text-[12px] text-ink-faint lg:hidden">
+                Rates, risk appetite, compute supply, regulation and the dominant narrative — ten readings that price this quarter.
+              </p>
+            )}
           </Panel>
 
-          <Panel title="Quarter clock">
-            <dl className="flex flex-col gap-1.5">
+          <Panel title="Quarter clock" iconName="stamp">
+            <dl className="flex flex-col gap-2">
               <div className="flex items-baseline justify-between gap-3">
                 <dt className="label-caps-faint">Open quarter</dt>
-                <dd className="figure text-[12px] text-ink">{quarterLabel(session.startYear, session.quarter)}</dd>
+                <dd className="figure text-[12.5px] text-ink">{quarterLabel(session.startYear, session.quarter)}</dd>
               </div>
               <div className="flex items-baseline justify-between gap-3">
                 <dt className="label-caps-faint">Last resolved</dt>
-                <dd className="figure text-[12px] text-ink-dim">
+                <dd className="figure text-[12.5px] text-ink-dim">
                   {session.lastResolvedQuarter === null ? 'None yet' : quarterLabel(session.startYear, session.lastResolvedQuarter)}
                 </dd>
               </div>
               <div className="flex items-baseline justify-between gap-3">
                 <dt className="label-caps-faint">Session</dt>
-                <dd className="text-[12px] text-ink-dim">
+                <dd className="text-[12.5px] text-ink-dim">
                   <Tag tone={session.status === 'active' ? 'gain' : 'warn'} dot>
                     {session.status}
                   </Tag>
@@ -226,7 +321,7 @@ export default function CommandCentrePage(): React.JSX.Element {
               </div>
               <div className="flex items-baseline justify-between gap-3">
                 <dt className="label-caps-faint">Submission</dt>
-                <dd className="text-[12px]">
+                <dd className="text-[12.5px]">
                   <Tag tone={seat?.hasSubmittedThisQuarter === true ? 'gain' : 'neutral'} dot>
                     {seat?.hasSubmittedThisQuarter === true ? 'Locked' : 'Open for planning'}
                   </Tag>
@@ -234,7 +329,7 @@ export default function CommandCentrePage(): React.JSX.Element {
               </div>
               <div className="flex items-baseline justify-between gap-3">
                 <dt className="label-caps-faint">Queued</dt>
-                <dd className="figure text-[12px] text-ink">
+                <dd className="figure text-[12.5px] text-ink">
                   {queued.length}
                   {blocked > 0 ? <span className="tone-warn"> · {blocked} unconfirmed</span> : null}
                 </dd>
@@ -244,50 +339,32 @@ export default function CommandCentrePage(): React.JSX.Element {
         </div>
       </div>
 
-      {/* --- objectives and quick links --------------------------------------- */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Objectives" className="lg:col-span-2" subtitle="Explicit goals. There is no fixed victory screen.">
-          {view.objectives.length === 0 ? (
-            <EmptyState compact title="No objectives set" message="This session was created without explicit objectives." />
-          ) : (
-            <div className="flex flex-col gap-3">
-              {view.objectives.map((objective) => (
-                <div key={objective.id}>
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className="text-[12px] font-medium text-ink">{objective.label}</span>
-                    <span className="figure text-[11px] text-ink-dim">{objectiveReading(objective.metric, objective.currentValue, objective.targetValue)}</span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] text-ink-faint">{objective.description}</p>
-                  <ProgressBar
-                    className="mt-1.5"
-                    value={objective.progress}
-                    tone={objective.completedQuarter !== null ? 'gain' : 'brand'}
-                    valueLabel={formatPct(objective.progress, 0)}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Go to">
-          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
-            {QUICK_LINKS.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="raised-surface flex items-center justify-between gap-2 px-2.5 py-1.5 transition-colors hover:border-hair-strong"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[12px] text-ink">{link.label}</span>
-                  <span className="block truncate text-[10px] text-ink-faint">{link.blurb}</span>
-                </span>
-                <span className="shrink-0 text-[11px] text-ink-faint">→</span>
-              </Link>
-            ))}
-          </div>
-        </Panel>
-      </div>
+      {/* --- where to go next --------------------------------------------------
+          Last on a phone because it is the thing you reach for after reading,
+          and a full-width strip on a desktop because six cards across three
+          columns balance the page better than six stacked in the last third. */}
+      <Panel title="Go to" iconName="compass">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {QUICK_LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className="raised-surface icon-knockout-raised press-pop tap-target flex items-center gap-2.5 px-3 py-2 transition-colors hover:border-hair-strong"
+            >
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-chip bg-panel text-ink-dim shadow-card">
+                <Icon name={link.icon} size={17} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-medium text-ink">{link.label}</span>
+                <span className="block truncate text-[11px] text-ink-faint">{link.blurb}</span>
+              </span>
+              <span className="shrink-0 text-ink-faint">
+                <Icon name="chevronRight" size={14} accent="current" />
+              </span>
+            </Link>
+          ))}
+        </div>
+      </Panel>
     </>
   );
 }

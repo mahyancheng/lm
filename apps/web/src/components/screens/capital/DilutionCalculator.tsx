@@ -61,23 +61,26 @@ export function DilutionCalculator({
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="block">
           <span className="label-caps-faint">Raise (USD)</span>
-          <input className="field mt-1" inputMode="numeric" value={amount} onChange={(event) => setAmount(event.target.value)} />
+          <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={amount} onChange={(event) => setAmount(event.target.value)} />
           <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(raise)}</span>
         </label>
         <label className="block">
           <span className="label-caps-faint">Pre-money (USD)</span>
-          <input className="field mt-1" inputMode="numeric" value={preMoney} onChange={(event) => setPreMoney(event.target.value)} />
+          <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={preMoney} onChange={(event) => setPreMoney(event.target.value)} />
           <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(pre)}</span>
         </label>
         <label className="block">
           <span className="label-caps-faint">Pool top-up (%)</span>
-          <input className="field mt-1" inputMode="decimal" value={poolIncrease} onChange={(event) => setPoolIncrease(event.target.value)} />
+          <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={poolIncrease} onChange={(event) => setPoolIncrease(event.target.value)} />
           <span className="mt-1 block text-[10px] text-ink-faint">{formatCount(poolShares)} shares</span>
         </label>
       </div>
 
+      {/* Two columns, not three: this panel is half a row on a desktop, and a
+          third track leaves a nine-character label beside a nine-character
+          figure with nowhere to go. */}
       <KeyValueGrid
-        columns={3}
+        columns={2}
         items={[
           { label: 'Post-money', value: formatMoney(post) },
           { label: 'Round dilution', value: formatPct(dilution, 2) },
@@ -92,7 +95,7 @@ export function DilutionCalculator({
         ]}
       />
 
-      <p className="text-[10px] text-ink-faint">
+      <p className="text-[11px] leading-relaxed text-ink-faint">
         Preview only. Nothing here is submitted, and the terms a round actually clears at are decided by the engine against venture
         liquidity, your metrics and what the market believes.
       </p>

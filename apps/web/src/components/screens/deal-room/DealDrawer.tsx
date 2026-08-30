@@ -82,12 +82,12 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
       footer={
         answerable && !answered ? (
           <>
-            <button type="button" className="btn" onClick={() => setRejecting(true)}>
+            <button type="button" className="btn tap-target sm:min-h-0" onClick={() => setRejecting(true)}>
               Reject
             </button>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary tap-target sm:min-h-0"
               onClick={() => {
                 setResult(validateIntent({ type: 'accept_deal', dealId: deal.id }));
                 setConfirming(true);
@@ -109,7 +109,7 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
           {deal.breachedByPartyId === null ? null : <Tag tone="loss">breached by {nameOf(deal.breachedByPartyId)}</Tag>}
         </div>
 
-        <p className="text-[12px] leading-relaxed text-ink-dim">{deal.summary}</p>
+        <p className="text-[13px] leading-relaxed text-ink-dim sm:text-[12px]">{deal.summary}</p>
 
         <KeyValueGrid
           columns={2}
@@ -137,11 +137,11 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
         <div>
           <SectionHeading rule>Said, not contracted — never enforced</SectionHeading>
           {deal.intentStatements.length === 0 ? (
-            <p className="mt-2 text-[11px] text-ink-faint">Nothing was said beyond the terms above.</p>
+            <p className="mt-2 text-[13px] text-ink-faint sm:text-[11px]">Nothing was said beyond the terms above.</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-1.5">
               {deal.intentStatements.map((statement, index) => (
-                <li key={index} className="rounded-card border border-dashed border-hair-strong px-3 py-2 text-[11px] text-ink-dim">
+                <li key={index} className="rounded-card border border-dashed border-hair-strong px-3 py-2 text-[13px] leading-relaxed text-ink-dim sm:text-[11px]">
                   {statement}
                 </li>
               ))}
@@ -166,7 +166,7 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
             <label className="block">
               <span className="label-caps-faint">Why you are turning it down</span>
               <textarea
-                className="field mt-1"
+                className="field tap-target mt-1 sm:min-h-0"
                 rows={2}
                 maxLength={300}
                 value={reason}
@@ -177,11 +177,11 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
             <p className="mt-1.5 text-[10px] text-ink-faint">
               {nameOf(deal.proposerId)} remembers how they were turned down, not only that they were.
             </p>
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" className="btn btn-sm" onClick={() => setRejecting(false)}>
+            <div className="mt-2 grid grid-cols-2 items-center gap-2 sm:flex">
+              <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => setRejecting(false)}>
                 Cancel
               </button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={reject}>
+              <button type="button" className="btn btn-danger btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={reject}>
                 Queue the rejection
               </button>
             </div>

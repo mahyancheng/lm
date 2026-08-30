@@ -25,10 +25,10 @@
  * away in the strip beneath the table.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Board, BoardProposal, Character, SessionState } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ProgressBar, Tag } from '@/components/ui';
+import { Icon, ProgressBar, Tag } from '@/components/ui';
 import { Portrait, moodFromRelationship } from '@/components/scenes/people';
 import { PROPOSAL_KIND_LABEL } from './labels';
 import { STANCE_LABEL, STANCE_TONE, TABLE, seatDirectors, seatOrder, stanceOf } from './table';
@@ -81,11 +81,21 @@ export function BoardroomScene({
 
   const cast = whip === null ? 0 : whip.support + whip.against;
 
+  // The stage is 640px of room whatever the viewport is, so on a phone it pans
+  // inside its frame. It should open on the head of the table — the matter and
+  // the chief executive — rather than on whoever happens to sit far left.
+  const panRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = panRef.current;
+    if (frame === null) return;
+    frame.scrollLeft = Math.max(0, (frame.scrollWidth - frame.clientWidth) / 2);
+  }, [seats.length]);
+
   return (
     <div className="flex flex-col gap-3">
       {/* --- the stage ---------------------------------------------------- */}
       <div className="scene-frame border border-hair bg-base">
-        <div className="scroll-x">
+        <div ref={panRef} className="scroll-x">
           <div className="relative min-w-[640px]" style={{ aspectRatio: '3 / 2' }}>
             {/* The floor and the table. `preserveAspectRatio="none"` makes the
                 viewBox percent-space, so the ellipse and the seats positioned
@@ -216,9 +226,14 @@ export function BoardroomScene({
         </div>
       </div>
 
+      <p className="flex items-center gap-1.5 text-[11px] text-ink-faint sm:hidden">
+        <Icon name="back" size={13} accent="current" />
+        Drag the table sideways to reach every seat. Tap a director for their card.
+      </p>
+
       {/* --- the count under the table ------------------------------------ */}
       {whip === null || proposal === null ? (
-        <p className="text-[11px] leading-relaxed text-ink-faint">
+        <p className="text-[13px] leading-relaxed text-ink-faint sm:text-[11px]">
           Financing, listings, acquisitions, buybacks, restructurings and C-suite appointments all arrive here automatically — the validator
           turns the action into the proposal that has to precede it.
         </p>
@@ -231,7 +246,7 @@ export function BoardroomScene({
             tone={whip.carries ? 'gain' : 'loss'}
             valueLabel={`${whip.support} for · ${whip.against} against · ${whip.abstain} abstaining`}
           />
-          <p className="mt-1.5 text-[10px] leading-relaxed text-ink-faint">
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
             A projection from state, not a promise: the engine runs the same assessment again in the board-resolution phase, against the
             numbers as they stand then. Tap a director for their reasoning.
           </p>

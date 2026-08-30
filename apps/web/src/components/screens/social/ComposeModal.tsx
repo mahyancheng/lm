@@ -27,7 +27,7 @@ import type {
 } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, POST_INTENTS } from '@frontier/contracts';
 import { formatPct } from '@frontier/shared';
-import { BarChart, Modal, SectionHeading, Tag, ValidationBanner, cx, type BarDatum } from '@/components/ui';
+import { BarChart, Icon, Modal, SectionHeading, Tag, ValidationBanner, cx, type BarDatum } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { audienceLabel, intentProfile, networkFit, networkLabel, networkProfile, predictedAudiences } from './audiences';
 import { requestSocialDraft } from './authorClient';
@@ -180,15 +180,27 @@ export function ComposeModal({
       title="Compose a post"
       subtitle="You choose the room, the intent and the words. The engine computes everything that follows."
       width="lg"
+      // Below `sm` the dialog is a bottom sheet: pulled to the bottom edge,
+      // squared off there and widened over the frame's own gutter. The frame is
+      // `Modal`'s and not this screen's to change, so the negative margins
+      // cancel its padding rather than removing it.
+      className="-mx-4 -mb-4 mt-auto min-w-[calc(100%+2rem)] rounded-b-none sm:mx-0 sm:mt-0 sm:mb-0 sm:min-w-0 sm:rounded-panel"
       footer={
         <>
-          <button type="button" className="btn" onClick={close}>
+          <button type="button" className="btn tap-target flex-1 sm:flex-none" onClick={close}>
             {queued ? 'Done' : 'Cancel'}
           </button>
-          <button type="button" className="btn" onClick={check} disabled={!ready}>
+          <button type="button" className="btn tap-target flex-1 sm:flex-none" onClick={check} disabled={!ready}>
+            <Icon name="search" size={15} />
             Check
           </button>
-          <button type="button" className="btn btn-primary" onClick={publish} disabled={!ready || queued}>
+          <button
+            type="button"
+            className="btn btn-primary tap-target icon-knockout-brand flex-[1.4] sm:flex-none"
+            onClick={publish}
+            disabled={!ready || queued}
+          >
+            <Icon name="check" size={15} accent="inherit" />
             {queued ? 'Queued' : 'Queue the post'}
           </button>
         </>
@@ -201,7 +213,7 @@ export function ComposeModal({
             <label className="block">
               <span className="label-caps-faint">Network</span>
               <select
-                className="field mt-1"
+                className="field tap-target mt-1"
                 value={network}
                 onChange={(event) => {
                   setNetwork(event.target.value as NetworkArchetype);
@@ -220,7 +232,7 @@ export function ComposeModal({
             <label className="block">
               <span className="label-caps-faint">Intent</span>
               <select
-                className="field mt-1"
+                className="field tap-target mt-1"
                 value={intent}
                 onChange={(event) => {
                   setIntent(event.target.value as PostIntent);
@@ -240,7 +252,7 @@ export function ComposeModal({
           <label className="block">
             <span className="label-caps-faint">Aimed at</span>
             <select
-              className="field mt-1"
+              className="field tap-target mt-1"
               value={target}
               onChange={(event) => {
                 setTarget(event.target.value);
@@ -262,7 +274,7 @@ export function ComposeModal({
           <label className="block">
             <span className="label-caps-faint">The post</span>
             <textarea
-              className="field mt-1"
+              className="field mt-1 text-[13px]"
               rows={6}
               maxLength={MAX_POST_CHARS}
               value={text}
@@ -286,7 +298,13 @@ export function ComposeModal({
           </label>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className="btn btn-sm" onClick={() => void draftWithAuthor()} disabled={drafting || trimmed.length === 0}>
+            <button
+              type="button"
+              className="btn tap-target w-full sm:w-auto"
+              onClick={() => void draftWithAuthor()}
+              disabled={drafting || trimmed.length === 0}
+            >
+              <Icon name="chat" size={15} />
               {drafting ? 'Drafting…' : 'Draft with the social author'}
             </button>
             {!llmAvailable ? (

@@ -10,6 +10,9 @@
  * contract, and these are its implementation.
  */
 
+export { ICON_NAMES, Icon, IconChip } from './icons';
+export type { IconAccent, IconChipProps, IconName, IconProps } from './icons';
+
 export { Panel } from './Panel';
 export type { PanelProps } from './Panel';
 

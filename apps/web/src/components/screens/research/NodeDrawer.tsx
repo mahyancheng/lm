@@ -192,7 +192,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                     <div className="label-caps-faint mb-1">Depends on</div>
                     <div className="flex flex-wrap gap-1.5">
                       {node.dependencies.map((id) => (
-                        <button key={id} type="button" className="btn btn-sm" onClick={() => onSelect(id)}>
+                        <button key={id} type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => onSelect(id)}>
                           {titles.get(id) ?? id}
                         </button>
                       ))}
@@ -204,7 +204,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                     <div className="label-caps-faint mb-1">Would make credible</div>
                     <div className="flex flex-wrap gap-1.5">
                       {node.possibleUnlocks.map((id) => (
-                        <button key={id} type="button" className="btn btn-sm" onClick={() => onSelect(id)}>
+                        <button key={id} type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => onSelect(id)}>
                           {titles.get(id) ?? id}
                         </button>
                       ))}
@@ -221,30 +221,37 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
               <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
                 <label className="block">
                   <span className="label-caps-faint mb-1 block">Budget / quarter</span>
-                  <input className="field" type="number" min={0} step="50000" value={budget} onChange={(event) => setBudget(event.target.value)} />
+                  <input className="field tap-target sm:min-h-0" type="number" min={0} step="50000" value={budget} onChange={(event) => setBudget(event.target.value)} />
                 </label>
                 <label className="block">
                   <span className="label-caps-faint mb-1 block">Compute units</span>
-                  <input className="field" type="number" min={0} step={1} value={computeUnits} onChange={(event) => setComputeUnits(event.target.value)} />
+                  <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={computeUnits} onChange={(event) => setComputeUnits(event.target.value)} />
                 </label>
                 <label className="block">
                   <span className="label-caps-faint mb-1 block">Researchers</span>
-                  <input className="field" type="number" min={0} step={1} value={researchers} onChange={(event) => setResearchers(event.target.value)} />
+                  <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={researchers} onChange={(event) => setResearchers(event.target.value)} />
                 </label>
               </div>
 
-              <label className="mt-2.5 flex items-start gap-2">
-                <input type="checkbox" checked={secret} onChange={(event) => setSecret(event.target.checked)} className="mt-0.5" />
-                <span className="text-[11px] text-ink-dim">
+              {/* The label is the target: a finger gets the whole 44px row,
+                  the box stays a box. */}
+              <label className="tap-target mt-2.5 flex cursor-pointer items-start gap-2.5 py-1 sm:min-h-0 sm:py-0">
+                <input
+                  type="checkbox"
+                  checked={secret}
+                  onChange={(event) => setSecret(event.target.checked)}
+                  className="mt-1 size-5 shrink-0 accent-[color:var(--color-brand-strong)] sm:mt-0.5 sm:size-4"
+                />
+                <span className="text-[13px] text-ink-dim sm:text-[11px]">
                   Keep the programme secret.
-                  <span className="block text-[10px] text-ink-faint">
+                  <span className="block text-[11px] leading-relaxed text-ink-faint sm:text-[10px]">
                     A secret setback stays out of the share price unless it leaks; a secret success surprises the market.
                   </span>
                 </span>
               </label>
 
               <div className="mt-2.5 flex justify-end">
-                <button type="button" className="btn btn-primary btn-sm" onClick={startProject}>
+                <button type="button" className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={startProject}>
                   Queue programme
                 </button>
               </div>
@@ -296,7 +303,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
               <div className="mt-2 flex flex-wrap items-end gap-2">
                 <label className="min-w-0 flex-1">
                   <span className="label-caps-faint mb-1 block">Mode</span>
-                  <select className="field" value={publishMode} onChange={(event) => setPublishMode(event.target.value as PublicationMode)}>
+                  <select className="field tap-target sm:min-h-0" value={publishMode} onChange={(event) => setPublishMode(event.target.value as PublicationMode)}>
                     {PUBLICATION_MODES.filter((mode) => mode !== 'leak').map((mode) => (
                       <option key={mode} value={mode}>
                         {PUBLICATION_LABEL[mode]}
@@ -304,7 +311,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                     ))}
                   </select>
                 </label>
-                <button type="button" className="btn btn-sm" onClick={publish}>
+                <button type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={publish}>
                   Queue publication
                 </button>
               </div>

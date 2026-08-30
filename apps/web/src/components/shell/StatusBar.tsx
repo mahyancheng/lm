@@ -13,7 +13,7 @@ import {
   usePlayerView,
   useSession,
 } from '@/lib/game';
-import { cx } from '@/components/ui';
+import { Icon, cx } from '@/components/ui';
 import { SettingsDrawer } from './SettingsDrawer';
 import { type SettingsSection, onOpenSettings } from './settingsBus';
 
@@ -53,8 +53,14 @@ export interface StatusBarProps {
 }
 
 /**
- * The permanent header: where you are in session time, and the five figures a
+ * The permanent header: where you are in session time, and the figures a
  * founder checks before doing anything else.
+ *
+ * On a phone the bar is deliberately six things and no more — who you are, the
+ * quarter, the cash, the alerts, whether a model is live, and the way into
+ * settings — because a row of small text links in a 56px bar is unusable with
+ * a thumb. The rest of the readouts appear from `sm` up, where there is room
+ * for them.
  *
  * Every value comes from committed state through the store. Nothing here is
  * computed by the interface.
@@ -82,100 +88,137 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
 
   const alerts = view.alerts.length;
   const cash = company.financials.cash;
+  const quarter = quarterLabel(session.startYear, session.quarter);
 
   return (
     <>
-    <header
-      className="sticky top-0 z-20 flex items-center gap-1 border-b border-hair bg-panel/92 backdrop-blur"
-      style={{ height: 'var(--statusbar-height)' }}
-    >
-      <button
-        type="button"
-        onClick={onOpenNav}
-        className="btn btn-ghost tap-target ml-1 lg:hidden"
-        aria-expanded={navOpen}
-        aria-label="Screens"
+      <header
+        className="sticky top-0 z-20 flex items-center gap-0.5 border-b border-hair bg-panel/92 px-0.5 backdrop-blur sm:gap-1 sm:px-1"
+        style={{ height: 'var(--statusbar-height)' }}
       >
-        <span className="text-[15px] leading-none">{navOpen ? '✕' : '☰'}</span>
-      </button>
+        <button
+          type="button"
+          onClick={onOpenNav}
+          className="btn btn-ghost tap-target shrink-0 px-0 lg:hidden"
+          aria-expanded={navOpen}
+          aria-label="All screens"
+        >
+          <Icon name={navOpen ? 'close' : 'menu'} size={18} accent="current" />
+        </button>
 
-      <Link href="/command-centre" className="flex min-w-0 shrink-0 items-center gap-2.5 rounded-chip px-3 py-1 hover:bg-raised">
-        <span className="figure flex size-7 shrink-0 items-center justify-center rounded-chip bg-brand-strong text-[10px] font-bold text-white shadow-card">
-          FC
-        </span>
-        <span className="min-w-0">
-          <span className="block truncate text-[12.5px] leading-tight font-bold text-ink">{company.name}</span>
-          <span className="label-caps-faint block leading-none">Frontier Capital</span>
-        </span>
-      </Link>
+        {/* The identity. It is the one shrinkable thing in the bar: everything
+            else is a fixed-width control, so the company name truncates rather
+            than pushing the settings button off the right edge — which is
+            exactly what used to widen the document by 14px at 390. */}
+        <Link
+          href="/command-centre"
+          className="tap-target flex min-w-0 items-center gap-2 rounded-chip px-1.5 hover:bg-raised sm:gap-2.5 sm:px-2"
+        >
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-chip bg-brand-strong text-white shadow-card">
+            <Icon name="logo" size={16} accent="current" />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[12.5px] leading-tight font-bold text-ink">{company.name}</span>
+            <span className="label-caps-faint hidden truncate leading-none sm:block">Frontier Capital</span>
+          </span>
+        </Link>
 
-      <div className="figure shrink-0 border-l border-hair px-3 text-[12px] font-semibold text-ink">
-        <span className="label-caps-faint block leading-none">Quarter</span>
-        {quarterLabel(session.startYear, session.quarter)}
-      </div>
+        {/* Phone: quarter over cash, one compact block instead of a link row. */}
+        <div className="ml-auto shrink-0 border-l border-hair px-2 text-right sm:hidden">
+          <span className="figure block text-[10px] leading-none font-semibold text-ink-faint">{quarter}</span>
+          <span className={cx('figure block text-[12px] leading-tight font-semibold', cash < 0 ? 'tone-loss' : 'text-ink')}>
+            {formatMoney(cash)}
+          </span>
+        </div>
 
-      <div className="flex min-w-0 flex-1 items-center overflow-hidden">
-        <Reading label="Cash" value={formatMoney(cash)} tone={cash < 0 ? 'loss' : 'neutral'} href="/financials" />
-        <Reading label="Market cap" value={formatMoney(marketCap)} href="/markets" title="Last quote when listed; the fundamental anchor when private." />
-        <Reading label="Net worth" value={formatMoney(netWorth)} href="/leaderboard" secondary />
-        <Reading label="Connection" value={String(connection)} tone="brand" href="/network" secondary />
-      </div>
+        <div className="figure hidden shrink-0 border-l border-hair px-3 text-[12px] font-semibold text-ink sm:block">
+          <span className="label-caps-faint block leading-none">Quarter</span>
+          {quarter}
+        </div>
 
-      <Link
-        href="/command-centre"
-        className={cx(
-          'press-pop mr-1 flex shrink-0 items-center gap-1.5 rounded-pill border px-2.5 py-1.5 text-[11px] font-semibold',
-          alerts > 0 ? 'border-warn/30 bg-warn-wash text-warn' : 'border-hair bg-panel text-ink-faint',
-        )}
-        title={alerts > 0 ? view.alerts.join('\n') : 'No alerts this quarter.'}
-      >
-        <span className="figure font-semibold">{alerts}</span>
-        <span className="hidden sm:inline">alerts</span>
-      </Link>
+        <div className="hidden min-w-0 flex-1 items-center overflow-hidden sm:flex">
+          <Reading label="Cash" value={formatMoney(cash)} tone={cash < 0 ? 'loss' : 'neutral'} href="/financials" />
+          <Reading
+            label="Market cap"
+            value={formatMoney(marketCap)}
+            href="/markets"
+            title="Last quote when listed; the fundamental anchor when private."
+          />
+          <Reading label="Net worth" value={formatMoney(netWorth)} href="/leaderboard" secondary />
+          <Reading label="Connection" value={String(connection)} tone="brand" href="/network" secondary />
+        </div>
 
-      {/* Not a readout: "Offline" is the one status in this bar the player can
-          actually do something about, so it is the button that opens Settings
-          at the paste field rather than a chip that states a fact and stops. */}
-      <button
-        type="button"
-        onClick={() => {
-          setSettingsFocus('ai');
-          setSettingsOpen(true);
-        }}
-        className="press-pop mr-1 hidden items-center gap-1.5 rounded-pill border border-hair bg-panel px-2.5 py-1.5 text-[10px] font-semibold text-ink-dim hover:bg-raised md:flex"
-        title={
-          llm.available
-            ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter. Open Settings to test or change the credential.`
-            : 'No model configured. Every role uses its deterministic fallback and the game plays in full — click to paste a Claude token.'
-        }
-      >
-        <span className={cx('inline-block size-1.5 rounded-full', llm.available ? 'bg-gain pulse-dot' : 'bg-ink-faint')} />
-        {llm.available ? 'Live' : 'Offline'}
-      </button>
+        <Link
+          href="/command-centre"
+          className={cx(
+            'press-pop tap-target relative flex shrink-0 items-center justify-center gap-1.5 rounded-chip px-0 text-[11px] font-semibold sm:px-2',
+            alerts > 0 ? 'text-warn' : 'text-ink-faint hover:bg-raised',
+          )}
+          aria-label={alerts === 1 ? '1 alert' : `${alerts} alerts`}
+          title={alerts > 0 ? view.alerts.join('\n') : 'No alerts this quarter.'}
+        >
+          <Icon name="bell" size={17} accent="inherit" className="icon-knockout-panel" />
+          {alerts > 0 ? (
+            <span className="figure absolute top-1.5 right-1 rounded-pill bg-warn px-1 text-[9px] leading-[14px] font-bold text-white sm:static">
+              {alerts}
+            </span>
+          ) : null}
+        </Link>
 
-      <button
-        type="button"
-        onClick={() => {
+        {/* Not a readout: "Offline" is the one status in this bar the player can
+            actually do something about, so it is the button that opens Settings
+            at the paste field rather than a chip that states a fact and stops. */}
+        <button
+          type="button"
+          onClick={() => {
+            setSettingsFocus('ai');
+            setSettingsOpen(true);
+          }}
+          className={cx(
+            'press-pop tap-target flex shrink-0 items-center justify-center gap-1.5 rounded-chip px-0 text-[10px] font-semibold hover:bg-raised md:px-2',
+            llm.available ? 'text-gain' : 'text-ink-faint',
+          )}
+          aria-label={llm.available ? 'Live model configured — open settings' : 'No model configured — open settings'}
+          title={
+            llm.available
+              ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter. Open Settings to test or change the credential.`
+              : 'No model configured. Every role uses its deterministic fallback and the game plays in full — click to paste a Claude token.'
+          }
+        >
+          {/* Live is a filled dot and offline is a hollow ring: the state is a
+              shape as well as a colour. */}
+          <Icon
+            name="live"
+            size={15}
+            accent={llm.available ? 'current' : 'inherit'}
+            className={cx('icon-knockout-panel', llm.available ? 'pulse-dot' : undefined)}
+          />
+          <span className="hidden md:inline">{llm.available ? 'Live' : 'Offline'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSettingsFocus(null);
+            setSettingsOpen(true);
+          }}
+          className="btn btn-ghost tap-target icon-knockout-panel shrink-0 px-0"
+          aria-label="Session settings and save"
+          aria-expanded={settingsOpen}
+          title="Session settings, the live-model switch and the save file"
+        >
+          <Icon name="settings" size={17} accent="inherit" />
+        </button>
+      </header>
+
+      <SettingsDrawer
+        open={settingsOpen}
+        focus={settingsFocus}
+        onClose={() => {
+          setSettingsOpen(false);
           setSettingsFocus(null);
-          setSettingsOpen(true);
         }}
-        className="btn btn-ghost tap-target mr-1.5 shrink-0"
-        aria-label="Session settings and save"
-        aria-expanded={settingsOpen}
-        title="Session settings, the live-model switch and the save file"
-      >
-        <span className="text-[13px] leading-none">⚙</span>
-      </button>
-    </header>
-
-    <SettingsDrawer
-      open={settingsOpen}
-      focus={settingsFocus}
-      onClose={() => {
-        setSettingsOpen(false);
-        setSettingsFocus(null);
-      }}
-    />
+      />
     </>
   );
 }

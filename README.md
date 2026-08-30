@@ -19,7 +19,7 @@ and reinterpret the future; **only the simulation engine makes reality.**
 |---|---|
 | Frontend + API | Next.js (App Router) on **Vercel** |
 | Canonical state, auth, realtime | **Supabase** (Postgres, RLS, Broadcast) |
-| All LLM roles | **Anthropic Claude API** (`claude-opus-5` default) |
+| All LLM roles | **Claude Code sessions** — Claude Agent SDK, subscription OAuth, **Sonnet** |
 | Engine | Pure TypeScript deterministic simulation (`packages/simulation`) |
 
 No OpenAI/ChatGPT dependency anywhere.
@@ -39,11 +39,17 @@ and every screen live — no Supabase project or Anthropic key needed.
 
 1. **Supabase**: create a project, then `supabase db push` (or apply
    `supabase/migrations/*.sql` in order) and load `supabase/seed.sql`.
-2. **Env**: copy `.env.example` to `apps/web/.env.local` and fill in the
-   Supabase URL/keys and `ANTHROPIC_API_KEY`; set
-   `NEXT_PUBLIC_DEMO_MODE=false`.
-3. **Vercel**: import the repo, set the root directory to `apps/web`, add the
-   same environment variables, deploy.
+2. **Claude (OAuth, no API key)**: run `claude setup-token` with your Claude
+   subscription and put the result in `CLAUDE_CODE_OAUTH_TOKEN`. Every
+   in-game LLM role (World Director, Chief of Staff, NPC rivals, characters)
+   runs as a Claude Code session on **Sonnet** through the Claude Agent SDK.
+3. **Env**: copy `.env.example` to `apps/web/.env.local` and fill in the
+   Supabase URL/keys and the OAuth token; set `NEXT_PUBLIC_DEMO_MODE=false`.
+4. **Vercel**: import the repo, set the root directory to `apps/web`, add the
+   same environment variables, deploy. LLM routes run on the Node.js runtime
+   (the Agent SDK spawns a Claude Code session per call). If your Vercel plan
+   can't run them, self-host the resolver worker (`docs/DEPLOYMENT.md`) or
+   set `LLM_TRANSPORT=api` as fallback.
 
 ## Commands
 

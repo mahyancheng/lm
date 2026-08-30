@@ -7,7 +7,8 @@ players build companies, negotiate, invest, win government contracts, control
 boards and compete against humans and AI founders.
 
 **Stack:** pnpm monorepo · TypeScript · Next.js (Vercel) · Supabase (Postgres,
-Auth, Realtime) · Anthropic Claude API (`claude-opus-5` default).
+Auth, Realtime) · Claude via **Claude Code sessions** (Claude Agent SDK with
+subscription OAuth, **Sonnet** for every in-game role).
 There is no OpenAI/ChatGPT dependency anywhere in this project.
 
 ## The one-sentence architectural rule
@@ -49,8 +50,15 @@ There is no OpenAI/ChatGPT dependency anywhere in this project.
 - `packages/simulation` — deterministic world engine: economy, markets,
   companies, research, government, boards, relationships, resolver.
 - `packages/llm` — Claude gateway: World Director, Chief of Staff, NPC
-  strategists, character dialogue, innovation interpreter. Structured outputs
-  only (`client.messages.parse` + `zodOutputFormat`).
+  strategists, character dialogue, innovation interpreter. Transport-pluggable:
+  the default `claude-session` transport drives Claude Code sessions through
+  `@anthropic-ai/claude-agent-sdk` `query()` (OAuth subscription auth via
+  `CLAUDE_CODE_OAUTH_TOKEN` or the local Claude Code login; model `sonnet`;
+  no tools, single turn, JSON-only prompting validated by zod with one
+  retry). An optional `api` transport (`@anthropic-ai/sdk`,
+  `messages.parse` + `zodOutputFormat`) exists as fallback; `none` yields
+  deterministic rule-based fallbacks. LLM output is always a zod-validated
+  proposal — never a state write.
 - `packages/shared` — seeded RNG, ids, formatting, math utilities.
 - `supabase/` — migrations, RLS policies, seed data.
 - `docs/` — design docs (game design, simulation, economy, LLM contracts...).
@@ -64,6 +72,8 @@ There is no OpenAI/ChatGPT dependency anywhere in this project.
 - Pinned versions: TypeScript 5.9.3, zod 3.25.76, Next 15.5.24, React 19.2.8,
   Tailwind CSS 4 (via `@tailwindcss/postcss`), `@anthropic-ai/sdk` 0.122.0.
 - Commands: `pnpm typecheck` · `pnpm test` · `pnpm build` · `pnpm dev`.
-- Anthropic SDK usage: default model `claude-opus-5`; adaptive thinking is the
-  default (do not send `budget_tokens`); use typed error classes; use
-  `messages.parse` with `zodOutputFormat` for structured outputs.
+- LLM usage: all in-game roles run on **Sonnet** through the `claude-session`
+  transport (Claude Agent SDK, OAuth). Never require an `ANTHROPIC_API_KEY`
+  for the default path. If touching the fallback `api` transport: adaptive
+  thinking is the default (never send `budget_tokens`); use typed error
+  classes; use `messages.parse` with `zodOutputFormat`.

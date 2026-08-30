@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useLayoutEffect, useState } from 'react';
+import { countUpFrames } from './theatre';
 
 /** `useLayoutEffect` warns during SSR; the count-up only exists in a browser. */
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
@@ -57,22 +58,20 @@ export function useCountUp(target: number, options: CountUpOptions = {}): number
     }
 
     setValue(from);
+    const frames = countUpFrames(from, target, STEPS);
     let step = 0;
     let interval: ReturnType<typeof setInterval> | null = null;
 
     const timer = setTimeout(() => {
       interval = setInterval(() => {
+        // `countUpFrames` ends on the target exactly, so the number a player is
+        // left looking at is the state's, never a sample of the curve.
+        setValue(frames[step] ?? target);
         step += 1;
-        if (step >= STEPS) {
+        if (step >= frames.length) {
           if (interval !== null) clearInterval(interval);
           interval = null;
-          // The last frame is the state's number, not a sample of the curve.
-          setValue(target);
-          return;
         }
-        const t = step / STEPS;
-        const eased = 1 - (1 - t) ** 3;
-        setValue(from + (target - from) * eased);
       }, STEP_MS);
     }, delayMs);
 

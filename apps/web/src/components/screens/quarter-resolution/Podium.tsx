@@ -18,6 +18,7 @@ import { formatPct, formatRankMove } from '@frontier/shared';
 import { Tag, cx } from '@/components/ui';
 import { CountUp } from './CountUp';
 import { PodiumFigure } from './Art';
+import { PODIUM_HEIGHTS, podiumOrder } from './theatre';
 
 export interface RankRow {
   readonly board: string;
@@ -28,21 +29,11 @@ export interface RankRow {
   readonly percentile: number;
 }
 
-/** Heights in px for the centre, left and right steps. */
-const STEP_HEIGHT: readonly number[] = [88, 66, 52];
-
-/** Podium order: second-best on the left, best in the middle, third on the right. */
-function arrange<T>(top: readonly T[]): readonly (T | null)[] {
-  const [first = null, second = null, third = null] = top;
-  return [second, first, third];
-}
-
 export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): React.JSX.Element | null {
   if (rows.length === 0) return null;
 
-  const top = [...rows].sort((a, b) => b.percentile - a.percentile).slice(0, 3);
-  const steps = arrange(top);
-  const heights = [STEP_HEIGHT[1] ?? 66, STEP_HEIGHT[0] ?? 88, STEP_HEIGHT[2] ?? 52];
+  const steps = podiumOrder(rows, (row) => row.percentile);
+  const top = steps.filter((row): row is RankRow => row !== null);
 
   return (
     <div className="flex flex-col">
@@ -80,7 +71,7 @@ export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): Rea
                   'flex w-full min-w-0 items-start justify-center rounded-t-card border border-b-0 px-1.5 pt-2',
                   best ? 'border-brand/40 bg-brand-wash' : 'border-hair bg-raised',
                 )}
-                style={{ height: heights[index] }}
+                style={{ height: PODIUM_HEIGHTS[index] }}
               >
                 <span
                   className={cx(
@@ -99,7 +90,8 @@ export function RankPodium({ rows }: { readonly rows: readonly RankRow[] }): Rea
       <div className="h-1.5 rounded-pill bg-hair-strong" aria-hidden="true" />
 
       <p className="mt-2 text-center text-[10px] leading-relaxed text-ink-faint">
-        The three boards you sit highest on, by percentile. Every figure is the leaderboard the ledger recomputed —{' '}
+        The {top.length === 1 ? 'board' : 'boards'} you sit highest on by percentile, counted from where you were to where you are. Every
+        figure is the leaderboard the ledger recomputed —{' '}
         {top.map((row) => `${row.board.replace(/_/g, ' ')} ${formatPct(row.percentile, 0)}`).join(' · ')}.
       </p>
     </div>

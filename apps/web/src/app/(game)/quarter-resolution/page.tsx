@@ -1,36 +1,477 @@
 'use client';
 
 /**
- * PLACEHOLDER — Quarter Resolution
+ * Quarter Resolution — the payoff, and mechanically a rendering of the ledger.
  *
- * Exactly what changed last quarter, and why.
+ * Five rules govern this screen and none of them are style preferences:
  *
- * A screen agent replaces this whole file. See `apps/web/SCREEN_GUIDE.md` for
- * the store hooks, the primitive props and the layout convention this screen
- * must follow. Keep the route path and the default export name.
+ * 1. Every line is a `ResolutionLine` and **every line references at least one
+ *    committed event**, so every line is clickable and opens its rows.
+ * 2. Phases arrive in pipeline order and are revealed progressively. The pacing
+ *    is the drama — world, competition, your company, markets, rank — and the
+ *    skip is remembered.
+ * 3. The `!` tone is reserved for something that has *not* gone wrong yet.
+ * 4. "Why did my stock fall?" is answered from committed facts, never by asking
+ *    a model to invent a reason.
+ * 5. The narrator is optional colour above the lines. Without it the lines
+ *    render directly; they are human-readable by construction.
+ *
+ * And the sixth case, which matters most when it happens: `committed: false`.
+ * An invariant refused the quarter, nothing changed, and the screen says which
+ * invariant and what did not reconcile.
  */
 
-import { EmptyState, PageHeader, Panel } from '@/components/ui';
-import { useSession } from '@/lib/game';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import type { NarratorOutput, ResolutionLine, SessionState } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
+import { formatMoney, formatPct, formatRankMove, formatScore } from '@frontier/shared';
+import {
+  DataTable,
+  DeltaBadge,
+  EmptyState,
+  PageHeader,
+  Panel,
+  SectionHeading,
+  Tag,
+  cx,
+  toneOfLine,
+  type Column,
+} from '@/components/ui';
+import { LedgerDrawer } from '@/components/screens/quarter-resolution/LedgerDrawer';
+import { groupLines, lineCount, markOf } from '@/components/screens/quarter-resolution/sections';
+import { requestNarrative } from '@/lib/llm/client';
+import { useGameActions, useLlm, useOutcome, usePlayerCharacter, usePlayerCompany, useSession, useSettings } from '@/lib/game';
+
+/** Milliseconds between one revealed line and the next. CSS only — no timers. */
+const REVEAL_STEP_MS = 55;
+const SECTION_STEP_MS = 220;
+const MAX_REVEAL_DELAY_MS = 2_600;
+
+interface PriceRow {
+  readonly instrumentId: string;
+  readonly symbol: string;
+  readonly name: string;
+  readonly price: number;
+  readonly quarterReturn: number;
+  readonly marketCapUsd: number;
+  readonly volume: number;
+  readonly isOwn: boolean;
+}
+
+interface RankRow {
+  readonly board: string;
+  readonly label: string;
+  readonly rank: number;
+  readonly previousRank: number | null;
+  readonly value: number;
+  readonly percentile: number;
+}
 
 export default function QuarterResolutionPage(): React.JSX.Element {
   const session = useSession();
+  const company = usePlayerCompany();
+  const founder = usePlayerCharacter();
+  const outcome = useOutcome();
+  const settings = useSettings();
+  const llm = useLlm();
+  const { updateSettings } = useGameActions();
+
+  const [narrative, setNarrative] = useState<NarratorOutput | null>(null);
+  const [narrating, setNarrating] = useState(false);
+  const [openLine, setOpenLine] = useState<ResolutionLine | null>(null);
+
+  const report = outcome?.report ?? null;
+
+  /* --- optional colour ----------------------------------------------------- */
+  useEffect(() => {
+    let cancelled = false;
+    setNarrative(null);
+    if (report === null || !llm.available) return;
+    setNarrating(true);
+    void requestNarrative(report, company.id)
+      .then((result) => {
+        if (!cancelled) setNarrative(result);
+      })
+      .finally(() => {
+        if (!cancelled) setNarrating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [report, company.id, llm.available]);
+
+  const ownIds = useMemo(() => new Set<string>([company.id, founder.id]), [company.id, founder.id]);
+  // Every company and character in the session: a subject in here that is not
+  // yours is a rival's line; a subject in neither is public news about the world.
+  const actorIds = useMemo(
+    () => new Set<string>([...session.companies.map((entry) => entry.id), ...session.characters.map((entry) => entry.id)]),
+    [session.companies, session.characters],
+  );
+  const sections = useMemo(() => (report === null ? [] : groupLines(report, ownIds, actorIds)), [report, ownIds, actorIds]);
+
+  /* --- the state the report describes -------------------------------------- */
+  // For a committed quarter this is the world afterwards. For a refused one the
+  // resolver hands back the restored pre-resolution state, so the price and rank
+  // panels are suppressed rather than shown as though they had moved.
+  const resolved: SessionState | null = outcome === null ? null : outcome.nextState;
+  const committed = outcome?.committed === true;
+
+  const prices: readonly PriceRow[] = useMemo(() => {
+    if (resolved === null || !committed) return [];
+    return resolved.marketInstruments
+      .filter((instrument) => !instrument.isReference)
+      .map((instrument) => {
+        const series = resolved.quotes.filter((quote) => quote.instrumentId === instrument.id).sort((a, b) => a.quarter - b.quarter);
+        const last = series[series.length - 1];
+        if (last === undefined) return null;
+        return {
+          instrumentId: instrument.id,
+          symbol: instrument.symbol,
+          name: instrument.name,
+          price: last.price,
+          quarterReturn: last.return,
+          marketCapUsd: last.marketCapUsd,
+          volume: last.volume,
+          isOwn: instrument.companyId === company.id,
+        };
+      })
+      .filter((row): row is PriceRow => row !== null)
+      .sort((a, b) => b.quarterReturn - a.quarterReturn);
+  }, [resolved, committed, company.id]);
+
+  const ranks: readonly RankRow[] = useMemo(() => {
+    if (resolved === null || !committed) return [];
+    const rows: RankRow[] = [];
+    for (const board of resolved.leaderboards) {
+      const entry = board.entries.find((candidate) => ownIds.has(candidate.subjectId));
+      if (entry === undefined) continue;
+      rows.push({
+        board: board.board,
+        label: entry.label,
+        rank: entry.rank,
+        previousRank: entry.previousRank,
+        value: entry.value,
+        percentile: entry.percentile,
+      });
+    }
+    return rows;
+  }, [resolved, committed, ownIds]);
+
+  /* --- nothing to show ------------------------------------------------------ */
+  if (outcome === null || report === null) {
+    return (
+      <>
+        <PageHeader
+          title="Quarter Resolution"
+          eyebrow={quarterLabel(session.startYear, session.quarter)}
+          subtitle="Exactly what changed, and why — every line traceable to a committed ledger row."
+        />
+        <Panel>
+          <EmptyState
+            glyph="QR"
+            title="No quarter has resolved in this tab yet"
+            message="Queue your instructions, review them, and lock the quarter. The report that comes back is a rendering of the ledger, not a summary of it."
+            action={
+              <Link href="/end-quarter" className="btn btn-primary btn-sm">
+                Go to End Quarter
+              </Link>
+            }
+          />
+        </Panel>
+      </>
+    );
+  }
+
+  const failed = outcome.invariants.filter((check) => !check.passed);
+  const reveal = !settings.skipResolutionReveal;
+  let lineIndex = 0;
 
   return (
     <>
       <PageHeader
-        title="Quarter Resolution"
-        eyebrow={quarterLabel(session.startYear, session.quarter)}
-        subtitle="Exactly what changed last quarter, and why."
+        title={committed ? 'Quarter Resolution' : 'Quarter refused'}
+        eyebrow={`${quarterLabel(session.startYear, report.quarter)} · ${lineCount(report)} lines · ledger ${report.sequenceFrom}–${report.sequenceTo}`}
+        subtitle={report.headline}
+        actions={
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn btn-sm" onClick={() => updateSettings({ skipResolutionReveal: !settings.skipResolutionReveal })}>
+              {settings.skipResolutionReveal ? 'Replay the reveal' : 'Skip to the end'}
+            </button>
+            <Link href="/command-centre" className="btn btn-primary btn-sm">
+              Continue to next quarter
+            </Link>
+          </div>
+        }
       />
-      <Panel>
-        <EmptyState
-          glyph="QR"
-          title="Under construction"
-          message="This screen is scaffolded. The engine, the store and the design system behind it are live — the surface is not built yet."
-        />
-      </Panel>
+
+      {/* --- the refusal case ---------------------------------------------- */}
+      {!committed ? (
+        <Panel title="The quarter did not commit" subtitle="An invariant refused it and the pre-resolution state was restored">
+          <p className="text-[12px] leading-relaxed text-ink-dim">
+            Nothing changed. Your queued instructions are still yours, the world is where it was, and the report below is what the pipeline
+            produced before the gate rejected it. A failed check in <span className="figure">ledger_commit</span> aborts the commit — that is
+            the mechanism working, not a lost quarter.
+          </p>
+          <SectionHeading className="mt-3" rule>
+            Checks that did not pass
+          </SectionHeading>
+          {failed.length === 0 ? (
+            <p className="mt-2 text-[11px] text-ink-faint">
+              No individual check reported a failure, which means the resolver aborted before the gate could complete.
+            </p>
+          ) : (
+            <ul className="mt-2 flex flex-col gap-2">
+              {failed.map((check) => (
+                <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="rounded-[4px] border border-loss/30 bg-loss-wash px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="figure text-[12px] text-loss">{check.invariant}</span>
+                    {check.subjectId === null ? null : <span className="figure text-[10px] text-ink-faint">{check.subjectId}</span>}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">{check.detail}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      ) : null}
+
+      {/* --- narrator ------------------------------------------------------- */}
+      {narrative !== null ? (
+        <Panel title="The quarter, in prose" subtitle={`Narrated from committed lines only · ${narrative.tone}`}>
+          <p className="text-[13px] font-medium text-ink">{narrative.headline}</p>
+          <p className="mt-2 text-[12px] leading-relaxed whitespace-pre-wrap text-ink-dim">{narrative.body}</p>
+          <p className="mt-2.5 text-[10px] leading-relaxed text-ink-faint">
+            The narrator's only input is the committed lines below. It may not introduce a number that was not supplied, and it decides
+            nothing.
+          </p>
+        </Panel>
+      ) : narrating ? (
+        <Panel>
+          <p className="text-[11px] text-ink-faint">Asking the narrator for colour over the committed lines…</p>
+        </Panel>
+      ) : null}
+
+      {/* --- the checklist --------------------------------------------------- */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {sections.map((section, sectionIndex) => (
+          <Panel key={section.id} title={section.title} subtitle={section.subtitle} className={section.id === 'rank' || section.id === 'ledger' ? 'lg:col-span-2' : ''}>
+            <ul className="flex flex-col gap-1">
+              {section.lines.map((line, index) => {
+                const tone = toneOfLine(line.tone);
+                // Capped so a ninety-line quarter still finishes revealing in a few
+                // seconds; the pacing is drama, not a loading bar.
+                const delay = Math.min(sectionIndex * SECTION_STEP_MS + lineIndex * REVEAL_STEP_MS, MAX_REVEAL_DELAY_MS);
+                lineIndex += 1;
+                return (
+                  <li
+                    key={`${section.id}-${index}`}
+                    className={reveal ? 'animate-rise' : undefined}
+                    style={reveal ? { animationDelay: `${delay}ms` } : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setOpenLine(line)}
+                      className="flex w-full items-start gap-2.5 rounded-[4px] px-1.5 py-1 text-left transition-colors hover:bg-raised"
+                      title={`${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
+                    >
+                      <span className={cx('figure mt-px shrink-0 text-[12px]', `tone-${tone}`)}>{markOf(line.tone)}</span>
+                      <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink">{line.text}</span>
+                      {line.deltaLabel === null ? null : (
+                        <span className={cx('figure shrink-0 text-[11px]', `tone-${tone}`)}>{line.deltaLabel}</span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </Panel>
+        ))}
+      </div>
+
+      {/* --- prices ---------------------------------------------------------- */}
+      {committed ? (
+        <Panel title="Price change" subtitle="Closing quotes for the quarter that just resolved" flush>
+          <DataTable
+            dense
+            rows={prices}
+            rowKey={(row) => row.instrumentId}
+            isHighlighted={(row) => row.isOwn}
+            rowHref={() => '/markets'}
+            initialSort={{ key: 'return', direction: 'desc' }}
+            empty={
+              <div className="p-3.5">
+                <EmptyState
+                  title="Nothing traded this quarter"
+                  message="No in-world instrument produced a quote. A private company has no instrument at all — that is the starting condition, not an error."
+                  compact
+                />
+              </div>
+            }
+            columns={
+              [
+                {
+                  key: 'symbol',
+                  header: 'Instrument',
+                  render: (row) => (
+                    <div className="min-w-0">
+                      <div className="figure truncate text-[12px] text-ink">{row.symbol}</div>
+                      <div className="truncate text-[10px] text-ink-faint">{row.name}</div>
+                    </div>
+                  ),
+                  sortable: true,
+                  sortValue: (row) => row.symbol,
+                },
+                { key: 'price', header: 'Close', align: 'right', render: (row) => formatMoney(row.price), sortable: true, sortValue: (row) => row.price },
+                {
+                  key: 'return',
+                  header: 'Quarter',
+                  align: 'right',
+                  render: (row) => <DeltaBadge value={row.quarterReturn} format="percent" bare />,
+                  sortable: true,
+                  sortValue: (row) => row.quarterReturn,
+                },
+                {
+                  key: 'cap',
+                  header: 'Market cap',
+                  align: 'right',
+                  hideOnMobile: true,
+                  render: (row) => formatMoney(row.marketCapUsd),
+                  sortable: true,
+                  sortValue: (row) => row.marketCapUsd,
+                },
+                {
+                  key: 'volume',
+                  header: 'Volume',
+                  align: 'right',
+                  hideOnMobile: true,
+                  render: (row) => formatScore(row.volume),
+                  sortable: true,
+                  sortValue: (row) => row.volume,
+                },
+              ] as readonly Column<PriceRow>[]
+            }
+          />
+        </Panel>
+      ) : null}
+
+      {/* --- rank ------------------------------------------------------------ */}
+      {committed ? (
+        <Panel title="Rank movement" subtitle="Where the quarter left you on each of the ten boards" flush>
+          <DataTable
+            dense
+            rows={ranks}
+            rowKey={(row) => row.board}
+            rowHref={() => '/leaderboard'}
+            empty={
+              <div className="p-3.5">
+                <EmptyState
+                  title="No board lists you yet"
+                  message="Leaderboards are recomputed from the ledger each quarter. A company with no priced security and no contracts can sit outside several of them."
+                  compact
+                />
+              </div>
+            }
+            columns={
+              [
+                {
+                  key: 'board',
+                  header: 'Board',
+                  render: (row) => <span className="text-[12px] text-ink">{row.board.replace(/_/g, ' ')}</span>,
+                },
+                { key: 'subject', header: 'You', hideOnMobile: true, render: (row) => <span className="text-[11px] text-ink-dim">{row.label}</span> },
+                { key: 'rank', header: 'Rank', align: 'right', render: (row) => `#${row.rank}` },
+                {
+                  key: 'move',
+                  header: 'Movement',
+                  align: 'right',
+                  render: (row) => {
+                    const move = formatRankMove(row.previousRank, row.rank);
+                    if (move === null) return <span className="text-ink-faint">unchanged</span>;
+                    if (move === 'new') return <Tag tone="info">new</Tag>;
+                    const improved = row.previousRank !== null && row.rank < row.previousRank;
+                    return <span className={improved ? 'tone-gain' : 'tone-loss'}>{move}</span>;
+                  },
+                },
+                {
+                  key: 'percentile',
+                  header: 'Percentile',
+                  align: 'right',
+                  hideOnMobile: true,
+                  render: (row) => formatPct(row.percentile, 0),
+                },
+              ] as readonly Column<RankRow>[]
+            }
+          />
+        </Panel>
+      ) : null}
+
+      {/* --- footer ---------------------------------------------------------- */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel title="Invariants" subtitle="Checked before the ledger committed">
+          <ul className="flex flex-col gap-1">
+            {outcome.invariants.map((check) => (
+              <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="flex items-baseline justify-between gap-3 text-[11px]">
+                <span className="truncate text-ink-dim">{check.invariant.replace(/_/g, ' ')}</span>
+                <span className={cx('figure shrink-0', check.passed ? 'tone-gain' : 'tone-loss')}>{check.passed ? 'pass' : 'fail'}</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+
+        <Panel title="State hashes" subtitle="Same state, same decisions, same seed">
+          <ul className="flex flex-col gap-1 text-[11px]">
+            <li className="flex items-baseline justify-between gap-3">
+              <span className="text-ink-dim">Before</span>
+              <span className="figure truncate text-ink-faint">{report.stateHashBefore.slice(0, 24)}</span>
+            </li>
+            <li className="flex items-baseline justify-between gap-3">
+              <span className="text-ink-dim">After</span>
+              <span className="figure truncate text-ink-faint">{report.stateHashAfter.slice(0, 24)}</span>
+            </li>
+            <li className="flex items-baseline justify-between gap-3">
+              <span className="text-ink-dim">Ledger rows</span>
+              <span className="figure text-ink">{outcome.events.length}</span>
+            </li>
+          </ul>
+          <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
+            Replaying this session's recorded decisions against this seed reproduces the hash after, byte for byte.
+          </p>
+        </Panel>
+
+        <Panel title="Phase timings" subtitle="Diagnostics only; never an input">
+          <ul className="flex flex-col gap-0.5">
+            {outcome.phaseTimings.map((timing) => (
+              <li key={timing.phase} className="flex items-baseline justify-between gap-3 text-[11px]">
+                <span className="truncate text-ink-dim">{timing.phase.replace(/_/g, ' ')}</span>
+                <span className="figure shrink-0 text-[10px] text-ink-faint">
+                  {timing.durationMs.toFixed(1)}ms · {timing.eventsEmitted}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[6px] border border-hair bg-panel px-3.5 py-3">
+        <div>
+          <p className="text-[12px] text-ink">
+            {committed
+              ? `${quarterLabel(session.startYear, report.quarter)} is committed. ${quarterLabel(session.startYear, session.quarter)} is open.`
+              : 'Nothing was committed. The quarter is still open and your queue is intact.'}
+          </p>
+          <p className="mt-0.5 text-[10px] text-ink-faint">
+            {committed
+              ? 'Every line above opens the ledger rows behind it. Nothing on this screen is narrative invention.'
+              : 'Fix what the failed invariant names, or remove the instruction that caused it, and resolve again.'}
+          </p>
+        </div>
+        <Link href={committed ? '/command-centre' : '/end-quarter'} className="btn btn-primary">
+          {committed ? 'Continue to next quarter' : 'Back to End Quarter'}
+        </Link>
+      </div>
+
+      <LedgerDrawer line={openLine} events={outcome.events} startYear={session.startYear} onClose={() => setOpenLine(null)} />
     </>
   );
 }

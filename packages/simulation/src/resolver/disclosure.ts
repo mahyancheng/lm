@@ -16,7 +16,12 @@
  *   why a secret setback damages internal research and leaves the share price
  *   untouched until it leaks;
  * - guidance is recorded with an `isTruthful` flag the client never sees, so a
- *   denial that later proves misleading can be punished two quarters later.
+ *   denial that later proves misleading can be punished two quarters later. The
+ *   flag lives on the disclosure row of canonical state and on a **private**
+ *   ledger row; it is never written into a public payload, because a public
+ *   payload is exactly the thing every reader is entitled to read, and a row
+ *   saying "that statement was a lie" is the one fact the liar's rivals must
+ *   have to earn. `social/reach.ts` keeps the same rule for posts.
  *
  * The phase also settles the previous quarters' promises: guidance whose target
  * quarter has arrived is compared against what actually happened, and management
@@ -159,12 +164,16 @@ function publishGuidance(draft: SessionState, ctx: ResolverContext): void {
         metric: intent.metric,
         value: round(intent.value, 4),
         targetQuarter: intent.quarter,
-        projected: projected === null ? null : round(projected, 4),
-        // The flag is written to a public row but never rendered to a client;
-        // the engine reads it when the guided quarter arrives.
-        isTruthful: truthful,
       },
       visibility: 'public',
+    });
+    // What the company privately knew when it said that, on its own row.
+    recordTruthAssessment(draft, ctx, company.id, disclosure.id, {
+      kind: 'guidance',
+      metric: intent.metric,
+      value: round(intent.value, 4),
+      projected: projected === null ? null : round(projected, 4),
+      isTruthful: truthful,
     });
     ctx.log({
       phase: 'disclosure_resolution',
@@ -208,11 +217,16 @@ function evaluateStandingGuidance(draft: SessionState, ctx: ResolverContext): vo
         guided: round(guided, 4),
         actual: round(actual, 4),
         met,
-        wasTruthfulWhenMade: disclosure.isTruthful,
         investorReputationBefore: round(before, 2),
         investorReputationAfter: round(company.reputation.investor, 2),
       },
       visibility: 'public',
+    });
+    recordTruthAssessment(draft, ctx, company.id, disclosure.id, {
+      kind: 'guidance_settled',
+      metric,
+      met,
+      isTruthful: disclosure.isTruthful,
     });
     ctx.log({
       phase: 'disclosure_resolution',
@@ -312,8 +326,15 @@ function publishCrisisResponses(draft: SessionState, ctx: ResolverContext): void
       type: 'disclosure_published',
       actorId: company.id,
       targetId: disclosure.id,
-      payload: { kind: 'crisis_response', responseKind: intent.responseKind, crisisEventId: intent.crisisEventId, isTruthful: truthful },
+      payload: { kind: 'crisis_response', responseKind: intent.responseKind, crisisEventId: intent.crisisEventId },
       visibility: 'public',
+    });
+    recordTruthAssessment(draft, ctx, company.id, disclosure.id, {
+      kind: 'crisis_response',
+      responseKind: intent.responseKind,
+      crisisEventId: intent.crisisEventId,
+      namesCompany,
+      isTruthful: truthful,
     });
     ctx.log({
       phase: 'disclosure_resolution',
@@ -329,6 +350,32 @@ function publishCrisisResponses(draft: SessionState, ctx: ResolverContext): void
 /* -------------------------------------------------------------------------- */
 /*  Projection and truth                                                       */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Write the engine's private judgement of a statement to its own ledger row.
+ *
+ * The public row says what was said. This one says what was true, and it is
+ * `private` so that reaching it requires the information boundary to be crossed
+ * deliberately — by a leak, by a rumour, or by the guided quarter arriving —
+ * rather than by reading the ledger a rival is entitled to read.
+ */
+function recordTruthAssessment(
+  draft: SessionState,
+  ctx: ResolverContext,
+  companyId: string,
+  disclosureId: string,
+  payload: Record<string, unknown>,
+): void {
+  ctx.emit({
+    sessionId: draft.sessionId,
+    quarter: draft.quarter,
+    type: 'disclosure_published',
+    actorId: companyId,
+    targetId: disclosureId,
+    payload: { ...payload, assessment: 'internal' },
+    visibility: 'private',
+  });
+}
 
 /** What the metric actually is, from canonical state. */
 export function projectMetric(draft: SessionState, company: Company, metric: GuidanceMetric): number | null {

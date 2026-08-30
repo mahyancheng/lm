@@ -217,10 +217,53 @@ export function applyProposalEffects(draft: SessionState, ctx: ResolverContext, 
 
     case 'csuite_appointment': {
       company.employees.morale = score100(company.employees.morale + 2);
+      // The board appoints whoever put the matter to it. For a chief executive
+      // that is a routine authorisation and changes nothing; for a shareholder
+      // who requisitioned the meeting it is the route back — win the vote, take
+      // the office, and with the office the direction of the company. This is
+      // the other half of the separation `dismissChiefExecutive` opens: control
+      // is lost at a vote and it can be won back at one.
+      const appointee = draft.characters.find((c) => c.id === proposal.proposedByCharacterId && c.isActive) ?? null;
+      if (appointee === null || appointee.id === company.ceoCharacterId) {
+        return { summary: `${company.name} filled the post the board approved.`, eventIds: [], changes: { authorised: true, moraleDelta: 2 } };
+      }
+
+      const previousCeo = company.ceoCharacterId;
+      const previousController = company.controllerPlayerId;
+      company.ceoCharacterId = appointee.id;
+      appointee.companyId = company.id;
+      const seat = draft.players.find((player) => player.characterId === appointee.id && player.companyId === company.id && player.isActive) ?? null;
+      if (seat !== null) company.controllerPlayerId = seat.playerId;
+
+      const eventId = emitEvent(
+        draft,
+        ctx,
+        'ceo_appointed',
+        proposal.proposedByCharacterId,
+        company.id,
+        {
+          proposalId: proposal.id,
+          appointedCharacterId: appointee.id,
+          replacedCharacterId: previousCeo,
+          controllerPlayerIdBefore: previousController,
+          controllerPlayerIdAfter: company.controllerPlayerId,
+          interim: false,
+        },
+        'public',
+      );
       return {
-        summary: `${company.name} filled the post the board approved.`,
-        eventIds: [],
-        changes: { authorised: true, moraleDelta: 2 },
+        summary: `${company.name}'s board appointed ${appointee.name} chief executive${
+          company.controllerPlayerId !== previousController ? ', returning the company to their direction' : ''
+        }.`,
+        eventIds: [eventId],
+        changes: {
+          authorised: true,
+          moraleDelta: 2,
+          appointedCharacterId: appointee.id,
+          replacedCharacterId: previousCeo,
+          controllerPlayerIdBefore: previousController,
+          controllerPlayerIdAfter: company.controllerPlayerId,
+        },
       };
     }
 

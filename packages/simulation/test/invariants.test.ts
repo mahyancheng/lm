@@ -11,9 +11,9 @@
 
 import { describe, expect, it } from 'vitest';
 import type { InvariantCheckResult, NpcActionBundle, SessionState, SimEvent, SimulationInvariant, SubmittedAction } from '@frontier/contracts';
-import { SIMULATION_INVARIANTS, SessionStateSchema, balanceSheetReconciles } from '@frontier/contracts';
+import { ResolutionReportSchema, SIMULATION_INVARIANTS, SessionStateSchema, balanceSheetReconciles } from '@frontier/contracts';
 import { hashState } from '@frontier/shared';
-import { ENGINE_INVARIANTS, runInvariantGate } from '../src/resolver';
+import { ENGINE_INVARIANTS, chainRowHash, isEventVisibleTo, audienceFor, projectResolutionOutcomeForPlayer, runInvariantGate } from '../src/resolver';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, createDemoSession } from '../src/scenario';
 
 /* -------------------------------------------------------------------------- */
@@ -43,20 +43,27 @@ const check = (results: InvariantCheckResult[], invariant: SimulationInvariant):
   return found;
 };
 
+/** Close a fabricated row the way the recorder does: chained onto its predecessor. */
+const chained = (previousRowHash: string, row: Omit<SimEvent, 'rowHash'>): SimEvent => {
+  const unchained: SimEvent = { ...row, rowHash: '' };
+  return { ...unchained, rowHash: chainRowHash(previousRowHash, unchained) };
+};
+
 /** A minimal, well-formed ledger row, so the reproducibility checks are happy. */
-const agentRow = (state: SessionState): SimEvent => ({
-  eventId: 'evt_agent',
-  sessionId: state.sessionId,
-  quarter: state.quarter,
-  sequence: state.ledgerSequence,
-  type: 'llm_call_logged',
-  actorId: null,
-  targetId: null,
-  payload: { agentRole: 'world_director' },
-  stateHashBefore: hashState(state),
-  stateHashAfter: hashState(state),
-  visibility: 'private',
-});
+const agentRow = (state: SessionState): SimEvent =>
+  chained(hashState(state), {
+    eventId: 'evt_agent',
+    sessionId: state.sessionId,
+    quarter: state.quarter,
+    sequence: state.ledgerSequence,
+    type: 'llm_call_logged',
+    actorId: null,
+    targetId: null,
+    payload: { agentRole: 'world_director' },
+    stateHashBefore: hashState(state),
+    stateHashAfter: hashState(state),
+    visibility: 'private',
+  });
 
 describe('runInvariantGate', () => {
   it('checks all thirteen invariants', () => {
@@ -186,8 +193,18 @@ describe('runInvariantGate', () => {
   it('catches a gap in the ledger sequence', () => {
     const state = createDemoSession();
     const first = agentRow(state);
-    const second: SimEvent = { ...first, eventId: 'evt_two', sequence: first.sequence + 4, stateHashBefore: first.stateHashAfter };
+    const second = chained(first.rowHash, { ...first, eventId: 'evt_two', sequence: first.sequence + 4, stateHashBefore: first.stateHashAfter });
     expect(check(gate(state, [first, second]), 'auditability').passed).toBe(false);
+  });
+
+  it('catches a ledger row edited after it was written, without hashing the state again', () => {
+    const state = createDemoSession();
+    const row = agentRow(state);
+    // Everything a state hash would notice is untouched: only the row's own
+    // payload is rewritten, which is precisely what the row chain is for.
+    const tampered: SimEvent = { ...row, payload: { agentRole: 'world_director', severityUsed: 99 } };
+    expect(check(gate(state, [tampered]), 'deterministic_replay').passed).toBe(false);
+    expect(check(gate(state, [row]), 'deterministic_replay').passed).toBe(true);
   });
 
   it('catches a quarter that recorded neither a model decision nor a fallback', () => {
@@ -372,6 +389,12 @@ describe.skipIf(engineModule === null)('twelve chaotic quarters', () => {
         expect(failures.map((failure) => `${failure.invariant}: ${failure.detail}`)).toEqual([]);
         expect(outcome.committed).toBe(true);
 
+        // Passing is only worth something if the check ran: every active company
+        // must have been compared against its own ledger, not skipped.
+        const financial = outcome.invariants.find((result) => result.invariant === 'financial_integrity');
+        expect(financial?.detail).not.toContain('could not be reconstructed');
+        expect(financial?.detail).toContain(`${outcome.nextState.companies.filter((company) => company.isActive).length} balance sheets`);
+
         // The ledger runs on without a gap or a rewind, quarter after quarter.
         outcome.events.forEach((event, index) => {
           expect(event.sequence).toBe(expectedSequence + index);
@@ -428,6 +451,208 @@ describe.skipIf(engineModule === null)('twelve chaotic quarters', () => {
         }
         state = outcome.nextState;
       }
+    },
+    120_000,
+  );
+});
+
+/* -------------------------------------------------------------------------- */
+/*  The information boundary, seat by seat                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The gate proves the *world* keeps its secrets. This proves the *screen* does.
+ *
+ * `resolveQuarter` returns the whole quarter — it has to, it is the engine — and
+ * `projectResolutionOutcomeForPlayer` is what one seat is allowed to be handed.
+ * Eight chaotic quarters of guidance, secret programmes, acquisitions and
+ * accumulation, and at every one of them: nothing a rival keeps private reaches
+ * the player, everything about the player does, every surviving line still cites
+ * a row that survived with it, and no public payload anywhere carries the flag
+ * that says whether a statement was true.
+ */
+describe.skipIf(engineModule === null)('the per-player projection', () => {
+  it(
+    'hands a player their own quarter and nobody else\'s, across eight chaotic quarters',
+    () => {
+      if (engineModule === null) return;
+      const engine = engineModule.createDefaultEngine();
+      let state = createDemoSession();
+      let ownLinesSeen = 0;
+      let rivalRowsWithheld = 0;
+      let rivalSecretResearchRows = 0;
+      let truthRowsRecorded = 0;
+
+      for (let quarter = 0; quarter < 8; quarter += 1) {
+        const script = chaosFor(state, quarter);
+        const outcome = engine.resolver.resolveQuarter(state, script.actions, null, script.bundles);
+        expect(outcome.committed).toBe(true);
+        const session = outcome.nextState;
+
+        // No public row anywhere says whether a statement was true. That fact is
+        // canonical reality, and it is recorded privately or not at all.
+        for (const event of outcome.events) {
+          if (event.visibility !== 'public') continue;
+          expect(Object.keys(event.payload)).not.toContain('isTruthful');
+          expect(Object.keys(event.payload)).not.toContain('wasTruthfulWhenMade');
+        }
+        truthRowsRecorded += outcome.events.filter((event) => event.visibility === 'private' && event.payload.assessment === 'internal').length;
+
+        const projected = projectResolutionOutcomeForPlayer(outcome, session, DEMO_PLAYER_ID);
+        const audience = audienceFor(session, DEMO_PLAYER_ID);
+        expect(audience.companyIds.has(DEMO_COMPANIES.player)).toBe(true);
+
+        // Every row handed over is a row this seat may read...
+        for (const event of projected.events) {
+          expect(isEventVisibleTo(event, session, audience)).toBe(true);
+        }
+        // ...and every row withheld is one it may not.
+        const withheld = outcome.events.filter((event) => !projected.events.includes(event));
+        for (const event of withheld) {
+          expect(isEventVisibleTo(event, session, audience)).toBe(false);
+          expect(event.visibility).not.toBe('public');
+        }
+
+        // A rival's private research never appears, secret or merely internal.
+        const rivalResearch = outcome.events.filter(
+          (event) => event.type.startsWith('research_') && event.visibility !== 'public' && event.actorId !== null && event.actorId !== DEMO_COMPANIES.player,
+        );
+        rivalSecretResearchRows += rivalResearch.length;
+        for (const event of rivalResearch) expect(projected.events).not.toContain(event);
+        rivalRowsWithheld += withheld.length;
+
+        // Every surviving line still cites a row that survived with it.
+        const ids = new Set(projected.events.map((event) => event.eventId));
+        for (const phase of projected.report.phases) {
+          expect(phase.lines.length).toBeGreaterThan(0);
+          for (const line of phase.lines) {
+            expect(line.refEventIds.length).toBeGreaterThan(0);
+            for (const ref of line.refEventIds) expect(ids.has(ref)).toBe(true);
+          }
+        }
+        // And it is still a report: the schema does not bend for a projection.
+        expect(() => ResolutionReportSchema.parse(projected.report)).not.toThrow();
+
+        ownLinesSeen += projected.report.phases.flatMap((phase) => phase.lines).filter((line) => line.subjectId === DEMO_COMPANIES.player).length;
+        state = session;
+      }
+
+      // The projection is not vacuous in either direction: the player's own
+      // quarter reaches them, and a great deal of everyone else's does not.
+      expect(ownLinesSeen).toBeGreaterThan(0);
+      expect(rivalRowsWithheld).toBeGreaterThan(50);
+      expect(rivalSecretResearchRows).toBeGreaterThan(0);
+      expect(truthRowsRecorded).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+
+  it(
+    'shows a rival exactly the same quarter from the other side',
+    () => {
+      if (engineModule === null) return;
+      const engine = engineModule.createDefaultEngine();
+      const state = createDemoSession();
+      // Seat a second player at Nexus, so the same quarter has two audiences.
+      const rivalPlayerId = 'player_rival';
+      state.players.push({
+        playerId: rivalPlayerId,
+        characterId: DEMO_CHARACTERS.maya,
+        companyId: DEMO_COMPANIES.nexus,
+        isHuman: true,
+        displayName: 'Maya Chen',
+        joinedQuarter: 0,
+        autoExecuteRoutine: false,
+        hasSubmittedThisQuarter: false,
+        isActive: true,
+      });
+      const nexus = state.companies.find((company) => company.id === DEMO_COMPANIES.nexus);
+      if (nexus === undefined) throw new Error('missing rival');
+      nexus.controllerPlayerId = rivalPlayerId;
+
+      const script = chaosFor(state, 0);
+      const outcome = engine.resolver.resolveQuarter(state, script.actions, null, script.bundles);
+      expect(outcome.committed).toBe(true);
+      const session = outcome.nextState;
+
+      const mine = projectResolutionOutcomeForPlayer(outcome, session, DEMO_PLAYER_ID);
+      const theirs = projectResolutionOutcomeForPlayer(outcome, session, rivalPlayerId);
+
+      const rowsOf = (view: { events: readonly { eventId: string }[] }): Set<string> => new Set(view.events.map((event) => event.eventId));
+      const minesIds = rowsOf(mine);
+      const theirsIds = rowsOf(theirs);
+      expect(minesIds).not.toEqual(theirsIds);
+
+      // Nexus keeps one secret programme. Its owner sees it; the player does not.
+      const secret = session.researchProjects.find((project) => project.isSecret && project.companyId === DEMO_COMPANIES.nexus);
+      expect(secret).toBeDefined();
+      const secretRows = outcome.events.filter((event) => event.targetId === secret?.targetNodeId && event.actorId === DEMO_COMPANIES.nexus);
+      expect(secretRows.length).toBeGreaterThan(0);
+      for (const row of secretRows) {
+        expect(theirsIds.has(row.eventId)).toBe(true);
+        if (row.visibility !== 'public') expect(minesIds.has(row.eventId)).toBe(false);
+      }
+    },
+    120_000,
+  );
+});
+
+/* -------------------------------------------------------------------------- */
+/*  A stake bought and sold                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one equity movement the ledger cannot state outright.
+ *
+ * A sale realises a gain — cash in at the market, carrying value out of
+ * investments — and the carrying value is not on the trade row. The invariant
+ * reconstructs it from the investments line, which moves by exactly that and by
+ * nothing else. Get the sign or the netting wrong and this quarter stops
+ * committing, which is why it is worth resolving a real sale rather than
+ * trusting the arithmetic.
+ */
+describe.skipIf(engineModule === null)('a stake bought and sold', () => {
+  it(
+    'commits the quarter in which a holding is sold at a profit',
+    () => {
+      if (engineModule === null) return;
+      const engine = engineModule.createDefaultEngine();
+      let state = createDemoSession();
+
+      const trade = (intent: SubmittedAction['intent']): NpcActionBundle => ({
+        companyId: DEMO_COMPANIES.aurora,
+        strategySummary: 'Take the corpus business while it is cheap, and take the profit when it is not.',
+        posture: 'consolidation',
+        actions: [intent],
+        rationale: 'Cash is piling up faster than the fab plan can spend it, and a listed corpus business is the cheapest thing in the sector.',
+      });
+
+      const bought = engine.resolver.resolveQuarter(
+        state,
+        [],
+        null,
+        [trade({ type: 'buy_shares', securityId: 'sec_meridian_common', targetPct: null, shares: 2_000_000, maxPricePerShareUsd: 60 })],
+      );
+      expect(bought.committed).toBe(true);
+      expect(bought.events.some((event) => event.type === 'shares_traded' && event.payload.side === 'buy')).toBe(true);
+      state = bought.nextState;
+
+      const sold = engine.resolver.resolveQuarter(
+        state,
+        [],
+        null,
+        [trade({ type: 'sell_shares', securityId: 'sec_meridian_common', shares: 1_000_000, minPricePerShareUsd: 0 })],
+      );
+      const sale = sold.events.find((event) => event.type === 'shares_traded' && event.payload.side === 'sell');
+      expect(sale).toBeDefined();
+      expect(sold.committed).toBe(true);
+      expect(check(sold.invariants, 'financial_integrity').passed).toBe(true);
+
+      // The realised result really did move equity: the seller's books are not
+      // simply unchanged by the trade.
+      const aurora = sold.nextState.companies.find((company) => company.id === DEMO_COMPANIES.aurora);
+      if (aurora === undefined) throw new Error('missing seller');
+      expect(balanceSheetReconciles(aurora.balanceSheet)).toBe(true);
     },
     120_000,
   );

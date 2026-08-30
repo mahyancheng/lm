@@ -324,21 +324,47 @@ export const CLEARANCE_BURDEN: Record<ClearanceLevel, number> = {
 };
 
 /**
+ * Ceiling on a programme's size, as a share of the agency's quarterly budget,
+ * for it to count as an entry-tier competition.
+ */
+export const ENTRY_TIER_SIZE_SHARE = 0.02;
+
+/**
+ * True when a competition is the on-ramp: small relative to what the agency
+ * buys, and needing no clearance to deliver.
+ *
+ * Every other programme carries a past-performance floor, and past performance
+ * only comes from delivering a contract — so without a tier that asks for none,
+ * a new entrant can never take the first step and government revenue is closed
+ * to everybody who does not already have it. Entry-tier programmes are small and
+ * unclassified on purpose: they are worth winning and they are not worth much.
+ */
+export function isEntryTier(template: ProgrammeTemplate, sizeShare: number): boolean {
+  return template.clearanceLevel === 'none' && sizeShare <= ENTRY_TIER_SIZE_SHARE;
+}
+
+/**
  * Hard gates for one opportunity, scaled to the programme's kind and size.
  *
  * `sizeShare` is the ceiling value as a fraction of the agency's quarterly
  * budget: the larger the programme relative to what the agency buys, the higher
  * the past-performance floor, which is what keeps a first-quarter founder out of
- * a sovereign platform competition.
+ * a sovereign platform competition — and, on an entry-tier programme, lets them
+ * in.
  */
 export function requirementsFor(template: ProgrammeTemplate, agency: Agency, world: WorldState, sizeShare: number): OpportunityRequirements {
   const scrutiny = unit(0.5 * world.regulation.safetyObligations + 0.3 * world.regulation.modelRules + 0.2 * world.media.controversyIntensity);
   const sovereignty = template.sovereign || world.geopolitics.techCompetition > 0.6 || world.regulation.exportControls > 0.65;
-  const minimumPastPerformance = clamp(
-    template.basePastPerformance + 22 * clamp(sizeShare, 0, 1.5) + (agency.clearanceAuthority ? 4 : 0) - (agency.priorities.includes('vendor_diversity') ? 8 : 0),
-    0,
-    95,
-  );
+  const minimumPastPerformance = isEntryTier(template, sizeShare)
+    ? 0
+    : clamp(
+        template.basePastPerformance +
+          22 * clamp(sizeShare, 0, 1.5) +
+          (agency.clearanceAuthority ? 4 : 0) -
+          (agency.priorities.includes('vendor_diversity') ? 8 : 0),
+        0,
+        95,
+      );
 
   return {
     clearanceLevel: template.clearanceLevel,

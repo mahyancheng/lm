@@ -39,12 +39,12 @@ import type {
   SessionState,
   SubmittedAction,
 } from '@frontier/contracts';
-import { makeId, requiresExplicitConfirmation } from '@frontier/contracts';
-import { BatchBudget, Verdict, findCompany, type ValidationActor } from './context';
+import { ActionIntentSchema, makeId, requiresExplicitConfirmation } from '@frontier/contracts';
+import { BatchBudget, Verdict, findCompany, shareholderStake, type ValidationActor } from './context';
 import { applyTypeRules, type RuleContext } from './rules';
 import { authorisedByBoard, boardMatterFor, toBoardProposalIntent } from './boardMatters';
 
-export { BatchBudget, Verdict, canReach, type ValidationActor, type ReachDecision } from './context';
+export { BatchBudget, Verdict, canReach, shareholderStake, type ValidationActor, type ReachDecision } from './context';
 export { RULES, applyTypeRules, quarterlyHireCostUsd, reservableUnits, type RuleContext } from './rules';
 export {
   BOARD_MATTER_BY_ACTION,
@@ -70,6 +70,38 @@ export {
   BOARD_GOV_CONTRACT_FLOOR_USD,
   MIN_INTRODUCTION_PURPOSE_CHARS,
 } from './balance';
+
+/**
+ * What a player who no longer directs their company may still do with it.
+ *
+ * Being chief executive and owning the company are separate states, and a
+ * dismissal ends only the first. A founder who was voted out keeps every share,
+ * and a shareholder of that size is not a spectator: they can trade, deal, speak
+ * publicly, ask for an introduction, and — the route back — requisition a matter
+ * for the board that removed them. Everything else needs the office.
+ *
+ * Ownership is the gate rather than the seat, so this is symmetrical: any player
+ * holding a qualifying stake in a company they do not direct has the same
+ * surface, and a player holding nothing has none of it.
+ */
+export const SHAREHOLDER_CAPACITY_ACTIONS: readonly ActionType[] = [
+  'buy_shares',
+  'sell_shares',
+  'propose_deal',
+  'accept_deal',
+  'reject_deal',
+  'social_post',
+  'request_introduction',
+  'submit_board_proposal',
+];
+
+/**
+ * Ownership at which a shareholder may act in their own name against a company
+ * they do not direct. Five per cent is the disclosure line the ownership
+ * thresholds already use: below it a holder is anonymous, above it they are a
+ * party the company has to deal with.
+ */
+export const SHAREHOLDER_ACTION_THRESHOLD = 0.05;
 
 /**
  * Actions only the chief executive may take on a company's behalf.
@@ -114,6 +146,24 @@ export function validateAction(
 ): ActionValidationResult {
   const verdict = new Verdict<ActionIntent>(intent);
 
+  /* --- the intent has to be an intent ------------------------------------ */
+  // CLAUDE.md rule 3: every proposal is zod-validated before the engine touches
+  // it. TypeScript cannot enforce that at the process boundary — an action can
+  // arrive from a client, a saved game or a model — so an instruction whose
+  // shape or enum value is out of contract is refused here, where a refusal is
+  // an ordinary verdict, rather than thrown out of a phase that indexed it.
+  const parsed = ActionIntentSchema.safeParse(intent);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    verdict.reject(
+      'illegal_value',
+      `The instruction is not a well-formed ${typeof (intent as { type?: unknown })?.type === 'string' ? String((intent as { type: string }).type).replace(/_/g, ' ') : 'action'}: ${
+        issue === undefined ? 'it does not match any action in the contract' : `${issue.path.join('.') || 'intent'} — ${issue.message}`
+      }.`,
+    );
+    return verdict.toResult(actionId);
+  }
+
   /* --- the quarter has to be the open one -------------------------------- */
   if (submittedForQuarter !== draft.quarter) {
     verdict.reject(
@@ -137,9 +187,30 @@ export function validateAction(
     verdict.reject('requirement_not_met', `${company.name} is no longer an operating company.`);
     return verdict.toResult(actionId);
   }
+  let shareholderCapacity = false;
   if (actor.playerId !== null && company.controllerPlayerId !== actor.playerId) {
-    verdict.reject('not_controller_of_company', `${actor.playerId} does not direct ${company.name}.`);
-    return verdict.toResult(actionId);
+    const stake = shareholderStake(draft, company.id, actor);
+    if (!SHAREHOLDER_CAPACITY_ACTIONS.includes(intent.type)) {
+      verdict.reject(
+        'not_controller_of_company',
+        `${actor.playerId} does not direct ${company.name}. As a shareholder they may still ${SHAREHOLDER_CAPACITY_ACTIONS.join(', ').replace(/_/g, ' ')}.`,
+      );
+      return verdict.toResult(actionId);
+    }
+    if (stake < SHAREHOLDER_ACTION_THRESHOLD) {
+      verdict.reject(
+        'not_controller_of_company',
+        `${actor.playerId} does not direct ${company.name} and holds ${(stake * 100).toFixed(1)}% of it; acting as a shareholder needs ${Math.round(
+          SHAREHOLDER_ACTION_THRESHOLD * 100,
+        )}%.`,
+      );
+      return verdict.toResult(actionId);
+    }
+    shareholderCapacity = true;
+    verdict.note(
+      'requirement_not_met',
+      `${company.name} is not directed by ${actor.playerId}; this is taken in their own name as a ${(stake * 100).toFixed(1)}% shareholder.`,
+    );
   }
   if (actor.playerId === null && company.controllerPlayerId !== null) {
     verdict.reject('not_controller_of_company', `${company.name} is directed by a player; an unattributed action cannot act for it.`);
@@ -156,7 +227,11 @@ export function validateAction(
   }
 
   /* --- some things only the chief executive may do ----------------------- */
+  // A shareholder acting in their own name is not claiming the office: their
+  // one governance action is to put a matter to the board, which is precisely
+  // what a shareholder requisition is.
   if (
+    !shareholderCapacity &&
     CEO_ONLY_ACTIONS.includes(intent.type) &&
     company.ceoCharacterId !== null &&
     actor.characterId !== null &&

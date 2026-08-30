@@ -137,15 +137,28 @@ export const SimEventSchema = z
     payload: z
       .record(z.string(), z.unknown())
       .describe('Type-specific detail, e.g. { value: 2400000000, expectedMargin: 0.17 }. INTERNAL: shape varies by event type and is not part of the LLM contract.'),
-    stateHashBefore: z.string().describe('Hash of the canonical state before this event applied. Together with stateHashAfter this makes a tampered ledger detectable.'),
-    stateHashAfter: z.string().describe('Hash of the canonical state after this event applied.'),
+    stateHashBefore: z
+      .string()
+      .describe(
+        'Canonical state hash at the opening of the resolution phase that wrote this row — i.e. at the close of the previous phase that wrote to the ledger. Every row emitted by one phase carries the same pair, because the full state is hashed once per phase boundary rather than once per row. Row-level tamper evidence is rowHash.',
+      ),
+    stateHashAfter: z
+      .string()
+      .describe(
+        'Canonical state hash at the close of the phase that wrote this row. It is the stateHashBefore of the next ledger-writing phase, so the per-phase hashes still chain unbroken from the pre-resolution state to the committed one.',
+      ),
+    rowHash: z
+      .string()
+      .describe(
+        'Chained row digest: fnv1a64(previous row\'s rowHash + this row canonically serialised), seeded with the pre-resolution state hash. Any row inserted, removed, reordered or altered breaks the chain from that point on, which is what makes a ledger of cheap per-phase state hashes still tamper-evident row by row.',
+      ),
     visibility: LedgerVisibilitySchema,
   })
   .describe('One row of the append-only simulation ledger. Rows are never updated and never deleted.');
 export type SimEvent = z.infer<typeof SimEventSchema>;
 
 /** The fields a subsystem supplies when emitting; the engine adds the rest. */
-export type SimEventDraft = Omit<SimEvent, 'eventId' | 'sequence' | 'stateHashBefore' | 'stateHashAfter'>;
+export type SimEventDraft = Omit<SimEvent, 'eventId' | 'sequence' | 'stateHashBefore' | 'stateHashAfter' | 'rowHash'>;
 
 /* -------------------------------------------------------------------------- */
 /*  Snapshots                                                                  */

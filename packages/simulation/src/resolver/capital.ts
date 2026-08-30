@@ -737,7 +737,15 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
     const targetLiabilities =
       target.balanceSheet.liabilities.debt + target.balanceSheet.liabilities.payables + target.balanceSheet.liabilities.deferredRevenue;
     const netAssets = targetAssets - targetLiabilities;
+    // Pay more than the net assets are worth and the excess is goodwill — an
+    // asset, and the usual case. Pay *less* and the difference is a bargain
+    // purchase: the acquirer really is better off by it, and the standards
+    // (IFRS 3, ASC 805) recognise it immediately as a gain rather than parking
+    // negative goodwill on the balance sheet. Booking neither, as this once did,
+    // left assets exceeding liabilities plus equity by the whole discount, which
+    // the financial phase then absorbed into equity — equity nobody issued.
     const goodwill = Math.max(0, intent.offerValueUsd - netAssets);
+    const bargainGain = Math.max(0, netAssets - intent.offerValueUsd);
 
     /* --- consideration ---------------------------------------------------- */
     acquirer.financials.cash -= cashComponent;
@@ -795,9 +803,11 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
     acquirer.balanceSheet.liabilities.debt += target.balanceSheet.liabilities.debt;
     acquirer.balanceSheet.liabilities.payables += target.balanceSheet.liabilities.payables;
     acquirer.balanceSheet.liabilities.deferredRevenue += target.balanceSheet.liabilities.deferredRevenue;
-    // assets - liabilities moved by netAssets + goodwill - cash paid, which is
-    // exactly the stock consideration; equity moves by the same amount.
-    acquirer.balanceSheet.equity += stockComponent;
+    // Assets less liabilities moved by netAssets + goodwill - cash paid. With
+    // goodwill floored at zero that is the stock consideration plus any bargain
+    // gain, so equity moves by exactly the same amount and the identity holds on
+    // both sides of net asset value.
+    acquirer.balanceSheet.equity += stockComponent + bargainGain;
 
     acquirer.financials.cash += target.financials.cash;
     acquirer.financials.debt += target.financials.debt;
@@ -865,13 +875,19 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
         stockUsd: round(stockComponent, 2),
         sharesIssued,
         goodwillUsd: round(goodwill, 2),
+        bargainGainUsd: round(bargainGain, 2),
         netAssetsUsd: round(netAssets, 2),
       },
       visibility: 'public',
     });
     ctx.log({
       phase: 'capital_resolution',
-      text: `${acquirer.name} acquired ${target.name} for ${compactUsd(intent.offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`,
+      text:
+        bargainGain > 0
+          ? `${acquirer.name} acquired ${target.name} for ${compactUsd(intent.offerValueUsd)}, ${compactUsd(
+              bargainGain,
+            )} below the net assets it took on — a bargain purchase, recognised as a gain.`
+          : `${acquirer.name} acquired ${target.name} for ${compactUsd(intent.offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`,
       deltaLabel: `+${headcount(target)} staff`,
       refEventIds: [eventId],
       tone: 'positive',

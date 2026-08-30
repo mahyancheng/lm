@@ -27,9 +27,10 @@ import type {
   Subsystems,
   WorldEventCandidate,
 } from '@frontier/contracts';
-import { RESOLUTION_PHASES, ResolutionReportSchema, SessionSnapshotSchema, SessionStateSchema, SimEventSchema } from '@frontier/contracts';
+import { RESOLUTION_PHASES, ResolutionReportSchema, SessionSnapshotSchema, SessionStateSchema, SimEventSchema, balanceSheetReconciles, makeId } from '@frontier/contracts';
 import { createStateHasher } from '@frontier/shared';
-import { InvariantViolationError, createQuarterResolver } from '../src/resolver';
+import type { NpcBundleInput } from '../src/resolver';
+import { InvariantViolationError, chainRowHash, createQuarterResolver, projectResolutionOutcomeForPlayer } from '../src/resolver';
 import { createActionValidator } from '../src/validator';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, createDemoSession } from '../src/scenario';
 
@@ -53,6 +54,15 @@ interface StubOptions {
   readonly canMaterialise?: boolean;
   /** Corrupt a balance sheet during the financial phase. */
   readonly breakBalanceSheet?: boolean;
+  /**
+   * Mint an asset and the equity to match it, writing no ledger row.
+   *
+   * This is the corruption the stored identity cannot see: the sheet still
+   * reconciles afterwards, exactly as it does when `resolveFinancials` derives
+   * closing equity from a sheet an earlier phase quietly unbalanced. Only a
+   * check that reads the ledger can tell that nobody issued this equity.
+   */
+  readonly mintEquity?: boolean;
   /** Log a report line pointing at a ledger row that does not exist. */
   readonly logPhantomReference?: boolean;
   /** Emit one ledger row and one line from the macro step. */
@@ -175,6 +185,13 @@ function makeStubs(options: StubOptions = {}): Stubs {
       if (options.breakBalanceSheet === true) {
         const company = draft.companies[0];
         if (company !== undefined) company.balanceSheet.equity += 1_000_000;
+      }
+      if (options.mintEquity === true) {
+        const company = draft.companies[0];
+        if (company !== undefined) {
+          company.balanceSheet.assets.cash += 1_000_000;
+          company.balanceSheet.equity += 1_000_000;
+        }
       }
       return { pnl: [], balanceChecks: [] };
     },
@@ -354,8 +371,22 @@ const proposalBatch = (severity: number, target: string): GmProposalBatch => ({
   quarterSummary: 'Packaging capacity disrupted; compute pricing followed within the quarter.',
 });
 
-const resolve = (state: SessionState, stubs: Stubs, gm: GmProposalBatch | null = null, actions: SubmittedAction[] = [], npc: NpcActionBundle[] = []) =>
+const resolve = (state: SessionState, stubs: Stubs, gm: GmProposalBatch | null = null, actions: SubmittedAction[] = [], npc: NpcBundleInput[] = []) =>
   createQuarterResolver(stubs.subsystems).resolveQuarter(state, actions, gm, npc);
+
+/** One instruction, attributed to a company and the character giving it. */
+const submittedFor = (intent: SubmittedAction['intent'], companyId: string, characterId: string, sequence = 1): SubmittedAction => ({
+  actionId: `act_${intent.type}_${sequence}`,
+  sessionId: createDemoSession().sessionId,
+  quarter: 0,
+  sequence,
+  actorPlayerId: null,
+  actorCompanyId: companyId,
+  actorCharacterId: characterId,
+  origin: 'npc_strategist',
+  intent,
+  confirmedByHuman: false,
+});
 
 /* -------------------------------------------------------------------------- */
 /*  Phase order and streams                                                    */
@@ -590,6 +621,103 @@ describe('action collection', () => {
     expect(observed.every((action) => action.actorCharacterId === DEMO_CHARACTERS.kenji)).toBe(true);
   });
 
+  /** A well-formed bundle for whichever company it names. */
+  const bundleFor = (companyId: string, budgetUsd = 1_000_000): NpcActionBundle => ({
+    companyId,
+    strategySummary: 'Fund the programme the board bought and defend the schedule it was sold on.',
+    posture: 'research_first',
+    actions: [{ type: 'set_research_budget', budgetUsd }],
+    rationale: 'The model schedule is the only thing this board is really buying, so it is the thing to protect.',
+  });
+
+  const observePending = (stubs: Stubs): { seen: SubmittedAction[] } => {
+    const seen: SubmittedAction[] = [];
+    stubs.subsystems.companies.applyNpcDefaults = (draft) => {
+      for (const action of draft.pendingActions) seen.push({ ...action });
+    };
+    return { seen };
+  };
+
+  it('refuses a bundle that names a company its strategist was not asked to run', () => {
+    const state = createDemoSession();
+    const stubs = makeStubs();
+    const observed = observePending(stubs);
+    // Nexus's strategist sees Nexus's private position. It returned Orbit.
+    const outcome = resolve(state, stubs, null, [], [{ requestedCompanyId: DEMO_COMPANIES.nexus, bundle: bundleFor(DEMO_COMPANIES.orbit, 1_560_000_000) }]);
+
+    expect(observed.seen).toHaveLength(0);
+    const refusal = outcome.events.find((event) => event.type === 'action_rejected' && event.payload.scope === 'bundle');
+    expect(refusal?.payload.code).toBe('company_mismatch');
+    expect(refusal?.payload.requestedCompanyId).toBe(DEMO_COMPANIES.nexus);
+    expect(refusal?.payload.claimedCompanyId).toBe(DEMO_COMPANIES.orbit);
+    // A containment record is engine business, not news.
+    expect(refusal?.visibility).toBe('private');
+    expect(outcome.committed).toBe(true);
+  });
+
+  it('accepts the same bundle when it names the company it was asked about', () => {
+    const state = createDemoSession();
+    const stubs = makeStubs();
+    const observed = observePending(stubs);
+    resolve(state, stubs, null, [], [{ requestedCompanyId: DEMO_COMPANIES.orbit, bundle: bundleFor(DEMO_COMPANIES.orbit) }]);
+    expect(observed.seen.map((action) => action.actorCompanyId)).toEqual([DEMO_COMPANIES.orbit]);
+  });
+
+  it('refuses a bundle for a company a human directs, and one for a company that does not exist', () => {
+    const state = createDemoSession();
+    const stubs = makeStubs();
+    const observed = observePending(stubs);
+    const outcome = resolve(state, stubs, null, [], [bundleFor(DEMO_COMPANIES.player), bundleFor('cmp_ghost')]);
+
+    expect(observed.seen).toHaveLength(0);
+    const codes = outcome.events.filter((event) => event.payload.scope === 'bundle').map((event) => event.payload.code);
+    expect(codes).toContain('not_npc_controlled');
+    expect(codes).toContain('unknown_company');
+  });
+
+  it('honours one bundle per company, so two cannot collide on the same action ids', () => {
+    const state = createDemoSession();
+    const stubs = makeStubs();
+    const observed = observePending(stubs);
+    const outcome = resolve(state, stubs, null, [], [bundleFor(DEMO_COMPANIES.orbit, 111_000_000), bundleFor(DEMO_COMPANIES.orbit, 222_000_000)]);
+
+    expect(observed.seen).toHaveLength(1);
+    const intent = observed.seen[0]?.intent;
+    if (intent?.type !== 'set_research_budget') throw new Error('expected a research budget');
+    // The first bundle to arrive is the one that runs; the second is refused
+    // rather than silently overwriting it through a duplicate action id.
+    expect(intent.budgetUsd).toBe(111_000_000);
+    expect(outcome.events.some((event) => event.payload.code === 'duplicate_bundle')).toBe(true);
+    expect(new Set(observed.seen.map((action) => action.actionId)).size).toBe(observed.seen.length);
+  });
+
+  it('refuses an instruction whose shape is out of contract rather than dying on it', () => {
+    const state = createDemoSession();
+    const stubs = makeStubs();
+    let reached = 0;
+    stubs.subsystems.social.propagatePosts = (draft) => {
+      reached = draft.pendingActions.length;
+      return [];
+    };
+    const outcome = resolve(state, stubs, null, [
+      {
+        ...hire(1),
+        actionId: 'act_bad_post',
+        // `thought_leadership` is not a member of POST_INTENTS. Downstream this
+        // indexes a profile table by the value and finds nothing.
+        intent: {
+          type: 'social_post',
+          draft: { authorCharacterId: DEMO_CHARACTERS.player, network: 'fast_feed', text: 'Shipping.', intent: 'thought_leadership', targetCompanyId: null },
+        } as unknown as SubmittedAction['intent'],
+      },
+    ]);
+
+    expect(outcome.committed).toBe(true);
+    expect(reached).toBe(0);
+    const rejection = outcome.events.find((event) => event.type === 'action_rejected' && event.targetId === 'act_bad_post');
+    expect(rejection?.payload.codes).toEqual(['illegal_value']);
+  });
+
   it('turns a board matter into a tabled proposal instead of executing it', () => {
     const state = createDemoSession();
     const outcome = resolve(state, makeStubs(), null, [
@@ -709,6 +837,71 @@ describe('capital resolution', () => {
     expect(outcome.events.some((event) => event.type === 'acquisition_completed')).toBe(true);
     expect(outcome.invariants.every((result) => result.passed)).toBe(true);
   });
+
+  /**
+   * Both sides of net asset value, from the same starting world.
+   *
+   * Above it the excess is goodwill, an asset. Below it the difference is a
+   * bargain purchase and is recognised as a gain, because the acquirer really is
+   * better off by it. Recognising neither — the old behaviour — left assets
+   * exceeding liabilities plus equity by the whole discount.
+   */
+  const netAssetsOf = (state: SessionState, companyId: string): number => {
+    const sheet = state.companies.find((company) => company.id === companyId)?.balanceSheet;
+    if (sheet === undefined) throw new Error(`missing ${companyId}`);
+    const assets = sheet.assets.cash + sheet.assets.ppe + sheet.assets.goodwill + sheet.assets.investments + sheet.assets.receivables;
+    return assets - (sheet.liabilities.debt + sheet.liabilities.payables + sheet.liabilities.deferredRevenue);
+  };
+
+  const buyVectorworks = (offerValueUsd: number) => {
+    const state = createDemoSession();
+    const netAssets = netAssetsOf(state, DEMO_COMPANIES.vectorworks);
+    const equityBefore = state.companies.find((company) => company.id === DEMO_COMPANIES.orbit)?.balanceSheet.equity ?? 0;
+    const goodwillBefore = state.companies.find((company) => company.id === DEMO_COMPANIES.orbit)?.balanceSheet.assets.goodwill ?? 0;
+    const outcome = resolve(state, makeStubs(), null, [
+      submittedFor(
+        { type: 'acquire_company', targetCompanyId: DEMO_COMPANIES.vectorworks, offerValueUsd, cashPct: 1, stockPct: 0 },
+        DEMO_COMPANIES.orbit,
+        DEMO_CHARACTERS.daniel,
+      ),
+    ]);
+    const acquirer = outcome.nextState.companies.find((company) => company.id === DEMO_COMPANIES.orbit);
+    const row = outcome.events.find((event) => event.type === 'acquisition_completed');
+    // The target's own goodwill crosses over with the rest of its sheet, and is
+    // not part of what this purchase recognised.
+    const inherited = createDemoSession().companies.find((company) => company.id === DEMO_COMPANIES.vectorworks)?.balanceSheet.assets.goodwill ?? 0;
+    return { netAssets, equityBefore, goodwillBefore: goodwillBefore + inherited, outcome, acquirer, row };
+  };
+
+  it('recognises goodwill when the price is above net asset value', () => {
+    const bought = buyVectorworks(2_000_000_000);
+    expect(bought.outcome.committed).toBe(true);
+    expect(bought.row?.payload.goodwillUsd).toBeCloseTo(2_000_000_000 - bought.netAssets, 2);
+    expect(bought.row?.payload.bargainGainUsd).toBe(0);
+    // All cash, no stock: nothing was issued, so equity does not move at all.
+    expect(bought.acquirer?.balanceSheet.equity).toBeCloseTo(bought.equityBefore, 2);
+    expect(bought.acquirer?.balanceSheet.assets.goodwill).toBeCloseTo(bought.goodwillBefore + (2_000_000_000 - bought.netAssets), 2);
+    if (bought.acquirer === undefined) throw new Error('missing acquirer');
+    expect(balanceSheetReconciles(bought.acquirer.balanceSheet)).toBe(true);
+    expect(bought.outcome.invariants.find((result) => result.invariant === 'financial_integrity')?.passed).toBe(true);
+  });
+
+  it('recognises a gain when the price is below net asset value, instead of minting equity', () => {
+    const bought = buyVectorworks(400_000_000);
+    const discount = bought.netAssets - 400_000_000;
+    expect(discount).toBeGreaterThan(0);
+    expect(bought.outcome.committed).toBe(true);
+    expect(bought.row?.payload.goodwillUsd).toBe(0);
+    expect(bought.row?.payload.bargainGainUsd).toBeCloseTo(discount, 2);
+    if (bought.acquirer === undefined) throw new Error('missing acquirer');
+    // The gain is equity, and it is the *only* thing that moved equity here.
+    expect(bought.acquirer.balanceSheet.equity - bought.equityBefore).toBeCloseTo(discount, 2);
+    expect(bought.acquirer.balanceSheet.assets.goodwill).toBeCloseTo(bought.goodwillBefore, 2);
+    // Without the gain the sheet would be out by the whole discount: this is
+    // the assertion the old behaviour failed.
+    expect(balanceSheetReconciles(bought.acquirer.balanceSheet)).toBe(true);
+    expect(bought.outcome.invariants.every((result) => result.passed)).toBe(true);
+  });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -781,20 +974,64 @@ describe('leaderboards', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('the ledger and the report', () => {
-  it('assigns contiguous sequence numbers and an unbroken hash chain', () => {
+  it('assigns contiguous sequence numbers and two unbroken hash chains', () => {
     const state = createDemoSession();
     const outcome = resolve(state, makeStubs(), null);
     outcome.events.forEach((event, index) => {
       expect(event.sequence).toBe(state.ledgerSequence + index);
     });
-    let expected = engineHash(state);
+
+    // The state chain runs phase by phase: every row a phase wrote shares one
+    // before-hash and one after-hash, and each phase opens where the last closed.
+    let opensAt = engineHash(state);
+    let groupBefore: string | null = null;
+    let phases = 0;
     for (const event of outcome.events) {
-      expect(event.stateHashBefore).toBe(expected);
-      expected = event.stateHashAfter;
+      if (event.stateHashBefore !== groupBefore) {
+        expect(event.stateHashBefore).toBe(opensAt);
+        groupBefore = event.stateHashBefore;
+        phases += 1;
+      }
+      expect(event.stateHashAfter).toBe(outcome.events.find((row) => row.stateHashBefore === groupBefore)?.stateHashAfter);
+      opensAt = event.stateHashAfter;
     }
+    expect(phases).toBeGreaterThan(1);
+    expect(phases).toBeLessThan(outcome.events.length);
+
+    // The row chain runs row by row, and costs no state hash at all.
+    let rowChain = engineHash(state);
+    for (const event of outcome.events) {
+      rowChain = chainRowHash(rowChain, event);
+      expect(event.rowHash).toBe(rowChain);
+    }
+
     expect(outcome.nextState.ledgerSequence).toBe(state.ledgerSequence + outcome.events.length);
     expect(outcome.report.sequenceFrom).toBe(0);
     expect(outcome.report.sequenceTo).toBe(outcome.events.length - 1);
+  });
+
+  it('closes the last phase, so the committed and snapshot rows are whole', () => {
+    const outcome = resolve(createDemoSession(), makeStubs(), null);
+    for (const event of outcome.events) {
+      expect(event.stateHashAfter.length).toBeGreaterThan(0);
+      expect(event.rowHash.length).toBeGreaterThan(0);
+    }
+    const last = outcome.events[outcome.events.length - 1];
+    expect(last?.stateHashAfter).toBe(outcome.report.stateHashAfter);
+  });
+
+  it('stamps every row of a quarter with that quarter, ids included', () => {
+    const state = createDemoSession();
+    const outcome = resolve(state, makeStubs(), null);
+    expect(outcome.nextState.quarter).toBe(state.quarter + 1);
+    for (const event of outcome.events) {
+      expect(event.quarter).toBe(state.quarter);
+      // The commit and the snapshot rows are written after the clock advances;
+      // their ids must still name the quarter they belong to.
+      expect(event.eventId).toBe(makeId('evt', state.sessionId, state.quarter, event.sequence));
+    }
+    expect(outcome.events.some((event) => event.type === 'quarter_committed')).toBe(true);
+    expect(outcome.events.some((event) => event.type === 'snapshot_created')).toBe(true);
   });
 
   it('gives every report line at least one committed ledger row', () => {
@@ -856,6 +1093,43 @@ describe('the invariant gate', () => {
     expect(outcome.events.some((event) => event.type === 'invariant_check_failed')).toBe(true);
     expect(outcome.report.headline).toContain('did not commit');
     expect(outcome.snapshot.phase).toBe('pre_resolution');
+  });
+
+  it('refuses a quarter whose equity moved without a ledger row behind it', () => {
+    // The corruption is double-entry *shaped*: an asset and the equity to match
+    // it. The stored identity therefore still holds, which is precisely why an
+    // invariant that only checks the stored identity is no invariant at all.
+    const shown = createDemoSession();
+    const company = shown.companies[0];
+    if (company === undefined) throw new Error('missing company');
+    company.balanceSheet.assets.cash += 1_000_000;
+    company.balanceSheet.equity += 1_000_000;
+    expect(balanceSheetReconciles(company.balanceSheet)).toBe(true);
+
+    const state = createDemoSession();
+    const outcome = resolve(state, makeStubs({ mintEquity: true }), null);
+    expect(outcome.committed).toBe(false);
+    expect(outcome.nextState).toBe(state);
+    const result = outcome.invariants.find((entry) => entry.invariant === 'financial_integrity');
+    expect(result?.passed).toBe(false);
+    expect(result?.detail).toContain(company.id);
+    expect(result?.detail).toContain('unexplained');
+  });
+
+  it('accepts equity that moved by exactly what the ledger says moved it', () => {
+    const state = createDemoSession();
+    state.world.capitalMarkets.ventureLiquidity = 1;
+    state.world.capitalMarkets.riskAppetite = 1;
+    const outcome = resolve(state, makeStubs(), null, [
+      submittedFor({ type: 'raise_round', stage: 'growth', targetAmountUsd: 500_000_000, maxDilutionPct: 0.3 }, DEMO_COMPANIES.orbit, DEMO_CHARACTERS.daniel),
+    ]);
+    expect(outcome.events.some((event) => event.type === 'funding_round_closed')).toBe(true);
+    expect(outcome.committed).toBe(true);
+    expect(outcome.invariants.find((entry) => entry.invariant === 'financial_integrity')?.passed).toBe(true);
+
+    const before = state.companies.find((company) => company.id === DEMO_COMPANIES.orbit)?.balanceSheet.equity ?? 0;
+    const after = outcome.nextState.companies.find((company) => company.id === DEMO_COMPANIES.orbit)?.balanceSheet.equity ?? 0;
+    expect(after - before).toBeCloseTo(500_000_000, 2);
   });
 
   it('throws when the engine itself is wrong, rather than quietly not committing', () => {

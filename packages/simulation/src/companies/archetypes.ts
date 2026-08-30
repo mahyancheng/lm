@@ -36,6 +36,12 @@ export interface ArchetypePolicy {
   readonly trainingAllocation: number;
   /** Quarterly price drift this archetype applies to its own products, as a fraction. */
   readonly pricingNudge: number;
+  /**
+   * How much this archetype wants public revenue, 0..1. A defence supplier bids
+   * on everything it is allowed to; a consumer company barely notices that
+   * procurement exists.
+   */
+  readonly governmentAppetite: number;
 }
 
 /**
@@ -53,6 +59,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'top_of_market',
     trainingAllocation: 0.62,
     pricingNudge: 0.01,
+    governmentAppetite: 0.25,
   },
   enterprise_ai: {
     defaultPosture: 'balanced',
@@ -63,6 +70,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'market',
     trainingAllocation: 0.24,
     pricingNudge: 0.015,
+    governmentAppetite: 0.5,
   },
   consumer_ai: {
     defaultPosture: 'aggressive_growth',
@@ -73,6 +81,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'market',
     trainingAllocation: 0.28,
     pricingNudge: -0.02,
+    governmentAppetite: 0.05,
   },
   infrastructure: {
     defaultPosture: 'efficiency',
@@ -83,6 +92,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'market',
     trainingAllocation: 0.12,
     pricingNudge: 0.01,
+    governmentAppetite: 0.45,
   },
   chip_maker: {
     defaultPosture: 'balanced',
@@ -93,6 +103,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'above_market',
     trainingAllocation: 0.18,
     pricingNudge: 0.02,
+    governmentAppetite: 0.2,
   },
   cloud: {
     defaultPosture: 'land_grab',
@@ -103,6 +114,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'market',
     trainingAllocation: 0.1,
     pricingNudge: -0.015,
+    governmentAppetite: 0.3,
   },
   data: {
     defaultPosture: 'research_first',
@@ -113,6 +125,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'above_market',
     trainingAllocation: 0.34,
     pricingNudge: 0.005,
+    governmentAppetite: 0.35,
   },
   defence_ai: {
     defaultPosture: 'defensive',
@@ -123,6 +136,7 @@ export const ARCHETYPE_POLICIES = {
     compBand: 'above_market',
     trainingAllocation: 0.22,
     pricingNudge: 0.01,
+    governmentAppetite: 0.9,
   },
 } as const satisfies Record<CompanyArchetype, ArchetypePolicy>;
 
@@ -165,6 +179,20 @@ export const NPC_MAX_LAYOFF_FRACTION = 0.18;
 export const NPC_MIN_PRICE_MOVE = 0.002;
 /** Quarters of runway below which an archetype default switches to survival behaviour. */
 export const NPC_SURVIVAL_RUNWAY_QUARTERS = 3;
+/** Government appetite below which an archetype default does not bid on public work. */
+export const NPC_BID_APPETITE_FLOOR = 0.3;
+/** What an archetype default bids, as a share of the programme's ceiling value. */
+export const NPC_BID_PRICE_SHARE = 0.85;
+/**
+ * Availability commitment an archetype default offers. Above the 0.75 that four
+ * nines demands, so a default bid is never disqualified on reliability alone,
+ * and low enough that the claim is not absurd.
+ */
+export const NPC_BID_RELIABILITY = 0.8;
+/** Share of its uncommitted technical staff an archetype default puts on a bid. */
+export const NPC_BID_STAFF_SHARE = 0.12;
+/** Share of its held capacity an archetype default commits to a programme. */
+export const NPC_BID_COMPUTE_SHARE = 0.1;
 
 /** The effective policy for one company, after its posture is applied. */
 export interface EffectivePolicy {
@@ -175,6 +203,7 @@ export interface EffectivePolicy {
   readonly compBand: CompBand;
   readonly trainingAllocation: number;
   readonly pricingNudge: number;
+  readonly governmentAppetite: number;
 }
 
 /**
@@ -192,5 +221,6 @@ export function effectivePolicy(archetype: CompanyArchetype, posture: CompanyPos
     compBand: adj.compBand ?? base.compBand,
     trainingAllocation: base.trainingAllocation,
     pricingNudge: base.pricingNudge + adj.pricingNudge,
+    governmentAppetite: base.governmentAppetite,
   };
 }

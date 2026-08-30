@@ -7,18 +7,31 @@
  * > Every line on the Quarter Resolution screen references at least one
  * > committed ledger event. Nothing on that screen is narrative invention.
  *
- * ## The hash chain
+ * ## The two hash chains
  *
- * Every row carries the canonical state hash before and after it. Because
- * subsystems mutate the draft and *then* emit, the hash taken at emit time is
- * the "after" state, and the "before" is the previous row's "after". The chain
- * therefore starts at the pre-resolution hash and ends at the committed hash,
- * and a row inserted, removed or altered afterwards breaks it — which is exactly
- * what the `deterministic_replay` invariant checks at commit.
+ * A quarter writes hundreds of rows, and hashing the whole session state for
+ * each of them made the state hash — not the economy — the cost of a quarter.
+ * The chain is therefore split into the two things it was doing at once:
+ *
+ * - **Per phase, the state.** The canonical state is hashed once at each phase
+ *   boundary. Every row a phase wrote carries that phase's opening hash as
+ *   `stateHashBefore` and its closing hash as `stateHashAfter`, so the phase
+ *   hashes still chain unbroken from the pre-resolution state to the committed
+ *   one and a replay can still be localised to the phase that diverged.
+ * - **Per row, the row.** `rowHash` is `fnv1a64(previousRowHash + the row,
+ *   canonically serialised)`, seeded with the pre-resolution state hash. It
+ *   costs a few hundred bytes of serialisation rather than a megabyte, and it
+ *   is what makes a row inserted, removed, reordered or altered detectable —
+ *   which is exactly what the `deterministic_replay` invariant checks at commit.
+ *
+ * Because a row's `stateHashAfter` is only known when its phase closes, rows are
+ * stamped and chained at the phase boundary. `beginPhase` seals the phase before
+ * it, and `seal` closes the last one; nothing reads a row before its own phase
+ * has been sealed.
  *
  * Sequence numbers come from `SessionState.ledgerSequence`, which advances
- * monotonically and never rewinds. Ids are built from session, quarter and
- * sequence, so a replay reproduces them byte for byte.
+ * monotonically and never rewinds. Ids are built from session, the quarter being
+ * resolved and sequence, so a replay reproduces them byte for byte.
  */
 
 import type {
@@ -33,10 +46,47 @@ import type {
   SimEventDraft,
 } from '@frontier/contracts';
 import { RESOLUTION_PHASES, makeId } from '@frontier/contracts';
+import { fnv1a64, stableStringify } from '@frontier/shared';
 
 /** Report lines are capped by the schema; a long line is clipped, never dropped. */
 const MAX_LINE_TEXT = 300;
 const MAX_DELTA_LABEL = 40;
+
+/* -------------------------------------------------------------------------- */
+/*  The row chain                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The canonical serialisation of a row, for the row chain.
+ *
+ * `rowHash` itself is excluded — it is the output — and every other field is
+ * included, so altering any of them after the fact breaks the chain.
+ */
+export function rowFingerprint(event: SimEvent): string {
+  return stableStringify({
+    eventId: event.eventId,
+    sessionId: event.sessionId,
+    quarter: event.quarter,
+    sequence: event.sequence,
+    type: event.type,
+    actorId: event.actorId,
+    targetId: event.targetId,
+    payload: event.payload,
+    stateHashBefore: event.stateHashBefore,
+    stateHashAfter: event.stateHashAfter,
+    visibility: event.visibility,
+  });
+}
+
+/**
+ * The next link of the row chain: cheap, order-dependent and tamper-evident.
+ *
+ * Seeded with the pre-resolution state hash, so a quarter's chain is bound to
+ * the state it started from as well as to its own rows.
+ */
+export function chainRowHash(previousRowHash: string, event: SimEvent): string {
+  return fnv1a64(`${previousRowHash}|${rowFingerprint(event)}`);
+}
 
 /**
  * Collects the quarter's ledger rows and report lines.
@@ -51,12 +101,25 @@ export class ResolutionRecorder {
   private phase: ResolutionPhase = 'world_events';
   private lastEventIdInPhase: string | null = null;
   private lastEventIdOverall: string | null = null;
+  /** State hash at the close of the last phase that wrote to the ledger. */
   private lastHash: string;
+  /** The last link of the row chain. Seeded with the pre-resolution hash. */
+  private lastRowHash: string;
+  /** Rows written by the open phase, awaiting its closing hash. */
+  private pending: SimEvent[] = [];
 
   /** Lines a subsystem logged with no event to reference. Reported at commit. */
   private unreferencedLines = 0;
 
   readonly startSequence: number;
+  /**
+   * The quarter being resolved, fixed at construction.
+   *
+   * Commit advances `draft.quarter`, so reading it per row would stamp the last
+   * rows of a quarter — the commit and the snapshot — with the *next* quarter's
+   * index. Event ids and phase contexts both come from here instead.
+   */
+  readonly resolutionQuarter: number;
 
   constructor(
     private readonly draft: SessionState,
@@ -64,35 +127,67 @@ export class ResolutionRecorder {
     preResolutionHash: string,
   ) {
     this.lastHash = preResolutionHash;
+    this.lastRowHash = preResolutionHash;
     this.startSequence = draft.ledgerSequence;
+    this.resolutionQuarter = draft.quarter;
   }
 
-  /** Open a phase. Emitted rows and logged lines attribute to it from here. */
+  /**
+   * Open a phase, sealing the one before it. Emitted rows and logged lines
+   * attribute to the new phase from here.
+   *
+   * Re-opening the phase that is already open — the resolver announces
+   * `world_events` before the loop reaches it — continues that phase rather than
+   * closing it, so the quarter's opening row belongs to the same group as the
+   * rest of the phase and costs no extra state hash.
+   */
   beginPhase(phase: ResolutionPhase): void {
+    if (phase !== this.phase) this.seal();
     this.phase = phase;
     this.lastEventIdInPhase = null;
   }
 
+  /**
+   * Close the open phase: hash the state once, stamp it on every row the phase
+   * wrote and extend the row chain over them in order.
+   *
+   * `knownHash` lets a caller that has just hashed the state for its own reasons
+   * — the snapshot — hand the value in rather than pay for it twice. Idempotent
+   * and free when the phase wrote nothing.
+   */
+  seal(knownHash?: string): void {
+    if (this.pending.length === 0) return;
+    const after = knownHash ?? this.hash(this.draft);
+    for (const row of this.pending) {
+      row.stateHashAfter = after;
+      this.lastRowHash = chainRowHash(this.lastRowHash, row);
+      row.rowHash = this.lastRowHash;
+    }
+    this.pending = [];
+    this.lastHash = after;
+  }
+
   /** The context handed to a subsystem for one phase. */
   contextFor(phase: ResolutionPhase, rng: SeededRng): ResolverContext {
-    const quarter = this.draft.quarter;
     return {
-      quarter,
+      quarter: this.resolutionQuarter,
       rng,
       emit: (draft: SimEventDraft) => this.emit(draft, phase),
       log: (line: ResolutionLineDraft) => this.log(line, phase),
     };
   }
 
-  /** Append a ledger row. Returns the assigned event id. */
+  /**
+   * Append a ledger row. Returns the assigned event id.
+   *
+   * The row's `stateHashAfter` and `rowHash` are written when its phase closes;
+   * until then they are empty, and no consumer sees a row before that.
+   */
   emit(draft: SimEventDraft, phase: ResolutionPhase = this.phase): string {
     const sequence = this.draft.ledgerSequence;
     this.draft.ledgerSequence = sequence + 1;
 
-    const eventId = makeId('evt', this.draft.sessionId, this.draft.quarter, sequence);
-    const stateHashBefore = this.lastHash;
-    const stateHashAfter = this.hash(this.draft);
-    this.lastHash = stateHashAfter;
+    const eventId = makeId('evt', this.draft.sessionId, this.resolutionQuarter, sequence);
 
     const event: SimEvent = {
       eventId,
@@ -103,11 +198,13 @@ export class ResolutionRecorder {
       actorId: draft.actorId,
       targetId: draft.targetId,
       payload: draft.payload,
-      stateHashBefore,
-      stateHashAfter,
+      stateHashBefore: this.lastHash,
+      stateHashAfter: '',
+      rowHash: '',
       visibility: draft.visibility,
     };
     this.events.push(event);
+    this.pending.push(event);
     if (phase === this.phase) this.lastEventIdInPhase = eventId;
     this.lastEventIdOverall = eventId;
     return eventId;
@@ -183,8 +280,14 @@ export class ResolutionRecorder {
     return this.unreferencedLines;
   }
 
+  /** State hash at the close of the last sealed phase. */
   get currentHash(): string {
     return this.lastHash;
+  }
+
+  /** The last link of the row chain, over every sealed row. */
+  get currentRowHash(): string {
+    return this.lastRowHash;
   }
 }
 

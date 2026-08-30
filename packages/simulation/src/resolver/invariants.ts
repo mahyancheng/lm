@@ -23,8 +23,9 @@
  * the refusal even when the state is rolled back.
  */
 
-import type { InvariantCheckResult, ResolutionLine, SessionState, SimEvent, SimulationInvariant } from '@frontier/contracts';
-import { balanceSheetReconciles, getTargetPathSpec } from '@frontier/contracts';
+import type { Company, InvariantCheckResult, ResolutionLine, SessionState, SimEvent, SimulationInvariant } from '@frontier/contracts';
+import { BALANCE_SHEET_TOLERANCE_USD, balanceSheetReconciles, getTargetPathSpec } from '@frontier/contracts';
+import { chainRowHash } from './ledger';
 
 /** Invariants whose failure means the engine is wrong rather than the world. */
 export const ENGINE_INVARIANTS: readonly SimulationInvariant[] = [
@@ -49,6 +50,16 @@ export class InvariantViolationError extends Error {
 /** Everything the gate inspects. */
 export interface InvariantGateInput {
   readonly draft: SessionState;
+  /**
+   * The pre-resolution state, untouched by the quarter.
+   *
+   * `financial_integrity` needs it: the closing equity is compared against the
+   * *opening* equity plus what the ledger says moved, so the check does not
+   * depend on the phase that wrote the closing sheet. Fixtures that fabricate a
+   * gate input may omit it, in which case the draft is compared with itself and
+   * only the stored balance-sheet identity is checked.
+   */
+  readonly opening?: SessionState;
   readonly events: readonly SimEvent[];
   readonly lines: readonly ResolutionLine[];
   readonly startSequence: number;
@@ -78,7 +89,7 @@ const fail = (invariant: SimulationInvariant, detail: string, subjectId: string 
  */
 export function runInvariantGate(input: InvariantGateInput): InvariantCheckResult[] {
   return [
-    checkFinancialIntegrity(input.draft),
+    checkFinancialIntegrity(input.draft, input.opening ?? input.draft, input.events),
     checkOwnershipIntegrity(input.draft),
     checkMarketIntegrity(input.draft),
     checkAuthoritativeBackend(input.draft),
@@ -98,22 +109,229 @@ export function runInvariantGate(input: InvariantGateInput): InvariantCheckResul
 /*  State invariants                                                           */
 /* -------------------------------------------------------------------------- */
 
-/** `sum(assets) - sum(liabilities) === equity`, within a dollar, per company. */
-function checkFinancialIntegrity(draft: SessionState): InvariantCheckResult {
+/**
+ * Two halves, and the second is the one that bites.
+ *
+ * 1. `sum(assets) - sum(liabilities) === equity`, within a dollar, per company.
+ * 2. `closing equity === opening equity + net income + net capital flows`, also
+ *    within a dollar, per company — with every term on the right read from the
+ *    **ledger**, never from the balance sheet the financial phase wrote.
+ *
+ * The second half exists because the first one cannot fail on its own.
+ * `resolveFinancials` derives closing equity from the closing sheet, so the
+ * stored identity holds by construction even when a phase before it moved
+ * assets without moving equity: the plug silently absorbs the difference and the
+ * quarter commits with equity nobody issued. Reconstructing the movement from
+ * the rows that claim to have caused it is what turns that from an unfalsifiable
+ * statement into a check. A double-entry defect anywhere in the pipeline now
+ * lands here as an unexplained equity movement, and the quarter does not commit.
+ *
+ * The reconstruction is exact, not heuristic, because only three files may move
+ * a balance sheet and every movement they make writes a row:
+ *
+ * | movement                        | row                                     |
+ * |---------------------------------|-----------------------------------------|
+ * | trading profit and loss         | `revenue_recognised` / `cost_recognised`|
+ * | a round closing                 | `funding_round_closed`                  |
+ * | a primary issue                 | `shares_issued` (`primary_issue`)       |
+ * | a listing                       | `ipo_completed`                         |
+ * | a buyback                       | `buyback_executed`                      |
+ * | acquisition consideration       | `acquisition_completed`                 |
+ * | a realised gain on a stake sold | `shares_traded` + the investments moved |
+ */
+function checkFinancialIntegrity(draft: SessionState, opening: SessionState, events: readonly SimEvent[]): InvariantCheckResult {
   const offenders: string[] = [];
+
   for (const company of draft.companies) {
     if (!company.isActive) continue;
     if (!balanceSheetReconciles(company.balanceSheet)) {
       const sheet = company.balanceSheet;
-      const assets = sheet.assets.cash + sheet.assets.ppe + sheet.assets.goodwill + sheet.assets.investments + sheet.assets.receivables;
-      const liabilities = sheet.liabilities.debt + sheet.liabilities.payables + sheet.liabilities.deferredRevenue;
-      offenders.push(`${company.id} off by ${(assets - liabilities - sheet.equity).toFixed(2)}`);
+      offenders.push(`${company.id} off by ${(assetsOf(company) - liabilitiesOf(company) - sheet.equity).toFixed(2)}`);
     }
   }
+
+  const openingById = new Map(opening.companies.map((company) => [company.id, company] as const));
+  const movements = equityMovementsFromLedger(events, openingById);
+  let checked = 0;
+  let unexplained = 0;
+
+  for (const company of draft.companies) {
+    if (!company.isActive) continue;
+    const before = openingById.get(company.id);
+    if (before === undefined) continue; // a company the quarter created: nothing to compare against
+    const moved = movements.get(company.id);
+    if (moved !== undefined && moved.unverifiable !== null) {
+      unexplained += 1;
+      continue;
+    }
+
+    const netIncome = moved === undefined ? 0 : moved.revenue - moved.cost;
+    const capital = moved === undefined ? 0 : moved.capital;
+    // A stake sold realises its gain into equity: cash in, carrying value out.
+    // The carrying value is not on the row, but the investments line moved by
+    // exactly it, net of what the quarter's purchases added and of what an
+    // acquisition absorbed from the company it swallowed.
+    const trading =
+      moved === undefined
+        ? 0
+        : moved.sold - moved.bought + (company.balanceSheet.assets.investments - before.balanceSheet.assets.investments) - moved.absorbedInvestments;
+
+    const expected = before.balanceSheet.equity + netIncome + capital + trading;
+    const gap = company.balanceSheet.equity - expected;
+    checked += 1;
+    if (Math.abs(gap) > BALANCE_SHEET_TOLERANCE_USD) {
+      offenders.push(
+        `${company.id} equity moved ${(company.balanceSheet.equity - before.balanceSheet.equity).toFixed(2)} but the ledger explains ${(
+          netIncome + capital + trading
+        ).toFixed(2)} (unexplained ${gap.toFixed(2)})`,
+      );
+    }
+  }
+
+  const skipped = unexplained > 0 ? ` ${unexplained} could not be reconstructed from their rows and were not compared.` : '';
   return offenders.length === 0
-    ? pass('financial_integrity', `${draft.companies.filter((c) => c.isActive).length} balance sheets reconcile within one dollar.`)
-    : fail('financial_integrity', `Balance sheets do not reconcile: ${offenders.slice(0, 5).join('; ')}`, firstId(offenders));
+    ? pass('financial_integrity', `${checked} balance sheets reconcile and move only by what the ledger explains.${skipped}`)
+    : fail('financial_integrity', `Balance sheets do not reconcile: ${offenders.slice(0, 3).join('; ')}`, firstId(offenders));
 }
+
+/** The keys the financial phase's cost row states the whole quarter's cost in. */
+const COST_KEYS = ['cogsUsd', 'payrollUsd', 'marketingUsd', 'rdSpendUsd', 'interestUsd', 'taxUsd'] as const;
+
+/** What one company's ledger rows say moved its equity this quarter. */
+interface EquityMovement {
+  revenue: number;
+  cost: number;
+  capital: number;
+  bought: number;
+  sold: number;
+  absorbedInvestments: number;
+  /** Whether the financial phase's own three rows were all read. */
+  sawRevenue: boolean;
+  sawCost: boolean;
+  sawCashFlow: boolean;
+  /** Set when a row that should carry a figure does not, so nothing is guessed. */
+  unverifiable: string | null;
+}
+
+/**
+ * Reduce the quarter's rows to a per-company statement of equity movement.
+ *
+ * Two rules keep this honest:
+ *
+ * - A row that omits a figure the reconstruction needs marks its company
+ *   unverifiable rather than contributing a zero. An invariant that quietly
+ *   assumes the missing number is nought is the tautology this replaced.
+ * - `cost_recognised` is written by five phases, four of which are *staging*
+ *   rows — a severance charge, a compute reservation, a capacity constraint, a
+ *   compliance burden — that the financial phase later books into the one row
+ *   stating the whole quarter. Those all carry a `kind`; the profit and loss
+ *   carries none. Counting a staging row would charge the same dollar twice, so
+ *   only the unkinded rows are read, and a company whose cash flow resolved
+ *   without a readable profit and loss is left uncompared rather than accused.
+ */
+function equityMovementsFromLedger(events: readonly SimEvent[], opening: ReadonlyMap<string, Company>): Map<string, EquityMovement> {
+  const out = new Map<string, EquityMovement>();
+  const entry = (id: string | null): EquityMovement | null => {
+    if (id === null) return null;
+    const existing = out.get(id);
+    if (existing !== undefined) return existing;
+    const created: EquityMovement = {
+      revenue: 0,
+      cost: 0,
+      capital: 0,
+      bought: 0,
+      sold: 0,
+      absorbedInvestments: 0,
+      sawRevenue: false,
+      sawCost: false,
+      sawCashFlow: false,
+      unverifiable: null,
+    };
+    out.set(id, created);
+    return created;
+  };
+  const money = (event: SimEvent, key: string): number | null => {
+    const value = event.payload[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  };
+  const add = (event: SimEvent, target: EquityMovement, key: string, apply: (value: number) => void): void => {
+    const value = money(event, key);
+    if (value === null) target.unverifiable = `${event.type} carries no numeric ${key}`;
+    else apply(value);
+  };
+  /** A staging row books nothing on its own; the profit and loss already has it. */
+  const isStagingRow = (event: SimEvent): boolean => event.payload.kind !== undefined;
+
+  for (const event of events) {
+    const actor = entry(event.actorId);
+    if (actor === null) continue;
+
+    switch (event.type) {
+      case 'revenue_recognised':
+        if (isStagingRow(event)) break;
+        actor.sawRevenue = true;
+        add(event, actor, 'revenueUsd', (value) => (actor.revenue += value));
+        break;
+      case 'cost_recognised':
+        if (isStagingRow(event)) break;
+        actor.sawCost = true;
+        for (const key of COST_KEYS) add(event, actor, key, (value) => (actor.cost += value));
+        break;
+      case 'cash_flow_resolved':
+        actor.sawCashFlow = true;
+        break;
+      case 'funding_round_closed':
+        add(event, actor, 'amountUsd', (value) => (actor.capital += value));
+        break;
+      case 'shares_issued':
+        // A round's own issuance is already counted through the round row.
+        if (event.payload.reason === 'primary_issue') add(event, actor, 'proceedsUsd', (value) => (actor.capital += value));
+        break;
+      case 'ipo_completed':
+        add(event, actor, 'raisedUsd', (value) => (actor.capital += value));
+        break;
+      case 'buyback_executed':
+        add(event, actor, 'costUsd', (value) => (actor.capital -= value));
+        break;
+      case 'acquisition_completed': {
+        add(event, actor, 'stockUsd', (value) => (actor.capital += value));
+        // A purchase below net asset value is a gain, not negative goodwill.
+        add(event, actor, 'bargainGainUsd', (value) => (actor.capital += value));
+        // The target's investments cross onto the acquirer's sheet with the
+        // rest of it. Chains resolve because rows are walked in order.
+        const swallowed = event.targetId === null ? undefined : opening.get(event.targetId);
+        const carried = event.targetId === null ? undefined : out.get(event.targetId);
+        actor.absorbedInvestments += (swallowed?.balanceSheet.assets.investments ?? 0) + (carried?.absorbedInvestments ?? 0);
+        break;
+      }
+      case 'shares_traded':
+        if (event.payload.side === 'buy') add(event, actor, 'considerationUsd', (value) => (actor.bought += value));
+        else if (event.payload.side === 'sell') add(event, actor, 'considerationUsd', (value) => (actor.sold += value));
+        break;
+      default:
+        break;
+    }
+  }
+
+  // The financial phase ran but its profit and loss could not be read: that is
+  // a reason not to compare this company, never a reason to accuse it.
+  for (const movement of out.values()) {
+    if (movement.sawCashFlow && !(movement.sawRevenue && movement.sawCost)) {
+      movement.unverifiable = movement.unverifiable ?? 'the financial phase left no readable profit and loss';
+    }
+  }
+  return out;
+}
+
+const assetsOf = (company: Company): number => {
+  const a = company.balanceSheet.assets;
+  return a.cash + a.ppe + a.goodwill + a.investments + a.receivables;
+};
+
+const liabilitiesOf = (company: Company): number => {
+  const l = company.balanceSheet.liabilities;
+  return l.debt + l.payables + l.deferredRevenue;
+};
 
 /** Per class, the sum of holdings equals the issued count. */
 function checkOwnershipIntegrity(draft: SessionState): InvariantCheckResult {
@@ -266,20 +484,57 @@ function checkIdempotency(input: InvariantGateInput): InvariantCheckResult {
     : fail('idempotency', `Quarter ${input.draft.quarter} had already committed when resolution was attempted.`, null);
 }
 
-/** The hash chain runs unbroken from the pre-resolution state to the last row. */
+/**
+ * Both chains run unbroken from the pre-resolution state to the last row.
+ *
+ * The state is hashed once per phase, so every row a phase wrote shares one
+ * before-hash and one after-hash, and each phase opens on the hash the previous
+ * one closed at. The row chain is the per-row half: each `rowHash` folds the
+ * previous one together with the row itself, so a row inserted, removed,
+ * reordered or edited breaks it from that point on even though the state was
+ * never hashed for it.
+ */
 function checkDeterministicReplay(input: InvariantGateInput): InvariantCheckResult {
-  let expected = input.preResolutionHash;
+  let opensAt = input.preResolutionHash;
+  let rowChain = input.preResolutionHash;
+  let groupBefore: string | null = null;
+  let groupAfter: string | null = null;
+  let phases = 0;
+
   for (const event of input.events) {
-    if (event.stateHashBefore !== expected) {
+    if (event.stateHashBefore !== groupBefore) {
+      if (event.stateHashBefore !== opensAt) {
+        return fail(
+          'deterministic_replay',
+          `Ledger hash chain broken at sequence ${event.sequence}: a phase opened on ${event.stateHashBefore}, but the previous phase closed at ${opensAt}.`,
+          event.eventId,
+        );
+      }
+      groupBefore = event.stateHashBefore;
+      groupAfter = event.stateHashAfter;
+      phases += 1;
+    } else if (event.stateHashAfter !== groupAfter) {
       return fail(
         'deterministic_replay',
-        `Ledger hash chain broken at sequence ${event.sequence}: expected before-hash ${expected}, found ${event.stateHashBefore}.`,
+        `Ledger hash chain broken at sequence ${event.sequence}: rows of one phase must close on one state hash, found ${event.stateHashAfter} beside ${String(groupAfter)}.`,
         event.eventId,
       );
     }
-    expected = event.stateHashAfter;
+    opensAt = event.stateHashAfter;
+
+    rowChain = chainRowHash(rowChain, event);
+    if (event.rowHash !== rowChain) {
+      return fail(
+        'deterministic_replay',
+        `Ledger row chain broken at sequence ${event.sequence}: rowHash is ${event.rowHash || '(empty)'}, expected ${rowChain}.`,
+        event.eventId,
+      );
+    }
   }
-  return pass('deterministic_replay', `${input.events.length} ledger rows form an unbroken hash chain from ${input.preResolutionHash}.`);
+  return pass(
+    'deterministic_replay',
+    `${input.events.length} rows across ${phases} phase(s) chain unbroken from ${input.preResolutionHash}, row by row and phase by phase.`,
+  );
 }
 
 /** Sequences are contiguous and every report line references a committed row. */

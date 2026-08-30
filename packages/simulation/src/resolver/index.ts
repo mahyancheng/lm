@@ -21,13 +21,17 @@
  *   a missing proposal falls back to the drawn candidates rather than blocking.
  * - **Action collection.** Player submissions and NPC bundles are validated by
  *   the same validator and reduced to `pendingActions`, which every later phase
- *   treats as the set of things that are actually going to happen.
+ *   treats as the set of things that are actually going to happen. A bundle that
+ *   names a company its strategist was not asked to run is refused there.
  * - **Capital, disclosure and leaderboards.** Rounds, debt, issuance, buybacks,
  *   listings and acquisitions; the private-to-public bridge; the ten boards.
- * - **The ledger.** Sequence numbers, the state hash chain, and the report whose
+ * - **The ledger.** Sequence numbers, the two hash chains, and the report whose
  *   every line traces to a committed row.
  * - **The invariant gate.** Balance sheets, cap tables, prices and the
  *   information boundary, checked before anything commits.
+ * - **Projection.** `projectResolutionOutcomeForPlayer` cuts the quarter down to
+ *   one seat's entitlement. The resolver returns the whole truth; nothing but
+ *   the engine is allowed to hold it.
  *
  * ## Determinism
  *
@@ -43,7 +47,6 @@ import type {
   EnginePhaseTiming,
   GmProposalBatch,
   InvariantCheckResult,
-  NpcActionBundle,
   QuarterResolutionOutcome,
   QuarterResolver,
   ResolutionPhase,
@@ -61,17 +64,18 @@ import { createRng, createStateHasher, hashState } from '@frontier/shared';
 import { ResolutionRecorder } from './ledger';
 import { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
 import { collectActions, pendingOfType, reviewActions } from './actions';
+import type { NpcBundleInput } from './actions';
 import { applyIntroductionRequests, ensureBoardProposals, ensureGovernmentBids, ensureResearchProjects, ensureSocialPosts } from './routing';
 import { resolveCapital } from './capital';
 import { resolveDisclosures } from './disclosure';
 import { rebuildLeaderboards } from './leaderboards';
 import { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 
-export { ResolutionRecorder } from './ledger';
+export { ResolutionRecorder, chainRowHash, rowFingerprint } from './ledger';
 export { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
 export type { ClampedGmBatch, GmRejection, CandidateMaterialiser } from './gm';
 export { collectActions, reviewActions, pendingOfType, labelFor, summariseIntent } from './actions';
-export type { ReviewedAction } from './actions';
+export type { ReviewedAction, NpcBundleInput, NpcBundleRefusal, NpcBundleSubmission } from './actions';
 export {
   ensureBoardProposals,
   ensureGovernmentBids,
@@ -84,6 +88,8 @@ export {
 export * from './capital';
 export * from './disclosure';
 export * from './leaderboards';
+export { audienceFor, isEventVisibleTo, projectResolutionOutcomeForPlayer } from './projection';
+export type { PlayerAudience, ProjectableOutcome, ProjectedOutcome } from './projection';
 export { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 export type { InvariantGateInput } from './invariants';
 
@@ -117,13 +123,20 @@ export interface FrontierResolutionOutcome extends QuarterResolutionOutcome {
   readonly phaseTimings: readonly EnginePhaseTiming[];
 }
 
-/** `QuarterResolver`, narrowed to the richer outcome this engine returns. */
+/**
+ * `QuarterResolver`, narrowed to the richer outcome this engine returns.
+ *
+ * `npcBundles` is widened, not narrowed: a caller that knows which company it
+ * asked a strategist to plan for may pass `{ requestedCompanyId, bundle }` so
+ * the engine can refuse a bundle that names a different one. A bare bundle is
+ * still accepted and is checked against the company it names.
+ */
 export interface FrontierQuarterResolver extends QuarterResolver {
   resolveQuarter(
     state: SessionState,
     submittedActions: readonly SubmittedAction[],
     gmProposal: GmProposalBatch | null,
-    npcBundles: readonly NpcActionBundle[],
+    npcBundles: readonly NpcBundleInput[],
   ): FrontierResolutionOutcome;
 }
 
@@ -157,7 +170,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
       state: SessionState,
       submittedActions: readonly SubmittedAction[],
       gmProposal: GmProposalBatch | null,
-      npcBundles: readonly NpcActionBundle[],
+      npcBundles: readonly NpcBundleInput[],
     ): FrontierResolutionOutcome {
       const quarter = state.quarter;
       const preResolutionHash = hash(state);
@@ -215,7 +228,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             break;
 
           case 'action_collection': {
-            const queued = collectActions(draft, submittedActions, npcBundles);
+            const queued = collectActions(draft, submittedActions, npcBundles, ctx);
             reviewActions(draft, subsystems.actionValidator, queued, ctx);
             // NPC defaults run after validation so a background company only
             // acts where its strategist did not, and so its own actions face
@@ -319,6 +332,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
       const invariants = runInvariantGate({
         draft,
+        opening: state,
         events: recorder.events,
         lines: recorder.allLines(),
         startSequence: recorder.startSequence,
@@ -350,6 +364,9 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
           });
         }
 
+        // Seal the refusal rows before anything reads them: a row is only whole
+        // once its phase has closed.
+        recorder.seal();
         const engineFault = failures.some((failure) => ENGINE_INVARIANTS.includes(failure.invariant));
         const report = buildReport(draft, recorder, quarter, preResolutionHash, hash(state), gmProposal, true);
         if (engineFault || strict) {
@@ -418,6 +435,9 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
         visibility: 'private',
       });
       const stateHashAfter = hash(draft);
+      // The last phase closes on the hash the snapshot already needed, so the
+      // committed state is hashed once rather than twice.
+      recorder.seal(stateHashAfter);
       const snapshot = snapshotOf(draft, 'post_commit', stateHashAfter, draft.ledgerSequence);
       snapshotCtx.log({
         phase: 'snapshot',

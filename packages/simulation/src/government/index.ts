@@ -41,6 +41,7 @@ import {
   templatesForAgency,
   type ProgrammeTemplate,
 } from './programmes';
+import { resolveOpportunityResponses } from './responses';
 import { scoreOpportunityBids } from './scoring';
 import { advanceMilestones, createContract, ensureReputation } from './contracts';
 import { clamp, companyById, emitEvent, line, money, round, unit, usdLabel } from './util';
@@ -80,6 +81,7 @@ export {
   GOVERNMENT_STAFF_AVAILABILITY,
 } from './contracts';
 export type { AwardResult, MilestoneOutcome } from './contracts';
+export { resolveOpportunityResponses, DECLINE_PAST_PERFORMANCE_COST, CONSORTIUM_OFFER_QUARTERS } from './responses';
 
 /* -------------------------------------------------------------------------- */
 /*  Balancing constants                                                        */
@@ -161,6 +163,11 @@ export function createGovernmentSubsystem(): GovernmentSubsystemImpl {
   /* ------------------------------- opening ------------------------------- */
 
   function openOpportunities(draft: SessionState, ctx: ResolverContext): void {
+    // What companies did about the competitions already on the table, before
+    // new ones join them: a decline is on the record before scoring runs, and a
+    // consortium invitation is on the table before the bid that would use it.
+    resolveOpportunityResponses(draft, ctx);
+
     const rng = ctx.rng.fork(`government_open_q${ctx.quarter}`);
     const openCount = draft.procurementOpportunities.filter((o) => o.status === 'open').length;
     let pipeline = openCount;

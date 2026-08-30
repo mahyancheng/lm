@@ -35,14 +35,17 @@ export {
   priceFactor,
   relativePrice,
   productChurn,
+  priceShock,
   marketingLift,
   customersPerUnit,
   servingComputeUnits,
   heldComputeUnits,
 } from './products';
+export { resolveComputeOrders, reservedUnitPriceUsd } from './compute';
 export { resolveFinancials, computeCost } from './financials';
 export type { ComputeCostBreakdown } from './financials';
-export { applyNpcDefaults } from './npc';
+export { resolveDistress, bridgeAppetite, enterAdministration, recentFailedBridges } from './distress';
+export { applyNpcDefaults, bidTarget } from './npc';
 export { recomputeMetrics } from './metrics';
 export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';
 export type { MarketingPlan } from './policy';

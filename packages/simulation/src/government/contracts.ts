@@ -62,6 +62,12 @@ export const PAST_PERFORMANCE_MOVES = {
   completed: 6,
   terminated: -25,
   won: 1,
+  /**
+   * Credit for delivering somebody else's programme as a consortium member or a
+   * subcontractor. Smaller than winning outright, and the only route to a first
+   * past-performance point for a company no agency would let bid alone.
+   */
+  partnered: 3,
 } as const;
 
 /** Share of a company's technical staff that can be on public work at once. */
@@ -245,6 +251,34 @@ export function createContract(
   reputation.contractsWon += 1;
   ensureReputation(draft, team.prime.id, null, ctx.quarter).contractsWon += 1;
   movePastPerformance(draft, team.prime.id, opportunity.agencyId, PAST_PERFORMANCE_MOVES.won, ctx.quarter);
+
+  // Junior partners are on the award too. A consortium seat or a subcontract is
+  // how a company with no record earns its first one, which is what keeps the
+  // programme floors from closing procurement to every new entrant for good.
+  const partners = new Set<string>([...contract.consortiumMemberIds, ...contract.subcontractors.map((s) => s.companyId)]);
+  partners.delete(team.prime.id);
+  for (const partnerId of [...partners].sort()) {
+    const partner = companyById(draft, partnerId);
+    if (partner === null || !partner.isActive) continue;
+    ensureReputation(draft, partnerId, opportunity.agencyId, ctx.quarter).contractsWon += 1;
+    movePastPerformance(draft, partnerId, opportunity.agencyId, PAST_PERFORMANCE_MOVES.partnered, ctx.quarter);
+    emitEvent(
+      draft,
+      ctx,
+      'contract_awarded',
+      partnerId,
+      contractId,
+      {
+        opportunityId: opportunity.id,
+        agencyId: opportunity.agencyId,
+        programme: opportunity.programme,
+        role: contract.consortiumMemberIds.includes(partnerId) ? 'consortium_member' : 'subcontractor',
+        primeCompanyId: team.prime.id,
+        pastPerformanceAfter: round(partner.governmentPastPerformance, 2),
+      },
+      'public',
+    );
+  }
 
   const eventId = emitEvent(
     draft,

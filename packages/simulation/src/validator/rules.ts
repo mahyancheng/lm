@@ -42,6 +42,7 @@ import {
   MIN_INTRODUCTION_PURPOSE_CHARS,
   MIN_IPO_FLOAT_PCT,
   MIN_RESERVABLE_UNITS,
+  PRICE_MOVE_BAND,
   RESERVABLE_SHARE_OF_INSTALLED_BASE,
   RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
@@ -258,7 +259,29 @@ const setProductPrice: Rule<'set_product_price'> = (intent, verdict, ctx) => {
     verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
     return;
   }
-  if (!product.isActive) verdict.reject('requirement_not_met', `${product.name} has been sunset and cannot be repriced.`);
+  if (!product.isActive) {
+    verdict.reject('requirement_not_met', `${product.name} has been sunset and cannot be repriced.`);
+    return;
+  }
+
+  // A price may move a long way over a year and only so far in one quarter. The
+  // band is the range the demand model's elasticity is defined on: outside it
+  // customers stop responding and revenue rises with the price for nothing.
+  if (product.pricePerSeat <= 0) return;
+  const floor = product.pricePerSeat * PRICE_MOVE_BAND.min;
+  const ceiling = product.pricePerSeat * PRICE_MOVE_BAND.max;
+  if (intent.pricePerSeatUsd >= floor && intent.pricePerSeatUsd <= ceiling) return;
+
+  const bounded = Math.round(Math.min(ceiling, Math.max(floor, intent.pricePerSeatUsd)) * 100) / 100;
+  verdict.clamp(
+    (draft) => {
+      draft.pricePerSeatUsd = bounded;
+    },
+    'illegal_value',
+    `${product.name} repriced to ${money(bounded)} rather than ${money(intent.pricePerSeatUsd)}: a price may move between ${
+      PRICE_MOVE_BAND.min
+    }x and ${PRICE_MOVE_BAND.max}x of its current ${money(product.pricePerSeat)} in one quarter, and a bigger move than that is a different product.`,
+  );
 };
 
 const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {

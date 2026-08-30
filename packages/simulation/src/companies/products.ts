@@ -38,6 +38,9 @@ import {
   PRICE_CHURN_SENSITIVITY,
   PRICE_DEVIATION_BOUNDS,
   PRICE_FACTOR_BOUNDS,
+  PRICE_MOVE_BAND,
+  PRICE_SHOCK_CHURN,
+  PRICE_SHOCK_CHURN_CEILING,
   QUALITY_CHURN_SENSITIVITY,
   QUALITY_DEMAND_SENSITIVITY,
   QUALITY_FACTOR_BOUNDS,
@@ -50,6 +53,7 @@ import {
   SEGMENT_SEED_POOL,
   SERVE_CUSTOMERS_PER_ACCELERATOR,
 } from './balance';
+import { resolveComputeOrders } from './compute';
 import { marketingPlan } from './policy';
 import {
   activeCompanies,
@@ -155,25 +159,51 @@ export function priceFactor(segment: ProductSegment, price: number, referencePri
   );
 }
 
-/** Churn for a product this quarter, inside the segment's design band. */
+/**
+ * How violent a repricing was, 0..1, where 1 is a move to the top of the band
+ * the validator allows in one quarter. Price cuts are not a shock: nobody leaves
+ * over a discount.
+ */
+export function priceShock(beforeUsd: number, afterUsd: number): number {
+  if (!(beforeUsd > 0) || !(afterUsd > beforeUsd)) return 0;
+  return unit(Math.log(afterUsd / beforeUsd) / Math.log(PRICE_MOVE_BAND.max));
+}
+
+/**
+ * Churn for a product this quarter, inside the segment's design band — except
+ * after a price rise, which is the one thing that moves customers faster than
+ * the band allows.
+ *
+ * The elasticity term above saturates at `PRICE_DEVIATION_BOUNDS`, so without
+ * this a company could raise its price to the top of the validator's band every
+ * quarter and keep most of its customers, and revenue (`customers × price`)
+ * would rise without limit. A shock big enough to leave the model's defined
+ * range takes the base with it.
+ */
 export function productChurn(
   segment: ProductSegment,
   qualityEdge: number,
   priceEdge: number,
   reputation: number,
   capacityShortfall: number,
+  shock = 0,
 ): number {
   const band = SEGMENT_CHURN_BAND[segment];
   const mid = (band.min + band.max) / 2;
+  const bounded = unit(shock);
   const raw =
     mid -
     QUALITY_CHURN_SENSITIVITY * qualityEdge +
     PRICE_CHURN_SENSITIVITY * SEGMENT_PRICE_ELASTICITY[segment] * priceEdge -
     REPUTATION_CHURN_SENSITIVITY * (reputation / 100 - 0.5) * 2 +
-    CAPACITY_SHORTFALL_CHURN * capacityShortfall;
+    CAPACITY_SHORTFALL_CHURN * capacityShortfall +
+    PRICE_SHOCK_CHURN * bounded;
   // The band is where a healthy or leaking product sits; a genuinely broken one
-  // is allowed to run above it, but never below the segment floor.
-  return clamp(raw, band.min * 0.5, Math.max(band.max * 2, 0.6));
+  // is allowed to run above it, but never below the segment floor. A repriced
+  // one is allowed to run right up to a near-total walkout.
+  const ordinaryCeiling = Math.max(band.max * 2, 0.6);
+  const ceiling = ordinaryCeiling + (PRICE_SHOCK_CHURN_CEILING - ordinaryCeiling) * bounded;
+  return clamp(raw, band.min * 0.5, ceiling);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -194,15 +224,23 @@ interface DemandDraft {
 export function resolveProducts(draft: SessionState, ctx: ResolverContext): void {
   const rng = ctx.rng;
 
+  // Reservations, cloud commitments and the training split are applied before
+  // anything reads serving capacity: capacity bought this quarter serves this
+  // quarter's demand.
+  resolveComputeOrders(draft, ctx);
+
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
 
     /* --- repricing, launches and sunsets --------------------------------- */
+    // How hard each product was repriced this quarter, for the churn model.
+    const shockByProduct = new Map<string, number>();
     for (const { intent } of intentsOfType(actions, 'set_product_price')) {
       const product = company.products.find((p) => p.id === intent.productId);
       if (product === undefined) continue;
       const before = product.pricePerSeat;
       product.pricePerSeat = money(intent.pricePerSeatUsd);
+      shockByProduct.set(product.id, priceShock(before, product.pricePerSeat));
       const eventId = emitEvent(
         draft,
         ctx,
@@ -340,7 +378,7 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
       const base = (product.activeCustomers + SEGMENT_SEED_POOL[segment]) * SEGMENT_BASE_ADD_RATE[segment];
       const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise);
 
-      const churn = productChurn(segment, qualityEdge, priceEdge, reputation, 0);
+      const churn = productChurn(segment, qualityEdge, priceEdge, reputation, 0, shockByProduct.get(product.id) ?? 0);
       const retained = product.activeCustomers * (1 - churn);
       const desired = retained + grossAdds;
       drafts.push({

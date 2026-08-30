@@ -232,6 +232,24 @@ export function heldShares(draft: SessionState, securityId: string, holderId: st
   return total;
 }
 
+/**
+ * The stake an actor holds in one company, 0..1 of its fully diluted shares.
+ *
+ * A player owns shares as a person, not as a company: the holding sits under
+ * their character id, or under their player id where a seat holds directly. Both
+ * are counted, because both mean the same thing — this is somebody the company
+ * has to answer to whether or not they currently run it.
+ */
+export function shareholderStake(draft: SessionState, companyId: string, actor: ValidationActor): number {
+  const table = findCapTable(draft, companyId);
+  if (table === null || table.fullyDilutedShares <= 0) return 0;
+  let held = 0;
+  for (const holding of table.holdings) {
+    if (holding.holderId === actor.characterId || (actor.playerId !== null && holding.holderId === actor.playerId)) held += holding.shares;
+  }
+  return held / table.fullyDilutedShares;
+}
+
 /** The earliest quarter a holder may sell out of a security, or null. */
 export function lockupUntil(draft: SessionState, securityId: string, holderId: string): number | null {
   const security = findSecurity(draft, securityId);

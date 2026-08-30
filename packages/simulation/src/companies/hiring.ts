@@ -18,6 +18,7 @@
  */
 
 import type { CompBand, Company, ResolverContext, SessionState, StaffRole } from '@frontier/contracts';
+import { effectivePolicy } from './archetypes';
 import {
   ATTRITION_BOUNDS,
   ATTRITION_REALISATION_BAND,
@@ -33,6 +34,9 @@ import {
   MORALE_ATTRITION_COEFFICIENT,
   MORALE_BASELINE,
   MORALE_DRIFT,
+  OPEN_ROLE_BACKLOG_CAP_SHARE,
+  OPEN_ROLE_BACKLOG_FLOOR,
+  OPEN_ROLE_EXPIRY_RATE,
   OPEN_ROLE_LOADED_FACTOR,
   POACH_BASE_PROBABILITY,
   POACH_MORALE_SHOCK,
@@ -189,6 +193,10 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
     const actions = companyActions(draft, ctx, company.id);
     let oneOffPeopleCostUsd = 0;
     let layoffFraction = 0;
+    // Requisitions carried in from earlier quarters. This quarter's own hires
+    // are resolved against their own fill rate below; what is left standing
+    // afterwards is worked separately, so a backlog can shrink as well as grow.
+    const carriedOpenRoles = company.employees.openRoles;
 
     /* --- hires ------------------------------------------------------------ */
     for (const { intent } of intentsOfType(actions, 'hire')) {
@@ -376,6 +384,60 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       }
     }
 
+    /* --- the standing requisition backlog --------------------------------- */
+    // `openRoles` is a real recruiting pipeline, not a tally: every quarter some
+    // of it fills, some of it is withdrawn, and what is left is capped against
+    // headcount. Without this it only ever rises, and a company pays the morale
+    // and payroll cost of requisitions nobody is working for the whole session.
+    if (carriedOpenRoles > 0) {
+      const policy = effectivePolicy(company.archetype, company.posture);
+      const role = policy.hiringPriority[0] ?? 'engineers';
+      const rate = fillRate(draft, company, role, policy.compBand);
+      const filledFromBacklog = Math.min(carriedOpenRoles, Math.floor(carriedOpenRoles * rate));
+      const standing = carriedOpenRoles - filledFromBacklog;
+      // At least one requisition lapses whenever any is standing, so a backlog
+      // that fills nothing still drains rather than rounding to a permanent one.
+      const lapsed = standing <= 0 ? 0 : Math.min(standing, Math.max(1, Math.round(standing * OPEN_ROLE_EXPIRY_RATE)));
+
+      if (filledFromBacklog > 0) {
+        const offer = offerCompUsd(draft, role, policy.compBand);
+        const head = totalHeadcount(company);
+        company.employees.avgComp = money((head * company.employees.avgComp + filledFromBacklog * offer) / (head + filledFromBacklog));
+        setRoleHeadcount(company, role, roleHeadcount(company, role) + filledFromBacklog);
+        oneOffPeopleCostUsd += money(filledFromBacklog * offer * RECRUITING_FEE_FRACTION);
+      }
+
+      company.employees.openRoles = count(company.employees.openRoles - filledFromBacklog - lapsed);
+      if (filledFromBacklog > 0 || lapsed > 0) {
+        const eventId = emitEvent(
+          draft,
+          ctx,
+          'hire_completed',
+          company.id,
+          null,
+          {
+            kind: 'requisition_backlog',
+            role,
+            carried: carriedOpenRoles,
+            filled: filledFromBacklog,
+            withdrawn: lapsed,
+            fillRate: rate,
+            openRolesAfter: company.employees.openRoles,
+          },
+          'company',
+        );
+        ctx.log({
+          phase: 'talent_resolution',
+          text: `${company.name} worked its recruiting backlog: ${filledFromBacklog} of ${carriedOpenRoles} standing ${role} requisitions filled and ${lapsed} were withdrawn, leaving ${company.employees.openRoles} open.`,
+          deltaLabel: `-${filledFromBacklog + lapsed} open`,
+          refEventIds: [eventId],
+          tone: filledFromBacklog > 0 ? 'positive' : 'neutral',
+          subjectId: company.id,
+        });
+      }
+    }
+
+
     /* --- attrition, morale and compensation ------------------------------- */
     const controversy = controversyLevel(draft, company);
     const marketComp = blendedMarketCompUsd(draft, company);
@@ -393,6 +455,12 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       setRoleHeadcount(company, role, head - leavers);
       departures += leavers;
     }
+
+    // However enthusiastically a company recruits, it cannot carry an unbounded
+    // pipeline: anything past a share of the workforce it actually has is not
+    // being worked, and is withdrawn before morale is asked to carry it.
+    const backlogCap = Math.round(Math.max(OPEN_ROLE_BACKLOG_FLOOR, totalHeadcount(company) * OPEN_ROLE_BACKLOG_CAP_SHARE));
+    if (company.employees.openRoles > backlogCap) company.employees.openRoles = count(backlogCap);
 
     const target = moraleTarget(company, competitiveness, controversy);
     company.employees.morale = score(company.employees.morale + (target - company.employees.morale) * MORALE_DRIFT);

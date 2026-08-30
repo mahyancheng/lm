@@ -34,6 +34,8 @@ import {
   resolveProducts,
   SEGMENT_PRICE_ELASTICITY,
 } from '../src/companies/index';
+import { createDefaultEngine } from '../src/engine';
+import { createDemoSession } from '../src/scenario/demo';
 
 /* -------------------------------------------------------------------------- */
 /*  Deterministic test RNG                                                     */
@@ -1130,5 +1132,264 @@ describe('report discipline', () => {
       expect(line.text.length).toBeGreaterThan(0);
       expect(line.text.length).toBeLessThanOrEqual(300);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  The revenue identity                                                       */
+/* -------------------------------------------------------------------------- */
+
+describe('the seeded world satisfies the engine own revenue identity', () => {
+  it('seeds every company so customers times price reproduces its quarterly revenue', () => {
+    // `resolveFinancials` recognises `activeCustomers * pricePerSeat`. A scenario
+    // whose seeded revenue disagrees with that product is a world the first
+    // resolved quarter destroys, however plausible each number looks alone.
+    const state = createDemoSession();
+    for (const target of state.companies) {
+      const implied = target.products
+        .filter((product) => product.isActive)
+        .reduce((sum, product) => sum + product.activeCustomers * product.pricePerSeat, 0);
+      const deviation = Math.abs(implied - target.financials.revenueQuarterly) / Math.max(1, target.financials.revenueQuarterly);
+      expect(`${target.id}: ${(deviation * 100).toFixed(1)}% apart`).toBe(`${target.id}: 0.0% apart`);
+    }
+  });
+
+  it('holds every seeded revenue within 35% through the first resolved quarter with no actions at all', () => {
+    const state = createDemoSession();
+    const seeded = new Map(state.companies.map((target) => [target.id, target.financials.revenueQuarterly]));
+    const outcome = createDefaultEngine().resolver.resolveQuarter(state, [], null, []);
+
+    expect(outcome.committed).toBe(true);
+    for (const target of outcome.nextState.companies) {
+      const before = seeded.get(target.id) ?? 0;
+      const deviation = Math.abs(target.financials.revenueQuarterly - before) / Math.max(1, before);
+      expect(`${target.id}: ${deviation <= 0.35 ? 'within' : `${(deviation * 100).toFixed(0)}% outside`} the band`).toBe(`${target.id}: within the band`);
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Compute orders                                                             */
+/* -------------------------------------------------------------------------- */
+
+describe('the compute pillar', () => {
+  it('credits a reservation, sets its expiry and charges it in the same quarter', () => {
+    const state = makeState();
+    const before = { ...company(state, 'cmp_nexus').compute };
+    const expiry = Math.max(before.reservationExpiryQuarter ?? 0, START_QUARTER + 6);
+    state.pendingActions.push(
+      action(state, START_QUARTER, 0, 'cmp_nexus', 'chr_maya_chen', {
+        type: 'reserve_compute',
+        units: 12_000,
+        quarters: 6,
+        maxPricePerUnitUsd: 10_000,
+      }),
+    );
+    const { events } = runQuarter(state, START_QUARTER, '424242');
+    const after = company(state, 'cmp_nexus').compute;
+
+    expect(after.reservedAccelerators).toBe(before.reservedAccelerators + 12_000);
+    expect(after.reservationExpiryQuarter).toBe(expiry);
+    const cost = events.find((event) => event.type === 'cost_recognised' && event.payload['kind'] === 'compute_reserved');
+    expect(cost?.payload['units']).toBe(12_000);
+    // The financial phase charges reserved capacity out of `company.compute`, so
+    // a reservation booked here is paid for here.
+    expect(company(state, 'cmp_nexus').financials.cogs).toBeGreaterThan(0);
+  });
+
+  it('refuses a reservation whose clearing price is above the bidder limit', () => {
+    const state = makeState();
+    const before = company(state, 'cmp_nexus').compute.reservedAccelerators;
+    state.pendingActions.push(
+      action(state, START_QUARTER, 0, 'cmp_nexus', 'chr_maya_chen', {
+        type: 'reserve_compute',
+        units: 5_000,
+        quarters: 4,
+        maxPricePerUnitUsd: 1,
+      }),
+    );
+    const { events } = runQuarter(state, START_QUARTER, '424242');
+    expect(company(state, 'cmp_nexus').compute.reservedAccelerators).toBe(before);
+    expect(events.some((event) => event.payload['kind'] === 'compute_reservation_failed')).toBe(true);
+  });
+
+  it('moves cloud spend and the training split, and the split changes what can be served', () => {
+    const serving = makeState();
+    const training = makeState();
+    for (const [state, fraction] of [
+      [serving, 0.05],
+      [training, 0.95],
+    ] as const) {
+      state.pendingActions.push(
+        action(state, START_QUARTER, 0, 'cmp_orbit', 'chr_daniel_okonkwo', {
+          type: 'buy_cloud_capacity',
+          quarterlySpendUsd: 90_000_000,
+          providerCompanyId: null,
+          commitmentQuarters: 2,
+        }),
+        action(state, START_QUARTER, 1, 'cmp_orbit', 'chr_daniel_okonkwo', { type: 'allocate_compute', trainingFraction: fraction }),
+      );
+      runQuarter(state, START_QUARTER, '424242');
+    }
+
+    expect(company(serving, 'cmp_orbit').compute.cloudSpendQuarterly).toBe(90_000_000);
+    expect(company(serving, 'cmp_orbit').compute.trainingAllocation).toBeCloseTo(0.05, 6);
+    expect(company(training, 'cmp_orbit').compute.trainingAllocation).toBeCloseTo(0.95, 6);
+    // Serving capacity is the whole point of the split.
+    expect(company(serving, 'cmp_orbit').products[0]?.activeCustomers ?? 0).toBeGreaterThan(
+      company(training, 'cmp_orbit').products[0]?.activeCustomers ?? 0,
+    );
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Requisitions                                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('the requisition backlog', () => {
+  it('shrinks every quarter a company opens no new roles, and reaches zero', () => {
+    const state = makeState();
+    const target = company(state, 'cmp_aurora');
+    target.employees.openRoles = 210;
+    let previous = target.employees.openRoles;
+
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 10; quarter += 1) {
+      runQuarter(state, quarter, '424242');
+      const now = company(state, 'cmp_aurora').employees.openRoles;
+      expect(now).toBeLessThanOrEqual(previous);
+      previous = now;
+    }
+    expect(company(state, 'cmp_aurora').employees.openRoles).toBe(0);
+  });
+
+  it('never carries more standing requisitions than a share of the workforce', () => {
+    const state = makeState();
+    const target = company(state, 'cmp_vector');
+    target.employees.openRoles = 5_000;
+    runQuarter(state, START_QUARTER, '424242');
+    const after = company(state, 'cmp_vector');
+    const headcount = after.employees.engineers + after.employees.researchers + after.employees.sales + after.employees.ops + after.employees.execs;
+    expect(after.employees.openRoles).toBeLessThanOrEqual(Math.round(headcount * 0.35));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Distress                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** Strip a company down to a guaranteed cash shortfall, books intact. */
+function starve(state: SessionState, companyId: string): void {
+  const target = company(state, companyId);
+  target.financials.cash = 0;
+  target.balanceSheet.assets.cash = 0;
+  target.balanceSheet.equity =
+    target.balanceSheet.assets.cash +
+    target.balanceSheet.assets.ppe +
+    target.balanceSheet.assets.goodwill +
+    target.balanceSheet.assets.investments +
+    target.balanceSheet.assets.receivables -
+    (target.balanceSheet.liabilities.debt + target.balanceSheet.liabilities.payables + target.balanceSheet.liabilities.deferredRevenue);
+}
+
+describe('forced bridge rounds', () => {
+  it('funds the bridge the next quarter, taking cash in and issuing the shares that dilute the cap table', () => {
+    const state = makeState();
+    starve(state, 'cmp_vector');
+    runQuarter(state, START_QUARTER, '424242');
+
+    const bridge = state.fundingRounds.find((round) => round.companyId === 'cmp_vector' && round.stage === 'bridge');
+    expect(bridge?.status).toBe('open');
+    const table = state.capTables.find((candidate) => candidate.companyId === 'cmp_vector');
+    const sharesBefore = table?.fullyDilutedShares ?? 0;
+
+    const { events } = runQuarter(state, START_QUARTER + 1, '424242');
+    const settled = state.fundingRounds.find((round) => round.id === bridge?.id);
+    expect(settled?.status).toBe('closed');
+    expect(settled?.dilution ?? 0).toBeGreaterThan(0);
+    expect(table?.fullyDilutedShares ?? 0).toBeGreaterThan(sharesBefore);
+    expect(events.some((event) => event.type === 'shares_issued' && event.payload['reason'] === 'forced_bridge')).toBe(true);
+    // Issued shares still reconcile to the holdings that carry them.
+    const issued = table?.shareClasses.reduce((sum, klass) => sum + klass.issuedShares, 0) ?? 0;
+    const held = table?.holdings.reduce((sum, holding) => sum + holding.shares, 0) ?? 0;
+    expect(held).toBe(issued);
+  });
+
+  it('never leaves a bridge open for two consecutive quarters', () => {
+    const state = makeState();
+    starve(state, 'cmp_vector');
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 6; quarter += 1) {
+      runQuarter(state, quarter, '424242');
+      const stale = state.fundingRounds.filter((round) => round.status === 'open' && round.closedQuarter < quarter);
+      expect(stale).toEqual([]);
+    }
+  });
+});
+
+describe('insolvency', () => {
+  it('winds a company up after three failed rescues, releasing its people and clearing its books', () => {
+    const state = makeState();
+    // Nobody is funding anything: every bridge this company forces will fail.
+    state.world.capitalMarkets.ventureLiquidity = 0;
+    state.world.capitalMarkets.riskAppetite = 0;
+    starve(state, 'cmp_vector');
+
+    let administered = false;
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 6 && !administered; quarter += 1) {
+      const { events } = runQuarter(state, quarter, '424242');
+      administered = events.some((event) => event.payload['kind'] === 'administration');
+    }
+    expect(administered).toBe(true);
+
+    const wound = company(state, 'cmp_vector');
+    expect(wound.products.every((product) => !product.isActive)).toBe(true);
+    expect(wound.employees.engineers + wound.employees.researchers + wound.employees.sales + wound.employees.ops + wound.employees.execs).toBe(0);
+    expect(wound.compute.ownedAccelerators).toBe(0);
+    expect(wound.balanceSheet.liabilities.payables).toBe(0);
+    expect(Math.abs(wound.balanceSheet.equity)).toBeLessThan(wound.financials.revenueQuarterly + 1);
+    expect(balanceSheetReconciles(wound.balanceSheet)).toBe(true);
+    // The husk stays acquirable — a distressed rival is the point of a failure.
+    expect(wound.isActive).toBe(true);
+    // Its people are on the market.
+    expect(state.characters.some((character) => character.companyId === 'cmp_vector')).toBe(false);
+  });
+
+  it('leaves a rescued company alone', () => {
+    const state = makeState();
+    starve(state, 'cmp_vector');
+    for (let quarter = START_QUARTER; quarter < START_QUARTER + 6; quarter += 1) runQuarter(state, quarter, '424242');
+    expect(company(state, 'cmp_vector').products.some((product) => product.isActive)).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Repricing                                                                  */
+/* -------------------------------------------------------------------------- */
+
+describe('a price shock', () => {
+  it('costs a company far more of its base than the segment churn band alone allows', () => {
+    const held = makeState();
+    const shocked = makeState();
+    const target = company(shocked, 'cmp_orbit');
+    const product = target.products[0];
+    if (product === undefined) throw new Error('fixture has no product');
+    shocked.pendingActions.push(
+      action(shocked, START_QUARTER, 0, 'cmp_orbit', 'chr_daniel_okonkwo', {
+        type: 'set_product_price',
+        productId: product.id,
+        pricePerSeatUsd: product.pricePerSeat * 4,
+      }),
+    );
+
+    runQuarter(held, START_QUARTER, '424242');
+    runQuarter(shocked, START_QUARTER, '424242');
+
+    const after = company(shocked, 'cmp_orbit').products[0];
+    const baseline = company(held, 'cmp_orbit').products[0];
+    expect(after?.churnQuarterly ?? 0).toBeGreaterThan(0.5);
+    expect(after?.activeCustomers ?? 0).toBeLessThan((baseline?.activeCustomers ?? 0) * 0.6);
+    // The whole point: quadrupling the price does not quadruple revenue.
+    expect(company(shocked, 'cmp_orbit').financials.revenueQuarterly).toBeLessThan(
+      company(held, 'cmp_orbit').financials.revenueQuarterly * 2,
+    );
   });
 });

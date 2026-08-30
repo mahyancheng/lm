@@ -25,9 +25,12 @@
  * committing a world whose books do not add up.
  *
  * An **opening** sheet that does not reconcile is a different thing: that is bad
- * upstream data, not a defect here. It is absorbed, reported as a failing
- * `BalanceSheetCheck` (which blocks the quarter commit through the normal
- * channel) and logged.
+ * upstream data, not a defect here. It is *carried*, never absorbed — closing
+ * equity is opening equity plus net income, so an imbalance an earlier phase
+ * created survives into the closing sheet, fails the `BalanceSheetCheck` and
+ * fails `financial_integrity` at the gate. Deriving equity from the closing
+ * assets instead would silently mint whatever equity the identity was short,
+ * and the quarter would commit on books that do not add up.
  *
  * ## Phase contract with the earlier phases
  *
@@ -71,6 +74,7 @@ import {
   SEGMENT_SUPPORT_COST_SHARE,
   TAX_RATE,
 } from './balance';
+import { resolveDistress } from './distress';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import {
   activeCompanies,
@@ -186,9 +190,10 @@ function registerDistressHaircut(draft: SessionState, ctx: ResolverContext, comp
 }
 
 /**
- * Queue the emergency financing the capital phase can consume. The round is
- * created `open`, not `closed`: this phase does not decide that anybody funded
- * it, only that the company now needs somebody to.
+ * Queue the emergency financing `resolveDistress` settles at the top of next
+ * quarter's financial phase. The round is created `open`, not `closed`: this
+ * phase does not decide that anybody funded it, only that the company now needs
+ * somebody to.
  */
 function queueBridgeRound(draft: SessionState, ctx: ResolverContext, company: Company, shortfallUsd: number): FundingRound | null {
   const existing = draft.fundingRounds.find((r) => r.companyId === company.id && r.stage === 'bridge' && r.status === 'open');
@@ -232,6 +237,10 @@ export function resolveFinancials(
 ): { pnl: ProfitAndLoss[]; balanceChecks: BalanceSheetCheck[] } {
   const pnl: ProfitAndLoss[] = [];
   const balanceChecks: BalanceSheetCheck[] = [];
+
+  // Last quarter's forced bridges are settled before this quarter's obligations
+  // are, so rescue cash is on the balance sheet when the bills are paid.
+  resolveDistress(draft, ctx);
 
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
@@ -339,8 +348,11 @@ export function resolveFinancials(
           `collections=${money(collections)} cashOut=${money(cashOut)} shortfall=${money(shortfall)}`,
       );
     }
-    // Absorb sub-cent rounding into equity so the stored identity is exact.
-    sheet.equity = derivedEquity;
+    // Closing equity is opening equity plus net income, with sub-cent rounding
+    // absorbed. When the opening sheet reconciled this is exactly the derived
+    // equity; when it did not, the residual is carried rather than laundered, so
+    // the closing sheet still fails to reconcile and the quarter cannot commit.
+    sheet.equity = signedMoney(derivedEquity - openingResidual);
 
     /* --- financials record ------------------------------------------------- */
     const quarterlyBurn = signedMoney(sheet.assets.cash - openingCash);
@@ -487,9 +499,7 @@ export function resolveFinancials(
 
     /* --- invariant --------------------------------------------------------- */
     const reconciles = balanceSheetReconciles(sheet) && openingReconciles;
-    const discrepancy = signedMoney(
-      openingReconciles ? closingAssets - closingLiabilities - sheet.equity : openingResidual,
-    );
+    const discrepancy = signedMoney(closingAssets - closingLiabilities - sheet.equity);
     balanceChecks.push({ companyId: company.id, quarter: ctx.quarter, reconciles, discrepancyUsd: discrepancy });
     const checkEventId = emitEvent(
       draft,

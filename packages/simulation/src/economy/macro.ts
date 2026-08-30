@@ -36,6 +36,20 @@ import { clampToTargetBounds, getTargetPathSpec } from '@frontier/contracts';
 import { clamp, standardNormal } from './util';
 
 /* -------------------------------------------------------------------------- */
+/*  Balancing constants                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How far a compute spot price above its neutral index pulls accelerator supply
+ * back up, per index point. Capacity responds to price: this is the supply side
+ * of the compute cycle, and the only thing in the model that undoes a shortage.
+ */
+export const SUPPLY_PRICE_RESPONSE = 0.25;
+
+/** The same response for fabrication capacity, which is what supply is built on. */
+export const FAB_PRICE_RESPONSE = 0.35;
+
+/* -------------------------------------------------------------------------- */
 /*  Drift table                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -183,7 +197,18 @@ export const WORLD_DRIFT_SPECS: readonly DriftSpec[] = [
   level(
     'world.compute.acceleratorSupply',
     'Accelerator supply',
-    (w) => 0.35 + 0.55 * w.compute.fabCapacity - 0.25 * w.regulation.exportControls - 0.15 * w.geopolitics.tradeFriction,
+    // Scarcity is self-correcting, slowly. Every contraction family in the event
+    // catalogue multiplies this path down and none of them ever multiplies it
+    // back up, so without a term that responds to price the shortage is a
+    // one-way ratchet rather than the cycle the design describes: expensive
+    // capacity is what pays for more capacity, and buyers who cannot get parts
+    // qualify second sources.
+    (w) =>
+      0.35 +
+      0.55 * w.compute.fabCapacity -
+      0.25 * w.regulation.exportControls -
+      0.15 * w.geopolitics.tradeFriction +
+      SUPPLY_PRICE_RESPONSE * Math.max(0, w.compute.spotPrice - 1),
     0.25,
     0.03,
   ),
@@ -206,8 +231,18 @@ export const WORLD_DRIFT_SPECS: readonly DriftSpec[] = [
     'world.compute.fabCapacity',
     'Fabrication capacity',
     // Slow-moving by construction: θ is a third of everything else, so a fab
-    // shock takes several quarters to unwind.
-    (w) => clamp(0.55 - 0.2 * w.geopolitics.conflictRisk - 0.15 * w.geopolitics.tradeFriction, 0.05, 1),
+    // shock takes several quarters to unwind. Sustained high spot prices are what
+    // a fab build-out is financed by, so they pull the target up — over years,
+    // which at θ = 0.1 is exactly what this does.
+    (w) =>
+      clamp(
+        0.55 -
+          0.2 * w.geopolitics.conflictRisk -
+          0.15 * w.geopolitics.tradeFriction +
+          FAB_PRICE_RESPONSE * Math.max(0, w.compute.spotPrice - 1),
+        0.05,
+        1,
+      ),
     0.1,
     0.015,
   ),

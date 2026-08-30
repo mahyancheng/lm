@@ -120,6 +120,30 @@ export const MARKETING_HALF_SATURATION_FLOOR_USD = 2_000_000;
  */
 export const PRICE_DEVIATION_BOUNDS = { min: -0.35, max: 0.6 } as const;
 
+/**
+ * How far a product's price may move in a single quarter, as a multiple of the
+ * price it currently carries.
+ *
+ * This is the companion to `PRICE_DEVIATION_BOUNDS`. The elasticity term is only
+ * defined near the segment's reference price, so an instruction that jumps two
+ * orders of magnitude in one quarter lands in a region where demand no longer
+ * responds and revenue — `customers × price` — rises with the price for free.
+ * The validator clamps a repricing into this band, and `PRICE_SHOCK_CHURN` makes
+ * a move to the edge of it expensive, so the model is never asked a question it
+ * cannot answer. Restated in `validator/balance.ts`; change both together.
+ */
+export const PRICE_MOVE_BAND = { min: 0.25, max: 4 } as const;
+
+/** Extra churn caused by a price rise to the top of the move band, in the quarter it lands. */
+export const PRICE_SHOCK_CHURN = 0.55;
+
+/**
+ * Churn ceiling a full-band price rise lifts the segment cap to. A company that
+ * quadruples its price does not lose the segment's usual maximum of customers;
+ * it loses nearly all of them.
+ */
+export const PRICE_SHOCK_CHURN_CEILING = 0.95;
+
 /** Demand noise band drawn from the seeded RNG, per product per quarter. */
 export const DEMAND_NOISE_BAND = { min: 0.94, max: 1.06 } as const;
 
@@ -207,6 +231,18 @@ export const ROLE_SUPPLY_SOURCE = {
 export const RECRUITING_FEE_FRACTION = 0.22;
 /** Loaded cost of an unfilled requisition, as a fraction of a filled seat's quarterly cost. */
 export const OPEN_ROLE_LOADED_FACTOR = 0.14;
+/**
+ * Share of the requisitions that neither filled nor were re-opened this quarter
+ * and are therefore withdrawn. A role nobody has filled in a year is not a role.
+ */
+export const OPEN_ROLE_EXPIRY_RATE = 0.35;
+/**
+ * Ceiling on the standing requisition backlog, as a share of headcount. Bounds
+ * the morale and payroll drag a company can carry from recruiting it never did.
+ */
+export const OPEN_ROLE_BACKLOG_CAP_SHARE = 0.35;
+/** Smallest backlog a company may carry regardless of size. */
+export const OPEN_ROLE_BACKLOG_FLOOR = 4;
 /** How far existing compensation drifts toward a richer offer in one quarter. */
 export const COMP_EXPECTATION_DRIFT = 0.35;
 
@@ -286,6 +322,22 @@ export const DISTRESS_HAIRCUT_QUARTERS = 3;
 export const BRIDGE_ROUND_COVER_MULTIPLE = 2.5;
 /** Discount applied to the last valuation when pricing a forced bridge round. */
 export const BRIDGE_ROUND_PREMONEY_DISCOUNT = 0.45;
+/**
+ * Investor appetite a forced bridge has to clear. Higher than an ordinary raise
+ * needs: everybody in the room knows why this round exists.
+ */
+export const BRIDGE_APPETITE_FLOOR = 0.35;
+/** Most of the company a single forced bridge may sell before nobody will price it. */
+export const BRIDGE_MAX_DILUTION = 0.75;
+/** Consecutive failed rescues after which a company is wound up. */
+export const INSOLVENCY_FAILED_BRIDGES = 3;
+/** Share of book value the estate of a wound-up company realises. */
+export const ADMINISTRATION_ASSET_RECOVERY = 0.35;
+/**
+ * Most a single wind-up may lift world talent supply, before scaling by the
+ * released workforce as a share of the industry's.
+ */
+export const TALENT_RELEASE_SUPPLY_LIFT = 0.08;
 /** Rounding precision for every stored monetary value, in decimal places. */
 export const MONEY_PRECISION = 2;
 /**

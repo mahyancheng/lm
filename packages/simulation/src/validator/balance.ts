@@ -42,6 +42,22 @@ export const COMP_BAND_MULTIPLIER = {
 export const HIRING_CASH_COVER_QUARTERS = 1;
 
 /* -------------------------------------------------------------------------- */
+/*  Product                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How far a product's price may move in one quarter, as a multiple of the price
+ * it currently carries.
+ *
+ * Restates `PRICE_MOVE_BAND` in `companies/balance.ts`, which is where the
+ * reasoning lives: the demand model's elasticity term is only defined near the
+ * segment reference price, so a repricing that leaves that neighbourhood in one
+ * step buys revenue the model never charges for. The validator is the boundary
+ * that keeps the instruction inside the range the economy can answer.
+ */
+export const PRICE_MOVE_BAND = { min: 0.25, max: 4 } as const;
+
+/* -------------------------------------------------------------------------- */
 /*  Compute                                                                    */
 /* -------------------------------------------------------------------------- */
 

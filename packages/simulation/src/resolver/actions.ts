@@ -9,9 +9,17 @@
  * 1. **NPC bundles become submitted actions.** An `NpcActionBundle` names a
  *    company and carries up to eight intents; each becomes a `SubmittedAction`
  *    with a deterministic id, attributed to that company's chief executive.
+ *    The name is *checked*, not trusted: the `companyId` on a bundle is a field
+ *    a model wrote, so a bundle is refused unless it names the company the
+ *    strategist was asked to plan for, that company exists, is active, and is
+ *    nobody's player company. A strategist that sees one company's private
+ *    position cannot spend another company's balance sheet.
  * 2. **Everything is validated by the same validator.** Player submissions and
  *    NPC bundles go through one code path with one set of rules. An NPC that
- *    cannot afford a reservation gets it clamped exactly as a player would.
+ *    cannot afford a reservation gets it clamped exactly as a player would. An
+ *    intent whose shape is out of contract never reaches the rules at all: it is
+ *    refused at the boundary, because a subsystem indexing a table by an enum
+ *    value that does not exist is a crash, not a decision.
  * 3. **`pendingActions` is reduced to what will actually run.** Rejected actions
  *    are dropped; clamped actions are rewritten to their clamped form. Every
  *    later phase reads `pendingActions` and can therefore assume that anything
@@ -28,7 +36,7 @@ import type {
   SessionState,
   SubmittedAction,
 } from '@frontier/contracts';
-import { makeId } from '@frontier/contracts';
+import { ActionIntentSchema, makeId } from '@frontier/contracts';
 
 /** One action and what validation decided about it. */
 export interface ReviewedAction {
@@ -37,6 +45,29 @@ export interface ReviewedAction {
   /** The action as it will run, with any clamp applied. Null when rejected. */
   readonly effective: SubmittedAction | null;
 }
+
+/**
+ * A bundle together with the company its strategist was asked to plan for.
+ *
+ * The engine cannot infer this: `NpcActionBundle.companyId` is model output, and
+ * a field that says which company it is about is worth nothing when the question
+ * is whether the model wrote the right company there. A caller that knows which
+ * company it asked about says so here, and the bundle is refused if the two
+ * disagree.
+ */
+export interface NpcBundleSubmission {
+  readonly requestedCompanyId: string;
+  readonly bundle: NpcActionBundle;
+}
+
+/** A bundle, with or without the request it answers. */
+export type NpcBundleInput = NpcActionBundle | NpcBundleSubmission;
+
+/** Why a bundle was refused before any of its actions existed. */
+export type NpcBundleRefusal = 'company_mismatch' | 'unknown_company' | 'not_npc_controlled' | 'duplicate_bundle';
+
+const asSubmission = (input: NpcBundleInput): NpcBundleSubmission =>
+  'bundle' in input ? input : { requestedCompanyId: input.companyId, bundle: input };
 
 /* -------------------------------------------------------------------------- */
 /*  Collection                                                                 */
@@ -48,11 +79,17 @@ export interface ReviewedAction {
  * Player submissions keep the sequence numbers they were given. NPC actions are
  * appended after them, ordered by company id and then by their position in the
  * bundle, so a replay assigns the same sequence to the same intent.
+ *
+ * Bundles that fail the identity check contribute nothing and, where a context
+ * is supplied, leave a private `action_rejected` row behind them: a strategist
+ * writing another company's id is an agent-containment event, and the ledger is
+ * where containment is recorded.
  */
 export function collectActions(
   draft: SessionState,
   submitted: readonly SubmittedAction[],
-  npcBundles: readonly NpcActionBundle[],
+  npcBundles: readonly NpcBundleInput[],
+  ctx?: ResolverContext,
 ): SubmittedAction[] {
   const own = submitted
     .filter((action) => action.quarter === draft.quarter && action.sessionId === draft.sessionId)
@@ -62,11 +99,43 @@ export function collectActions(
   let sequence = own.reduce((max, action) => Math.max(max, action.sequence + 1), 0);
   const npc: SubmittedAction[] = [];
 
-  const bundles = [...npcBundles].sort((a, b) => compare(a.companyId, b.companyId));
-  for (const bundle of bundles) {
+  // Sorted by the company named, then by arrival, so a replay orders identical
+  // input identically even when two bundles name the same company.
+  const bundles = [...npcBundles]
+    .map((input, arrival) => ({ ...asSubmission(input), arrival }))
+    .sort((a, b) => (a.bundle.companyId !== b.bundle.companyId ? compare(a.bundle.companyId, b.bundle.companyId) : a.arrival - b.arrival));
+
+  const honoured = new Set<string>();
+  for (const { requestedCompanyId, bundle } of bundles) {
     const company = draft.companies.find((candidate) => candidate.id === bundle.companyId) ?? null;
+    const refuse = (code: NpcBundleRefusal): void => refuseBundle(draft, ctx, requestedCompanyId, bundle, code);
+
+    // The strategist wrote a company it was not asked about. This is the one
+    // that matters: its prompt held that company's private position.
+    if (bundle.companyId !== requestedCompanyId) {
+      refuse('company_mismatch');
+      continue;
+    }
+    if (company === null) {
+      refuse('unknown_company');
+      continue;
+    }
+    // A company somebody is directing is not an agent's to run, and neither is
+    // one that has been acquired or wound up.
+    if (!company.isActive || company.controllerPlayerId !== null) {
+      refuse('not_npc_controlled');
+      continue;
+    }
+    // Two bundles for one company would mint the same action ids twice and the
+    // second set would be dropped as duplicates, silently deleting the first.
+    if (honoured.has(bundle.companyId)) {
+      refuse('duplicate_bundle');
+      continue;
+    }
+    honoured.add(bundle.companyId);
+
     const characterId =
-      company?.ceoCharacterId ??
+      company.ceoCharacterId ??
       draft.characters.find((character) => character.companyId === bundle.companyId)?.id ??
       makeId('chr', 'unassigned', bundle.companyId);
 
@@ -94,6 +163,38 @@ export function collectActions(
   return [...own, ...npc];
 }
 
+/** Record a refused bundle. Silent when no context is available. */
+function refuseBundle(
+  draft: SessionState,
+  ctx: ResolverContext | undefined,
+  requestedCompanyId: string,
+  bundle: NpcActionBundle,
+  refusal: NpcBundleRefusal,
+): void {
+  if (ctx === undefined) return;
+  ctx.emit({
+    sessionId: draft.sessionId,
+    quarter: ctx.quarter,
+    type: 'action_rejected',
+    // Deliberately unattributed. Naming the companies on the row would make it
+    // readable by whichever of them the projection thinks it belongs to, and
+    // "a rival's strategist tried to spend your balance sheet" is not a fact
+    // this game hands anybody for free. Both ids are in the payload, which is
+    // private, and the row is engine business.
+    actorId: null,
+    targetId: null,
+    payload: {
+      origin: 'npc_strategist',
+      scope: 'bundle',
+      code: refusal,
+      requestedCompanyId,
+      claimedCompanyId: bundle.companyId,
+      actionsDropped: bundle.actions.length,
+    },
+    visibility: 'private',
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Validation                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -106,6 +207,13 @@ export function collectActions(
  * everything that was refused or reduced — a player is entitled to know what the
  * engine did with their instruction and why, in the same screen that tells them
  * what happened to the world.
+ *
+ * Every intent is re-parsed against `ActionIntentSchema` first. TypeScript
+ * cannot vouch for an action that arrived from a browser, a saved game or a
+ * model, and the rules downstream index tables by enum values: an intent whose
+ * shape is out of contract is refused here as `illegal_value`, so a malformed
+ * instruction costs its author a rejection rather than costing the session its
+ * quarter. That is the boundary CLAUDE.md rule 3 describes.
  */
 export function reviewActions(
   draft: SessionState,
@@ -113,13 +221,28 @@ export function reviewActions(
   actions: readonly SubmittedAction[],
   ctx: ResolverContext,
 ): ReviewedAction[] {
-  const results = validator.validateBatch(draft, actions);
+  // The schema gate runs before the rules, and the rules never see what it
+  // refused — a rule reading an out-of-contract intent is the crash we are
+  // preventing, not the check that catches it. Order is preserved on both sides
+  // so that two submissions sharing an id still get their own verdicts.
+  const wellFormed = actions.map((action) => ActionIntentSchema.safeParse(action.intent).success);
+  const validated = validator.validateBatch(
+    draft,
+    actions.filter((_, index) => wellFormed[index] === true),
+  );
   const reviewed: ReviewedAction[] = [];
+  let cursor = 0;
 
   for (let index = 0; index < actions.length; index += 1) {
     const action = actions[index];
-    const result = results[index];
-    if (action === undefined || result === undefined) continue;
+    if (action === undefined) continue;
+    let result: ActionValidationResult;
+    if (wellFormed[index] === true) {
+      result = validated[cursor] ?? malformed(action);
+      cursor += 1;
+    } else {
+      result = malformed(action);
+    }
 
     const effective =
       result.status === 'rejected'
@@ -221,9 +344,29 @@ export function labelFor(intent: ActionIntent): string {
       return `The board matter "${intent.title}"`;
     case 'launch_product':
       return `The launch of ${intent.name}`;
-    default:
-      return `The instruction "${intent.type.replace(/_/g, ' ')}"`;
+    default: {
+      // Defensive: this also labels an intent the schema gate refused, whose
+      // `type` is whatever the sender wrote rather than a member of the union.
+      const type: unknown = intent.type;
+      return `The instruction "${typeof type === 'string' && type.length > 0 ? type.replace(/_/g, ' ') : 'unrecognised'}"`;
+    }
   }
+}
+
+/**
+ * The verdict for an instruction whose shape is not in the contract.
+ *
+ * Refused, not repaired: the engine has no way to know what a malformed
+ * instruction meant, and guessing is how a client becomes authoritative.
+ */
+function malformed(action: SubmittedAction): ActionValidationResult {
+  return {
+    actionId: action.actionId,
+    status: 'rejected',
+    reasons: ['This instruction does not match any action in the contract, so the engine refused it rather than acting on a shape it cannot read.'],
+    codes: ['illegal_value'],
+    clampedAction: null,
+  };
 }
 
 /** Compact payload description of an intent, for the ledger. */

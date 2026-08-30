@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import type { NpcActionBundle, SessionState, SubmittedAction } from '@frontier/contracts';
 import { TECH_EPISTEMIC_STATES, balanceSheetReconciles } from '@frontier/contracts';
-import { hashState, stableStringify } from '@frontier/shared';
+import { createStateHasher, hashState, stableStringify } from '@frontier/shared';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, DEMO_SEED, createDemoSession } from '../src/scenario';
 
 /* -------------------------------------------------------------------------- */
@@ -314,6 +314,53 @@ describe.skipIf(engineModule === null)('eight quarters, twice', () => {
       };
       expect(resolveOnce(DEMO_SEED)).toBe(resolveOnce(DEMO_SEED));
       expect(resolveOnce(DEMO_SEED)).not.toBe(resolveOnce(DEMO_SEED + 1));
+    },
+    60_000,
+  );
+
+  /**
+   * Replay equality is proved above. This is the other half of the same
+   * property: it must be *affordable* to prove.
+   *
+   * The ledger once hashed the entire session state for every row it wrote —
+   * hundreds of full serialisations of a megabyte of world per quarter, which
+   * was about 99% of a quarter's wall time and a one-to-two-second freeze of the
+   * browser's main thread on every turn. The state is now hashed once per phase
+   * that writes to the ledger, and per-row tamper evidence comes from the row
+   * chain instead. The count below is the assertion that matters, because it is
+   * deterministic and machine-independent; the clock is only a backstop, and its
+   * bar is deliberately loose so a slow shared runner cannot make it flaky. The
+   * reading is taken here, outside the engine, and is never an input to it — the
+   * simulation itself still may not read a clock.
+   */
+  it(
+    'hashes the state a handful of times per quarter, not once per ledger row',
+    () => {
+      if (engineModule === null) return;
+      let hashes = 0;
+      const counting = createStateHasher(2);
+      const engine = engineModule.createDefaultEngine({
+        hashState: (value) => {
+          hashes += 1;
+          return counting(value);
+        },
+      });
+
+      let state = createDemoSession();
+      // The first quarter warms the module; measure the second, as a session does.
+      state = engine.resolver.resolveQuarter(state, [], null, []).nextState;
+      hashes = 0;
+      const started = Date.now();
+      const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+      const elapsedMs = Date.now() - started;
+
+      expect(outcome.committed).toBe(true);
+      expect(outcome.events.length).toBeGreaterThan(50);
+      // At most one full-state hash per phase boundary, plus the pre-resolution
+      // one and the report's closing one. Never one per row.
+      expect(hashes).toBeLessThanOrEqual(25);
+      expect(hashes).toBeLessThan(outcome.events.length);
+      expect(elapsedMs).toBeLessThan(3_000);
     },
     60_000,
   );

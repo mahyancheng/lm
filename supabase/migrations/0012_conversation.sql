@@ -89,7 +89,11 @@ create table public.conversations (
     )
   ),
   constraint conversations_has_creator
-    check (created_by is not null or created_by_character_id is not null)
+    check (created_by is not null or created_by_character_id is not null),
+  -- Target of the composite foreign keys below: participants and messages must
+  -- carry the SAME session_id as their conversation, so a client cannot insert
+  -- a message into a conversation while claiming a different session.
+  constraint conversations_id_session_unique unique (id, session_id)
 );
 
 comment on table public.conversations is
@@ -129,7 +133,10 @@ create table public.conversation_participants (
     = 1
   ),
   constraint conversation_participants_npc_is_character
-    check (is_npc = (character_id is not null))
+    check (is_npc = (character_id is not null)),
+  constraint conversation_participants_conversation_session_fkey
+    foreign key (conversation_id, session_id)
+    references public.conversations (id, session_id) on delete cascade
 );
 
 comment on table public.conversation_participants is
@@ -174,7 +181,13 @@ create table public.messages (
   constraint messages_sender_bound check (
     (sender_profile_id is not null and sender_character_id is null and is_npc = false)
     or (sender_profile_id is null and sender_character_id is not null and is_npc = true)
-  )
+  ),
+  -- A message's session_id must be the conversation's session_id. Enforced in
+  -- the database rather than in the RLS predicate, so it holds for the service
+  -- role too.
+  constraint messages_conversation_session_fkey
+    foreign key (conversation_id, session_id)
+    references public.conversations (id, session_id) on delete cascade
 );
 
 comment on table public.messages is

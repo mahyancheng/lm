@@ -259,7 +259,9 @@ export const GmEventProposalSchema = z
     modifiers: z
       .array(WorldModifierProposalSchema)
       .max(12)
-      .describe('The world variables this event moves, and by how much. Prefer two to five modifiers that trace a believable causal chain over a long list of small nudges. Every target must be a legal registered path.'),
+      .describe(
+        'The world variables this event moves, and by how much. Prefer two to five modifiers that trace a believable causal chain over a long list of small nudges. Every target must be a legal registered path. Note for engine authors: this is WorldModifierProposal, not the stored WorldModifier — id, source, appliedAtQuarter and remainingQuarters are assigned by the engine after validation.',
+      ),
     rationale: z
       .string()
       .min(20)

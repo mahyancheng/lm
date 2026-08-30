@@ -190,6 +190,35 @@ export const RATE_LIMIT_WINDOW_MS = 60_000;
 /** How many principals the limiter remembers before evicting the coldest. */
 export const RATE_LIMIT_MAX_PRINCIPALS = 5_000;
 
+/**
+ * Calls one network origin may make *without presenting an id we minted*.
+ *
+ * Without this the per-principal window is trivially escaped: a caller that
+ * throws its cookie away is a new principal on every request and never meets a
+ * limit at all. In normal play exactly one POST per browser is cookieless — the
+ * World Director call that starts a quarter, after which every request carries
+ * the id — so this can be generous and still bound a loop.
+ */
+export const RATE_LIMIT_COOKIELESS_PER_WINDOW = 60;
+
+/**
+ * A coarse identifier for where a request came from, for the cookieless bucket
+ * only.
+ *
+ * The forwarded headers are set by the platform in front of the app and are
+ * forgeable by anything that reaches the app directly, so this is a
+ * throttling hint and never an identity. Callers that present nothing usable
+ * share one bucket, which is the correct answer for local development and a
+ * safe answer for anyone hiding their origin.
+ */
+export function originKey(headers: Headers): string {
+  const forwarded = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  if (forwarded !== undefined && forwarded.length > 0 && forwarded.length <= 64) return forwarded;
+  const real = headers.get('x-real-ip')?.trim();
+  if (real !== undefined && real.length > 0 && real.length <= 64) return real;
+  return 'unattributed';
+}
+
 export interface RateDecision {
   readonly allowed: boolean;
   /** Whole seconds until the oldest call in the window ages out. Zero when allowed. */

@@ -308,6 +308,16 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
 
   /* --- the estate -------------------------------------------------------- */
   const sheet = company.balanceSheet;
+  // Two movements, and both belong to the shareholders. Realising the estate at
+  // a haircut destroys value: goodwill is worth nothing in a wind-up and the
+  // rest fetches `ADMINISTRATION_ASSET_RECOVERY` of its carrying value. Paying
+  // creditors only what the estate covers releases the remainder, which is a
+  // gain. The net of the two is the whole equity movement this function makes,
+  // and it is stated on the ledger row below so the quarter's closing equity is
+  // explained by the ledger rather than by this function having written it.
+  const impairment = money(
+    sheet.assets.goodwill + (sheet.assets.ppe + sheet.assets.receivables + sheet.assets.investments) * (1 - ADMINISTRATION_ASSET_RECOVERY),
+  );
   const realisable =
     sheet.assets.cash +
     (sheet.assets.ppe + sheet.assets.receivables + sheet.assets.investments) * ADMINISTRATION_ASSET_RECOVERY;
@@ -368,6 +378,13 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
       failedBridges: INSOLVENCY_FAILED_BRIDGES,
       staffReleased: released,
       creditorsWrittenOffUsd: writtenOff,
+      assetsImpairedUsd: impairment,
+      // The equity flow the wind-up caused, stated from its two causes rather
+      // than read back off the sheet: creditors released, less the value the
+      // estate lost being realised. `financial_integrity` adds this to the
+      // opening equity, so a wind-up whose arithmetic does not match its own
+      // account of itself fails the gate instead of committing.
+      equityMovementUsd: signedMoney(writtenOff - impairment),
       residualEquityUsd: sheet.equity,
     },
     'public',

@@ -657,3 +657,79 @@ describe.skipIf(engineModule === null)('a stake bought and sold', () => {
     120_000,
   );
 });
+
+/* -------------------------------------------------------------------------- */
+/*  A company wound up                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The other equity movement that is not a trade, and the one the gate nearly
+ * refused.
+ *
+ * `enterAdministration` realises the estate at a haircut and releases the
+ * creditors it cannot pay. Both move equity, and neither is revenue nor cost, so
+ * for a while the wind-up moved a balance sheet that the ledger did not explain
+ * — which is exactly what `financial_integrity` exists to catch. The quarter a
+ * company failed in was therefore refused, and the world rolled back to a state
+ * that would fail again: the session could not proceed at all.
+ *
+ * The administration row now states that movement from its two causes, and this
+ * test is the only thing in the suite that reaches administration through the
+ * real resolver. The unit tests in `companies.test.ts` drive the phase directly
+ * and never see the gate, which is why the deadlock went unnoticed.
+ */
+describe.skipIf(engineModule === null)('a company wound up in administration', () => {
+  it(
+    'commits the quarter it fails in, and every quarter after it',
+    () => {
+      if (engineModule === null) return;
+      const engine = engineModule.createDefaultEngine();
+      let state = createDemoSession();
+
+      // The player's company with nothing in the bank, in a market that will not
+      // rescue anybody: appetite is 0.5 liquidity + 0.3 risk + 0.2 standing, and
+      // it has to stay below the floor for three quarters running.
+      const target = state.companies.find((company) => company.id === DEMO_COMPANIES.player);
+      if (target === undefined) throw new Error('demo has no player company');
+      target.financials.cash = 0;
+      target.balanceSheet.assets.cash = 0;
+      target.balanceSheet.equity =
+        target.balanceSheet.assets.ppe +
+        target.balanceSheet.assets.goodwill +
+        target.balanceSheet.assets.investments +
+        target.balanceSheet.assets.receivables -
+        (target.balanceSheet.liabilities.debt + target.balanceSheet.liabilities.payables + target.balanceSheet.liabilities.deferredRevenue);
+      target.reputation.investor = 1;
+
+      let administered = false;
+      for (let quarter = 0; quarter < 6 && !administered; quarter += 1) {
+        state.world.capitalMarkets.ventureLiquidity = 0.02;
+        state.world.capitalMarkets.riskAppetite = 0.02;
+        const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+        expect(outcome.invariants.filter((result) => !result.passed).map((result) => `${result.invariant}: ${result.detail}`)).toEqual([]);
+        expect(outcome.committed).toBe(true);
+        administered = outcome.events.some(
+          (event) => event.actorId === DEMO_COMPANIES.player && event.type === 'information_revealed' && event.payload.kind === 'administration',
+        );
+        state = outcome.nextState;
+      }
+      expect(administered).toBe(true);
+
+      // The husk keeps resolving. A wind-up that fails the gate one quarter later
+      // is the same deadlock one step further on.
+      for (let quarter = 0; quarter < 3; quarter += 1) {
+        const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+        expect(outcome.invariants.filter((result) => !result.passed).map((result) => `${result.invariant}: ${result.detail}`)).toEqual([]);
+        expect(outcome.committed).toBe(true);
+        state = outcome.nextState;
+      }
+
+      const wound = state.companies.find((company) => company.id === DEMO_COMPANIES.player);
+      if (wound === undefined) throw new Error('the husk vanished');
+      expect(balanceSheetReconciles(wound.balanceSheet)).toBe(true);
+      expect(wound.isActive).toBe(true);
+      expect(wound.products.some((product) => product.isActive)).toBe(false);
+    },
+    120_000,
+  );
+});

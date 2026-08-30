@@ -22,6 +22,7 @@ import {
   declaresOversizeBody,
   deriveConversationKey,
   isPlausibleAnonymousId,
+  originKey,
   resolvePrincipal,
   seatFor,
 } from './_identity';
@@ -196,6 +197,24 @@ describe('rate limiting', () => {
     expect(limiter.take('a', 0).allowed).toBe(true);
     expect(limiter.take('a', 1).allowed).toBe(false);
     expect(limiter.take('b', 2).allowed).toBe(true);
+  });
+
+  it('bounds a caller that throws its cookie away, via the network origin', () => {
+    // The bypass this closes: no cookie means a fresh principal every request,
+    // so the per-principal window never binds. The origin bucket does.
+    const cookieless = createRateLimiter({ limit: 2, windowMs: 60_000 });
+    const origin = new Headers({ 'x-forwarded-for': '203.0.113.7, 70.41.3.18' });
+    expect(originKey(origin)).toBe('203.0.113.7');
+    expect(cookieless.take(originKey(origin), 0).allowed).toBe(true);
+    expect(cookieless.take(originKey(origin), 1).allowed).toBe(true);
+    expect(cookieless.take(originKey(origin), 2).allowed).toBe(false);
+  });
+
+  it('reads the origin from either forwarded header, and shares one bucket when there is none', () => {
+    expect(originKey(new Headers({ 'x-real-ip': '198.51.100.4' }))).toBe('198.51.100.4');
+    expect(originKey(new Headers())).toBe('unattributed');
+    // A forged header cannot be used to grow the key space without bound.
+    expect(originKey(new Headers({ 'x-forwarded-for': 'a'.repeat(500) }))).toBe('unattributed');
   });
 
   it('does not grow without bound when the caller ids do', () => {

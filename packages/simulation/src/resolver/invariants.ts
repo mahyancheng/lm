@@ -138,6 +138,7 @@ export function runInvariantGate(input: InvariantGateInput): InvariantCheckResul
  * | a buyback                       | `buyback_executed`                      |
  * | acquisition consideration       | `acquisition_completed`                 |
  * | a realised gain on a stake sold | `shares_traded` + the investments moved |
+ * | a wind-up in administration     | `information_revealed` (`administration`)|
  */
 function checkFinancialIntegrity(draft: SessionState, opening: SessionState, events: readonly SimEvent[]): InvariantCheckResult {
   const offenders: string[] = [];
@@ -307,6 +308,14 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
       case 'shares_traded':
         if (event.payload.side === 'buy') add(event, actor, 'considerationUsd', (value) => (actor.bought += value));
         else if (event.payload.side === 'sell') add(event, actor, 'considerationUsd', (value) => (actor.sold += value));
+        break;
+      case 'information_revealed':
+        // A wind-up moves equity without trading: the estate is realised at a
+        // haircut and the creditors it cannot pay are released. The row states
+        // that movement from its causes, so the reconstruction reads it like any
+        // other declared flow — and a wind-up that moved equity by some other
+        // amount fails the gate.
+        if (event.payload.kind === 'administration') add(event, actor, 'equityMovementUsd', (value) => (actor.capital += value));
         break;
       default:
         break;

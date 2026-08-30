@@ -44,10 +44,12 @@ import {
   type ConversationRole,
   MAX_BODY_BYTES,
   type Principal,
+  RATE_LIMIT_COOKIELESS_PER_WINDOW,
   conversationKeySecret,
   createRateLimiter,
   declaresOversizeBody,
   deriveConversationKey,
+  originKey,
   resolvePrincipal,
 } from './_identity';
 
@@ -122,6 +124,13 @@ export function ok<T>(output: T | null, fallback: boolean, reason?: string): Nex
 /** One limiter for the process, shared by every role route. */
 const limiter = createRateLimiter();
 
+/**
+ * The second bucket, charged only to callers who presented no id we minted.
+ * Without it, discarding the cookie makes every request a fresh principal and
+ * the window above never binds.
+ */
+const cookielessLimiter = createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_WINDOW });
+
 /** What a route needs once it has been let in. */
 export interface Admission {
   readonly principal: Principal;
@@ -169,9 +178,13 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
   if (!outcome.ok) return { ok: false, response: refuse(401, 'unauthenticated') };
 
   const { principal, issuedAnonymousId } = outcome.resolution;
-  const decision = limiter.take(principal.id, Date.now());
-  if (!decision.allowed) {
-    return { ok: false, response: refuse(429, 'rate_limited', { 'retry-after': String(decision.retryAfterSeconds) }) };
+  const now = Date.now();
+  const decisions = [limiter.take(principal.id, now)];
+  if (issuedAnonymousId !== null) decisions.push(cookielessLimiter.take(originKey(request.headers), now));
+
+  const refused = decisions.find((decision) => !decision.allowed);
+  if (refused !== undefined) {
+    return { ok: false, response: refuse(429, 'rate_limited', { 'retry-after': String(refused.retryAfterSeconds) }) };
   }
 
   const secret = conversationKeySecret();

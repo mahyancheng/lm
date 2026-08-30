@@ -179,22 +179,12 @@ export class ResolutionRecorder {
     return reports;
   }
 
-  /** Ledger rows emitted during one phase. */
-  eventsForPhase(): readonly SimEvent[] {
-    return this.events;
-  }
-
   get droppedLineCount(): number {
     return this.unreferencedLines;
   }
 
   get currentHash(): string {
     return this.lastHash;
-  }
-
-  /** Rewrite the chain head after a mutation made outside `emit`. */
-  setHash(hash: string): void {
-    this.lastHash = hash;
   }
 }
 

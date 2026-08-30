@@ -323,7 +323,7 @@ deterministic and playable straight through an outage — which is why
 | Transport | Mechanism | Auth | Model |
 |---|---|---|---|
 | `claude-session` *(default)* | Claude Code sessions via `@anthropic-ai/claude-agent-sdk` `query()` | `CLAUDE_CODE_OAUTH_TOKEN` (subscription OAuth) | `sonnet` |
-| `api` *(fallback)* | `@anthropic-ai/sdk` `messages.parse` | `ANTHROPIC_API_KEY` (metered) | `claude-opus-5` by default |
+| `api` *(fallback)* | `@anthropic-ai/sdk` `messages.parse` | `ANTHROPIC_API_KEY` (metered) | `claude-sonnet-5` by default |
 | `none` | No model at all | — | — |
 
 The default path is deliberately **not** metered API billing: it drives Claude
@@ -346,7 +346,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { GmProposalBatchSchema } from '@frontier/contracts';
 
 const response = await new Anthropic().messages.parse({
-  model: 'claude-opus-5',
+  model: 'claude-sonnet-5',
   max_tokens: 16000,
   system: worldDirectorSystemPrompt,   // stable prefix — cache this
   messages: [{ role: 'user', content: renderWorldDirectorInput(input) }],
@@ -358,9 +358,9 @@ const batch = response.parsed_output;
 if (batch === null) return fallback('invalid_output');
 ```
 
-**Model ids.** `claude-opus-5` for the World Director, NPC strategists and the
-innovation interpreter; a cheaper tier is acceptable for the narrator and social
-author in cost mode. Use the exact id string — never append a date suffix.
+**Model ids.** Every role runs on Sonnet — `sonnet` through the default
+`claude-session` transport, `claude-sonnet-5` (env `ANTHROPIC_MODEL` override)
+on the `api` fallback. Use the exact id string — never append a date suffix.
 **Thinking** is adaptive (`thinking: { type: 'adaptive' }` where used); **never
 send `budget_tokens`**, which is rejected on current models.
 

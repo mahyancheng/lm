@@ -143,15 +143,16 @@ export function commitmentsFromLobbying(draft: SessionState, ctx: ResolverContex
     .sort((a, b) => a.sequence - b.sequence);
 
   for (const action of actions) {
-    if (action.intent.type !== 'lobby_director') continue;
-    const proposal = draft.boardProposals.find((p) => p.id === action.intent.proposalId);
+    const intent = action.intent;
+    if (intent.type !== 'lobby_director') continue;
+    const proposal = draft.boardProposals.find((p) => p.id === intent.proposalId);
     if (proposal === undefined || proposal.status !== 'tabled') continue;
     const board = boardForProposal(draft, proposal);
-    const director = board?.directors.find((d) => d.characterId === action.intent.directorCharacterId);
+    const director = board?.directors.find((d) => d.characterId === intent.directorCharacterId);
     if (board === null || board === undefined || director === undefined) continue;
 
     // Would they support it on the terms offered?
-    const hypothetical = applyConcessions(proposal, action.intent.concessions);
+    const hypothetical = applyConcessions(proposal, intent.concessions);
     const withConcessions = assessDirector(draft, hypothetical, director);
     const stance = withConcessions.value > SUPPORT_THRESHOLD ? 'support' : withConcessions.value < -SUPPORT_THRESHOLD ? 'oppose' : 'abstain';
 
@@ -165,7 +166,7 @@ export function commitmentsFromLobbying(draft: SessionState, ctx: ResolverContex
       actorCharacterId: director.characterId,
       proposalKind: proposal.kind,
       stance,
-      conditions: action.intent.concessions.slice(0, 6).map((c) => ({ ...c })),
+      conditions: intent.concessions.slice(0, 6).map((c) => ({ ...c })),
       commitmentStrength: round(strength, 3),
       expiresQuarter: Math.max(proposal.decisionQuarter, ctx.quarter + LOBBY_COMMITMENT_QUARTERS),
       targetCompanyId: proposal.targetCompanyId,

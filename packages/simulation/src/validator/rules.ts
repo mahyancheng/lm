@@ -99,11 +99,6 @@ const money = (value: number): string => {
 
 const heldCompute = (company: Company): number => company.compute.ownedAccelerators + company.compute.reservedAccelerators;
 
-const totalHeadcount = (company: Company): number => {
-  const e = company.employees;
-  return e.engineers + e.researchers + e.sales + e.ops + e.execs;
-};
-
 /** Quarterly fully loaded cost of one hire in a role at a band. */
 export function quarterlyHireCostUsd(draft: SessionState, role: StaffRole, band: keyof typeof COMP_BAND_MULTIPLIER): number {
   const base = MARKET_BASE_COMP_USD[role];
@@ -1253,6 +1248,3 @@ export function applyTypeRules(intent: ActionIntent, verdict: Verdict<ActionInte
   }
   rule(intent, verdict, ctx);
 }
-
-/** Total headcount helper, exported for the board-matter threshold and tests. */
-export { totalHeadcount };

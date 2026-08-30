@@ -55,6 +55,7 @@ export {
   engineCostEstimate,
   costRealism,
   pastPerformanceScore,
+  recordPastPerformance,
   disqualificationReasons,
   scoreOpportunityBids,
   CLAIM_CREDIBILITY_FLOOR,
@@ -323,6 +324,9 @@ export function createGovernmentSubsystem(): GovernmentSubsystemImpl {
   /* -------------------------------- award -------------------------------- */
 
   function awardContracts(draft: SessionState, ctx: ResolverContext): void {
+    // Idempotent, and safe when called without a preceding scoreBids: a
+    // competition whose window has closed is always in evaluation by here.
+    closeExpiredOpportunities(draft, ctx);
     for (const opportunity of draft.procurementOpportunities) {
       if (opportunity.status !== 'evaluating' || opportunity.closeQuarter > ctx.quarter) continue;
 

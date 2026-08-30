@@ -55,7 +55,21 @@ export {
   toBoardProposalIntent,
   type BoardMatter,
 } from './boardMatters';
-export * from './balance';
+// Only the validator's own balancing constants are re-exported. The
+// compensation and compute figures in `./balance` deliberately restate
+// `companies/balance.ts`, and re-exporting them here would make the package
+// index ambiguous about which definition it means.
+export {
+  HIRING_CASH_COVER_QUARTERS,
+  RESERVABLE_SHARE_OF_INSTALLED_BASE,
+  MIN_RESERVABLE_UNITS,
+  MAX_ROUND_DILUTION_PCT,
+  MAX_IPO_FLOAT_PCT,
+  MIN_IPO_FLOAT_PCT,
+  BOARD_GOV_CONTRACT_REVENUE_MULTIPLE,
+  BOARD_GOV_CONTRACT_FLOOR_USD,
+  MIN_INTRODUCTION_PURPOSE_CHARS,
+} from './balance';
 
 /**
  * Actions only the chief executive may take on a company's behalf.

@@ -71,10 +71,10 @@ export const WorldModifierProposalSchema = z
     operation: TargetOperationSchema,
     value: z
       .number()
-      .min(-10)
-      .max(10)
+      .min(-100)
+      .max(100)
       .describe(
-        'The operand. For "add" on a 0..1 variable, a meaningful shift is 0.02 to 0.15 and the sign carries the direction. For "multiply" on a price or supply index, 0.84 means a 16% fall and 1.24 a 24% rise. For "set", the literal new value. Magnitude is capped by the impact budget; anything larger is clamped and logged.',
+        'The operand. For "add" on a 0..1 variable, a meaningful shift is 0.02 to 0.15 and the sign carries the direction; on a 0..100 span such as a reputation, whole points are meaningful (-5 to -20 for a serious scandal). For "multiply" on a price or supply index, 0.84 means a 16% fall and 1.24 a 24% rise. For "set", the literal new value. Magnitude is capped by the impact budget, scaled to the target path\'s span; anything larger is clamped and logged.',
       ),
     decay: ModifierDecaySchema,
     durationQuarters: z
@@ -111,7 +111,7 @@ export const WorldModifierSchema = z
     source: ModifierSourceSchema,
     target: ModifierTargetSchema,
     operation: TargetOperationSchema,
-    value: z.number().min(-10).max(10).describe('The operand, after impact-budget clamping.'),
+    value: z.number().min(-100).max(100).describe('The operand, after impact-budget clamping (the budget cap scales with the target path\'s span, so a 0..100 path may legally carry a whole-point operand).'),
     decay: ModifierDecaySchema,
     durationQuarters: z.number().int().min(1).max(12).describe('Total lifetime in quarters, as validated.'),
     remainingQuarters: z

@@ -1,0 +1,215 @@
+/**
+ * @frontier/llm
+ *
+ * The Claude gateway. Every in-game LLM role runs through here, and nothing
+ * here writes state of any kind.
+ *
+ * > LLMs are allowed to think, propose, negotiate, communicate and reinterpret
+ * > the future; only the simulation engine is allowed to make reality.
+ *
+ * ## Shape
+ *
+ * | Layer | Responsibility |
+ * |---|---|
+ * | `compose/*` | Build `{ system, prompt }` from a pre-redacted input. **The information boundary.** |
+ * | `transport/*` | Turn a prompt pair plus a schema into a validated object, or null. Never throws. |
+ * | `fallbacks` | Deterministic behaviour when a model is unavailable or wrong twice. Pure, no RNG, no clock. |
+ * | `roles` | Compose → call → fall back → post-process → log an `AgentRunRecord`. |
+ * | `sessionStore` | The conversation → Claude-session mapping that gives dialogue multi-turn memory. |
+ *
+ * ## Transports
+ *
+ * | `LLM_TRANSPORT` | Mechanism | Auth | Model |
+ * |---|---|---|---|
+ * | `claude-session` *(default)* | Claude Code sessions via the Claude Agent SDK | `CLAUDE_CODE_OAUTH_TOKEN` | `sonnet` |
+ * | `api` | `@anthropic-ai/sdk` `messages.parse` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
+ * | `none` | No model at all | — | — |
+ *
+ * The default path is deliberately not metered API billing: it drives Claude
+ * Code sessions with the operator's subscription OAuth token, generated with
+ * `claude setup-token`. `none` yields the rule-based fallbacks for every role
+ * and is what demo mode runs on, which is why demo mode needs no credentials.
+ */
+
+/* ------------------------------- transports ------------------------------- */
+
+export type {
+  LlmCompletion,
+  LlmCompletionRequest,
+  LlmFailureReason,
+  LlmTokenUsage,
+  LlmTransport,
+  LlmTransportKind,
+} from './transport/types';
+export {
+  LLM_FAILURE_REASONS,
+  LLM_SKIPPED_ISSUE,
+  classifyIssues,
+  isSkipped,
+  parseAgainst,
+  taggedIssue,
+  validationFailed,
+  validationOk,
+  zodIssueSummary,
+} from './transport/types';
+
+export type { JsonExtraction } from './transport/json';
+export { extractJsonObject, firstBalancedObject, stripCodeFence } from './transport/json';
+
+export { jsonSchemaObjectFor, jsonSchemaTextFor } from './transport/schemaText';
+
+export type { ClaudeQueryFn, ClaudeSessionTransportConfig } from './transport/claudeSession';
+export {
+  DEFAULT_CLAUDE_SESSION_MODEL,
+  DISALLOWED_TOOLS,
+  JSON_PROTOCOL_INSTRUCTION,
+  buildQueryOptions,
+  buildRepairPrompt,
+  buildSystemPrompt,
+  collectAttempt,
+  createClaudeSessionTransport,
+} from './transport/claudeSession';
+
+export type { ApiTransportConfig } from './transport/api';
+export { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFormatFor } from './transport/api';
+
+export type { NullTransportConfig } from './transport/none';
+export { createNullTransport } from './transport/none';
+
+/* ------------------------------ session store ----------------------------- */
+
+export type { InMemoryLlmSessionStore, LlmSessionStore } from './sessionStore';
+export { createInMemorySessionStore, createNullSessionStore } from './sessionStore';
+
+/* -------------------------------- composers ------------------------------- */
+
+export type { ComposedPrompt, ContextComposer } from './compose/render';
+export { AUTHORITY_PREAMBLE, OUTPUT_DISCIPLINE, bullets, joinBlocks, lastN, num, numbered, pct, section, signed, truncate, usd } from './compose/render';
+
+export type { SecretBearingRecord } from './compose/redaction';
+export { INTERNAL_STATE_MARKERS, LlmContextLeakError, assertNoForeignSecretResearch, assertNoInternalMarkers, assertOwnedBy } from './compose/redaction';
+
+export { WORLD_DIRECTOR_SYSTEM, composeWorldDirector } from './compose/worldDirector';
+export { CHIEF_OF_STAFF_SYSTEM, composeChiefOfStaff, enforceConfirmationPolicy } from './compose/chiefOfStaff';
+export type { NpcPastDecision, NpcStrategistEvidence, RivalSignal } from './compose/npcStrategist';
+export { EMPTY_NPC_EVIDENCE, NPC_DECISION_HISTORY_QUARTERS, NPC_STRATEGIST_SYSTEM, composeNpcStrategist } from './compose/npcStrategist';
+export { DIALOGUE_HISTORY_TURNS, DIALOGUE_MEMORY_LIMIT, composeCharacterDialogue, composeCharacterPersona } from './compose/characterDialogue';
+export { INNOVATION_INTERPRETER_SYSTEM, composeInnovationInterpreter } from './compose/innovationInterpreter';
+export { SOCIAL_AUTHOR_SYSTEM, composeSocialAuthor } from './compose/socialAuthor';
+export { NARRATOR_SYSTEM, composeNarrator, groupLinesByPhase } from './compose/narrator';
+
+/* -------------------------------- fallbacks ------------------------------- */
+
+export type { DialogueRegister } from './fallbacks';
+export { INNOVATION_DECLINE_REASON, dialogueRegister, fallbackCharacterReply, fallbackChiefOfStaff, fallbackNarratorOutput, narratorTone } from './fallbacks';
+
+/* --------------------------------- roles ---------------------------------- */
+
+export type { LlmRoles, LlmRolesOptions, RoleCallMeta, RoleResult } from './roles';
+export { AGENT_VERSION, createLlmRoles } from './roles';
+
+export type { MemoryRunSink, RunSink } from './runSink';
+export { createMemoryRunSink, createNullRunSink, safeRunSink } from './runSink';
+
+/* -------------------------------------------------------------------------- */
+/*  Gateway                                                                    */
+/* -------------------------------------------------------------------------- */
+
+import type Anthropic from '@anthropic-ai/sdk';
+import { type LlmRoles, type LlmRolesOptions, createLlmRoles } from './roles';
+import { type LlmSessionStore, createInMemorySessionStore } from './sessionStore';
+import { type ClaudeQueryFn, createClaudeSessionTransport } from './transport/claudeSession';
+import { createApiTransport } from './transport/api';
+import { createNullTransport } from './transport/none';
+import type { LlmTransport, LlmTransportKind } from './transport/types';
+import type { RunSink } from './runSink';
+
+/** The environment variables the gateway reads. A plain object, so a caller can supply a redacted view of `process.env`. */
+export interface GatewayEnv {
+  readonly [key: string]: string | undefined;
+  readonly LLM_TRANSPORT?: string | undefined;
+  readonly LLM_MODEL?: string | undefined;
+  readonly CLAUDE_CODE_OAUTH_TOKEN?: string | undefined;
+  readonly ANTHROPIC_API_KEY?: string | undefined;
+  readonly ANTHROPIC_MODEL?: string | undefined;
+}
+
+export interface GatewayOptions {
+  /** Where dialogue conversations remember their Claude session id. Defaults to an in-memory store. */
+  readonly sessionStore?: LlmSessionStore;
+  /** Where `AgentRunRecord`s go. Defaults to dropping them. */
+  readonly runSink?: RunSink;
+  /** Options for the pre-built `roles` accessor. Also the defaults for `createRoles`. */
+  readonly roles?: LlmRolesOptions;
+  /** Injected Agent SDK `query()`, for tests. */
+  readonly queryFn?: ClaudeQueryFn;
+  /** Injected Anthropic client for the `api` transport, for tests. */
+  readonly anthropicClient?: Anthropic;
+}
+
+export interface LlmGateway {
+  readonly transport: LlmTransport;
+  readonly transportKind: LlmTransportKind;
+  readonly sessionStore: LlmSessionStore;
+  /** Roles bound to `options.roles`, or to a placeholder session when none was supplied. */
+  readonly roles: LlmRoles;
+  /** Bind a fresh set of roles to a specific session. */
+  createRoles(rolesOptions: LlmRolesOptions): LlmRoles;
+}
+
+/** Resolve `LLM_TRANSPORT` to a transport kind. Anything unrecognised is the default. */
+export function resolveTransportKind(value: string | undefined): LlmTransportKind {
+  const normalised = (value ?? '').trim().toLowerCase();
+  if (normalised === 'none' || normalised === 'off' || normalised === 'disabled') return 'none';
+  if (normalised === 'api') return 'api';
+  return 'claude-session';
+}
+
+/**
+ * Build the gateway from environment configuration.
+ *
+ * `claude-session` is the default and the only path that works with no API
+ * key. `none` is a first-class configuration, not a degraded one: it produces
+ * the deterministic fallback for every role, which is exactly what demo mode
+ * wants and what every test in this package uses.
+ */
+export function createGateway(env: GatewayEnv = {}, options: GatewayOptions = {}): LlmGateway {
+  const kind = resolveTransportKind(env.LLM_TRANSPORT);
+  const sessionStore = options.sessionStore ?? createInMemorySessionStore();
+
+  let transport: LlmTransport;
+  if (kind === 'none') {
+    transport = createNullTransport();
+  } else if (kind === 'api') {
+    transport = createApiTransport({
+      model: env.ANTHROPIC_MODEL,
+      apiKey: env.ANTHROPIC_API_KEY,
+      client: options.anthropicClient,
+      env,
+    });
+  } else {
+    transport = createClaudeSessionTransport({
+      model: env.LLM_MODEL,
+      oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+      sessionStore,
+      queryFn: options.queryFn,
+      env,
+    });
+  }
+
+  const defaults: LlmRolesOptions = options.roles ?? { sessionId: 'unbound-session', quarter: 0 };
+  const rolesOptions: LlmRolesOptions = { ...defaults, runSink: defaults.runSink ?? options.runSink };
+
+  return {
+    transport,
+    transportKind: kind,
+    sessionStore,
+    roles: createLlmRoles(transport, rolesOptions),
+    createRoles(next: LlmRolesOptions): LlmRoles {
+      return createLlmRoles(transport, { ...next, runSink: next.runSink ?? options.runSink });
+    },
+  };
+}
+
+/** Version of this gateway surface. */
+export const LLM_GATEWAY_VERSION = '1.0.0';

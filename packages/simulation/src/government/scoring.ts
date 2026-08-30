@@ -261,6 +261,17 @@ function reputationFor(draft: SessionState, companyId: string, agencyId: string 
   return draft.contractorReputations.find((r) => r.companyId === companyId && r.agencyId === agencyId) ?? null;
 }
 
+/**
+ * The formal past-performance score, 0..100, as the eligibility gate reads it:
+ * this agency's record first, then the government-wide aggregate. No behavioural
+ * adjustments — those belong to the scored axis, not to the hard gate.
+ */
+export function recordPastPerformance(draft: SessionState, company: Company, agencyId: string): number {
+  const aggregate = reputationFor(draft, company.id, null)?.pastPerformanceScore ?? company.governmentPastPerformance;
+  const agencyRecord = reputationFor(draft, company.id, agencyId);
+  return clamp(agencyRecord === null ? aggregate : 0.65 * agencyRecord.pastPerformanceScore + 0.35 * aggregate, 0, 100);
+}
+
 /** A company's record with one agency, blended with its government-wide record. */
 export function pastPerformanceScore(draft: SessionState, company: Company, agencyId: string): number {
   const aggregateRecord = reputationFor(draft, company.id, null);
@@ -306,7 +317,7 @@ export function disqualificationReasons(
     reasons.push('The programme does not permit joint bids.');
   }
 
-  const record = pastPerformanceScore(draft, team.prime, opportunity.agencyId) * 100;
+  const record = recordPastPerformance(draft, team.prime, opportunity.agencyId);
   if (record < req.minimumPastPerformance) {
     reasons.push(
       `Past performance ${Math.round(record)} is below the programme floor of ${Math.round(req.minimumPastPerformance)}.`,
@@ -515,19 +526,9 @@ export function scoreOpportunityBids(
         : unit(0.5 * entry.axes.realism + 0.5 * competitiveness);
 
     const axes = entry.axes;
-    const weightedTotal = unit(
-      axes.technical * weights.technical +
-        axes.security * weights.security +
-        axes.pastPerformance * weights.pastPerformance +
-        priceRealism * weights.priceRealism +
-        axes.schedule * weights.schedule +
-        axes.domesticSupply * weights.domesticSupply +
-        axes.responsibleAi * weights.responsibleAi,
-    );
-
-    scored.push({
-      bidId: entry.bid.id,
-      companyId: entry.bid.bidderCompanyId,
+    // Round first, then weight, so the breakdown a bidder is shown adds up to
+    // the total they were ranked on.
+    const shown = {
       technical: round(axes.technical, 4),
       security: round(axes.security, 4),
       pastPerformance: round(axes.pastPerformance, 4),
@@ -535,6 +536,21 @@ export function scoreOpportunityBids(
       schedule: round(axes.schedule, 4),
       domesticSupply: round(axes.domesticSupply, 4),
       responsibleAi: round(axes.responsibleAi, 4),
+    };
+    const weightedTotal = unit(
+      shown.technical * weights.technical +
+        shown.security * weights.security +
+        shown.pastPerformance * weights.pastPerformance +
+        shown.priceRealism * weights.priceRealism +
+        shown.schedule * weights.schedule +
+        shown.domesticSupply * weights.domesticSupply +
+        shown.responsibleAi * weights.responsibleAi,
+    );
+
+    scored.push({
+      bidId: entry.bid.id,
+      companyId: entry.bid.bidderCompanyId,
+      ...shown,
       weightedTotal: round(weightedTotal, 6),
       rank: 1,
       disqualified: false,

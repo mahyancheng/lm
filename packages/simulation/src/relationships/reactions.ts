@@ -155,8 +155,9 @@ function reactToIntroduction(draft: SessionState, ctx: ResolverContext, action: 
 }
 
 function reactToDealActions(draft: SessionState, ctx: ResolverContext, action: SubmittedAction): void {
-  if (action.intent.type === 'accept_deal') {
-    const deal = draft.deals.find((d) => d.id === action.intent.dealId);
+  const intent = action.intent;
+  if (intent.type === 'accept_deal') {
+    const deal = draft.deals.find((d) => d.id === intent.dealId);
     if (deal === undefined) return;
     const proposerCharacter = subjectCharacterId(draft, deal.proposerId);
     if (proposerCharacter !== null) {
@@ -171,8 +172,8 @@ function reactToDealActions(draft: SessionState, ctx: ResolverContext, action: S
     }
     return;
   }
-  if (action.intent.type === 'reject_deal') {
-    const deal = draft.deals.find((d) => d.id === action.intent.dealId);
+  if (intent.type === 'reject_deal') {
+    const deal = draft.deals.find((d) => d.id === intent.dealId);
     if (deal === undefined) return;
     const proposerCharacter = subjectCharacterId(draft, deal.proposerId);
     if (proposerCharacter !== null) {
@@ -180,7 +181,7 @@ function reactToDealActions(draft: SessionState, ctx: ResolverContext, action: S
         ownerCharacterId: proposerCharacter,
         aboutId: action.actorCharacterId,
         kind: 'negotiation',
-        summary: `They turned the deal down: ${action.intent.reason || 'no reason given'}.`.slice(0, 300),
+        summary: `They turned the deal down: ${intent.reason || 'no reason given'}.`.slice(0, 300),
         sentiment: -0.35,
         stableKey: `${deal.id}_rejected`,
       });

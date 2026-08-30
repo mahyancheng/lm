@@ -108,6 +108,10 @@ importers:
         version: 4.1.11(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1)(jiti@2.7.0))
 
   packages/shared:
+    dependencies:
+      '@frontier/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       typescript:
         specifier: 5.9.3

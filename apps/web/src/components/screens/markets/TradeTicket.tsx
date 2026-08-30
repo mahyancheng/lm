@@ -130,7 +130,7 @@ export function TradeTicket({
       )}
 
       {queued === null ? null : (
-        <div className="rounded-[4px] border border-brand/25 bg-brand-wash px-2 py-1.5 text-[11px] text-brand">
+        <div className="rounded-card border border-brand/25 bg-brand-wash px-3 py-2 text-[11px] text-brand">
           Queued for this quarter. It resolves in the market phase.
         </div>
       )}

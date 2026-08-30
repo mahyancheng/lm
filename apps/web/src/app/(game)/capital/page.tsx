@@ -191,7 +191,7 @@ export default function CapitalPage(): React.JSX.Element {
           ) : (
             <div className="flex flex-col gap-3">
               {table.shareClasses.map((shareClass) => (
-                <div key={shareClass.id} className="border-b border-hair/60 pb-2 last:border-b-0 last:pb-0">
+                <div key={shareClass.id} className="border-b border-hair pb-2 last:border-b-0 last:pb-0">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[12px] text-ink">{shareClass.label}</span>
                     <Tag tone={shareClass.kind === 'founder_super_voting' ? 'brand' : 'neutral'}>{humanise(shareClass.kind)}</Tag>

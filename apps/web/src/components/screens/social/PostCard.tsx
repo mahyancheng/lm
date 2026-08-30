@@ -75,7 +75,7 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
               {engagement.sentimentShifts.map((shift) => (
                 <span
                   key={shift.audience}
-                  className="inline-flex items-center gap-1 rounded-[3px] border border-hair bg-raised px-1.5 py-px text-[10px] text-ink-dim"
+                  className="inline-flex items-center gap-1 rounded-pill border border-hair bg-raised px-2 py-px text-[10px] text-ink-dim"
                 >
                   {audienceLabel(shift.audience)}
                   <DeltaBadge value={shift.delta} format="number" decimals={1} bare arrow={false} />

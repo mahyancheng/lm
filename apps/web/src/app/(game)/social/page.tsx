@@ -236,7 +236,7 @@ export default function SocialPage(): React.JSX.Element {
                         .filter(([, share]) => typeof share === 'number' && share > 0)
                         .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
                         .map(([audience, share]) => (
-                          <span key={audience} className="rounded-[3px] border border-hair bg-raised px-1.5 py-px text-[10px] text-ink-dim">
+                          <span key={audience} className="rounded-pill border border-hair bg-raised px-2 py-px text-[10px] text-ink-dim">
                             {audienceLabel(audience as Audience)} {formatPct(share ?? 0, 0)}
                           </span>
                         ))}

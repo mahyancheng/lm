@@ -39,11 +39,12 @@ function Toggle({
   readonly onChange: (next: boolean) => void;
 }): React.JSX.Element {
   return (
-    <div className="raised-surface flex items-start justify-between gap-3 px-3 py-2.5">
+    <div className="raised-surface flex items-start justify-between gap-3 px-3.5 py-3">
       <div className="min-w-0">
-        <p className="text-[12px] font-medium text-ink">{label}</p>
+        <p className="text-[12px] font-semibold text-ink">{label}</p>
         <p className="mt-0.5 text-[10px] leading-relaxed text-ink-dim">{hint}</p>
       </div>
+      {/* A real switch: a pill track and a knob that slides. Transform only. */}
       <button
         type="button"
         role="switch"
@@ -51,9 +52,26 @@ function Toggle({
         aria-label={label}
         disabled={disabled}
         onClick={() => onChange(!value)}
-        className={cx('btn btn-sm shrink-0', value ? 'border-brand/50 bg-brand-wash text-brand' : '')}
+        className={cx(
+          'tap-target -my-2 flex shrink-0 items-center justify-center rounded-chip',
+          disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer',
+        )}
       >
-        {value ? 'On' : 'Off'}
+        <span
+          aria-hidden="true"
+          className={cx(
+            'flex h-6 w-11 items-center rounded-pill border transition-colors',
+            value ? 'border-brand-strong bg-brand-strong' : 'border-hair-strong bg-raised',
+          )}
+        >
+          <span
+            className={cx(
+              'block size-4 rounded-pill bg-panel shadow-card transition-transform',
+              value ? 'translate-x-[22px]' : 'translate-x-[3px]',
+            )}
+          />
+        </span>
+        <span className="sr-only">{value ? 'On' : 'Off'}</span>
       </button>
     </div>
   );
@@ -117,7 +135,7 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps): React.JS
             the World Director and the rival strategists contributed — not the world, which is re-resolved from them.
           </p>
           {!saveWritable ? (
-            <p className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+            <p className="rounded-card border border-warn/25 bg-warn-wash px-3.5 py-2.5 text-[11px] text-warn">
               This session is not being written to disk: the stored save could not be replayed in full, so it is being preserved exactly as
               it is. Start a new session to save again.
             </p>

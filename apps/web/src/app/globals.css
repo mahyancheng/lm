@@ -548,17 +548,23 @@
      Nothing here drives layout, nothing here runs a loop in JavaScript, and
      every animation is disabled wholesale under prefers-reduced-motion. */
 
+  /* Arrival animations fill `backwards`, not `both`, on purpose: every one of
+     them ends on the element's natural state, so holding the last keyframe
+     would buy nothing and would keep `transform` under the animation's control
+     forever — which pins a containing block on the element and outranks the
+     cascade for anything else that wants to move it. `backwards` still applies
+     the first keyframe through a `stagger-*` delay, which is the part we need. */
   .animate-fade-in {
-    animation: fc-fade-in 180ms ease-out both;
+    animation: fc-fade-in 180ms ease-out backwards;
   }
 
   .animate-rise {
-    animation: fc-rise 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+    animation: fc-rise 220ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
   }
 
   /* A card, a chip or a person arriving: a small overshoot, then settle. */
   .animate-pop-in {
-    animation: fc-pop-in 320ms cubic-bezier(0.22, 1.15, 0.36, 1) both;
+    animation: fc-pop-in 320ms cubic-bezier(0.22, 1.15, 0.36, 1) backwards;
   }
 
   /* Idle life for a flat-vector character or an icon. Infinite, tiny, cheap. */
@@ -578,7 +584,7 @@
   /* A figure that has just changed: it rises into place and settles. Pair it
      with a React `key` on the value so a new number remounts and replays. */
   .animate-count-up {
-    animation: fc-count-up 420ms cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+    animation: fc-count-up 420ms cubic-bezier(0.2, 0.9, 0.3, 1.05) backwards;
   }
 
   .animate-pulse-soft {
@@ -607,10 +613,9 @@
 
   /* A card that answers the pointer.
      These use the INDIVIDUAL `translate` / `scale` properties rather than
-     `transform`, deliberately: a card carrying `animate-pop-in` holds its
-     final `transform` through `animation-fill-mode: both`, and an animation
-     outranks the cascade for the property it animates. Composing on separate
-     properties lets a card pop in on mount and still lift under the pointer. */
+     `transform`, deliberately: a running animation outranks the cascade for
+     the property it animates, so a card mid-`animate-pop-in` could not also
+     lift if the two shared `transform`. Separate properties compose. */
   .hover-lift {
     transition: translate 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1),
       box-shadow 160ms ease, border-color 160ms ease;

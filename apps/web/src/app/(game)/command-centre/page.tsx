@@ -34,6 +34,7 @@ import {
   useQuotes,
   useSession,
 } from '@/lib/game';
+import { OfficeSceneCompact } from '@/components/scenes/office';
 import { AlertFeed } from '@/components/screens/command-centre/AlertFeed';
 import { TapeStrip } from '@/components/screens/command-centre/TapeStrip';
 import { WorldStrip } from '@/components/screens/command-centre/WorldStrip';
@@ -105,8 +106,25 @@ export default function CommandCentrePage(): React.JSX.Element {
         }
       />
 
-      {/* --- the eight figures ------------------------------------------------ */}
+      {/* --- the office, then the eight figures --------------------------------
+          The scene takes the hero slot beside the stat cards: the company as a
+          place — headcount, the mood on the floor, the glow off the racks —
+          before the company as a set of numbers. It is a link, not a control
+          surface; the Company screen is where the rooms are operable. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Panel
+          title="The floor"
+          subtitle={`${company.name} · ${company.headquartersCity}`}
+          className="sm:col-span-2 lg:row-span-2"
+          actions={
+            <Link href="/company" className="btn btn-ghost btn-sm">
+              Open office
+            </Link>
+          }
+        >
+          <OfficeSceneCompact href="/company" />
+        </Panel>
+
         <StatCard
           label="Market cap"
           value={formatMoney(marketCap)}

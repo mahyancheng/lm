@@ -31,8 +31,10 @@ export const OFFICE_STYLES = `
   --fc-wall: var(--color-build-side);
   --fc-wall-shade: var(--color-build-roof);
   --fc-glass: var(--color-build-glass);
-  --fc-shadow: rgb(30 41 59 / 0.10);
-  --fc-shadow-soft: rgb(30 41 59 / 0.06);
+  /* Contact shadows are the ink token thinned out, never a literal black:
+     a re-skin that darkens the ink darkens the shadows with it. */
+  --fc-shadow: color-mix(in srgb, var(--color-ink) 14%, transparent);
+  --fc-shadow-soft: color-mix(in srgb, var(--color-ink) 8%, transparent);
 
   /* --- furniture --------------------------------------------------------- */
   --fc-desk: var(--color-pop-4);
@@ -119,6 +121,37 @@ export const OFFICE_STYLES = `
   border-style: dashed;
 }
 
+/* The executive row is a frame around its own buttons, so the frame itself is
+   inert: it must not look or behave like one big control. */
+.fc-office-zone[data-static='true'] {
+  cursor: default;
+}
+
+.fc-office-zone[data-static='true']:hover {
+  transform: none;
+  border-color: var(--color-hair);
+  box-shadow: none;
+}
+
+/* One executive's desk. A real button, comfortably over the 44px floor. */
+.fc-office-desk {
+  min-height: var(--tap, 44px);
+  cursor: pointer;
+  transition: transform 150ms cubic-bezier(0.2, 0.9, 0.3, 1.1), background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.fc-office-desk:hover {
+  background-color: var(--color-brand-wash);
+  border-color: var(--color-brand);
+  transform: translateY(-2px);
+}
+
+.fc-office-desk:focus-visible {
+  outline: 2px solid var(--color-brand-strong);
+  outline-offset: 2px;
+}
+
 .fc-office-figure {
   transform-box: fill-box;
   transform-origin: 50% 100%;
@@ -155,6 +188,7 @@ export const OFFICE_STYLES = `
 
 @media (prefers-reduced-motion: reduce) {
   .fc-office-zone,
+  .fc-office-desk,
   .fc-office-figure,
   .fc-office-hand,
   .fc-office-led {
@@ -162,7 +196,8 @@ export const OFFICE_STYLES = `
     transition: none !important;
     transform: none !important;
   }
-  .fc-office-zone:hover { transform: none; box-shadow: var(--shadow-card); }
+  .fc-office-zone:hover,
+  .fc-office-desk:hover { transform: none; box-shadow: var(--shadow-card); }
   .fc-office-led { opacity: 0.8; }
 }
 `;

@@ -147,7 +147,7 @@ export function InstrumentDrawer({
           ) : (
             <div className="mt-2">
               <BarChart data={bars} formatValue={(value) => formatDelta(value, 'percent', 2)} />
-              <dl className="mt-3 divide-y divide-hair rounded-[4px] border border-hair bg-base/50">
+              <dl className="mt-3 divide-y divide-hair rounded-card border border-hair bg-raised/60">
                 <div className="flex items-baseline justify-between gap-3 px-3 py-2">
                   <dt className="label-caps-faint">Components sum</dt>
                   <dd className="figure text-[12px] text-ink-dim">{formatDelta(decomposition.sum, 'percent', 4)}</dd>
@@ -205,7 +205,7 @@ export function InstrumentDrawer({
                 <div className="label-caps-faint mb-1">Inputs</div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
                   {Object.entries(anchor.inputs).map(([key, value]) => (
-                    <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair/50 pb-1">
+                    <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
                       <dt className="truncate text-[10px] text-ink-faint">{key}</dt>
                       <dd className="figure text-[11px] text-ink-dim">
                         {Math.abs(value) >= 1000 ? formatMoney(value) : value.toFixed(4)}

@@ -127,7 +127,7 @@ export default function MarketsPage(): React.JSX.Element {
       width: '92px',
       render: (row) => (
         <span
-          className={`figure inline-flex h-5 min-w-11 items-center justify-center rounded-[3px] border px-1 text-[10px] ${
+          className={`figure inline-flex h-5 min-w-11 items-center justify-center rounded-pill border px-1.5 text-[10px] font-semibold ${
             row.instrument.companyId === company.id
               ? 'border-brand/40 bg-brand-wash text-brand'
               : 'border-hair bg-raised text-ink-dim'
@@ -345,7 +345,7 @@ export default function MarketsPage(): React.JSX.Element {
               />
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {Object.entries(ownAnchor.inputs).map(([key, value]) => (
-                  <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair/50 pb-1">
+                  <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
                     <span className="truncate text-[10px] text-ink-faint">{key}</span>
                     <span className="figure text-[11px] text-ink-dim">
                       {Math.abs(value) >= 1000 ? formatMoney(value) : value.toFixed(4)}
@@ -415,7 +415,7 @@ export default function MarketsPage(): React.JSX.Element {
           ) : (
             <ul className="flex flex-col gap-2">
               {recentDisclosures.map((disclosure) => (
-                <li key={disclosure.id} className="border-b border-hair/60 pb-2 last:border-b-0 last:pb-0">
+                <li key={disclosure.id} className="border-b border-hair pb-2 last:border-b-0 last:pb-0">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5">
                       <Tag tone={disclosure.kind === 'leak' || disclosure.kind === 'rumour' ? 'warn' : 'neutral'}>

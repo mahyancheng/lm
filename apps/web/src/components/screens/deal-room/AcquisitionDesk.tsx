@@ -147,12 +147,12 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
           />
 
           {hasBoard ? (
-            <p className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+            <p className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
               Your company has a board, so this will be tabled as an acquisition matter rather than executed. Directors negotiate hardest
               over the stock component — that is what the slider above is really setting.
             </p>
           ) : (
-            <p className="rounded-[4px] border border-hair bg-raised px-3 py-2 text-[11px] text-ink-dim">
+            <p className="rounded-card border border-hair bg-raised px-3 py-2 text-[11px] text-ink-dim">
               No board sits over this company yet, so an offer executes on its own terms. That freedom ends at the first priced round.
             </p>
           )}

@@ -214,20 +214,15 @@ export function ExecutiveDesk({
   const look = seatLook(executive.seatId);
   return (
     <g>
-      <g transform={`translate(${(EXEC_CELL.width - 24) / 2} 12)`}>
+      <g transform={`translate(${(EXEC_CELL.width - 24) / 2} 6)`}>
         <Worker look={look} role="exe" band={band} />
       </g>
-      <g transform="translate(9 0)">
+      <g transform={`translate(${(EXEC_CELL.width - 54) / 2} 0)`}>
         <Desk />
       </g>
       {executive.isCeo ? (
-        <g transform={`translate(${EXEC_CELL.width / 2 - 9} 0)`}>
-          <path
-            d="M0 8 3 3l3 4 3-4 3 5v3H0z"
-            fill="var(--color-pop-4)"
-            stroke="var(--color-panel)"
-            strokeWidth="0.8"
-          />
+        <g transform={`translate(${EXEC_CELL.width / 2 - 6} 0)`}>
+          <path d="M0 7 2 3l2 3 2-3 2 4v2H0z" fill="var(--color-pop-4)" stroke="var(--color-panel)" strokeWidth="0.7" />
         </g>
       ) : null}
     </g>

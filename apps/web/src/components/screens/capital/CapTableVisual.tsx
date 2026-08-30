@@ -100,7 +100,7 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <div className="flex h-6 w-full overflow-hidden rounded-[3px] border border-hair">
+        <div className="flex h-7 w-full overflow-hidden rounded-pill border border-hair">
           {bands.map((band) => (
             <div
               key={band.key}
@@ -120,14 +120,14 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
           {bands.map((band) => (
             <span key={band.key} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-              <span className={cx('inline-block size-2 rounded-[2px]')} style={{ backgroundColor: TONE_VAR[band.tone] }} />
+              <span className={cx('inline-block size-2.5 rounded-pill')} style={{ backgroundColor: TONE_VAR[band.tone] }} />
               <span className="truncate">{band.label}</span>
               <span className="figure text-ink-faint">{formatPct(band.pct, 1)}</span>
             </span>
           ))}
           {poolPct > 0 ? (
             <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-              <span className="inline-block size-2 rounded-[2px] bg-raised" />
+              <span className="inline-block size-2.5 rounded-pill bg-raised" />
               Option pool
               <span className="figure text-ink-faint">{formatPct(poolPct, 1)}</span>
             </span>

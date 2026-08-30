@@ -213,7 +213,8 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
                 y2={to.y}
                 stroke={EDGE_TONE[edge.kind]}
                 strokeWidth={1 + edge.weight * 4}
-                strokeOpacity={active ? 0.55 : 0.12}
+                strokeLinecap="round"
+                strokeOpacity={active ? 0.7 : 0.14}
                 strokeDasharray={edge.kind === 'deal' ? '5 4' : edge.kind === 'board' ? '2 3' : undefined}
               >
                 <title>{edge.title}</title>
@@ -238,10 +239,10 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
                     y={node.y - 13}
                     width={60}
                     height={26}
-                    rx={4}
-                    fill="var(--color-raised)"
+                    rx={9}
+                    fill={node.own ? 'var(--color-brand-wash)' : 'var(--color-raised)'}
                     stroke={node.own ? TONE_VAR.brand : 'var(--color-hair-strong)'}
-                    strokeWidth={node.own ? 1.5 : 1}
+                    strokeWidth={node.own ? 2 : 1.2}
                   />
                   <text
                     x={node.x}
@@ -272,9 +273,9 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
                   cx={node.x}
                   cy={node.y}
                   r={13}
-                  fill="var(--color-panel)"
+                  fill={node.own ? 'var(--color-brand-wash)' : 'var(--color-raised)'}
                   stroke={node.own ? TONE_VAR.brand : 'var(--color-hair-strong)'}
-                  strokeWidth={node.own ? 1.5 : 1}
+                  strokeWidth={node.own ? 2 : 1.2}
                 />
                 <text
                   x={node.x}
@@ -298,15 +299,15 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-          <span className="inline-block h-0.5 w-5" style={{ backgroundColor: EDGE_TONE.holding }} />
+          <span className="inline-block h-[3px] w-5 rounded-pill" style={{ backgroundColor: EDGE_TONE.holding }} />
           Disclosed holding ≥5% <span className="figure text-ink-faint">{counts.holding}</span>
         </span>
         <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-          <span className="inline-block h-0.5 w-5" style={{ backgroundColor: EDGE_TONE.board }} />
+          <span className="inline-block h-[3px] w-5 rounded-pill" style={{ backgroundColor: EDGE_TONE.board }} />
           Board seat <span className="figure text-ink-faint">{counts.board}</span>
         </span>
         <span className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-          <span className="inline-block h-0.5 w-5" style={{ backgroundColor: EDGE_TONE.deal }} />
+          <span className="inline-block h-[3px] w-5 rounded-pill" style={{ backgroundColor: EDGE_TONE.deal }} />
           Deal <span className="figure text-ink-faint">{counts.deal}</span>
         </span>
         <Tag tone="neutral">{nodes.length} nodes</Tag>

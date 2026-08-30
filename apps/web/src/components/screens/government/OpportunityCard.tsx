@@ -203,7 +203,7 @@ export function OpportunityCard({
             <div className="space-y-1">
               {commitments.map((item) => (
                 <div key={item.label} className="flex items-start gap-2 text-[11px]">
-                  <span className={`mt-1.5 inline-block size-1.5 shrink-0 rounded-full ${item.met ? 'bg-hair-strong' : 'bg-warn'}`} />
+                  <span className={`mt-1.5 inline-block size-1.5 shrink-0 rounded-full ${item.met ? 'bg-ink-faint' : 'bg-warn'}`} />
                   <span className="min-w-0">
                     <span className="text-ink-dim">{item.label}</span>
                     <span className="block text-[10px] text-ink-faint">{item.detail}</span>

@@ -60,7 +60,7 @@ export function FrontierMap({
       >
         <defs>
           <marker id={`${markerId}-arrow`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 1 L 7 4 L 0 7 z" fill="var(--color-hair-strong)" />
+            <path d="M 0 1 L 7 4 L 0 7 z" fill="var(--color-ink-faint)" />
           </marker>
         </defs>
 
@@ -75,7 +75,9 @@ export function FrontierMap({
                 key={`${laid.edge.from}-${laid.edge.to}-${laid.edge.kind}-${index}`}
                 d={laid.path}
                 fill="none"
-                stroke="var(--color-hair-strong)"
+                // A hairline is invisible on an off-white ground: dependency
+                // edges take the faint ink tier so the graph still reads.
+                stroke="var(--color-ink-faint)"
                 strokeWidth={0.8 + laid.edge.strength * 1.4}
                 strokeDasharray={style.dash}
                 opacity={dimmed ? style.opacity * 0.25 : style.opacity}
@@ -141,11 +143,11 @@ function MapNode({ laid, companyId, selected, changed, dimmed, onSelect }: MapNo
         y={laid.y}
         width={laid.width}
         height={laid.height}
-        rx={5}
+        rx={10}
         fill={colour}
         fillOpacity={fillOpacityOf(node)}
         stroke={selected ? 'var(--color-ink)' : colour}
-        strokeWidth={selected ? 2 : 1.1}
+        strokeWidth={selected ? 2.5 : 1.4}
         strokeDasharray={style.dashed ? '4 3' : undefined}
       />
 
@@ -218,7 +220,7 @@ function MapNode({ laid, companyId, selected, changed, dimmed, onSelect }: MapNo
         {changed ? (
           <>
             <circle cx={laid.x + laid.width - 6} cy={laid.y + laid.height - 6} r="5.5" fill="var(--color-info)" />
-            <text x={laid.x + laid.width - 6} y={laid.y + laid.height - 2.5} fontSize="7.5" textAnchor="middle" fill="var(--color-base)" fontWeight={700}>
+            <text x={laid.x + laid.width - 6} y={laid.y + laid.height - 2.5} fontSize="7.5" textAnchor="middle" fill="var(--color-panel)" fontWeight={700}>
               Δ
             </text>
           </>

@@ -214,7 +214,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
       {mode === 'form' ? (
         <div className="space-y-3">
           {declined ? (
-            <div className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+            <div className="rounded-card border border-warn/25 bg-warn-wash px-3.5 py-2.5 text-[11px] text-warn">
               The interpreter declined — no model answered. State the fields yourself; the object you produce is identical.
             </div>
           ) : null}

@@ -141,7 +141,7 @@ export function DealDrawer({ deal, ownCompanyId, nameOf, startYear, quarter, onC
           ) : (
             <ul className="mt-2 flex flex-col gap-1.5">
               {deal.intentStatements.map((statement, index) => (
-                <li key={index} className="rounded-[4px] border border-dashed border-hair px-2.5 py-1.5 text-[11px] text-ink-dim">
+                <li key={index} className="rounded-card border border-dashed border-hair-strong px-3 py-2 text-[11px] text-ink-dim">
                   {statement}
                 </li>
               ))}

@@ -260,7 +260,7 @@ export function DealBuilder({
       {cashOut > 0 ? (
         <p
           className={cx(
-            'rounded-[4px] border px-3 py-2 text-[11px]',
+            'rounded-card border px-3.5 py-2.5 text-[11px]',
             cashOut > availableCashUsd ? 'border-loss/25 bg-loss-wash text-loss' : 'border-hair bg-raised text-ink-dim',
           )}
         >

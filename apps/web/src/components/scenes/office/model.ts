@@ -167,8 +167,8 @@ interface ZoneDefinition {
 /** The four working rooms, in the order the floor plan lays them out. */
 export const WORK_ZONES: readonly ZoneDefinition[] = [
   { id: 'engineering', role: 'engineers', label: 'Engineering', href: '/people', capacity: 18 },
-  { id: 'research', role: 'researchers', label: 'Research', href: '/research', capacity: 12 },
-  { id: 'sales', role: 'sales', label: 'Sales & marketing', href: '/products', capacity: 12 },
+  { id: 'research', role: 'researchers', label: 'Research', href: '/research', capacity: 10 },
+  { id: 'sales', role: 'sales', label: 'Sales & marketing', href: '/products', capacity: 10 },
   { id: 'operations', role: 'ops', label: 'Operations', href: '/people', capacity: 16 },
 ];
 
@@ -231,14 +231,19 @@ export function buildOfficeModel({ session, company, projects, characters }: Bui
 
   const zones = WORK_ZONES.map((definition, index): OfficeWorkZone => {
     const zoneHeadcount = employees[definition.role];
-    const shape = crowd(zoneHeadcount, definition.capacity);
     const allocated = vacancies[index] ?? 0;
-    // Empty desks are drawn at the same scale as filled ones, and never crowd
-    // the room out: at most a third of the drawn desks stand empty.
+
+    // Empty desks are drawn at the same scale as the filled ones and never
+    // crowd the room out: a quarter of the desks at most. They are reserved
+    // *before* the crowd is laid out, so a full room still shows its vacancies
+    // rather than pushing them off the end of the grid.
+    const provisional = crowd(zoneHeadcount, definition.capacity);
     const vacantDesks = Math.min(
-      Math.max(0, Math.round(allocated / shape.perFigure)),
-      Math.max(1, Math.floor(definition.capacity / 3)),
+      Math.max(0, Math.round(allocated / provisional.perFigure)),
+      Math.floor(definition.capacity / 4),
     );
+    const shape = crowd(zoneHeadcount, Math.max(1, definition.capacity - vacantDesks));
+
     const seats: OfficeSeat[] = [];
     for (let seat = 0; seat < shape.figures; seat += 1) {
       seats.push({ id: seatId(company.id, definition.id, seat), filled: true });

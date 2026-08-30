@@ -209,9 +209,15 @@ export const EDGE_STYLE: Readonly<Record<TechEdge['kind'], EdgeStyle>> = {
   informs: { label: 'Informs', dash: '2 4', opacity: 0.4, arrow: false, blurb: 'Evidence about the source updates belief in the target.' },
 };
 
-/** Fill opacity from public confidence: the world's conviction, made visible. */
+/**
+ * Fill opacity from public confidence: the world's conviction, made visible.
+ *
+ * The range is tuned for the light theme — a tint over white, never a slab of
+ * saturated colour — so the slate title on top of a fully-believed node still
+ * clears 5:1. Confidence is still the only thing the opacity encodes.
+ */
 export function fillOpacityOf(node: TechNode): number {
-  return 0.18 + 0.5 * Math.max(0, Math.min(1, node.publicConfidence));
+  return 0.12 + 0.4 * Math.max(0, Math.min(1, node.publicConfidence));
 }
 
 /** Two lines of title, broken on words, so a box never overflows. */

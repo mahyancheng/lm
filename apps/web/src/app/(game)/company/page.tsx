@@ -1,17 +1,24 @@
 'use client';
 
 /**
- * Company — the operating overview.
+ * Company — the operating overview, anchored on the office itself.
  *
- * What the company *is*: archetype, posture, people, sites, compute and
- * standing with five separate audiences. Nothing here is a control surface;
- * every lever that changes these figures lives on Products, People, Research or
- * Capital, and this screen links to them.
+ * The screen opens on the place rather than the table: a flat isometric-lite
+ * floor plan whose rooms are the real headcount by function, whose server room
+ * is the real accelerator fleet, and whose people wear the company's real
+ * morale. Every room is a control — engineering opens the headcount plan,
+ * research opens the frontier, sales opens the product book, the racks open the
+ * compute drawer, an executive's desk opens their card.
  *
- * Information boundary: everything on this screen is the player's own company,
- * read from `SessionState`. The one place rivals appear — the group structure
- * panel — reads `usePlayerView().visibleCompanies`, so an acquired subsidiary
- * shows its identity and nothing operational.
+ * Underneath it, unchanged in substance, sits the drill-down layer: charter,
+ * reputation, compute position, organisation, culture, sites, capability and
+ * group structure. Nothing on this screen is a lever; every lever it points at
+ * lives on Products, People, Research or Capital.
+ *
+ * Information boundary: everything above the group-structure panel is the
+ * player's own company, read from `SessionState`. The one place rivals appear —
+ * group structure — reads `usePlayerView().visibleCompanies`, so an acquired
+ * subsidiary shows its identity and nothing operational.
  */
 
 import { useMemo, useState } from 'react';
@@ -37,7 +44,11 @@ import {
   Tag,
   type Column,
 } from '@/components/ui';
+import { OfficeScene, type OfficeDrawerId } from '@/components/scenes/office';
+import { ComputeDrawer } from '@/components/screens/company/ComputeDrawer';
 import { ComputePosition } from '@/components/screens/company/ComputePosition';
+import { ExecutiveDrawer } from '@/components/screens/company/ExecutiveDrawer';
+import { SitesDrawer } from '@/components/screens/company/SitesDrawer';
 import {
   ARCHETYPE_BLURB,
   ARCHETYPE_LABEL,
@@ -62,7 +73,10 @@ export default function CompanyPage(): React.JSX.Element {
   const view = usePlayerView();
   const company = usePlayerCompany();
   const metrics = useCompanyMetrics();
+
   const [openRole, setOpenRole] = useState<StaffRole | null>(null);
+  const [openDrawer, setOpenDrawer] = useState<OfficeDrawerId | null>(null);
+  const [openExecutive, setOpenExecutive] = useState<string | null>(null);
 
   const employees = company.employees;
   const headcount = STAFF_ROLES.reduce((total, role) => total + employees[role], 0);
@@ -92,6 +106,11 @@ export default function CompanyPage(): React.JSX.Element {
   const executives = useMemo(
     () => session.characters.filter((character) => character.companyId === company.id && character.isActive),
     [session.characters, company.id],
+  );
+
+  const executive = useMemo(
+    () => (openExecutive === null ? null : (executives.find((character) => character.id === openExecutive) ?? null)),
+    [executives, openExecutive],
   );
 
   const subsidiaries = useMemo(
@@ -156,6 +175,23 @@ export default function CompanyPage(): React.JSX.Element {
         }
       />
 
+      {/* --- the office ------------------------------------------------------
+          The scene is the screen's anchor: one floor, seven rooms, all of it
+          read from committed state. It contains its own width — on a phone the
+          frame pans sideways and the page body does not move. */}
+      <Panel
+        title="Headquarters"
+        subtitle="Every room is drawn from committed state, and every room opens the screen that operates it."
+        actions={
+          <span className="hidden text-[10px] text-ink-faint sm:inline">
+            {headcount} people · morale {formatScore(employees.morale)}
+          </span>
+        }
+        flush
+      >
+        <OfficeScene onOpenDrawer={setOpenDrawer} onOpenCharacter={setOpenExecutive} className="rounded-t-none" />
+      </Panel>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Headcount" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} href="/people" />
         <StatCard
@@ -180,6 +216,7 @@ export default function CompanyPage(): React.JSX.Element {
         />
       </div>
 
+      {/* --- the drill-down layer -------------------------------------------- */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Charter" subtitle={ARCHETYPE_BLURB[company.archetype]}>
           <KeyValueGrid
@@ -266,6 +303,7 @@ export default function CompanyPage(): React.JSX.Element {
                     key={character.id}
                     character={character}
                     subtitle={character.title}
+                    onClick={() => setOpenExecutive(character.id)}
                     right={
                       character.id === company.ceoCharacterId ? (
                         <Tag tone="brand" size="sm">
@@ -282,7 +320,15 @@ export default function CompanyPage(): React.JSX.Element {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Offices" subtitle={`${company.offices.length} site${company.offices.length === 1 ? '' : 's'} · ${formatMoney(siteCost)} a quarter`}>
+        <Panel
+          title="Offices"
+          subtitle={`${company.offices.length} site${company.offices.length === 1 ? '' : 's'} · ${formatMoney(siteCost)} a quarter`}
+          actions={
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpenDrawer('sites')}>
+              Open sites
+            </button>
+          }
+        >
           {company.offices.length === 0 ? (
             <EmptyState title="No sites" message="This company has no physical office. Headcount growth is uncapped and fixed cost is zero." />
           ) : (
@@ -364,6 +410,24 @@ export default function CompanyPage(): React.JSX.Element {
           </div>
         )}
       </Panel>
+
+      {/* --- drill-downs the scene opens -------------------------------------- */}
+      <ComputeDrawer
+        open={openDrawer === 'compute'}
+        onClose={() => setOpenDrawer(null)}
+        session={session}
+        company={company}
+        projects={view.ownResearchProjects}
+      />
+
+      <SitesDrawer open={openDrawer === 'sites'} onClose={() => setOpenDrawer(null)} session={session} company={company} />
+
+      <ExecutiveDrawer
+        open={executive !== null}
+        onClose={() => setOpenExecutive(null)}
+        character={executive}
+        isCeo={executive !== null && executive.id === company.ceoCharacterId}
+      />
 
       <Drawer
         open={drawerRole !== null}

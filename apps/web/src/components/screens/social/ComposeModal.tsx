@@ -297,7 +297,7 @@ export function ComposeModal({
           </div>
 
           {authorNote === null ? null : (
-            <p className="rounded-[4px] border border-hair bg-raised px-3 py-2 text-[11px] text-ink-dim">{authorNote}</p>
+            <p className="rounded-card border border-hair bg-raised px-3.5 py-2.5 text-[11px] text-ink-dim">{authorNote}</p>
           )}
 
           <ValidationBanner result={result} />

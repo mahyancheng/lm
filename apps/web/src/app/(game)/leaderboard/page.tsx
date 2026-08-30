@@ -282,7 +282,7 @@ export default function LeaderboardPage(): React.JSX.Element {
                     type="button"
                     onClick={() => setBoard(name)}
                     className={cx(
-                      'flex w-full items-center justify-between gap-3 rounded-[3px] border-b border-hair/60 px-1 py-1.5 text-left transition-colors hover:bg-raised',
+                      'flex w-full items-center justify-between gap-3 rounded-chip border-b border-hair px-2 py-2 text-left transition-colors hover:bg-raised',
                       board === name ? 'bg-raised' : '',
                     )}
                   >

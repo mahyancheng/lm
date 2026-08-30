@@ -10,7 +10,12 @@
 import { describe, expect, it } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import { NarratorOutputSchema } from '@frontier/contracts';
+import {
+  ChiefOfStaffInterpretationSchema,
+  GmProposalBatchSchema,
+  NarratorOutputSchema,
+  NpcActionBundleSchema,
+} from '@frontier/contracts';
 import { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFormatFor } from '../src/transport/api';
 import { classifyIssues } from '../src/transport/types';
 import { VALID_NARRATION } from './fixtures';
@@ -59,6 +64,118 @@ describe('output format', () => {
   it('inlines rather than emitting $ref, which models follow badly', () => {
     const format = outputFormatFor(NarratorOutputSchema);
     expect(JSON.stringify(format.schema)).not.toContain('$ref');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Structured-output schema narrowing                                         */
+/* -------------------------------------------------------------------------- */
+
+/** The keywords the structured-output endpoint accepts, per the SDK's transform. */
+const SUPPORTED_KEYWORDS = new Set([
+  '$ref',
+  '$defs',
+  'type',
+  'anyOf',
+  'allOf',
+  'description',
+  'title',
+  'properties',
+  'additionalProperties',
+  'required',
+  'items',
+  'format',
+  'minItems',
+]);
+
+function collectKeywords(node: unknown, out: Set<string>): void {
+  if (node === null || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const entry of node) collectKeywords(entry, out);
+    return;
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    out.add(key);
+    if (key === 'properties' || key === '$defs') {
+      for (const child of Object.values(value as Record<string, unknown>)) collectKeywords(child, out);
+    } else {
+      collectKeywords(value, out);
+    }
+  }
+}
+
+describe('structured-output schema narrowing', () => {
+  // Nested, with bounded strings, a bounded array, an enum, an optional field
+  // and a nullable one — every shape the contracts schemas actually use.
+  const Nested = z.object({
+    headline: z.string().min(3).max(80),
+    tone: z.enum(['calm', 'strained']),
+    items: z
+      .array(
+        z.object({
+          label: z.string().max(24),
+          weight: z.number().min(0).max(1),
+          note: z.string().optional(),
+        }),
+      )
+      .min(1)
+      .max(4),
+    parent: z.string().nullable(),
+  });
+
+  it('emits no keyword the endpoint would reject', () => {
+    const keywords = new Set<string>();
+    collectKeywords(outputFormatFor(Nested).schema, keywords);
+    expect([...keywords].filter((key) => !SUPPORTED_KEYWORDS.has(key))).toEqual([]);
+  });
+
+  it('narrows every contract schema the roles actually send', () => {
+    for (const schema of [NarratorOutputSchema, ChiefOfStaffInterpretationSchema, GmProposalBatchSchema, NpcActionBundleSchema]) {
+      const keywords = new Set<string>();
+      collectKeywords(outputFormatFor(schema).schema, keywords);
+      expect([...keywords].filter((key) => !SUPPORTED_KEYWORDS.has(key))).toEqual([]);
+    }
+  });
+
+  it('forces every object strict, including the ones nested inside arrays', () => {
+    const schema = outputFormatFor(Nested).schema as Record<string, unknown>;
+    expect(schema['additionalProperties']).toBe(false);
+    const properties = schema['properties'] as Record<string, Record<string, unknown>>;
+    const items = properties['items']?.['items'] as Record<string, unknown>;
+    expect(items['type']).toBe('object');
+    expect(items['additionalProperties']).toBe(false);
+    // An optional field is simply absent from `required`; the object stays strict.
+    expect(items['required']).toEqual(['label', 'weight']);
+  });
+
+  it('keeps the bounds the endpoint refuses as keywords by folding them into the description', () => {
+    const schema = outputFormatFor(Nested).schema as Record<string, unknown>;
+    const properties = schema['properties'] as Record<string, Record<string, unknown>>;
+
+    const headline = properties['headline'] as Record<string, unknown>;
+    expect(headline['minLength']).toBeUndefined();
+    expect(headline['description']).toContain('minLength: 3');
+    expect(headline['description']).toContain('maxLength: 80');
+
+    // minItems survives only at 0 or 1; maxItems never does.
+    const items = properties['items'] as Record<string, unknown>;
+    expect(items['minItems']).toBe(1);
+    expect(items['description']).toContain('maxItems: 4');
+  });
+
+  it('rewrites a nullable union to anyOf and drops the $schema marker', () => {
+    const schema = outputFormatFor(Nested).schema as Record<string, unknown>;
+    expect(schema['$schema']).toBeUndefined();
+    expect(JSON.stringify(schema)).not.toContain('$schema');
+    const properties = schema['properties'] as Record<string, Record<string, unknown>>;
+    const parent = properties['parent'] as Record<string, unknown>;
+    expect(Array.isArray(parent['anyOf'])).toBe(true);
+  });
+
+  it('still validates against the untouched contract schema on the way back', () => {
+    const format = outputFormatFor(NarratorOutputSchema);
+    expect(format.parse(JSON.stringify(VALID_NARRATION))).toEqual(VALID_NARRATION);
+    expect(() => format.parse('{"headline":"x"}')).toThrow();
   });
 });
 
@@ -128,7 +245,9 @@ describe('typed error handling', () => {
     ['rate limit', new Anthropic.RateLimitError(429, undefined, 'slow down', new Headers()), 'rate_limited'],
     ['authentication', new Anthropic.AuthenticationError(401, undefined, 'bad key', new Headers()), 'disabled'],
     ['permission denied', new Anthropic.PermissionDeniedError(403, undefined, 'not allowed', new Headers()), 'disabled'],
-    ['bad request', new Anthropic.BadRequestError(400, undefined, 'malformed', new Headers()), 'invalid_output'],
+    // A 400 is a malformed *request*, which is this side's bug. Recording it as
+    // invalid_output would blame the model for a schema the endpoint refused.
+    ['bad request', new Anthropic.BadRequestError(400, undefined, 'malformed', new Headers()), 'api_error'],
     ['connection timeout', new Anthropic.APIConnectionTimeoutError({ message: 'took too long' }), 'timeout'],
     ['connection', new Anthropic.APIConnectionError({ message: 'socket hang up' }), 'api_error'],
     ['internal server', new Anthropic.InternalServerError(500, undefined, 'boom', new Headers()), 'api_error'],

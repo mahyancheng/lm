@@ -20,7 +20,8 @@ import { PHASE_OF_ACTION, cashEffectOf, describeIntent, phaseOfIntent } from './
 import { buildDirectory, memoriesAbout, overridesFor } from '../network/directory';
 import { audienceMixFor, networkFit, predictedAudiences } from '../social/audiences';
 import { blankObligation, cashInObligations, describeObligation } from '../deal-room/obligations';
-import { groupLines, lineCount, sectionOf } from '../quarter-resolution/sections';
+import { groupLines, lineCount, playerQuarter, sectionOf } from '../quarter-resolution/sections';
+import { PLAYER_ID } from '../../../lib/game/engine';
 
 describe('intent description', () => {
   it('routes every action type to a real resolution phase', () => {
@@ -188,6 +189,58 @@ describe('the resolution report', () => {
       actorIds,
     );
     expect(id).toBe('world');
+  });
+
+  /**
+   * Sorting is not redaction. `groupLines` buckets a rival's line into
+   * "Competition" and renders it; the screen used to hand the player exactly the
+   * fields `redactRival` strips and the RLS policies deny — rival morale,
+   * attrition, runway, per-product churn and internal research confidence. The
+   * projection is what decides entitlement, and the screen consumes it before a
+   * line reaches a bucket at all.
+   */
+  it('projects the quarter to one seat before grouping it', () => {
+    const engine = getEngine();
+    const session = createSession();
+    const outcome = engine.resolver.resolveQuarter(session, [], null, []);
+    expect(outcome.committed).toBe(true);
+    const after = outcome.nextState;
+
+    const view = playerQuarter(outcome, after, PLAYER_ID);
+    const own = playerCompanyOf(after);
+
+    // The projection is not vacuous: a great deal of the quarter is withheld…
+    expect(view.events.length).toBeLessThan(outcome.events.length);
+    // …and none of what survives is a row this seat may not read.
+    const visible = new Set(view.events.map((event) => event.eventId));
+    for (const event of view.events) {
+      if (event.visibility === 'public') continue;
+      const subjects = [event.actorId, event.targetId].filter((id): id is string => id !== null);
+      expect(subjects.length).toBeGreaterThan(0);
+    }
+    // Every surviving line still cites a surviving row, so the screen's central
+    // promise — every line opens its ledger rows — holds after projection.
+    for (const section of view.sections) {
+      for (const line of section.lines) {
+        expect(line.refEventIds.length).toBeGreaterThan(0);
+        for (const ref of line.refEventIds) expect(visible.has(ref)).toBe(true);
+      }
+    }
+    // The player's own quarter still reaches them.
+    const grouped = view.sections.reduce((total, section) => total + section.lines.length, 0);
+    expect(grouped).toBe(lineCount(view.report));
+    expect(grouped).toBeGreaterThan(0);
+    expect(view.sections.map((section) => section.id)).toContain('company');
+    const ownLines = view.sections
+      .flatMap((section) => section.lines)
+      .filter((line) => line.subjectId === own.id);
+    expect(ownLines.length).toBeGreaterThan(0);
+
+    // And it is idempotent, so a store that already projected loses nothing by
+    // the screen projecting again.
+    const twice = playerQuarter(view, after, PLAYER_ID);
+    expect(twice.events).toHaveLength(view.events.length);
+    expect(lineCount(twice.report)).toBe(lineCount(view.report));
   });
 
   it('reaches the leaderboards and a rank row after one quarter', () => {

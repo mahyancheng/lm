@@ -53,21 +53,26 @@ export {
   zodIssueSummary,
 } from './transport/types';
 
-export type { JsonExtraction } from './transport/json';
-export { extractJsonObject, firstBalancedObject, stripCodeFence } from './transport/json';
+export type { JsonCandidateFilter, JsonExtraction } from './transport/json';
+export { balancedObjects, extractJsonObject, firstBalancedObject, stripCodeFence } from './transport/json';
 
-export { jsonSchemaObjectFor, jsonSchemaTextFor } from './transport/schemaText';
+export { jsonSchemaObjectFor, jsonSchemaTextFor, structuredOutputSchemaFor, transformJsonSchema } from './transport/schemaText';
 
 export type { ClaudeQueryFn, ClaudeSessionTransportConfig } from './transport/claudeSession';
 export {
+  ASSISTANT_ERROR_REASONS,
   DEFAULT_CLAUDE_SESSION_MODEL,
   DISALLOWED_TOOLS,
   JSON_PROTOCOL_INSTRUCTION,
+  RATE_LIMIT_RETRY_DELAY_MS,
+  TOOL_DENIED_MESSAGE,
   buildQueryOptions,
   buildRepairPrompt,
   buildSystemPrompt,
+  classifyAssistantError,
   collectAttempt,
   createClaudeSessionTransport,
+  denyEveryTool,
 } from './transport/claudeSession';
 
 export type { ApiTransportConfig } from './transport/api';
@@ -106,7 +111,7 @@ export { INNOVATION_DECLINE_REASON, dialogueRegister, fallbackCharacterReply, fa
 /* --------------------------------- roles ---------------------------------- */
 
 export type { LlmRoles, LlmRolesOptions, RoleCallMeta, RoleResult } from './roles';
-export { AGENT_VERSION, createLlmRoles } from './roles';
+export { AGENT_VERSION, contextHashFor, createLlmRoles } from './roles';
 
 export type { MemoryRunSink, RunSink } from './runSink';
 export { createMemoryRunSink, createNullRunSink, safeRunSink } from './runSink';

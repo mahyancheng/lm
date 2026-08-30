@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createSession, getEngine, buildSubmittedAction, drawWorldCandidates } from './engine';
+import type { FrontierResolutionOutcome } from '@frontier/simulation';
+import {
+  createSequenceAllocator,
+  createSession,
+  getEngine,
+  buildSubmittedAction,
+  drawWorldCandidates,
+  resolveQuarterSafely,
+} from './engine';
 import { projectPlayerView, buildAlerts, marketCapOf, founderNetWorth } from './playerView';
 import { buildWorldDirectorInput, buildNpcStrategistInput, strategistCompanies, buildChiefOfStaffInput } from './briefings';
 import { replay } from './persistence';
@@ -59,9 +67,18 @@ describe('demo store surfaces', () => {
     const s = createSession();
     const a = buildSubmittedAction(s, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     const first = engine.resolver.resolveQuarter(s, [a], null, []);
-    const loaded = replay({ version: 1, seed: 424242, difficulty: 'standard', actionLog: [[a]], savedQuarter: 1 });
+    const loaded = replay({
+      version: 2,
+      seed: 424242,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+      checkpoint: null,
+      savedQuarter: 1,
+    });
     expect(loaded.session.quarter).toBe(1);
     expect(loaded.rejectedQuarters).toHaveLength(0);
+    expect(loaded.complete).toBe(true);
     expect(JSON.stringify(loaded.session)).toBe(JSON.stringify(first.nextState));
   });
 
@@ -83,5 +100,73 @@ describe('demo store surfaces', () => {
     expect(cos.playerMessage).toContain('marketing');
     // state is untouched by the candidate draw
     expect(s.quarter).toBe(0);
+  });
+});
+
+/**
+ * The resolving overlay is `fixed inset-0` with no dismiss control, so the one
+ * state `endQuarter` may never leave behind is `resolving: true`. It used to:
+ * the recovery from a throwing `resolveQuarter` was to call `resolveQuarter`
+ * again, unguarded, and the four engine invariants throw on both calls because
+ * they are checks over the ledger the resolve just produced.
+ */
+describe('resolving without a way to get stuck', () => {
+  const s = createSession();
+  const action = buildSubmittedAction(s, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
+  const quiet = { proposals: [], quarterSummary: 'A deliberately quiet quarter with nothing proposed.' };
+
+  it('falls back to an offline resolve when the model breaks the engine, and records the offline inputs', () => {
+    let calls = 0;
+    const attempt = resolveQuarterSafely(s, [action], quiet, [], (state, actions, proposal, bundles) => {
+      calls += 1;
+      if (proposal !== null) throw new Error('the proposal broke the pipeline');
+      return getEngine().resolver.resolveQuarter(state, actions, proposal, bundles);
+    });
+    expect(calls).toBe(2);
+    expect(attempt.error).toBeNull();
+    expect(attempt.outcome?.committed).toBe(true);
+    // What is recorded for replay is what actually ran, not what was attempted.
+    expect(attempt.gmProposal).toBeNull();
+    expect(attempt.npcBundles).toEqual([]);
+  });
+
+  it('reports a fault instead of throwing when the offline resolve throws too', () => {
+    const attempt = resolveQuarterSafely(s, [action], quiet, [], () => {
+      throw new Error('invariant auditability failed');
+    });
+    expect(attempt.outcome).toBeNull();
+    expect(attempt.error).toContain('auditability');
+  });
+
+  it('passes an outcome straight through when nothing throws', () => {
+    const outcome: FrontierResolutionOutcome = getEngine().resolver.resolveQuarter(s, [action], null, []);
+    const attempt = resolveQuarterSafely(s, [action], null, [], () => outcome);
+    expect(attempt.outcome).toBe(outcome);
+    expect(attempt.error).toBeNull();
+  });
+});
+
+/**
+ * "Approve N routine actions" loops `queueAction` inside one event handler.
+ * React does not re-render between the iterations, so a sequence read from
+ * rendered state is the same number every time round and every action minted in
+ * the loop collided on its `actionId` — one validation survived for all of them,
+ * and removing any one removed them all.
+ */
+describe('action ids survive a bulk approve', () => {
+  it('mints a distinct id per queued action from one stale state', () => {
+    const s = createSession();
+    const allocator = createSequenceAllocator();
+    const budgets = [100_000, 200_000, 300_000, 400_000];
+    // `s` never changes inside the loop: that is precisely the stale-state case.
+    const queued = budgets.map((budgetUsd) =>
+      buildSubmittedAction(s, { type: 'set_research_budget', budgetUsd }, allocator.next()),
+    );
+    expect(new Set(queued.map((entry) => entry.actionId)).size).toBe(budgets.length);
+    expect(queued.map((entry) => entry.sequence)).toEqual([0, 1, 2, 3]);
+    expect(allocator.peek()).toBe(4);
+
+    allocator.reset();
+    expect(allocator.next()).toBe(0);
   });
 });

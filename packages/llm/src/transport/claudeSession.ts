@@ -9,9 +9,15 @@
  *
  * The session is locked down to be a pure text-in/JSON-out function:
  *
- * - `allowedTools: []` and `disallowedTools: [...]` — the model has no tools.
- *   A World Director that could read the filesystem would be a security bug and
- *   an information-boundary bug at the same time.
+ * - `tools: []` — the base set of built-in tools is empty, so nothing is
+ *   offered to the model in the first place. This is the option that actually
+ *   restricts availability: `allowedTools` only names what may run *without a
+ *   permission prompt*, which is a different question. `disallowedTools` names
+ *   the built-ins explicitly as belt-and-braces, and `canUseTool` denies every
+ *   request that reaches it, so no tool executes even if a future SDK offers
+ *   one this list has never heard of. A World Director that could read the
+ *   filesystem would be a security bug and an information-boundary bug at the
+ *   same time.
  * - `permissionMode: 'dontAsk'` — nothing may be approved interactively; a
  *   server-side resolver has nobody to ask.
  * - `settingSources: []` — no user, project or local settings are loaded, so
@@ -30,6 +36,17 @@
  * session so the model can see what it wrote. A success on that retry is
  * recorded as `repaired: true` — a repaired run is not the same as a clean one.
  *
+ * ## Failure taxonomy
+ *
+ * The SDK reports transport-level failures as a typed `SDKAssistantMessageError`
+ * enum, and those are mapped one-for-one onto `LlmFallbackRecord.reason`
+ * (`ASSISTANT_ERROR_REASONS`) rather than flattened to `api_error`. The reason
+ * then steers the retry, because retrying is not always the kind thing to do:
+ * a `disabled` failure (no token, org not allowed, billing) cannot be repaired
+ * by asking again, so the repair is skipped entirely; a `rate_limited` failure
+ * waits `RATE_LIMIT_RETRY_DELAY_MS` before its single retry rather than firing
+ * a second call straight into the limit that just rejected the first.
+ *
  * ## Session continuity
  *
  * When `sessionKey` is non-null the transport looks the Claude session id up in
@@ -39,14 +56,16 @@
  * boundary-safe.
  */
 
-import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { CanUseTool, Options, PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { LlmSessionStore } from '../sessionStore';
 import { extractJsonObject } from './json';
 import {
   type LlmCompletion,
   type LlmCompletionRequest,
+  type LlmFailureReason,
   type LlmTransport,
   type LlmTokenUsage,
+  classifyIssues,
   nowMs,
   parseAgainst,
   taggedIssue,
@@ -77,13 +96,22 @@ export interface ClaudeSessionTransportConfig {
   readonly cwd?: string;
   /** Retry an invalid reply once with the error summary. Default true. */
   readonly repairOnce?: boolean;
+  /** How the rate-limit backoff waits. Injected by tests so no test ever sleeps. */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export const DEFAULT_CLAUDE_SESSION_MODEL = 'sonnet';
 
 /**
- * Built-in tools explicitly removed from context. `allowedTools: []` stops the
- * model from *using* a tool; naming them here stops them from being offered.
+ * How long to wait before the single retry of a rate-limited call. Bounded and
+ * fixed: one short pause, never a growing storm of attempts.
+ */
+export const RATE_LIMIT_RETRY_DELAY_MS = 2_000;
+
+/**
+ * Built-in tools named as denied. Redundant with `tools: []`, which already
+ * empties the base set — kept so a session is refused these by name even if a
+ * future SDK default reintroduces one.
  */
 export const DISALLOWED_TOOLS: readonly string[] = [
   'Bash',
@@ -105,6 +133,52 @@ export const DISALLOWED_TOOLS: readonly string[] = [
 
 export const JSON_PROTOCOL_INSTRUCTION = 'Respond with ONLY a JSON object matching this JSON Schema (no prose, no code fences):';
 
+/** The message a denied tool request is answered with. */
+export const TOOL_DENIED_MESSAGE = 'This session is a pure text-in/JSON-out role. No tool may run.';
+
+/**
+ * The last line of the lockdown: whatever is asked for, the answer is no.
+ *
+ * `tools: []` already means nothing is offered, so in practice this is never
+ * called. It exists so that "no tool executes" is guaranteed by a decision this
+ * package makes, not by the contents of a hardcoded name list.
+ */
+export const denyEveryTool: CanUseTool = async (): Promise<PermissionResult> => ({
+  behavior: 'deny',
+  message: TOOL_DENIED_MESSAGE,
+  interrupt: true,
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Failure taxonomy                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `SDKAssistantMessageError` (sdk.d.ts) mapped onto the fallback reasons the
+ * ledger records. Flattening these to `api_error` would make
+ * `LlmFallbackRecord.reason` — the field whose whole job is to say *why* the
+ * model was unavailable — useless: an expired OAuth token and a malformed reply
+ * would read identically to an operator.
+ */
+export const ASSISTANT_ERROR_REASONS: Readonly<Record<string, LlmFailureReason>> = {
+  authentication_failed: 'disabled',
+  oauth_org_not_allowed: 'disabled',
+  account_on_hold: 'disabled',
+  billing_error: 'disabled',
+  rate_limit: 'rate_limited',
+  overloaded: 'rate_limited',
+  server_error: 'api_error',
+  invalid_request: 'api_error',
+  model_not_found: 'api_error',
+  max_output_tokens: 'invalid_output',
+  unknown: 'api_error',
+};
+
+/** The reason for one reported assistant error. Anything unrecognised is an API error. */
+export function classifyAssistantError(error: string): LlmFailureReason {
+  return ASSISTANT_ERROR_REASONS[error] ?? 'api_error';
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Environment                                                                */
 /* -------------------------------------------------------------------------- */
@@ -123,6 +197,7 @@ interface AttemptOutcome {
   readonly claudeSessionId: string | null;
   readonly modelId: string | null;
   readonly tokens: LlmTokenUsage | null;
+  /** Tagged issues (`"<reason>: <detail>"`), so the cause survives into the ledger. */
   readonly errors: string[];
 }
 
@@ -154,7 +229,9 @@ export async function collectAttempt(stream: AsyncIterable<SDKMessage>): Promise
       for (const block of message.message.content) {
         if (block.type === 'text') assistantText.push(block.text);
       }
-      if (message.error !== undefined) errors.push(`assistant error: ${message.error}`);
+      if (message.error !== undefined) {
+        errors.push(taggedIssue(classifyAssistantError(message.error), `assistant error: ${message.error}`));
+      }
       continue;
     }
     if (message.type === 'result') {
@@ -162,9 +239,9 @@ export async function collectAttempt(stream: AsyncIterable<SDKMessage>): Promise
       tokens = readTokenUsage(message.usage) ?? tokens;
       if (message.subtype === 'success') {
         resultText = message.result;
-        if (message.is_error) errors.push(`result reported an error: ${message.result}`);
+        if (message.is_error) errors.push(taggedIssue('api_error', `result reported an error: ${message.result}`));
       } else {
-        errors.push(`result ${message.subtype}${message.errors.length > 0 ? `: ${message.errors.join('; ')}` : ''}`);
+        errors.push(taggedIssue('api_error', `result ${message.subtype}${message.errors.length > 0 ? `: ${message.errors.join('; ')}` : ''}`));
       }
     }
   }
@@ -204,8 +281,12 @@ export function buildQueryOptions(params: {
     model: params.model,
     systemPrompt: params.system,
     maxTurns: 1,
+    // `tools: []` is the option that empties the base set of built-ins; the
+    // other three are defence in depth, in decreasing order of trust.
+    tools: [],
     allowedTools: [],
     disallowedTools: [...DISALLOWED_TOOLS],
+    canUseTool: denyEveryTool,
     permissionMode: 'dontAsk',
     settingSources: [],
   };
@@ -234,6 +315,7 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
   const oauthToken = config.oauthToken ?? env['CLAUDE_CODE_OAUTH_TOKEN'];
   const store = config.sessionStore;
   const repairOnce = config.repairOnce ?? true;
+  const sleep = config.sleep ?? defaultSleep;
 
   return {
     kind: 'claude-session',
@@ -301,8 +383,11 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
         tokens = outcome.tokens ?? tokens;
         claudeSessionId = outcome.claudeSessionId ?? claudeSessionId;
 
-        const extraction = extractJsonObject(outcome.text);
-        const issues: string[] = outcome.errors.map((line) => taggedIssue('api_error', line));
+        // The schema is the arbiter of which balanced object in the reply is
+        // the answer, so a thinking aside that happens to contain JSON cannot
+        // shadow it.
+        const extraction = extractJsonObject(outcome.text, (value) => req.schema.safeParse(value).success);
+        const issues: string[] = [...outcome.errors];
 
         if (!extraction.ok) {
           issues.push(taggedIssue('invalid_output', extraction.reason));
@@ -323,11 +408,19 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
         }
 
         if (attempt === 0 && repairOnce) {
-          firstIssues = issues;
-          prompt = buildRepairPrompt(req.prompt, issues);
-          // Resume the attempt we just made, so the repair sees its own reply.
-          resume = claudeSessionId;
-          continue;
+          const reason = classifyIssues(issues);
+          // A missing token, a suspended account or a billing failure is not
+          // something a second call can talk its way out of. Stop here.
+          if (reason !== 'disabled') {
+            // A rate limit asked for less traffic. Honour it with one bounded
+            // pause instead of answering with a second immediate call.
+            if (reason === 'rate_limited') await sleep(RATE_LIMIT_RETRY_DELAY_MS);
+            firstIssues = issues;
+            prompt = buildRepairPrompt(req.prompt, issues);
+            // Resume the attempt we just made, so the repair sees its own reply.
+            resume = claudeSessionId;
+            continue;
+          }
         }
 
         await remember(store, req.sessionKey, claudeSessionId);
@@ -344,6 +437,12 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 async function remember(store: LlmSessionStore | undefined, sessionKey: string | null, claudeSessionId: string | null): Promise<void> {
   if (store === undefined || sessionKey === null || claudeSessionId === null) return;

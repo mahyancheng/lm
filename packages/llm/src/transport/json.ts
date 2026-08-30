@@ -13,10 +13,19 @@
  *
  * The scan is brace-balanced and string-aware, so an object containing `"}"`
  * inside a string value (a rationale, a post body) survives intact.
+ *
+ * It is also position-blind: a reply may contain several top-level objects — a
+ * thinking aside, a worked example, then the answer — and the *first* one is
+ * not necessarily the intended one. Every balanced object is offered in turn
+ * and the caller's `accept` predicate decides, so a decoy preamble can no
+ * longer burn the one permitted repair.
  */
 
 /** Result of pulling a JSON value out of arbitrary model text. */
 export type JsonExtraction = { ok: true; value: unknown; source: string } | { ok: false; reason: string };
+
+/** Decides whether an extracted object is the one the caller wanted. */
+export type JsonCandidateFilter = (value: unknown) => boolean;
 
 const FENCE = /^\s*```(?:json|jsonc|json5)?\s*\n([\s\S]*?)\n?\s*```\s*$/;
 
@@ -28,10 +37,12 @@ export function stripCodeFence(text: string): string {
 }
 
 /**
- * The first balanced `{...}` in `text`, honouring string literals and escapes,
- * or null when there is no complete object.
+ * Every balanced top-level `{...}` in `text`, in order, honouring string
+ * literals and escapes. Nested objects are part of their parent, never yielded
+ * on their own.
  */
-export function firstBalancedObject(text: string): string | null {
+export function balancedObjects(text: string): string[] {
+  const found: string[] = [];
   let depth = 0;
   let start = -1;
   let inString = false;
@@ -60,33 +71,51 @@ export function firstBalancedObject(text: string): string | null {
     if (ch === '}') {
       if (depth === 0) continue; // stray closer before any opener
       depth -= 1;
-      if (depth === 0 && start >= 0) return text.slice(start, i + 1);
+      if (depth === 0 && start >= 0) found.push(text.slice(start, i + 1));
     }
   }
-  return null;
+  return found;
+}
+
+/**
+ * The first balanced `{...}` in `text`, or null when there is no complete
+ * object.
+ */
+export function firstBalancedObject(text: string): string | null {
+  return balancedObjects(text)[0] ?? null;
 }
 
 /**
  * Pull one JSON object out of a model reply.
  *
- * Order: parse the whole reply, then the de-fenced reply, then the first
- * balanced object inside it. Anything that parses to a non-object (a bare
- * string, a number, an array) is refused — every LLM-facing schema in
+ * Order: the whole reply, the de-fenced reply, then **every** balanced object
+ * inside either, in the order they appear. Anything that parses to a non-object
+ * (a bare string, a number, an array) is refused — every LLM-facing schema in
  * `@frontier/contracts` is an object at the root.
+ *
+ * `accept` lets the caller keep looking past an object that parses but is not
+ * the reply: the transport passes its zod schema, so `{"note":"decoy"} then
+ * {…the real answer…}` resolves to the real answer instead of spending the one
+ * permitted repair on packaging. The first candidate that parses is still
+ * returned when nothing satisfies `accept`, so the caller reports a schema
+ * violation against the model's most plausible answer rather than a bare
+ * "no JSON found".
  */
-export function extractJsonObject(text: string): JsonExtraction {
+export function extractJsonObject(text: string, accept?: JsonCandidateFilter): JsonExtraction {
   const candidates: string[] = [];
   const trimmed = text.trim();
   if (trimmed.length === 0) return { ok: false, reason: 'the reply was empty' };
 
-  candidates.push(trimmed);
-  const defenced = stripCodeFence(trimmed).trim();
-  if (defenced !== trimmed && defenced.length > 0) candidates.push(defenced);
+  const push = (candidate: string): void => {
+    if (candidate.length > 0 && !candidates.includes(candidate)) candidates.push(candidate);
+  };
 
-  for (const source of [trimmed, defenced]) {
-    const balanced = firstBalancedObject(source);
-    if (balanced !== null && !candidates.includes(balanced)) candidates.push(balanced);
-  }
+  push(trimmed);
+  const defenced = stripCodeFence(trimmed).trim();
+  push(defenced);
+  for (const source of [trimmed, defenced]) for (const balanced of balancedObjects(source)) push(balanced);
+
+  let firstParsed: JsonExtraction | null = null;
 
   for (const candidate of candidates) {
     let parsed: unknown;
@@ -95,10 +124,13 @@ export function extractJsonObject(text: string): JsonExtraction {
     } catch {
       continue;
     }
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return { ok: true, value: parsed, source: candidate };
-    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+
+    const extraction: JsonExtraction = { ok: true, value: parsed, source: candidate };
+    if (accept === undefined || accept(parsed)) return extraction;
+    firstParsed ??= extraction;
   }
 
+  if (firstParsed !== null) return firstParsed;
   return { ok: false, reason: 'no complete JSON object could be extracted from the reply' };
 }

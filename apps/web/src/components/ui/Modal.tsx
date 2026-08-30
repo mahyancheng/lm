@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
-import { cx, nextTrapIndex } from './tokens';
+import { useId, type ReactNode, type RefObject } from 'react';
+import { useDialogFocus } from './focusTrap';
+import { cx } from './tokens';
 
 export interface ModalProps {
   readonly open: boolean;
@@ -25,43 +26,11 @@ const WIDTH: Readonly<Record<'sm' | 'md' | 'lg', string>> = {
   lg: 'max-w-4xl',
 };
 
-/** Everything the keyboard can reach, in document order. */
-const FOCUSABLE =
-  'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * The page does not scroll while any dialog is open.
- *
- * Reference-counted rather than saved-and-restored: two overlapping dialogs
- * closing out of order must not unlock the page while one is still up.
- */
-let scrollLocks = 0;
-let restoreOverflow = '';
-
-function lockScroll(): () => void {
-  if (typeof document === 'undefined') return () => undefined;
-  if (scrollLocks === 0) {
-    restoreOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-  }
-  scrollLocks += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    scrollLocks = Math.max(0, scrollLocks - 1);
-    if (scrollLocks === 0) document.body.style.overflow = restoreOverflow;
-  };
-}
-
 /**
  * A centred dialog. Escape and backdrop close it unless `dismissible` is false.
  *
- * `aria-modal` hides the background from the accessibility tree, so the keyboard
- * must not be able to walk into it: focus moves into the dialog on open, Tab and
- * Shift+Tab wrap inside it, and the element that opened it gets focus back on
- * close. A dialog that announces itself as modal while focus sits on content a
- * screen reader will not read is worse than one that does not announce at all.
+ * Focus is taken on open, trapped while open and given back on close — see
+ * `useDialogFocus`. The heading is the accessible name.
  */
 export function Modal({
   open,
@@ -75,59 +44,8 @@ export function Modal({
   initialFocus,
   className,
 }: ModalProps): React.JSX.Element | null {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
-
-  const focusable = useCallback((): HTMLElement[] => {
-    const container = dialogRef.current;
-    if (container === null) return [];
-    return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-      (element) => element.offsetParent !== null || element === document.activeElement,
-    );
-  }, []);
-
-  /* --- focus: take it, keep it, give it back ------------------------------- */
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const target = initialFocus?.current ?? focusable()[0] ?? dialogRef.current;
-    target?.focus();
-    return () => {
-      previous?.focus();
-    };
-  }, [open, initialFocus, focusable]);
-
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        if (dismissible) onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const elements = focusable();
-      if (elements.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-      const current = elements.findIndex((element) => element === document.activeElement);
-      const next = nextTrapIndex(elements.length, current, event.shiftKey);
-      // Wrapping is only needed at the ends; in the middle the browser does the
-      // right thing already and intercepting would break composed widgets.
-      const atEdge = current === -1 || (event.shiftKey ? current === 0 : current === elements.length - 1);
-      if (!atEdge) return;
-      event.preventDefault();
-      elements[next]?.focus();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, dismissible, onClose, focusable]);
-
-  useEffect(() => {
-    if (!open) return;
-    return lockScroll();
-  }, [open]);
+  const dialogRef = useDialogFocus(open, { dismissible, onClose, initialFocus });
 
   if (!open) return null;
 

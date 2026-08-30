@@ -17,9 +17,20 @@
  *    fallback is pure from its inputs: no RNG, no clock, no state.
  * 4. **Post-process** where the contract demands it — the confirmation policy on
  *    a Chief of Staff interpretation is enforced here as well as in the engine.
- * 5. **Record** an `AgentRunRecord` into the injected `RunSink`, with
- *    `contextHash = fnv1a64(stableStringify(input))` so two runs with the same
- *    hash and the same model are comparable.
+ * 5. **Record** an `AgentRunRecord` into the injected `RunSink`, with a
+ *    `contextHash` over the **composed prompt pair and the conversation key**
+ *    so two runs with the same hash and the same model are comparable.
+ *
+ * The hash covers the prompt rather than the raw input on purpose. Half of what
+ * an NPC strategist sees — its research programmes, its people's memories, its
+ * rival signals, its last four quarters of decisions — arrives as `evidence`
+ * beside the input and never appears in it, so hashing the input alone would
+ * report two calls with wildly different rival intelligence as identical. The
+ * composed prompt is by construction everything the model was told this turn.
+ * The two dialogue roles additionally resume a Claude session, and a transcript
+ * this package never holds cannot be hashed; the conversation key is folded in
+ * so that at least two *different* threads never collide, and `sessionKey` on
+ * the completion names the thread whose history the hash does not cover.
  *
  * Nothing in this module writes state, and nothing in it returns a value the
  * engine will apply without bounds-checking it first.
@@ -139,6 +150,22 @@ export interface LlmRoles {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Context hashing                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `AgentRunRecord.contextHash` for one call.
+ *
+ * Everything the model actually saw this turn, and nothing else: the role
+ * system prompt, the composed dossier, and the conversation key for the two
+ * roles that resume a session. Exported so a caller reconstructing a run can
+ * recompute the hash without going through the transport.
+ */
+export function contextHashFor(composed: ComposedPrompt, sessionKey: string | null): string {
+  return fnv1a64(stableStringify({ system: composed.system, prompt: composed.prompt, sessionKey }));
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Factory                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -155,11 +182,10 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
    * instead", which is the correct answer for the World Director, the NPC
    * strategist and the social author.
    */
-  async function run<TInput, TOutput>(params: {
+  async function run<TOutput>(params: {
     role: AgentRole;
     schema: z.ZodType<TOutput>;
     schemaName: string;
-    input: TInput;
     composed: ComposedPrompt;
     sessionKey: string | null;
     sessionId: string;
@@ -168,7 +194,7 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
     fallback: () => { output: TOutput | null; declineReason: string | null };
     postProcess?: (value: TOutput) => TOutput;
   }): Promise<RoleResult<TOutput>> {
-    const contextHash = fnv1a64(stableStringify(params.input));
+    const contextHash = contextHashFor(params.composed, params.sessionKey);
     const completion = await transport.complete<TOutput>({
       role: params.role,
       system: params.composed.system,
@@ -247,7 +273,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'world_director',
           schema: GmProposalBatchSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.world_director,
-          input,
           composed: composeWorldDirector(input),
           sessionKey: null,
           ...scope,
@@ -265,7 +290,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'chief_of_staff',
           schema: ChiefOfStaffInterpretationSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.chief_of_staff,
-          input,
           composed: composeChiefOfStaff(input),
           sessionKey: conversationKey,
           ...scope,
@@ -282,7 +306,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'npc_strategist',
           schema: NpcActionBundleSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.npc_strategist,
-          input,
           composed: composeNpcStrategist(input, evidence),
           sessionKey: null,
           ...scope,
@@ -300,7 +323,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'character_dialogue',
           schema: CharacterReplySchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.character_dialogue,
-          input: context,
           composed: composeCharacterDialogue(context),
           sessionKey: conversationKey,
           ...scope,
@@ -316,7 +338,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'innovation_interpreter',
           schema: InnovationProposalSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.innovation_interpreter,
-          input,
           composed: composeInnovationInterpreter(input),
           sessionKey: null,
           ...scope,
@@ -334,7 +355,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'social_author',
           schema: SocialPostDraftSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.social_author,
-          input,
           composed: composeSocialAuthor(input),
           sessionKey: null,
           ...scope,
@@ -351,7 +371,6 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           role: 'narrator',
           schema: NarratorOutputSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.narrator,
-          input,
           composed: composeNarrator(input),
           sessionKey: null,
           ...scope,

@@ -85,6 +85,7 @@ export {
   clearSaveFile,
   exportSave,
   hasSavedGame,
+  hasStoredSave,
   importSave,
   inspectSave,
   loadSavedGame,
@@ -92,6 +93,7 @@ export {
   readSaveFile,
   replay,
   replayAsync,
+  storedSaveVersion,
   writeSaveFile,
 } from './persistence';
 export type {

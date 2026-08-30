@@ -119,6 +119,8 @@ export interface StubTurn {
   readonly tokens?: { input: number; output: number };
   /** When set, the stub throws instead of yielding. */
   readonly throws?: Error;
+  /** A typed `SDKAssistantMessageError` reported on the assistant message. */
+  readonly error?: string;
 }
 
 export interface StubQuery {
@@ -148,6 +150,7 @@ export function stubQuery(script: readonly StubTurn[]): StubQuery {
         uuid: 'u-asst',
         parent_tool_use_id: null,
         message: { content: [{ type: 'text', text: turn.text }] },
+        ...(turn.error === undefined ? {} : { error: turn.error }),
       } as unknown as SDKMessage,
       { type: 'result', subtype: 'success', session_id: turn.sessionId, uuid: 'u-res', result: turn.text, is_error: false, usage } as unknown as SDKMessage,
     ];

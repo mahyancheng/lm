@@ -234,7 +234,14 @@ export function inspectSave(): SaveInspection {
   };
 }
 
-/** Parse the save file without replaying it. Returns null when absent or unreadable. */
+/**
+ * Parse the save file without replaying it. Returns null when absent or
+ * unreadable.
+ *
+ * This validates a checkpoint against `SessionStateSchema`, which is not free —
+ * call it on a load or a user action, not on every write. `hasStoredSave` and
+ * `storedSaveVersion` answer the two cheap questions the write path asks.
+ */
 export function readSaveFile(): SaveFile | null {
   return inspectSave().file;
 }
@@ -242,6 +249,33 @@ export function readSaveFile(): SaveFile | null {
 /** Is there a game to continue? */
 export function hasSavedGame(): boolean {
   return readSaveFile() !== null;
+}
+
+/** Is anything at all stored, without parsing it? */
+export function hasStoredSave(): boolean {
+  const store = storage();
+  if (store === null) return false;
+  try {
+    return store.getItem(SAVE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The stored file's version, or null when absent or unreadable. */
+export function storedSaveVersion(): number | null {
+  const store = storage();
+  if (store === null) return null;
+  try {
+    const raw = store.getItem(SAVE_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== 'object') return null;
+    const version = (parsed as Record<string, unknown>).version;
+    return typeof version === 'number' ? version : null;
+  } catch {
+    return null;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -288,7 +322,8 @@ export function buildSaveFile(input: {
 export function writeSaveFile(file: SaveFile): boolean {
   const store = storage();
   if (store === null) return false;
-  if (inspectSave().status === 'unsupported') return false;
+  const stored = storedSaveVersion();
+  if (stored !== null && stored !== 1 && stored !== SAVE_VERSION) return false;
 
   try {
     store.setItem(SAVE_KEY, JSON.stringify(file));

@@ -28,11 +28,20 @@
  * `parsed_output` typed and validated, null on a parse failure — is identical;
  * only the construction differs. Should contracts move to zod 4, replace
  * `outputFormatFor` with `zodOutputFormat` and delete this note.
+ *
+ * What that hand-rolling must not skip is the schema *transformation*.
+ * `zodOutputFormat` does not send raw JSON Schema: it runs it through
+ * `transformJSONSchema` first, because the structured-output endpoint accepts
+ * only a narrow keyword set. The contracts schemas are full of the keywords it
+ * refuses (`minLength`, `maximum`, `pattern`, `maxItems`, `const`, `$schema`),
+ * so sending them raw earns an `invalid_request_error` on *every* call and
+ * quietly degrades every role to its deterministic fallback. That
+ * transformation is replicated in `structuredOutputSchemaFor`.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { z } from 'zod';
-import { jsonSchemaObjectFor } from './schemaText';
+import { structuredOutputSchemaFor } from './schemaText';
 import {
   type LlmCompletion,
   type LlmCompletionRequest,
@@ -76,6 +85,9 @@ function ambientEnv(): Readonly<Record<string, string | undefined>> {
 /**
  * The `AutoParseableOutputFormat<T>` shape, built from a zod 3 schema.
  * Structural, so `messages.parse` still infers `parsed_output: T | null`.
+ *
+ * The schema goes through the same narrowing `zodOutputFormat` applies, so what
+ * reaches `output_config.format` carries only keywords the endpoint accepts.
  */
 export function outputFormatFor<T>(schema: z.ZodType<T>): {
   type: 'json_schema';
@@ -84,7 +96,7 @@ export function outputFormatFor<T>(schema: z.ZodType<T>): {
 } {
   return {
     type: 'json_schema',
-    schema: jsonSchemaObjectFor(schema),
+    schema: structuredOutputSchemaFor(schema),
     parse: (content: string): T => schema.parse(JSON.parse(content)),
   };
 }
@@ -190,7 +202,10 @@ export function createApiTransport(config: ApiTransportConfig = {}): LlmTranspor
         if (error instanceof Anthropic.RateLimitError) return fail('rate_limited', describe(error));
         if (error instanceof Anthropic.AuthenticationError) return fail('disabled', describe(error));
         if (error instanceof Anthropic.PermissionDeniedError) return fail('disabled', describe(error));
-        if (error instanceof Anthropic.BadRequestError) return fail('invalid_output', describe(error));
+        // A 400 is this side's fault — a malformed request or a schema the
+        // endpoint will not take — never the model answering badly. Recording
+        // it as `invalid_output` would blame the model for a configuration bug.
+        if (error instanceof Anthropic.BadRequestError) return fail('api_error', describe(error));
         if (error instanceof Anthropic.APIConnectionTimeoutError) return fail('timeout', describe(error));
         if (error instanceof Anthropic.APIConnectionError) return fail('api_error', describe(error));
         if (error instanceof Anthropic.APIError) return fail('api_error', describe(error));

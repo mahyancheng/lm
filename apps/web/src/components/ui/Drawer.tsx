@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
+import { useDialogFocus } from './focusTrap';
 import { cx } from './tokens';
 
 export interface DrawerProps {
@@ -22,6 +23,9 @@ export interface DrawerProps {
  * The ledger rows behind a figure, a director's card, one node of the Frontier
  * Map: all read better beside the thing they explain than on a route of their
  * own.
+ *
+ * It declares `aria-modal`, so it keeps the keyboard as well: focus moves in on
+ * open, Tab wraps inside, Escape closes and the trigger gets focus back.
  */
 export function Drawer({
   open,
@@ -34,14 +38,8 @@ export function Drawer({
   width = 460,
   className,
 }: DrawerProps): React.JSX.Element | null {
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onClose();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const titleId = useId();
+  const dialogRef = useDialogFocus(open, { onClose });
 
   if (!open) return null;
 
@@ -49,8 +47,11 @@ export function Drawer({
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden="true" />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className={cx(
           'absolute flex flex-col border-hair-strong bg-panel shadow-2xl shadow-black/60',
           side === 'right'
@@ -62,7 +63,9 @@ export function Drawer({
       >
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-4 py-3">
           <div className="min-w-0">
-            <h2 className="truncate text-[13px] font-semibold text-ink">{title}</h2>
+            <h2 id={titleId} className="truncate text-[13px] font-semibold text-ink">
+              {title}
+            </h2>
             {subtitle !== undefined ? <p className="mt-0.5 truncate text-[11px] text-ink-dim">{subtitle}</p> : null}
           </div>
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm" aria-label="Close">

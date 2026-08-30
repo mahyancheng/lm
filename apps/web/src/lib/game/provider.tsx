@@ -72,11 +72,12 @@ import {
   clearSaveFile,
   exportSave,
   importSave,
+  hasStoredSave,
   inspectSave,
   loadSavedGameAsync,
-  readSaveFile,
   writeSaveFile,
   type LoadedGame,
+  type SaveFile,
   type QuarterRecord,
   type ReplayProgress,
 } from './persistence';
@@ -147,6 +148,12 @@ export interface GameStoreState {
   readonly llm: LlmHealth;
   /** A transient message for the shell to surface, or null. */
   readonly notice: string | null;
+  /**
+   * The lowest sequence number not yet taken, for display and diagnostics only.
+   * The allocator in `GameProvider` is what actually mints them: a number read
+   * from rendered state is the same number for every iteration of a bulk
+   * approve, which is how a whole batch used to collide on one `actionId`.
+   */
   readonly nextSequence: number;
 }
 
@@ -447,6 +454,10 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   // Ids are minted from this, never from rendered state: see the allocator's
   // note in engine.ts for why a bulk approve would otherwise collide.
   const sequences = useRef(createSequenceAllocator()).current;
+  // The file as this tab last wrote or read it. Held here so the persistence
+  // effect does not re-parse a checkpointed session out of localStorage — and
+  // back through `SessionStateSchema` — after every quarter.
+  const savedFile = useRef<SaveFile | null>(null);
 
   /* --- replay the save file, once ------------------------------------------ */
   const runLoad = useCallback(async (): Promise<boolean> => {
@@ -458,7 +469,10 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       });
       return false;
     }
-    if (inspection.file === null) return false;
+    if (inspection.file === null) {
+      dispatch({ type: 'hydrated' });
+      return false;
+    }
 
     dispatch({ type: 'load_start' });
     const loaded = await loadSavedGameAsync({
@@ -473,6 +487,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       return false;
     }
     sequences.reset(0);
+    savedFile.current = inspection.file;
     dispatch({ type: 'loaded', loaded });
     return loaded.complete;
   }, [sequences]);
@@ -509,17 +524,16 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     // A replay that did not finish, or a file this build cannot read, is never
     // written over: the stored decisions outrank whatever is in this tab.
     if (!state.saveWritable) return;
-    if (state.actionLog.length === 0 && readSaveFile() === null) return;
-    writeSaveFile(
-      buildSaveFile({
-        seed: state.settings.seed,
-        difficulty: state.settings.difficulty,
-        autoExecuteRoutine: state.settings.autoExecuteRoutine,
-        log: state.actionLog,
-        session: state.session,
-        previous: readSaveFile(),
-      }),
-    );
+    if (state.actionLog.length === 0 && !hasStoredSave()) return;
+    const file = buildSaveFile({
+      seed: state.settings.seed,
+      difficulty: state.settings.difficulty,
+      autoExecuteRoutine: state.settings.autoExecuteRoutine,
+      log: state.actionLog,
+      session: state.session,
+      previous: savedFile.current,
+    });
+    if (writeSaveFile(file)) savedFile.current = file;
   }, [
     state.actionLog,
     state.hydrated,
@@ -656,6 +670,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       autoExecuteRoutine: settings.autoExecuteRoutine,
     });
     clearSaveFile();
+    savedFile.current = null;
     sequences.reset(0);
     dispatch({ type: 'new_game', session, settings });
   }, [sequences]);
@@ -669,16 +684,16 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       });
       return;
     }
-    const wrote = writeSaveFile(
-      buildSaveFile({
-        seed: current.settings.seed,
-        difficulty: current.settings.difficulty,
-        autoExecuteRoutine: current.settings.autoExecuteRoutine,
-        log: current.actionLog,
-        session: current.session,
-        previous: readSaveFile(),
-      }),
-    );
+    const file = buildSaveFile({
+      seed: current.settings.seed,
+      difficulty: current.settings.difficulty,
+      autoExecuteRoutine: current.settings.autoExecuteRoutine,
+      log: current.actionLog,
+      session: current.session,
+      previous: savedFile.current,
+    });
+    const wrote = writeSaveFile(file);
+    if (wrote) savedFile.current = file;
     dispatch({
       type: 'notice',
       notice: wrote ? 'Session saved.' : 'The session could not be saved: this browser refused the write and the stored file is unchanged.',
@@ -695,6 +710,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   const deleteSave = useCallback(() => {
     clearSaveFile();
+    savedFile.current = null;
     dispatch({ type: 'notice', notice: 'Saved session deleted.' });
   }, []);
 

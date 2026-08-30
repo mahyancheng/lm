@@ -12,8 +12,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { AGENT_OUTPUT_SCHEMA_NAMES, CONTRACTS_VERSION, CharacterReplySchema, ChiefOfStaffInterpretationSchema, NarratorOutputSchema } from '@frontier/contracts';
-import { fnv1a64, stableStringify } from '@frontier/shared';
-import { AGENT_VERSION, createLlmRoles } from '../src/roles';
+import { AGENT_VERSION, contextHashFor, createLlmRoles } from '../src/roles';
+import { composeNpcStrategist } from '../src/compose/npcStrategist';
 import { createMemoryRunSink } from '../src/runSink';
 import { createNullTransport } from '../src/transport/none';
 import { INNOVATION_DECLINE_REASON } from '../src/fallbacks';
@@ -138,7 +138,7 @@ describe('run records', () => {
     expect(run?.sessionId).toBe(SESSION_ID);
     expect(run?.quarter).toBe(1);
     expect(run?.inputStateVersion).toBe('state-abc');
-    expect(run?.contextHash).toBe(fnv1a64(stableStringify(input)));
+    expect(run?.contextHash).toBe(contextHashFor(composeNpcStrategist(input), null));
     expect(run?.tokens).toEqual({ input: 900, output: 220 });
     expect(run?.fallbackUsed).toBe(false);
     expect(run?.error).toBeNull();

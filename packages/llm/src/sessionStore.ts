@@ -20,10 +20,11 @@
  *
  * ## Contract for implementors
  *
- * - `sessionKey` is game-side and caller-chosen: `"cos:<sessionId>:<playerId>"`,
- *   `"chr:<sessionId>:<conversationId>"`. It must be stable for the life of the
- *   conversation and must never be derived from anything a client controls
- *   directly.
+ * - `sessionKey` is an opaque server-derived digest: the API layer computes an
+ *   HMAC over (role, principal, game session, seat, thread) under
+ *   `LLM_KEY_SECRET`, so a key is stable for the life of the conversation and
+ *   is never composed from anything a client controls directly. Implementors
+ *   should treat keys as opaque strings and impose no format.
  * - `get` returns the last Claude session id stored for that key, or null. A
  *   null is never an error: the transport simply opens a fresh session.
  * - `set` is last-write-wins. The Agent SDK may hand back a *new* session id

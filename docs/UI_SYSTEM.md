@@ -241,20 +241,25 @@ LLM → TechGraph JSON → schema validation (TechGraphSchema)
 
 **Layout.** Deterministic, seeded from `TechGraph.version` and node ids, so the
 same graph always lays out the same way and spatial memory survives a reload.
-Layered by dependency depth, ordered within a layer by `publicConfidence`
-descending. Transitions between versions are animated so the graph visibly
-*rearranges* when beliefs move — that motion is the point.
+A four-stage Sugiyama pipeline: longest-path layering, dummy slots for edges
+spanning multiple layers (so no edge can route through a card), barycenter
+crossing minimisation (alternating sweeps, stable tiebreaks), then a shared
+row grid with right-out/left-in ports and horizontal-tangent cubics. A
+geometric test pins the demo graph at zero edge crossings and zero
+edge-through-node intersections — a ratchet that may tighten, never loosen.
+Transitions between versions are animated so the graph visibly *rearranges*
+when beliefs move — that motion is the point.
 
-**Node encoding.**
+**Node encoding.** Calm white cards; state carries colour, form carries class.
 
 | Channel | Encodes |
 |---|---|
-| Fill | `status` — the nine epistemic states, each with a distinct treatment |
-| Opacity / halo | `publicConfidence` |
-| Border | `visibility` — dashed for `company_private`, locked for `classified` |
+| Left accent bar + dot | `status` — the nine epistemic states (fill only for `achieved`'s soft wash) |
+| Confidence bar | `publicConfidence`, with a tick marker for this company's own conviction |
+| Border | dashed for `company_thesis`, `secret` and `discredited`; struck title for dead ends |
 | Size | `computeIntensity` |
 | Badge | `achievedByCompanyId`, plus an inventor mark for player-proposed nodes |
-| Secondary ring | This company's `confidenceByCompany`, when it differs from public |
+| Focus | hover/keyboard focus lights incident edges and 1-hop neighbours, hushes the rest |
 
 That last row is the informational edge a research bet is made on, and it should
 be immediately visible: a node the world rates at 0.31 and you rate at 0.68 is

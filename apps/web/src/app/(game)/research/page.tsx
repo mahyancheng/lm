@@ -322,7 +322,7 @@ export default function ResearchPage(): React.JSX.Element {
 
       <Panel
         title="The map"
-        subtitle="Layered by dependency depth, ordered by public confidence. The same graph always lays out the same way."
+        subtitle="Layered by dependency depth and ordered to minimise crossings, so it reads left to right. The same graph always lays out the same way. Point at a node to light its dependencies."
         actions={
           <TabBar
             variant="segmented"
@@ -367,9 +367,10 @@ export default function ResearchPage(): React.JSX.Element {
               </span>
             ))}
             <span>
-              <span className="text-ink-dim">Size</span> — compute intensity. <span className="text-ink-dim">Fill</span> — public confidence.{' '}
-              <span className="text-ink-dim">Second bar</span> — your own conviction. <span className="text-ink-dim">✓</span> demonstrated,{' '}
-              <span className="text-ink-dim">★</span> invented in session, <span className="text-ink-dim">▣</span> secret.
+              <span className="text-ink-dim">Accent bar and dot</span> — epistemic state. <span className="text-ink-dim">Bar</span> — public
+              confidence, with <span className="text-ink-dim">▲</span> your own conviction. <span className="text-ink-dim">Size</span> — compute
+              intensity. <span className="text-ink-dim">✓</span> demonstrated, <span className="text-ink-dim">★</span> invented in session,{' '}
+              <span className="text-ink-dim">▣</span> secret, <span className="text-ink-dim">Δ</span> moved last quarter.
             </span>
           </div>
         </div>

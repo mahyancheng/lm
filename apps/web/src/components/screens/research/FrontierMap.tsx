@@ -10,24 +10,27 @@
  *
  * The graph handed in is already `PlayerView.techGraph` — public nodes plus the
  * player's own, with `confidenceByCompany` cut to the player's entry and the
- * public figure. No rival's private conviction reaches this file, so the second
- * confidence bar on a node is always the viewer's own.
+ * public figure. No rival's private conviction reaches this file, so the
+ * conviction tick on a node is always the viewer's own.
+ *
+ * **The drawing rule.** A node is a calm white card. Exactly one thing on it
+ * carries the epistemic-state colour — a 4px left accent bar and a matching
+ * dot — and exactly one thing carries a number: the public-confidence bar
+ * along the bottom, with your own conviction as a tick under it. Edges live at
+ * a low opacity and are told apart by form, not colour. The one moment the map
+ * uses colour loudly is the moment you point at something: the node under the
+ * pointer, its direct neighbours and the edges between them come up to full
+ * strength and everything else recedes.
  */
 
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { TechGraph, TechNode } from '@frontier/contracts';
-import { TONE_VAR, cx } from '@/components/ui';
-import {
-  EDGE_STYLE,
-  STATE_STYLE,
-  fillOpacityOf,
-  layoutGraph,
-  wrapTitle,
-} from './graphLayout';
+import { TONE_VAR, type Tone } from '@/components/ui';
+import { EDGE_STYLE, STATE_STYLE, layoutGraph, wrapTitle, type LaidOutNode } from './graphLayout';
 
 export interface FrontierMapProps {
   readonly graph: TechGraph;
-  /** The viewing company, whose own confidence is drawn as the second bar. */
+  /** The viewing company, whose own conviction is drawn as the bar's tick. */
   readonly companyId: string;
   readonly selectedNodeId: string | null;
   readonly onSelect: (nodeId: string) => void;
@@ -36,6 +39,22 @@ export interface FrontierMapProps {
   /** Node ids to keep at full strength; everything else dims. Null shows all. */
   readonly highlightIds: ReadonlySet<string> | null;
 }
+
+/** The pale tint of a tone. Only `achieved` ever uses one. */
+const TONE_WASH_VAR: Readonly<Record<Tone, string>> = {
+  neutral: 'var(--color-raised)',
+  gain: 'var(--color-gain-wash)',
+  loss: 'var(--color-loss-wash)',
+  warn: 'var(--color-warn-wash)',
+  info: 'var(--color-info-wash)',
+  brand: 'var(--color-brand-wash)',
+};
+
+/** Transform/opacity/stroke only, and the global reduced-motion rule kills it. */
+const EASE = 'opacity 160ms ease-out, stroke 160ms ease-out, stroke-width 160ms ease-out';
+
+/** Mean advance of the title face at 10.5px semibold, measured in-browser. */
+const TITLE_CHAR_WIDTH = 6.7;
 
 export function FrontierMap({
   graph,
@@ -47,6 +66,28 @@ export function FrontierMap({
 }: FrontierMapProps): React.JSX.Element {
   const markerId = useId().replace(/:/g, '');
   const layout = useMemo(() => layoutGraph(graph), [graph]);
+  const [focusId, setFocusId] = useState<string | null>(null);
+
+  /** The node under the pointer or under keyboard focus, plus its 1-hop world. */
+  const focus = useMemo(() => {
+    if (focusId === null) return null;
+    const nodes = new Set<string>([focusId]);
+    const edges = new Set<string>();
+    for (const laid of layout.edges) {
+      if (laid.edge.from !== focusId && laid.edge.to !== focusId) continue;
+      edges.add(laid.key);
+      nodes.add(laid.edge.from);
+      nodes.add(laid.edge.to);
+    }
+    return { nodes, edges };
+  }, [focusId, layout.edges]);
+
+  // Lit edges paint last so a highlighted dependency runs over its quiet peers.
+  const drawOrder = useMemo(() => {
+    const lit = focus;
+    if (lit === null) return layout.edges;
+    return [...layout.edges].sort((a, b) => Number(lit.edges.has(a.key)) - Number(lit.edges.has(b.key)));
+  }, [layout.edges, focus]);
 
   return (
     <div className="scroll-x">
@@ -55,33 +96,37 @@ export function FrontierMap({
         width={layout.width}
         height={layout.height}
         role="img"
-        aria-label={`Frontier Map, version ${graph.version}: ${graph.nodes.length} technologies in ${layout.layerCount} dependency layers.`}
+        aria-label={`Frontier Map, version ${graph.version}: ${graph.nodes.length} technologies in ${layout.layerCount} dependency layers, drawn left to right.`}
         style={{ minWidth: layout.width, maxWidth: '100%', height: 'auto' }}
       >
         <defs>
           <marker id={`${markerId}-arrow`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 1 L 7 4 L 0 7 z" fill="var(--color-ink-faint)" />
           </marker>
+          <marker id={`${markerId}-arrow-lit`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1 L 7 4 L 0 7 z" fill="var(--color-brand-strong)" />
+          </marker>
         </defs>
 
         {/* --- edges under nodes, always ------------------------------------ */}
-        <g>
-          {layout.edges.map((laid, index) => {
+        <g fill="none" strokeLinecap="round">
+          {drawOrder.map((laid) => {
             const style = EDGE_STYLE[laid.edge.kind];
-            const dimmed =
+            const lit = focus !== null && focus.edges.has(laid.key);
+            const filtered =
               highlightIds !== null && !(highlightIds.has(laid.edge.from) && highlightIds.has(laid.edge.to));
+            const hushed = focus !== null && !lit;
+            const opacity = lit ? 1 : style.opacity * (hushed ? 0.16 : filtered ? 0.25 : 1);
             return (
               <path
-                key={`${laid.edge.from}-${laid.edge.to}-${laid.edge.kind}-${index}`}
+                key={laid.key}
                 d={laid.path}
-                fill="none"
-                // A hairline is invisible on an off-white ground: dependency
-                // edges take the faint ink tier so the graph still reads.
-                stroke="var(--color-ink-faint)"
-                strokeWidth={0.8 + laid.edge.strength * 1.4}
+                stroke={lit ? 'var(--color-brand-strong)' : 'var(--color-ink-faint)'}
+                strokeWidth={(lit ? 1.6 : 1) + laid.edge.strength * 0.7}
                 strokeDasharray={style.dash}
-                opacity={dimmed ? style.opacity * 0.25 : style.opacity}
-                markerEnd={style.arrow ? `url(#${markerId}-arrow)` : undefined}
+                opacity={opacity}
+                markerEnd={style.arrow ? `url(#${markerId}-arrow${lit ? '-lit' : ''})` : undefined}
+                style={{ transition: EASE }}
               />
             );
           })}
@@ -96,8 +141,19 @@ export function FrontierMap({
               companyId={companyId}
               selected={laid.node.id === selectedNodeId}
               changed={changedNodeIds.has(laid.node.id)}
-              dimmed={highlightIds !== null && !highlightIds.has(laid.node.id)}
+              lit={focus !== null && focus.nodes.has(laid.node.id)}
+              // Two strengths of recession: a filter still wants its excluded
+              // nodes legible as context, a focus wants them out of the way.
+              dim={
+                focus !== null && !focus.nodes.has(laid.node.id)
+                  ? 0.2
+                  : highlightIds !== null && !highlightIds.has(laid.node.id)
+                    ? 0.3
+                    : 1
+              }
               onSelect={onSelect}
+              onFocus={setFocusId}
+              onRelease={(nodeId) => setFocusId((current) => (current === nodeId ? null : current))}
             />
           ))}
         </g>
@@ -107,30 +163,70 @@ export function FrontierMap({
 }
 
 interface MapNodeProps {
-  readonly laid: ReturnType<typeof layoutGraph>['nodes'][number];
+  readonly laid: LaidOutNode;
   readonly companyId: string;
   readonly selected: boolean;
   readonly changed: boolean;
-  readonly dimmed: boolean;
+  /** In the focused node's one-hop neighbourhood. */
+  readonly lit: boolean;
+  /** Group opacity: 1 at full strength, lower when filtered or hushed. */
+  readonly dim: number;
   readonly onSelect: (nodeId: string) => void;
+  readonly onFocus: (nodeId: string) => void;
+  readonly onRelease: (nodeId: string) => void;
 }
 
-function MapNode({ laid, companyId, selected, changed, dimmed, onSelect }: MapNodeProps): React.JSX.Element {
+function MapNode({ laid, companyId, selected, changed, lit, dim, onSelect, onFocus, onRelease }: MapNodeProps): React.JSX.Element {
   const node: TechNode = laid.node;
   const style = STATE_STYLE[node.status];
   const colour = TONE_VAR[style.tone];
   const own = node.confidenceByCompany[companyId];
   const lines = wrapTitle(node.title);
-  const barY = laid.y + laid.height - 13;
-  const barWidth = laid.width - 20;
+  const { x, y, width, height } = laid;
+
+  const badges: readonly { readonly glyph: string; readonly fill: string; readonly key: string }[] = [
+    ...(node.achievedByCompanyId !== null ? [{ glyph: '✓', fill: 'var(--color-gain)', key: 'achieved' }] : []),
+    ...(node.originalProposerId !== null ? [{ glyph: '★', fill: 'var(--color-brand)', key: 'proposed' }] : []),
+    ...(style.locked ? [{ glyph: '▣', fill: 'var(--color-warn)', key: 'secret' }] : []),
+    ...(changed ? [{ glyph: 'Δ', fill: 'var(--color-info)', key: 'moved' }] : []),
+  ];
+
+  const barX = x + 13;
+  const barY = y + height - 11;
+  const barWidth = Math.max(40, width - 26 - badges.length * 11);
+  const publicPct = Math.max(0, Math.min(1, node.publicConfidence));
+
+  const border = selected
+    ? 'var(--color-brand-strong)'
+    : lit
+      ? 'var(--color-brand)'
+      : style.dashed
+        ? 'var(--color-hair-strong)'
+        : 'var(--color-hair)';
+
+  const ownLabel = own === undefined ? '' : `, your conviction ${Math.round(own * 100)} percent`;
 
   return (
     <g
-      className={cx('cursor-pointer', dimmed ? 'opacity-30' : '')}
+      className="cursor-pointer"
+      opacity={dim}
+      style={{ transition: EASE }}
       onClick={() => onSelect(node.id)}
+      // Pointer events rather than mouse events, filtered to a real mouse: on a
+      // touch screen a tap synthesises a hover it can never take back, and a tap
+      // is meant to open the drawer, not leave the map half dimmed behind it.
+      // Keyboard focus goes through onFocus/onBlur and is unaffected.
+      onPointerEnter={(event) => {
+        if (event.pointerType === 'mouse') onFocus(node.id);
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType === 'mouse') onRelease(node.id);
+      }}
+      onFocus={() => onFocus(node.id)}
+      onBlur={() => onRelease(node.id)}
       role="button"
       tabIndex={0}
-      aria-label={`${node.title} — ${style.label}, public confidence ${Math.round(node.publicConfidence * 100)} percent`}
+      aria-label={`${node.title} — ${style.label}, public confidence ${Math.round(node.publicConfidence * 100)} percent${ownLabel}`}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -138,94 +234,71 @@ function MapNode({ laid, companyId, selected, changed, dimmed, onSelect }: MapNo
         }
       }}
     >
+      {/* the card: white, hairline, and nothing else */}
       <rect
-        x={laid.x}
-        y={laid.y}
-        width={laid.width}
-        height={laid.height}
+        x={x}
+        y={y}
+        width={width}
+        height={height}
         rx={10}
-        fill={colour}
-        fillOpacity={fillOpacityOf(node)}
-        stroke={selected ? 'var(--color-ink)' : colour}
-        strokeWidth={selected ? 2.5 : 1.4}
-        strokeDasharray={style.dashed ? '4 3' : undefined}
+        fill={style.wash ? TONE_WASH_VAR[style.tone] : 'var(--color-panel)'}
+        stroke={border}
+        strokeWidth={selected ? 2 : lit ? 1.5 : 1}
+        strokeDasharray={style.dashed ? '3.5 2.5' : undefined}
+        style={{ transition: EASE }}
       />
 
+      {/* the one place the epistemic colour lives: an accent bar and a dot */}
+      <rect x={x} y={y + 8} width={4} height={height - 16} rx={2} fill={colour} />
+      <circle cx={x + width - 11} cy={y + 12.5} r={3.5} fill={colour} />
+
       {lines.map((line, index) => (
-        <text
-          key={index}
-          x={laid.x + 10}
-          y={laid.y + 17 + index * 12}
-          fontSize="10.5"
-          fill="var(--color-ink)"
-          fontWeight={600}
-        >
+        <text key={index} x={x + 13} y={y + 16.5 + index * 11} fontSize="10.5" fill="var(--color-ink)" fontWeight={600}>
           {line}
         </text>
       ))}
 
-      {style.struck ? (
-        <line
-          x1={laid.x + 8}
-          y1={laid.y + laid.height / 2}
-          x2={laid.x + laid.width - 8}
-          y2={laid.y + laid.height / 2}
-          stroke={colour}
-          strokeWidth="1"
-          opacity="0.8"
-        />
-      ) : null}
+      {/* A dead end is struck through, line by line — one rule across the whole
+          card would read as a divider rather than as a deletion. The width is
+          estimated from the character count because SVG cannot measure text
+          before it paints, and it is clamped to the card either way. */}
+      {style.struck
+        ? lines.map((line, index) => (
+            <line
+              key={`strike-${index}`}
+              x1={x + 11}
+              y1={y + 13 + index * 11}
+              x2={Math.min(x + 12 + line.length * TITLE_CHAR_WIDTH, x + width - 20)}
+              y2={y + 13 + index * 11}
+              stroke={colour}
+              strokeWidth="1.1"
+              opacity="0.9"
+            />
+          ))
+        : null}
 
-      {/* public confidence, then this company's own when it has one */}
-      <rect x={laid.x + 10} y={barY} width={barWidth} height={2.5} rx={1.25} fill="var(--color-hair-strong)" />
-      <rect
-        x={laid.x + 10}
-        y={barY}
-        width={barWidth * Math.max(0, Math.min(1, node.publicConfidence))}
-        height={2.5}
-        rx={1.25}
-        fill={colour}
-      />
+      {/* one bar: what the world believes, with your own conviction ticked under it */}
+      <rect x={barX} y={barY} width={barWidth} height={3} rx={1.5} fill="var(--color-hair)" />
+      <rect x={barX} y={barY} width={barWidth * publicPct} height={3} rx={1.5} fill={colour} />
       {own === undefined ? null : (
-        <>
-          <rect x={laid.x + 10} y={barY + 4.5} width={barWidth} height={2.5} rx={1.25} fill="var(--color-hair-strong)" />
-          <rect
-            x={laid.x + 10}
-            y={barY + 4.5}
-            width={barWidth * Math.max(0, Math.min(1, own))}
-            height={2.5}
-            rx={1.25}
-            fill="var(--color-brand)"
-          />
-        </>
+        <path
+          d={`M ${barX + barWidth * Math.max(0, Math.min(1, own))} ${barY + 3.4} l 3.1 4 l -6.2 0 z`}
+          fill="var(--color-brand)"
+        />
       )}
 
-      {/* badges: achieved, invented here, secret, moved this quarter */}
-      <g>
-        {node.achievedByCompanyId !== null ? (
-          <text x={laid.x + laid.width - 10} y={laid.y + 15} fontSize="10" textAnchor="end" fill="var(--color-gain)">
-            ✓
-          </text>
-        ) : null}
-        {node.originalProposerId !== null ? (
-          <text x={laid.x + laid.width - 24} y={laid.y + 15} fontSize="10" textAnchor="end" fill="var(--color-brand)">
-            ★
-          </text>
-        ) : null}
-        {style.locked ? (
-          <text x={laid.x + laid.width - 10} y={laid.y + laid.height - 18} fontSize="9" textAnchor="end" fill="var(--color-warn)">
-            ▣
-          </text>
-        ) : null}
-        {changed ? (
-          <>
-            <circle cx={laid.x + laid.width - 6} cy={laid.y + laid.height - 6} r="5.5" fill="var(--color-info)" />
-            <text x={laid.x + laid.width - 6} y={laid.y + laid.height - 2.5} fontSize="7.5" textAnchor="middle" fill="var(--color-panel)" fontWeight={700}>
-              Δ
-            </text>
-          </>
-        ) : null}
-      </g>
+      {badges.map((badge, index) => (
+        <text
+          key={badge.key}
+          x={x + width - 13 - index * 11}
+          y={y + height - 6.5}
+          fontSize="9.5"
+          textAnchor="end"
+          fill={badge.fill}
+        >
+          {badge.glyph}
+        </text>
+      ))}
     </g>
   );
 }

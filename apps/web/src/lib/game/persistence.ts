@@ -332,7 +332,11 @@ export function writeSaveFile(file: SaveFile): boolean {
     /* Quota: fall through to the pruned form. */
   }
 
-  const floor = file.checkpoint?.quarter ?? file.savedQuarter - MAX_REPLAY_QUARTERS;
+  // Only the entries a checkpoint has already absorbed may be dropped: their
+  // effect is in the snapshot, so nothing is lost. With no checkpoint there is
+  // nothing safe to prune, and failing to save beats destroying a decision.
+  const floor = file.checkpoint?.quarter;
+  if (floor === undefined) return false;
   const pruned: SaveFile = { ...file, log: file.log.filter((record) => record.quarter >= floor) };
   try {
     store.setItem(SAVE_KEY, JSON.stringify(pruned));
@@ -450,10 +454,15 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
       : usable.state;
   const replayedFrom = usable === null ? 0 : usable.quarter;
 
-  const pending = log.filter((record) => record.quarter >= replayedFrom);
+  const outstanding = log.filter((record) => record.quarter >= replayedFrom);
+  // With a checkpoint the work is bounded by the interval. Without one — an
+  // unreadable snapshot, or a hand-edited file — it is bounded by the ceiling
+  // instead, and a log that exceeds it loads as incomplete rather than replaying
+  // for minutes. Incomplete means read-only, so nothing is written over.
+  const pending = usable === null ? outstanding.slice(0, MAX_REPLAY_QUARTERS) : outstanding;
   const rejectedQuarters: number[] = [];
   let replayedCount = 0;
-  let complete = true;
+  let complete = pending.length === outstanding.length;
 
   for (const record of pending) {
     yield { completed: replayedCount, total: pending.length, quarter: record.quarter };

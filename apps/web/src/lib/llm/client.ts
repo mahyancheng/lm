@@ -131,26 +131,28 @@ async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT
 /**
  * Which thread a conversational call belongs to.
  *
- * A conversation key is what the transport resumes a Claude session from, so it
- * decides whose transcript a reply is written into. It must therefore name the
- * **seat**, not just the session: two players in one game session each hold
- * their own Chief of Staff, and a key that omits the player id resumes one
- * shared thread carrying the other player's private company briefing.
+ * The client names the **parts** of a conversation — the game session, the seat
+ * within it, the thread within that seat — and never the key. The key is what
+ * the transport resumes a Claude session from, so it decides whose transcript a
+ * reply is written into and can quote from; the server derives it from these
+ * parts plus the verified caller, under a secret this bundle has never seen.
  *
- * The components are sent alongside the composed key so the server can derive
- * the key from the authenticated identity instead of trusting this one. The
- * client's key is a convenience, never an authority.
+ * That split is the whole point. A key composed here would be a key any caller
+ * could compose, and `cos:<sessionId>` is guessable: one crafted POST would
+ * resume another player's Chief of Staff thread, complete with their private
+ * company briefing, and return the answer to the attacker.
  */
 export interface ConversationRef {
+  /** The *game* session. Never a Claude session. */
   readonly sessionId: string;
   readonly playerId: string;
   /** The thread within that seat: `main` for the Chief of Staff, the character id for dialogue. */
   readonly conversationId: string;
 }
 
-/** `<role>:<sessionId>:<playerId>:<conversationId>` — stable for the life of the thread. */
-export function conversationKeyFor(role: 'cos' | 'chr', ref: ConversationRef): string {
-  return `${role}:${ref.sessionId}:${ref.playerId}:${ref.conversationId}`;
+/** The wire form of a `ConversationRef`, named so nobody mistakes it for a Claude session id. */
+function conversationBody(ref: ConversationRef): { gameSessionId: string; playerId: string; conversationId: string } {
+  return { gameSessionId: ref.sessionId, playerId: ref.playerId, conversationId: ref.conversationId };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -170,8 +172,7 @@ export function requestChiefOfStaff(
 ): Promise<ChiefOfStaffInterpretation | null> {
   return postRole<ChiefOfStaffInterpretation>('/api/llm/chief-of-staff', {
     input,
-    conversationKey: conversationKeyFor('cos', conversation),
-    conversation,
+    conversation: conversationBody(conversation),
   });
 }
 
@@ -205,8 +206,7 @@ export function requestCharacterReply(
 ): Promise<CharacterReply | null> {
   return postRole<CharacterReply>('/api/llm/character', {
     context,
-    conversationKey: conversationKeyFor('chr', conversation),
-    conversation,
+    conversation: conversationBody(conversation),
   });
 }
 

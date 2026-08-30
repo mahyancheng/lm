@@ -20,6 +20,7 @@ import type { GmProposalBatch, NpcActionBundle, SessionState, SubmittedAction } 
 import { buildSubmittedAction, createSession, getEngine } from './engine';
 import {
   CHECKPOINT_INTERVAL,
+  MAX_REPLAY_QUARTERS,
   SAVE_KEY,
   buildSaveFile,
   exportSave,
@@ -199,6 +200,59 @@ describe('the replay ceiling never destroys a decision', () => {
     expect(loaded.complete).toBe(false);
     expect(loaded.replayedCount).toBe(1);
     expect(loaded.log).toHaveLength(2);
+  });
+});
+
+describe('a replay from the seed is bounded by the ceiling', () => {
+  it('caps the work and reports the load as incomplete rather than replaying forever', async () => {
+    const start = createSession({ seed: SEED });
+    const first = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
+    // A file with no usable checkpoint and far more records than the ceiling.
+    // The second record is stamped for a quarter that will never come round, so
+    // the replay stops immediately — but the *plan* was already bounded.
+    const log: QuarterRecord[] = [{ quarter: 0, actions: [first], gmProposal: null, npcBundles: [] }];
+    for (let index = 1; index <= MAX_REPLAY_QUARTERS + 4; index += 1) {
+      log.push({ quarter: index === 1 ? 500 : 500 + index, actions: [], gmProposal: null, npcBundles: [] });
+    }
+
+    const totals: number[] = [];
+    const loaded = await replayAsync(fileOf(log), { onProgress: (progress) => totals.push(progress.total) });
+    expect(totals[0]).toBe(MAX_REPLAY_QUARTERS);
+    expect(loaded.complete).toBe(false);
+    // Incomplete means read-only, so the whole file is handed back untouched.
+    expect(loaded.log).toHaveLength(log.length);
+  });
+});
+
+describe('a quota failure prunes only what the checkpoint already absorbed', () => {
+  it('retries without the absorbed entries, and refuses outright when there is no checkpoint', () => {
+    const start = createSession({ seed: SEED });
+    const checkpoint = { quarter: 2, state: { ...start, quarter: 2 } };
+    const log: QuarterRecord[] = [0, 1, 2, 3].map((quarter) => ({ quarter, actions: [], gmProposal: null, npcBundles: [] }));
+
+    // A store that refuses the first write and accepts the second.
+    const inner = fakeStorage();
+    let refusals = 1;
+    globals.window = {
+      localStorage: {
+        ...inner,
+        getItem: (key: string) => inner.getItem(key),
+        setItem: (key: string, value: string) => {
+          if (refusals > 0) {
+            refusals -= 1;
+            throw new Error('QuotaExceededError');
+          }
+          inner.setItem(key, value);
+        },
+      } as Storage,
+    };
+
+    expect(writeSaveFile({ ...fileOf(log, checkpoint), savedQuarter: 4 })).toBe(true);
+    expect(readSaveFile()?.log.map((record) => record.quarter)).toEqual([2, 3]);
+
+    // Without a checkpoint there is nothing safe to drop, so it fails instead.
+    refusals = 2;
+    expect(writeSaveFile(fileOf(log))).toBe(false);
   });
 });
 

@@ -13,12 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_OUTPUT_SCHEMA_NAMES, CONTRACTS_VERSION, CharacterReplySchema, ChiefOfStaffInterpretationSchema, NarratorOutputSchema } from '@frontier/contracts';
 import { AGENT_VERSION, contextHashFor, createLlmRoles } from '../src/roles';
-import { composeNpcStrategist } from '../src/compose/npcStrategist';
+import { EMPTY_NPC_EVIDENCE, composeNpcStrategist } from '../src/compose/npcStrategist';
 import { createMemoryRunSink } from '../src/runSink';
 import { createNullTransport } from '../src/transport/none';
 import { INNOVATION_DECLINE_REASON } from '../src/fallbacks';
 import {
   NEXUS_ID,
+  ORBIT_ID,
   SESSION_ID,
   VALID_CHARACTER_REPLY,
   VALID_GM_BATCH,
@@ -159,6 +160,42 @@ describe('run records', () => {
     expect(sink.runs[0]?.contextHash).not.toBe(sink.runs[2]?.contextHash);
     // Ids stay distinct even when the context repeats, so two runs never collide.
     expect(sink.runs[0]?.id).not.toBe(sink.runs[1]?.id);
+  });
+
+  it('covers the NPC evidence, which never appears in the input', async () => {
+    const sink = createMemoryRunSink();
+    const transport = createMockTransport(() => VALID_NPC_BUNDLE);
+    const roles = createLlmRoles(transport, { ...ROLES_OPTIONS, runSink: sink });
+    const input = npcStrategistInput();
+
+    await roles.npcStrategist.plan(input, {
+      ...EMPTY_NPC_EVIDENCE,
+      rivalSignals: [{ companyId: ORBIT_ID, basis: 'public filing', observation: 'Orbit is hiring inference engineers hard.' }],
+    });
+    await roles.npcStrategist.plan(input, {
+      ...EMPTY_NPC_EVIDENCE,
+      rivalSignals: [{ companyId: ORBIT_ID, basis: 'public filing', observation: 'Orbit has frozen hiring entirely.' }],
+    });
+
+    // Same input, opposite rival intelligence. Two runs this different must
+    // never report the same context hash.
+    expect(transport.calls[0]?.prompt).not.toBe(transport.calls[1]?.prompt);
+    expect(sink.runs[0]?.contextHash).not.toBe(sink.runs[1]?.contextHash);
+  });
+
+  it('separates two dialogue threads that differ only by conversation key', async () => {
+    const sink = createMemoryRunSink();
+    const roles = createLlmRoles(createMockTransport(() => VALID_CHARACTER_REPLY), { ...ROLES_OPTIONS, runSink: sink });
+    const context = utteranceContext();
+
+    await roles.character.converse(context, 'chr:session:player-a:maya');
+    await roles.character.converse(context, 'chr:session:player-b:maya');
+    await roles.character.converse(context, 'chr:session:player-a:maya');
+
+    // The resumed transcript cannot be hashed, but the thread it belongs to can:
+    // two seats never share a hash, and one seat is stable across turns.
+    expect(sink.runs[0]?.contextHash).not.toBe(sink.runs[1]?.contextHash);
+    expect(sink.runs[0]?.contextHash).toBe(sink.runs[2]?.contextHash);
   });
 
   it('records the failure and the fallback when nothing valid came back', async () => {

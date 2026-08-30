@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { ResolutionReportSchema } from '@frontier/contracts';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedResolutionReportSchema } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BodySchema = z.object({
-  report: ResolutionReportSchema,
+  report: BoundedResolutionReportSchema,
   focusCompanyId: z.string().min(1).nullable().default(null),
 });
 
@@ -22,8 +22,12 @@ const BodySchema = z.object({
  * role is optional.
  */
 export async function POST(request: Request): Promise<Response> {
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish } = admission.admission;
+
   const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return finish(parsed.response);
 
   const { report, focusCompanyId } = parsed.value;
 
@@ -31,16 +35,18 @@ export async function POST(request: Request): Promise<Response> {
     phase.lines.map((line) => ({ phase: line.phase, text: line.text, deltaLabel: line.deltaLabel })),
   );
 
-  return runRole(async () => {
-    const result = await gateway().roles.narrator.narrate(
-      {
-        sessionId: report.sessionId,
-        quarter: report.quarter,
-        committedLines,
-        focusCompanyId: focusCompanyId ?? null,
-      },
-      { sessionId: report.sessionId, quarter: report.quarter },
-    );
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.narrator.narrate(
+        {
+          sessionId: report.sessionId,
+          quarter: report.quarter,
+          committedLines,
+          focusCompanyId: focusCompanyId ?? null,
+        },
+        { sessionId: report.sessionId, quarter: report.quarter },
+      );
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

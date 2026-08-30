@@ -130,7 +130,8 @@ describe('structured-output schema narrowing', () => {
   });
 
   it('narrows every contract schema the roles actually send', () => {
-    for (const schema of [NarratorOutputSchema, ChiefOfStaffInterpretationSchema, GmProposalBatchSchema, NpcActionBundleSchema]) {
+    const schemas: z.ZodTypeAny[] = [NarratorOutputSchema, ChiefOfStaffInterpretationSchema, GmProposalBatchSchema, NpcActionBundleSchema];
+    for (const schema of schemas) {
       const keywords = new Set<string>();
       collectKeywords(outputFormatFor(schema).schema, keywords);
       expect([...keywords].filter((key) => !SUPPORTED_KEYWORDS.has(key))).toEqual([]);

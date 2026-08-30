@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { InnovationInterpreterInputSchema } from '@frontier/contracts';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedInnovationInputSchema } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BodySchema = z.object({
-  input: InnovationInterpreterInputSchema,
+  input: BoundedInnovationInputSchema,
 });
 
 /**
@@ -24,16 +24,22 @@ const BodySchema = z.object({
  * fields themselves.
  */
 export async function POST(request: Request): Promise<Response> {
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish } = admission.admission;
+
   const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return finish(parsed.response);
 
   const { input } = parsed.value;
 
-  return runRole(async () => {
-    const result = await gateway().roles.innovation.interpret(input, {
-      sessionId: input.sessionId,
-      quarter: input.quarter,
-    });
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.innovation.interpret(input, {
+        sessionId: input.sessionId,
+        quarter: input.quarter,
+      });
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

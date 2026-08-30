@@ -9,8 +9,23 @@
  * whenever no model is configured, the model refuses, or anything throws. The
  * client always has a deterministic path, and `failure_mode` is an engine
  * invariant, not an aspiration.
+ *
+ * That contract covers the *model*, and only the model. It is not a way to
+ * answer an authority question, so `admit()` runs first and its refusals are
+ * real HTTP failures:
+ *
+ * | Situation | Answer |
+ * |---|---|
+ * | Body larger than `MAX_BODY_BYTES` | 413, before the body is read |
+ * | Supabase configured, no signed-in user | 401 |
+ * | More than `RATE_LIMIT_PER_WINDOW` calls in a minute | 429 with `retry-after` |
+ * | Anything the model does or does not do | 200, `fallback: true` |
+ *
+ * Each call spawns a Claude Code subprocess on the operator's subscription, so
+ * "no auth and no limit" is not a missing nicety — it is an open tap.
  */
 
+import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { z, ZodTypeAny } from 'zod';
 import {
@@ -21,6 +36,20 @@ import {
   type LlmGateway,
   type LlmTransportKind,
 } from '@frontier/llm';
+import { getRouteClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import {
+  ANONYMOUS_ID_COOKIE,
+  ANONYMOUS_ID_MAX_AGE_SECONDS,
+  type ConversationParts,
+  type ConversationRole,
+  MAX_BODY_BYTES,
+  type Principal,
+  conversationKeySecret,
+  createRateLimiter,
+  declaresOversizeBody,
+  deriveConversationKey,
+  resolvePrincipal,
+} from './_identity';
 
 /** Every LLM route runs on Node and is never cached. */
 export const LLM_ROUTE_RUNTIME = 'nodejs';
@@ -84,6 +113,87 @@ const NO_STORE = {
 export function ok<T>(output: T | null, fallback: boolean, reason?: string): NextResponse {
   const body: RolePayload<T> = reason === undefined ? { output, fallback } : { output, fallback, reason };
   return NextResponse.json(body, { headers: NO_STORE });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Admission                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** One limiter for the process, shared by every role route. */
+const limiter = createRateLimiter();
+
+/** What a route needs once it has been let in. */
+export interface Admission {
+  readonly principal: Principal;
+  /**
+   * The conversation key for this principal and thread. Derived, never
+   * accepted — see `_identity.ts`.
+   */
+  conversationKey(role: ConversationRole, parts: ConversationParts): string;
+  /** Attach anything the admission owes the response, such as a new anonymous id cookie. */
+  finish(response: NextResponse): NextResponse;
+}
+
+function refuse(status: number, reason: string, extraHeaders: Record<string, string> = {}): NextResponse {
+  return NextResponse.json({ output: null, fallback: false, reason }, { status, headers: { ...NO_STORE, ...extraHeaders } });
+}
+
+/**
+ * Decide whether this request may reach a model at all.
+ *
+ * Order matters: size before identity (refuse a megabyte without reading it),
+ * identity before rate (a limit shared by every anonymous caller would be a
+ * denial-of-service surface rather than a protection).
+ */
+export async function admit(request: Request): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
+  if (declaresOversizeBody(request.headers)) {
+    return { ok: false, response: refuse(413, `body_too_large: at most ${MAX_BODY_BYTES} bytes`) };
+  }
+
+  const store = await cookies();
+  const outcome = await resolvePrincipal({
+    supabaseConfigured: isSupabaseConfigured(),
+    getUserId: async () => {
+      const supabase = getRouteClient({
+        getAll: () => store.getAll(),
+        setAll: (list) => list.forEach(({ name, value, options }) => store.set(name, value, options)),
+      });
+      if (supabase === null) return null;
+      const { data, error } = await supabase.auth.getUser();
+      if (error !== null) return null;
+      return data.user?.id ?? null;
+    },
+    anonymousId: store.get(ANONYMOUS_ID_COOKIE)?.value ?? null,
+  });
+
+  if (!outcome.ok) return { ok: false, response: refuse(401, 'unauthenticated') };
+
+  const { principal, issuedAnonymousId } = outcome.resolution;
+  const decision = limiter.take(principal.id, Date.now());
+  if (!decision.allowed) {
+    return { ok: false, response: refuse(429, 'rate_limited', { 'retry-after': String(decision.retryAfterSeconds) }) };
+  }
+
+  const secret = conversationKeySecret();
+  return {
+    ok: true,
+    admission: {
+      principal,
+      conversationKey: (role, parts) => deriveConversationKey(role, principal, parts, secret),
+      finish(response: NextResponse): NextResponse {
+        if (issuedAnonymousId !== null) {
+          response.cookies.set(ANONYMOUS_ID_COOKIE, issuedAnonymousId, {
+            httpOnly: true,
+            sameSite: 'lax',
+            path: '/',
+            maxAge: ANONYMOUS_ID_MAX_AGE_SECONDS,
+            secure: process.env.NODE_ENV === 'production',
+          });
+        }
+        return response;
+      },
+    },
+  };
 }
 
 /** The graceful null response every failure path returns. Always HTTP 200. */

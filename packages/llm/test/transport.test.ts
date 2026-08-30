@@ -77,7 +77,10 @@ describe('JSON extraction', () => {
     const reply = 'Thinking... {"note":"a decoy"} and now the answer: {"a":4,"b":"y"}';
 
     // Position alone picks the decoy; the schema picks the answer.
-    expect(extractJsonObject(reply).value).toEqual({ note: 'a decoy' });
+    const positional = extractJsonObject(reply);
+    expect(positional.ok).toBe(true);
+    if (positional.ok) expect(positional.value).toEqual({ note: 'a decoy' });
+
     const result = extractJsonObject(reply, accept);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value).toEqual({ a: 4, b: 'y' });
@@ -140,7 +143,11 @@ describe('claude-session transport', () => {
   it('denies any tool request that reaches the permission callback', async () => {
     const options = buildQueryOptions({ system: 'sys', model: 'sonnet', resume: null, oauthToken: undefined, cwd: undefined, env: {} });
     expect(options.canUseTool).toBeDefined();
-    const decision = await options.canUseTool?.('Bash', { command: 'cat /etc/passwd' }, { signal: new AbortController().signal });
+    const decision = await options.canUseTool?.(
+      'Bash',
+      { command: 'cat /etc/passwd' },
+      { signal: new AbortController().signal, toolUseID: 'tu-1', requestId: 'req-1' },
+    );
     expect(decision?.behavior).toBe('deny');
     if (decision?.behavior === 'deny') expect(decision.message).toBe(TOOL_DENIED_MESSAGE);
   });

@@ -1,15 +1,20 @@
 import { z } from 'zod';
-import { CharacterUtteranceContextSchema } from '@frontier/contracts';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedCharacterContextSchema, ConversationPartsSchema } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BodySchema = z.object({
-  context: CharacterUtteranceContextSchema,
-  /** The conversation this turn belongs to. Gives dialogue multi-turn memory. */
-  conversationKey: z.string().min(1).max(200),
-  sessionId: z.string().min(1).optional(),
+  context: BoundedCharacterContextSchema,
+  /**
+   * Which thread this turn belongs to. Note the shape: the *parts* of a
+   * conversation, never a conversation key. The key the transport resumes a
+   * Claude session from is derived server-side from these plus the verified
+   * caller, because a key a client can name is a key that reaches another
+   * player's negotiation transcript.
+   */
+  conversation: ConversationPartsSchema,
   quarter: z.number().int().min(0).optional(),
 });
 
@@ -25,16 +30,22 @@ const BodySchema = z.object({
  * register, and carrying no commitment.
  */
 export async function POST(request: Request): Promise<Response> {
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish, conversationKey } = admission.admission;
+
   const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return finish(parsed.response);
 
-  const { context, conversationKey, sessionId, quarter } = parsed.value;
+  const { context, conversation, quarter } = parsed.value;
 
-  return runRole(async () => {
-    const result = await gateway().roles.character.converse(context, conversationKey, {
-      ...(sessionId === undefined ? {} : { sessionId }),
-      ...(quarter === undefined ? {} : { quarter }),
-    });
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.character.converse(context, conversationKey('chr', conversation), {
+        sessionId: conversation.gameSessionId,
+        ...(quarter === undefined ? {} : { quarter }),
+      });
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

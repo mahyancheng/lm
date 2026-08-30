@@ -1,14 +1,18 @@
 import { z } from 'zod';
-import { ChiefOfStaffInputSchema } from '@frontier/contracts';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedChiefOfStaffInputSchema, ConversationPartsSchema } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const BodySchema = z.object({
-  input: ChiefOfStaffInputSchema,
-  /** Conversation key: gives the thread genuine multi-turn memory across calls. */
-  conversationKey: z.string().min(1).max(200),
+  input: BoundedChiefOfStaffInputSchema,
+  /**
+   * Which seat's thread this belongs to — the parts, never a key. This prompt
+   * carries the player's whole private company briefing, so the thread it is
+   * written into is derived from the verified caller and nothing else.
+   */
+  conversation: ConversationPartsSchema,
 });
 
 /**
@@ -24,15 +28,22 @@ const BodySchema = z.object({
  * guessing.
  */
 export async function POST(request: Request): Promise<Response> {
-  const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish, conversationKey } = admission.admission;
 
-  const { input, conversationKey } = parsed.value;
-  return runRole(async () => {
-    const result = await gateway().roles.chiefOfStaff.interpret(input, conversationKey, {
-      sessionId: input.sessionId,
-      quarter: input.quarter,
-    });
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  const parsed = await parseBody(request, BodySchema);
+  if (!parsed.ok) return finish(parsed.response);
+
+  const { input, conversation } = parsed.value;
+
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.chiefOfStaff.interpret(input, conversationKey('cos', conversation), {
+        sessionId: input.sessionId,
+        quarter: input.quarter,
+      });
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

@@ -68,6 +68,7 @@ import {
 } from './engine';
 import { buildNpcStrategistInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
 import {
+  MAX_REPLAY_QUARTERS,
   buildSaveFile,
   clearSaveFile,
   exportSave,
@@ -311,9 +312,13 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       // the player recorded; writing the prefix that happened to load back over
       // it would destroy the rest permanently, and no engine fix could recover
       // them afterwards.
+      const preserved =
+        'Your saved session has been left exactly as it was — nothing will be written over it until you start a new game.';
       const notice = action.loaded.complete
         ? null
-        : `Replay stopped at quarter ${action.loaded.rejectedQuarters[0] ?? action.loaded.session.quarter}: a recorded quarter no longer commits under the current engine. Your saved session has been left exactly as it was — nothing will be written over it until you start a new game.`;
+        : action.loaded.rejectedQuarters.length > 0
+          ? `Replay stopped at quarter ${action.loaded.rejectedQuarters[0]}: a recorded quarter no longer commits under the current engine. ${preserved}`
+          : `This save is longer than the ${MAX_REPLAY_QUARTERS}-quarter ceiling a replay from the seed can rebuild, and its checkpoint could not be read. You are at quarter ${action.loaded.session.quarter}. ${preserved}`;
       return {
         ...state,
         session: action.loaded.session,

@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import { WorldDirectorInputSchema } from '@frontier/contracts';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedWorldDirectorInputSchema } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BodySchema = z.object({ input: WorldDirectorInputSchema });
+const BodySchema = z.object({ input: BoundedWorldDirectorInputSchema });
 
 /**
  * `POST /api/llm/world-director` — contextualise the quarter's drawn events.
@@ -19,15 +19,21 @@ const BodySchema = z.object({ input: WorldDirectorInputSchema });
  * fires the drawn candidates on their family templates instead.
  */
 export async function POST(request: Request): Promise<Response> {
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish } = admission.admission;
+
   const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return finish(parsed.response);
 
   const { input } = parsed.value;
-  return runRole(async () => {
-    const result = await gateway().roles.worldDirector.propose(input, {
-      sessionId: input.sessionId,
-      quarter: input.quarter,
-    });
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.worldDirector.propose(input, {
+        sessionId: input.sessionId,
+        quarter: input.quarter,
+      });
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

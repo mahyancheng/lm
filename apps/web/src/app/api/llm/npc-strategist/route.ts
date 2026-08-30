@@ -2,13 +2,13 @@ import { z } from 'zod';
 import {
   CompanyPostureSchema,
   MemorySchema,
-  NpcStrategistInputSchema,
   RecentEventSummarySchema,
   RelationshipSchema,
   ResearchProjectSchema,
 } from '@frontier/contracts';
 import { EMPTY_NPC_EVIDENCE, type NpcStrategistEvidence } from '@frontier/llm';
-import { gateway, parseBody, runRole } from '../_gateway';
+import { BoundedNpcStrategistInputSchema, LLM_INPUT_LIMITS } from '../_bounds';
+import { admit, gateway, parseBody, runRole } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,29 +19,34 @@ export const dynamic = 'force-dynamic';
  * `LlmContextLeakError` on a foreign one; validating the shape here means a
  * malformed body is a 400 rather than a thrown leak error.
  */
+const ENTRIES = LLM_INPUT_LIMITS.listEntries;
+const TEXT = LLM_INPUT_LIMITS.listText;
+
 const EvidenceSchema = z.object({
-  researchProjects: z.array(ResearchProjectSchema).default([]),
-  memories: z.array(MemorySchema).default([]),
-  relationships: z.array(RelationshipSchema).default([]),
+  researchProjects: z.array(ResearchProjectSchema).max(ENTRIES).default([]),
+  memories: z.array(MemorySchema).max(ENTRIES).default([]),
+  relationships: z.array(RelationshipSchema).max(ENTRIES).default([]),
   rivalSignals: z
-    .array(z.object({ companyId: z.string().min(1), basis: z.string(), observation: z.string() }))
+    .array(z.object({ companyId: z.string().min(1).max(200), basis: z.string().max(TEXT), observation: z.string().max(TEXT) }))
+    .max(ENTRIES)
     .default([]),
-  recentPublicEvents: z.array(RecentEventSummarySchema).default([]),
+  recentPublicEvents: z.array(RecentEventSummarySchema).max(ENTRIES).default([]),
   pastDecisions: z
     .array(
       z.object({
         quarter: z.number().int().min(0),
         posture: CompanyPostureSchema,
-        strategySummary: z.string(),
-        outcomeSummary: z.string(),
+        strategySummary: z.string().max(TEXT),
+        outcomeSummary: z.string().max(TEXT),
       }),
     )
+    .max(ENTRIES)
     .default([]),
-  ownCharacterIds: z.array(z.string()).default([]),
+  ownCharacterIds: z.array(z.string().max(200)).max(ENTRIES).default([]),
 });
 
 const BodySchema = z.object({
-  input: NpcStrategistInputSchema,
+  input: BoundedNpcStrategistInputSchema,
   evidence: EvidenceSchema.nullable().default(null),
 });
 
@@ -57,17 +62,23 @@ const BodySchema = z.object({
  * is a perfectly playable world.
  */
 export async function POST(request: Request): Promise<Response> {
+  const admission = await admit(request);
+  if (!admission.ok) return admission.response;
+  const { finish } = admission.admission;
+
   const parsed = await parseBody(request, BodySchema);
-  if (!parsed.ok) return parsed.response;
+  if (!parsed.ok) return finish(parsed.response);
 
   const { input, evidence } = parsed.value;
   const resolved: NpcStrategistEvidence = evidence === null ? EMPTY_NPC_EVIDENCE : evidence;
 
-  return runRole(async () => {
-    const result = await gateway().roles.npcStrategist.plan(input, resolved, {
-      sessionId: input.sessionId,
-      quarter: input.quarter,
-    });
-    return { output: result.output, fallbackUsed: result.fallbackUsed };
-  });
+  return finish(
+    await runRole(async () => {
+      const result = await gateway().roles.npcStrategist.plan(input, resolved, {
+        sessionId: input.sessionId,
+        quarter: input.quarter,
+      });
+      return { output: result.output, fallbackUsed: result.fallbackUsed };
+    }),
+  );
 }

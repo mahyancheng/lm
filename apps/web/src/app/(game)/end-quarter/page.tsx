@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * End Quarter — the lock screen.
+ * End Quarter — the signing desk.
  *
  * Everything queued, grouped by the resolution phase that will consume it, each
  * carrying the validator's answer: accepted, clamped into the reduced form that
@@ -13,6 +13,12 @@
  * they have committed more than they hold before the engine tells them, and any
  * action in the always-confirm set that has not had a human click blocks the
  * submission outright.
+ *
+ * The desk is presentation over exactly that: instructions are documents you
+ * leaf through, the things standing in your way are notes stuck to the desk,
+ * and the submission is a seal you press. The gate is unchanged — the seal
+ * opens `ConfirmDialog`, the dialog still requires the typed word, and a
+ * blocked action still refuses the whole submission.
  */
 
 import { useMemo, useState } from 'react';
@@ -35,6 +41,16 @@ import {
   toneOfStatus,
 } from '@/components/ui';
 import { cashEffectOf, describeIntent, phaseOfIntent, titleise } from '@/components/screens/end-quarter/intents';
+import {
+  CoinGlyph,
+  DeskScene,
+  FolderGlyph,
+  GavelGlyph,
+  PaperSheet,
+  PipelineGlyph,
+  SealStamp,
+  StickyNote,
+} from '@/components/screens/end-quarter/desk';
 import {
   useGameActions,
   useLlm,
@@ -133,7 +149,7 @@ export default function EndQuarterPage(): React.JSX.Element {
         subtitle="Every instruction you have queued, grouped by the phase that will consume it, with the engine's answer already attached."
         actions={
           queue.length === 0 ? null : (
-            <button type="button" className="btn btn-sm" onClick={clearQueue} disabled={resolving}>
+            <button type="button" className="btn btn-sm tap-target" onClick={clearQueue} disabled={resolving}>
               Clear the queue
             </button>
           )
@@ -141,50 +157,67 @@ export default function EndQuarterPage(): React.JSX.Element {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Queued" value={String(queue.length)} hint={`${clamped.length} clamped · ${rejected.length} rejected`} />
+        <StatCard
+          label="Queued"
+          icon={<FolderGlyph />}
+          iconTone="brand"
+          value={String(queue.length)}
+          hint={`${clamped.length} clamped · ${rejected.length} rejected`}
+        />
         <StatCard
           label="Blocked"
+          icon={<GavelGlyph />}
           value={String(blocked.length)}
           tone={blocked.length > 0 ? 'loss' : undefined}
+          iconTone={blocked.length > 0 ? 'loss' : 'neutral'}
           hint={blocked.length > 0 ? 'Submission is refused while any remain' : 'Nothing is waiting on a confirmation'}
         />
         <StatCard
           label="Cash committed"
+          icon={<CoinGlyph />}
+          iconTone={overCommitted ? 'loss' : 'warn'}
           value={formatMoney(cash.outflow)}
           tone={overCommitted ? 'loss' : undefined}
           hint={`${formatPct(Math.min(committedShare, 9.99))} of ${formatMoney(available)} on hand`}
         />
-        <StatCard label="Cash sought" value={formatMoney(cash.inflow)} hint="Attempts, not receipts: the market decides" />
+        <StatCard
+          label="Cash sought"
+          icon={<CoinGlyph />}
+          iconTone="gain"
+          value={formatMoney(cash.inflow)}
+          hint="Attempts, not receipts: the market decides"
+        />
       </div>
 
+      {/* --- notes stuck to the desk ---------------------------------------- */}
       {blocked.length > 0 || rejected.length > 0 || overCommitted ? (
-        <Panel title="Before you submit">
-          <ul className="flex flex-col gap-2">
+        <Panel title="Before you submit" subtitle="Notes stuck to the desk, in the order they matter" icon={<GavelGlyph />} iconTone="warn">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {blocked.length > 0 ? (
-              <li className="rounded-[4px] border border-loss/25 bg-loss-wash px-3 py-2 text-[11px] text-loss">
+              <StickyNote tone="loss" title="Needs your hand">
                 {blocked.length} action{blocked.length === 1 ? '' : 's'} in the always-confirm set have not had an explicit human
                 confirmation. The engine rejects those with the code <span className="figure">confirmation_required</span>, so the
                 submission is refused here first.
-              </li>
+              </StickyNote>
             ) : null}
             {rejected.length > 0 ? (
-              <li className="rounded-[4px] border border-warn/25 bg-warn-wash px-3 py-2 text-[11px] text-warn">
+              <StickyNote tone="warn" lean="right" title="Will not run">
                 {rejected.length} action{rejected.length === 1 ? '' : 's'} will not run at all. You can submit anyway — they are simply
                 dropped in the action-collection phase — or remove them.
-              </li>
+              </StickyNote>
             ) : null}
             {overCommitted ? (
-              <li className="rounded-[4px] border border-loss/25 bg-loss-wash px-3 py-2 text-[11px] text-loss">
+              <StickyNote tone="loss" title="More than you hold">
                 You have committed {formatMoney(cash.outflow)} against {formatMoney(available)} of cash. The validator clamps what it can;
                 what it cannot, the financial phase will.
-              </li>
+              </StickyNote>
             ) : null}
-          </ul>
+          </div>
         </Panel>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* --- the queue --------------------------------------------------- */}
+        {/* --- the documents ------------------------------------------------ */}
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           {queue.length === 0 ? (
             <Panel>
@@ -193,83 +226,100 @@ export default function EndQuarterPage(): React.JSX.Element {
                 title="Nothing queued for this quarter"
                 message="A quarter with no instructions is legal and sometimes correct: the world still moves, rivals still act, and your company still trades. But you probably meant to do something."
                 action={
-                  <Link href="/command-centre" className="btn btn-sm">
+                  <Link href="/command-centre" className="btn btn-sm tap-target">
                     Back to the command centre
                   </Link>
                 }
               />
             </Panel>
           ) : (
-            groups.map((group) => (
+            groups.map((group, groupIndex) => (
               <Panel
                 key={group.phase}
                 title={titleise(group.phase)}
                 subtitle={`${group.entries.length} instruction${group.entries.length === 1 ? '' : 's'} consumed in this phase`}
+                icon={<FolderGlyph />}
+                iconTone="brand"
+                bodyClassName="bg-raised/50"
               >
-                <ul className="flex flex-col gap-2">
-                  {group.entries.map((entry) => {
+                <ul className="flex flex-col gap-2.5">
+                  {group.entries.map((entry, entryIndex) => {
                     const effective = entry.validation.clampedAction ?? entry.action.intent;
                     const description = describeIntent(effective, session.startYear);
                     const isBoardMatter = entry.validation.clampedAction?.type === 'submit_board_proposal';
+                    const verdict = toneOfStatus(entry.validation.status);
                     return (
-                      <li
-                        key={entry.action.actionId}
-                        className={cx(
-                          'raised-surface px-3 py-2.5',
-                          entry.blocked ? 'border-loss/40' : entry.validation.status === 'rejected' ? 'border-loss/25' : '',
-                        )}
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-medium text-ink">{description.label}</p>
-                            <p className="mt-0.5 text-[10px] text-ink-faint">
-                              {entry.action.origin === 'chief_of_staff' ? 'Interpreted by the Chief of Staff' : 'Entered by hand'} · sequence{' '}
-                              {entry.action.sequence}
-                            </p>
-                            {description.terms.length === 0 ? null : (
-                              <dl className="mt-1.5 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
-                                {description.terms.map((term) => (
-                                  <div key={term.label} className="flex items-baseline justify-between gap-2 border-b border-hair/60 pb-0.5">
-                                    <dt className="label-caps-faint shrink-0">{term.label}</dt>
-                                    <dd className="figure truncate text-[11px] text-ink">{term.value}</dd>
-                                  </div>
-                                ))}
-                              </dl>
+                      <li key={entry.action.actionId}>
+                        <PaperSheet
+                          tone={entry.blocked ? 'loss' : verdict}
+                          style={{ animationDelay: `${Math.min(groupIndex * 90 + entryIndex * 45, 640)}ms` }}
+                        >
+                          <div className="px-3 py-2.5">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[12.5px] font-semibold text-ink">{description.label}</p>
+                                <p className="mt-0.5 text-[10px] text-ink-faint">
+                                  {entry.action.origin === 'chief_of_staff' ? 'Interpreted by the Chief of Staff' : 'Entered by hand'} · sequence{' '}
+                                  {entry.action.sequence}
+                                </p>
+                                {description.terms.length === 0 ? null : (
+                                  <dl className="mt-2 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                                    {description.terms.map((term) => (
+                                      <div key={term.label} className="flex items-baseline justify-between gap-2 border-b border-dashed border-hair pb-0.5">
+                                        <dt className="label-caps-faint shrink-0">{term.label}</dt>
+                                        <dd className="figure truncate text-[11px] text-ink">{term.value}</dd>
+                                      </div>
+                                    ))}
+                                  </dl>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 flex-col items-end gap-1.5">
+                                <Tag tone={verdict} dot>
+                                  {isBoardMatter ? 'To the board' : labelOfStatus(entry.validation.status)}
+                                </Tag>
+                                <div className="flex items-center gap-1.5">
+                                  {entry.blocked ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm tap-target"
+                                      onClick={() => confirmAction(entry.action.actionId)}
+                                    >
+                                      Confirm
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm tap-target"
+                                    onClick={() => unqueueAction(entry.action.actionId)}
+                                    aria-label={`Remove ${description.label}`}
+                                  >
+                                    <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
+                                      <path
+                                        d="M4 4l8 8M12 4l-8 8"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        strokeLinecap="round"
+                                      />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {entry.blocked ? (
+                              <p className="mt-2 text-[10px] text-loss">
+                                Blocked: this type always requires an explicit human confirmation, whatever your automation preference says.
+                              </p>
+                            ) : null}
+
+                            {entry.validation.status === 'accepted' ? null : (
+                              <div className="mt-2">
+                                <ValidationBanner result={entry.validation} />
+                              </div>
                             )}
                           </div>
-                          <div className="flex shrink-0 flex-col items-end gap-1.5">
-                            <Tag tone={toneOfStatus(entry.validation.status)} dot>
-                              {isBoardMatter ? 'To the board' : labelOfStatus(entry.validation.status)}
-                            </Tag>
-                            <div className="flex items-center gap-1.5">
-                              {entry.blocked ? (
-                                <button type="button" className="btn btn-sm" onClick={() => confirmAction(entry.action.actionId)}>
-                                  Confirm
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => unqueueAction(entry.action.actionId)}
-                                aria-label={`Remove ${description.label}`}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        {entry.blocked ? (
-                          <p className="mt-1.5 text-[10px] text-loss">
-                            Blocked: this type always requires an explicit human confirmation, whatever your automation preference says.
-                          </p>
-                        ) : null}
-
-                        {entry.validation.status === 'accepted' ? null : (
-                          <div className="mt-2">
-                            <ValidationBanner result={entry.validation} />
-                          </div>
-                        )}
+                        </PaperSheet>
                       </li>
                     );
                   })}
@@ -281,7 +331,7 @@ export default function EndQuarterPage(): React.JSX.Element {
 
         {/* --- the right rail ------------------------------------------------ */}
         <div className="flex flex-col gap-4">
-          <Panel title="Cash impact" subtitle="Estimated from the validator's affordability model">
+          <Panel title="Cash impact" subtitle="Estimated from the validator's affordability model" icon={<CoinGlyph />} iconTone="warn">
             <ProgressBar
               label="Committed against cash on hand"
               value={Math.min(cash.outflow, available)}
@@ -313,7 +363,7 @@ export default function EndQuarterPage(): React.JSX.Element {
             </p>
           </Panel>
 
-          <Panel title="Board matters" subtitle="Clamped, not refused">
+          <Panel title="Board matters" subtitle="Clamped, not refused" icon={<GavelGlyph />} iconTone="info">
             {boardMatters.length === 0 ? (
               <p className="text-[11px] text-ink-faint">
                 Nothing you have queued needs the board's morning. Financing, listing, M&amp;A, buybacks, major awards and large
@@ -336,15 +386,15 @@ export default function EndQuarterPage(): React.JSX.Element {
                 })}
               </ul>
             )}
-            <Link href="/boardroom" className="btn btn-sm mt-2.5 w-full">
+            <Link href="/boardroom" className="btn btn-sm tap-target mt-2.5 w-full">
               Open the boardroom
             </Link>
           </Panel>
 
-          <Panel title="How this quarter resolves" subtitle="What is driving the world and your rivals">
+          <Panel title="How this quarter resolves" subtitle="What is driving the world and your rivals" icon={<PipelineGlyph />} iconTone="info">
             <div className="flex flex-col gap-2 text-[11px] leading-relaxed text-ink-dim">
               <p className="flex items-start gap-2">
-                <span className={cx('mt-1.5 inline-block size-1.5 shrink-0 rounded-full', llm.available ? 'bg-gain' : 'bg-ink-faint')} />
+                <span className={cx('mt-1.5 inline-block size-1.5 shrink-0 rounded-pill', llm.available ? 'bg-gain' : 'bg-ink-faint')} />
                 {llm.available && settings.useLiveModel
                   ? `The World Director and the major rivals' strategists run on ${llm.model ?? llm.transportKind}. Their output is a proposal: the engine bounds-checks every modifier and validates every NPC action with the same rules as yours.`
                   : llm.available
@@ -357,7 +407,12 @@ export default function EndQuarterPage(): React.JSX.Element {
             </div>
           </Panel>
 
-          <Panel title="The pipeline" subtitle="Eighteen phases, in the order that makes causality work">
+          <Panel
+            title="The pipeline"
+            subtitle="Eighteen phases, in the order that makes causality work"
+            icon={<PipelineGlyph />}
+            iconTone="neutral"
+          >
             <ol className="flex flex-col gap-0.5">
               {RESOLUTION_PHASES.map((phase, index) => {
                 const timing = timings.find((entry) => entry.phase === phase) ?? null;
@@ -388,9 +443,30 @@ export default function EndQuarterPage(): React.JSX.Element {
       <Panel
         title="Lock the quarter"
         subtitle="The moment the world moves"
+        icon={<DeskSealGlyph />}
+        iconTone={canSubmit ? 'brand' : 'neutral'}
         className={cx(canSubmit ? 'border-brand/40' : '')}
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          {/* the desk */}
+          <div className="scene-frame min-w-0 flex-1 bg-sky/50 px-3 py-3">
+            <DeskScene className="mx-auto h-[96px] w-full max-w-[280px]" />
+          </div>
+
+          {/* the seal */}
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <SealStamp
+              quarter={quarterLabel(session.startYear, session.quarter)}
+              disabled={!canSubmit}
+              busy={resolving}
+              onPress={() => setArming(true)}
+              ariaLabel={`Resolve ${quarterLabel(session.startYear, session.quarter)} — opens a confirmation you must complete`}
+            />
+            <span className="label-caps-faint">Resolve quarter</span>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3">
           <div className="grid gap-3 sm:grid-cols-3">
             <SubmitReading label="Instructions" value={String(queue.length)} />
             <SubmitReading label="Blocked" value={String(blocked.length)} tone={blocked.length > 0 ? 'loss' : undefined} />
@@ -398,28 +474,17 @@ export default function EndQuarterPage(): React.JSX.Element {
           </div>
 
           {resolving ? (
-            <div className="rounded-[4px] border border-brand/30 bg-brand-wash px-3 py-2.5">
+            <div className="rounded-card border border-brand/30 bg-brand-wash px-3 py-2.5">
               <div className="label-caps text-brand">Resolving</div>
               <p className="mt-1 text-[12px] text-ink">{status === '' ? 'Working' : status}</p>
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!canSubmit}
-              onClick={() => setArming(true)}
-              style={{ letterSpacing: '0.08em' }}
-            >
-              RESOLVE QUARTER
-            </button>
-            <span className="text-[11px] text-ink-dim">
-              {canSubmit
-                ? `${quarterLabel(session.startYear, session.quarter)} closes and ${quarterLabel(session.startYear, session.quarter + 1)} opens. A quarter cannot resolve twice.`
-                : 'Confirm the blocked actions first, or remove them.'}
-            </span>
-          </div>
+          <p className="text-[11px] leading-relaxed text-ink-dim">
+            {canSubmit
+              ? `${quarterLabel(session.startYear, session.quarter)} closes and ${quarterLabel(session.startYear, session.quarter + 1)} opens. A quarter cannot resolve twice.`
+              : 'Confirm the blocked actions first, or remove them.'}
+          </p>
         </div>
       </Panel>
 
@@ -456,7 +521,24 @@ function SubmitReading({
   return (
     <div className="raised-surface px-3 py-2">
       <div className="label-caps-faint">{label}</div>
-      <div className={cx('figure mt-0.5 text-[19px] leading-none', tone === 'loss' ? 'tone-loss' : 'text-ink')}>{value}</div>
+      {/* The key replays the arrival animation whenever the reading changes. */}
+      <div
+        key={value}
+        className={cx('figure animate-count-up mt-0.5 text-[19px] leading-none font-semibold', tone === 'loss' ? 'tone-loss' : 'text-ink')}
+      >
+        {value}
+      </div>
     </div>
+  );
+}
+
+/** A wax seal, flat: the glyph in the "Lock the quarter" panel header. */
+function DeskSealGlyph(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" className="size-4" role="img" aria-label="A wax seal">
+      <circle cx="10" cy="10" r="7.5" fill="currentColor" />
+      <circle cx="10" cy="10" r="4.6" fill="none" stroke="var(--color-panel)" strokeWidth="1.4" />
+      <circle cx="10" cy="10" r="1.7" fill="var(--color-panel)" />
+    </svg>
   );
 }

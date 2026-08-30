@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { STAFF_ROLES } from '@frontier/contracts';
 import type { SessionState } from '@frontier/contracts';
 import { createDefaultEngine, createDemoSession } from '@frontier/simulation';
-import { buildOfficeModel, moraleBand, rackPlan, RACK_CAP, WORK_ZONES } from './model';
+import { acceleratorsPerRack, buildOfficeModel, moraleBand, rackPlan, RACK_CAP, WORK_ZONES } from './model';
 import { allocate, crowd, seatId, seatLook } from './seats';
 
 function playerCompany(state: SessionState) {
@@ -112,14 +112,39 @@ describe('open-role allocation', () => {
 });
 
 describe('server room racks', () => {
-  it('never draws more than the cap, and states what a rack stands for', () => {
-    expect(rackPlan(0)).toEqual({ racks: 0, acceleratorsPerRack: 256 });
-    for (const fleet of [1, 255, 256, 2000, 25_000, 4_000_000]) {
+  it('draws nothing for nothing', () => {
+    expect(rackPlan(0).racks).toBe(0);
+  });
+
+  it('never draws more than the cap, and one rack always covers its share', () => {
+    for (const fleet of [1, 35, 255, 256, 2000, 25_000, 4_000_000]) {
       const plan = rackPlan(fleet);
       expect(plan.racks).toBeLessThanOrEqual(RACK_CAP);
       expect(plan.racks).toBeGreaterThanOrEqual(1);
       expect(plan.racks * plan.acceleratorsPerRack).toBeGreaterThanOrEqual(fleet);
     }
+  });
+
+  it('keeps the room legible at every scale — a 1-2-5 ladder, never a bar chart', () => {
+    expect(acceleratorsPerRack(0)).toBe(1);
+    expect(acceleratorsPerRack(35)).toBe(5);
+    expect(acceleratorsPerRack(2000)).toBe(200);
+    // 250 000 wants 25 000 a rack; the ladder's next rung up is 50 000.
+    expect(acceleratorsPerRack(250_000)).toBe(50_000);
+    expect(acceleratorsPerRack(500_000)).toBe(50_000);
+    for (const total of [1, 9, 35, 640, 2000, 25_000, 4_000_000]) {
+      const per = acceleratorsPerRack(total);
+      expect(Math.ceil(total / per)).toBeLessThanOrEqual(RACK_CAP);
+      // Never coarser than it needs to be: one step down would overflow.
+      expect(per).toBeGreaterThan(0);
+    }
+  });
+
+  it('plans rented capacity at the same scale as owned capacity', () => {
+    // 400 owned inside a 1000-unit held fleet: both kinds of rack are worth 100.
+    const plan = rackPlan(400, 1000);
+    expect(plan.acceleratorsPerRack).toBe(acceleratorsPerRack(1000));
+    expect(plan.racks).toBe(4);
   });
 });
 
@@ -186,6 +211,7 @@ describe('office model: built from committed state only', () => {
     expect(model.server.held).toBeGreaterThanOrEqual(0);
     expect(model.server.cloudUnits).toBeGreaterThanOrEqual(0);
     expect(model.server.racks).toBeLessThanOrEqual(RACK_CAP);
+    expect(model.server.racks + model.server.cloudRacks).toBeLessThanOrEqual(RACK_CAP);
     expect(model.band).toBe(moraleBand(company.employees.morale));
 
     // The expiry warning is a reading of state, not a guess.

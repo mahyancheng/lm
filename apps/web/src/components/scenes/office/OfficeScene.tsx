@@ -33,8 +33,10 @@ import { TONE_CHIP, cx, type Tone } from '@/components/ui';
 import { usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { DESK_CELL, Desk, EXEC_CELL, RACK_CELL, Rack, Worker } from './Figures';
 import {
+  AnonymousExecutiveDesk,
   BoardShelf,
   CrateShelf,
+  ExecutiveBackdrop,
   ExecutiveDesk,
   Floor,
   LobbyRoom,
@@ -285,9 +287,16 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
           <ZoneFrame
             rect={lobbyRect}
             label={model.lobby.companyName}
-            caption={`${model.lobby.headquartersCity} · ${model.lobby.sites} site${model.lobby.sites === 1 ? '' : 's'}`}
-            badge={<ZoneBadge tone="info">{model.lobby.tier}</ZoneBadge>}
-            ariaLabel={`Lobby. ${model.lobby.companyName}, ${model.lobby.tier} tier, headquartered in ${model.lobby.headquartersCity}. Opens the sites drill-down.`}
+            caption={`${model.lobby.tier} tier · ${model.lobby.headquartersCity} · ${model.lobby.sites} site${model.lobby.sites === 1 ? '' : 's'}`}
+            // The mood on the wall: the floor is tinted and the mouths are drawn
+            // from the same morale figure, but a colour is not a reading — the
+            // badge says the number out loud.
+            badge={
+              <ZoneBadge tone={MORALE_TONE[model.band]}>
+                {MORALE_MOOD[model.band]} {formatScore(model.morale)}
+              </ZoneBadge>
+            }
+            ariaLabel={`Lobby. ${model.lobby.companyName}, ${model.lobby.tier} tier, headquartered in ${model.lobby.headquartersCity}. Morale ${formatScore(model.morale)}, ${MORALE_MOOD[model.band].toLowerCase()}. Opens the sites drill-down.`}
             href={sitesDrawer === undefined ? fallbackHref : undefined}
             onActivate={sitesDrawer}
             staggerIndex={0}
@@ -310,6 +319,7 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
           >
             <Floor width={execInner.width} height={execInner.height} />
             <MoraleWash width={execInner.width} height={execInner.height} band={model.band} />
+            <ExecutiveBackdrop width={execInner.width} />
           </ZoneFrame>
           <div
             className="pointer-events-none absolute flex items-end gap-1"
@@ -362,7 +372,21 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
                 </button>
               );
             })}
-            {model.executives.length === 0 ? (
+            {Array.from({ length: model.unnamedExecDesks }, (_, index) => (
+              <svg
+                key={`unnamed-${index}`}
+                width={EXEC_CELL.width}
+                height={EXEC_CELL.height}
+                viewBox={`0 0 ${EXEC_CELL.width} ${EXEC_CELL.height}`}
+                role="presentation"
+                focusable="false"
+                aria-hidden="true"
+                className="mb-[26px] block shrink-0"
+              >
+                <AnonymousExecutiveDesk seatId={`${model.companyId}/exec-open/${index}`} band={model.band} />
+              </svg>
+            ))}
+            {model.executives.length === 0 && model.unnamedExecDesks === 0 ? (
               <span className="pointer-events-none px-2 pb-3 text-[11px] text-ink-faint">
                 Nobody holds a post here yet.
               </span>
@@ -374,23 +398,24 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
             rect={serverRect}
             label="Server room"
             caption={
-              model.server.racks === 0
-                ? 'No accelerators held'
+              model.server.racks + model.server.cloudRacks === 0
+                ? 'No capacity held'
                 : `1 rack ≈ ${countLabel(model.server.acceleratorsPerRack)} · ${formatPct(model.server.utilisation, 0)} utilised`
             }
             badge={
               <ZoneBadge tone={model.server.expiryWarning ? 'warn' : 'info'}>
-                {countLabel(model.server.owned + model.server.reserved)}
+                {countLabel(model.server.held)}
+                {model.server.cloudRacks > 0 ? <span className="text-ink-faint"> · {countLabel(model.server.cloudUnits)} rented</span> : null}
               </ZoneBadge>
             }
-            ariaLabel={`Server room. ${model.server.owned} owned and ${model.server.reserved} reserved accelerators at ${formatPct(model.server.utilisation, 0)} utilisation. Opens the compute drill-down.`}
-            empty={model.server.racks === 0}
+            ariaLabel={`Server room. ${countLabel(model.server.owned)} owned and ${countLabel(model.server.reserved)} reserved accelerators, ${countLabel(model.server.cloudUnits)} rented on demand, running at ${formatPct(model.server.utilisation, 0)} utilisation. Opens the compute drill-down.`}
+            empty={model.server.racks + model.server.cloudRacks === 0}
             href={serverDrawer === undefined ? fallbackHref : undefined}
             onActivate={serverDrawer}
             staggerIndex={2}
           >
             <Floor width={serverInner.width} height={serverInner.height} />
-            <g transform={`translate(0 ${Math.max(0, serverInner.height - RACK_CELL.height - 4)})`}>
+            <g transform={`translate(0 ${Math.max(0, (serverInner.height - RACK_CELL.height) / 2 + 6)})`}>
               <ServerRoom server={model.server} width={serverInner.width} height={RACK_CELL.height} />
             </g>
           </ZoneFrame>
@@ -400,7 +425,14 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
             if (zone === undefined) return null;
             const rect: Rect = RECT[zone.id];
             const inner = innerOf(rect);
-            const shelf = zone.id === 'research' ? 32 : zone.id === 'sales' ? 28 : 0;
+            // The back-wall strip only takes space when there is something on
+            // it: no running programmes, no whiteboards, no reserved band.
+            const shelf =
+              zone.id === 'research' && model.activeProgrammes > 0
+                ? 32
+                : zone.id === 'sales' && model.activeProducts > 0
+                  ? 28
+                  : 0;
             const note = zone.crowd.perFigure > 1 ? `, drawn one figure per ${zone.crowd.perFigure}` : '';
             return (
               <ZoneFrame
@@ -433,9 +465,13 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
 /*  The compact scene                                                          */
 /* -------------------------------------------------------------------------- */
 
-const COMPACT = { width: 520, height: 112 } as const;
+/**
+ * The compact stage. Sized to fit two columns of the Command Centre's stat grid
+ * on a desktop without scrolling, and to pan inside its own frame below that.
+ */
+const COMPACT = { width: 496, height: 112 } as const;
 /** Figures the compact scene draws, split across the four functions. */
-const COMPACT_FIGURES = 6;
+const COMPACT_FIGURES = 5;
 const COMPACT_RACKS = 3;
 
 export interface OfficeSceneCompactProps {
@@ -462,10 +498,13 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
     );
     const out: { readonly seatId: string; readonly zoneId: OfficeWorkZone['id'] }[] = [];
     model.zones.forEach((zone, index) => {
-      const wanted = split[index] ?? 0;
+      // Reuse the full scene's own seats, so the same six faces appear in both
+      // places. Never more than the room actually drew: a one-person function
+      // gets one figure, not a row of clones.
       const filled = zone.seats.filter((seat) => seat.filled);
-      for (let seat = 0; seat < wanted; seat += 1) {
-        const entry = filled[seat % Math.max(1, filled.length)];
+      const take = Math.min(split[index] ?? 0, filled.length);
+      for (let seat = 0; seat < take; seat += 1) {
+        const entry = filled[seat];
         if (entry === undefined) continue;
         out.push({ seatId: entry.id, zoneId: zone.id });
       }
@@ -476,7 +515,8 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
   const litBays = Math.max(0, Math.min(6, Math.round(model.server.utilisation * 6)));
   const rackTone =
     model.server.utilisation >= 0.9 ? 'var(--color-warn)' : model.server.utilisation >= 0.35 ? 'var(--color-gain)' : 'var(--color-info)';
-  const racks = Math.min(COMPACT_RACKS, model.server.racks);
+  const ownedRacks = Math.min(COMPACT_RACKS, model.server.racks);
+  const racks = Math.min(COMPACT_RACKS, model.server.racks + model.server.cloudRacks);
   const mood = MORALE_MOOD[model.band];
 
   return (
@@ -485,7 +525,7 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
       <Link
         href={href}
         className="scene-frame fc-office block bg-base hover-lift"
-        aria-label={`The ${model.lobby.companyName} office: ${model.headcount} people, morale ${formatScore(model.morale)} (${mood.toLowerCase()}), ${countLabel(model.server.owned + model.server.reserved)} accelerators. Opens the Company screen.`}
+        aria-label={`The ${model.lobby.companyName} office: ${model.headcount} people, morale ${formatScore(model.morale)} (${mood.toLowerCase()}), ${countLabel(model.server.held)} accelerator-equivalents held. Opens the Company screen.`}
       >
         <div className="scroll-x">
           <svg
@@ -501,15 +541,15 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
             <MoraleWash width={COMPACT.width} height={COMPACT.height} band={model.band} />
 
             {/* frontage */}
-            <rect x="8" y="22" width="72" height="26" rx="4" fill="var(--fc-glass)" opacity="0.85" />
-            <path d="M8 35h72" stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.8" />
-            <g transform="translate(16 74)">
+            <rect x="8" y="22" width="64" height="26" rx="4" fill="var(--fc-glass)" opacity="0.85" />
+            <path d="M8 35h64" stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.8" />
+            <g transform="translate(16 70)">
               <Worker look={seatLook(`${model.companyId}/lobby/0`)} role="ops" band={model.band} />
             </g>
 
             {/* the floor */}
             {figures.map((figure, index) => (
-              <g key={figure.seatId} transform={`translate(${92 + index * DESK_CELL.width} 44)`}>
+              <g key={`${figure.seatId}:${index}`} transform={`translate(${88 + index * DESK_CELL.width} 44)`}>
                 <g transform={`translate(${(DESK_CELL.width - 24) / 2} 6)`}>
                   <Worker look={seatLook(figure.seatId)} role={ROLE_FIGURE[figure.zoneId]} band={model.band} atKeyboard />
                 </g>
@@ -520,7 +560,7 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
             {/* the racks */}
             {Array.from({ length: racks }, (_, index) => (
               <g key={index} transform={`translate(${COMPACT.width - 12 - (racks - index) * RACK_CELL.width} 30)`}>
-                <Rack lit={litBays} tone={rackTone} delayMs={index * 160} />
+                <Rack lit={litBays} tone={rackTone} delayMs={index * 160} rented={index >= ownedRacks} />
               </g>
             ))}
           </svg>
@@ -532,9 +572,7 @@ export function OfficeSceneCompact({ href = '/company', className }: OfficeScene
         <ZoneBadge tone={MORALE_TONE[model.band]}>
           {mood} · {formatScore(model.morale)}
         </ZoneBadge>
-        <ZoneBadge tone={model.server.expiryWarning ? 'warn' : 'info'}>
-          {countLabel(model.server.owned + model.server.reserved)} accel.
-        </ZoneBadge>
+        <ZoneBadge tone={model.server.expiryWarning ? 'warn' : 'info'}>{countLabel(model.server.held)} accel.</ZoneBadge>
         {model.lobby.openRoles > 0 ? <ZoneBadge tone="warn">{model.lobby.openRoles} open</ZoneBadge> : null}
       </div>
     </div>

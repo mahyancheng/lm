@@ -1,14 +1,21 @@
 'use client';
 
 /**
- * Boardroom — composition, docket, and the two levers that move a vote.
+ * Boardroom — the room, the matter on the table, and the two levers that move a
+ * vote.
  *
  * Being chief executive and owning the company are separate states, and this
  * screen is where that separation becomes mechanical. A board can dismiss the
  * player; the player keeps every share and the campaign continues as a proxy
- * fight. So directors are rendered as people with mandates and memories, not as
- * a difficulty slider: their traits, their independence, their relationship with
- * the chief executive and every live conditional commitment are on the surface.
+ * fight. So directors are rendered as *people around a table* rather than as a
+ * difficulty slider: their faces carry how they feel about the chief executive,
+ * the badge by each seat carries how they would vote on the matter at the head
+ * of the table, and their traits, mandate and live commitments are one tap away.
+ *
+ * Everything the screen could do before it was a scene it still does: table a
+ * matter, lobby a director, read the whip count and its reasoning, open the
+ * minutes of a decided matter, and read the commitments ledger. The scene is the
+ * way in, not a replacement for the controls.
  *
  * Every director here sits on the player's own board and is therefore visible by
  * construction. Nothing on this screen reads a rival's governance.
@@ -30,9 +37,12 @@ import {
   ProgressBar,
   SectionHeading,
   StatCard,
+  TabBar,
   Tag,
 } from '@/components/ui';
-import { LobbyPanel } from '@/components/screens/boardroom/LobbyPanel';
+import { Portrait, moodFromRelationship } from '@/components/scenes/people';
+import { BoardroomScene } from '@/components/screens/boardroom/BoardroomScene';
+import { LobbyPanel, type LobbyFocus } from '@/components/screens/boardroom/LobbyPanel';
 import { ProposePanel } from '@/components/screens/boardroom/ProposePanel';
 import { MANDATE_LABEL, PROPOSAL_KIND_LABEL, commitmentText } from '@/components/screens/boardroom/labels';
 import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
@@ -46,6 +56,12 @@ const STATUS_TONE = {
   withdrawn: 'neutral',
 } as const;
 
+/** Bring a panel into view after a control elsewhere on the page targets it. */
+function scrollTo(id: string): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 export default function BoardroomPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
@@ -53,6 +69,8 @@ export default function BoardroomPage(): React.JSX.Element {
   const founder = usePlayerCharacter();
   const [openDirectorId, setOpenDirectorId] = useState<string | null>(null);
   const [openProposalId, setOpenProposalId] = useState<string | null>(null);
+  const [tabledId, setTabledId] = useState<string | null>(null);
+  const [lobbyFocus, setLobbyFocus] = useState<LobbyFocus | null>(null);
 
   const board = view.board;
   const proposals = view.boardProposals;
@@ -95,11 +113,17 @@ export default function BoardroomPage(): React.JSX.Element {
   const openMatters = proposals.filter((proposal) => proposal.status === 'tabled' || proposal.status === 'draft');
   const decided = proposals.filter((proposal) => proposal.status !== 'tabled' && proposal.status !== 'draft');
 
+  // The matter at the head of the table: whichever the player selected, or the
+  // first one open. A selection that has since been decided falls back rather
+  // than emptying the table.
+  const headProposal: BoardProposal | null = openMatters.find((proposal) => proposal.id === tabledId) ?? openMatters[0] ?? null;
+
   const independentCount = board.directors.filter((seat) => seat.seat === 'independent').length;
   const meanRelationship =
     board.directors.length === 0 ? 0 : board.directors.reduce((total, seat) => total + seat.relationshipWithCeo, 0) / board.directors.length;
 
   const openDirector = openDirectorId === null ? null : (board.directors.find((seat) => seat.characterId === openDirectorId) ?? null);
+  const openDirectorCharacter = openDirector === null ? null : (directorsById.get(openDirector.characterId) ?? null);
   const openProposal: BoardProposal | null = openProposalId === null ? null : (proposals.find((proposal) => proposal.id === openProposalId) ?? null);
   const openTally = openProposal === null ? null : tallyProposal(session, openProposal.id);
 
@@ -111,7 +135,9 @@ export default function BoardroomPage(): React.JSX.Element {
         subtitle="Directors are people with mandates who remember how they were treated. A conversation creates a commitment; only the vote changes anything."
         actions={
           <>
-            <Tag tone="neutral">{board.directors.length} of {board.seatsAuthorised} seats</Tag>
+            <Tag tone="neutral">
+              {board.directors.length} of {board.seatsAuthorised} seats
+            </Tag>
             <Tag tone={openMatters.length > 0 ? 'info' : 'neutral'} dot>
               {openMatters.length} matter{openMatters.length === 1 ? '' : 's'} open
             </Tag>
@@ -135,50 +161,75 @@ export default function BoardroomPage(): React.JSX.Element {
         />
       </div>
 
-      <Panel title="Composition" subtitle="Select a director for their card">
-        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-          {board.directors.map((seat) => {
-            const character = directorsById.get(seat.characterId);
-            return (
-              <button
-                key={seat.characterId}
-                type="button"
-                onClick={() => setOpenDirectorId(seat.characterId)}
-                className="raised-surface p-3 text-left transition-colors hover:border-hair-strong"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  {character === undefined ? (
-                    <span className="text-[12px] text-ink">{seat.characterId}</span>
-                  ) : (
-                    <PersonChip character={character} subtitle={character.title} size="sm" />
-                  )}
-                  {seat.isChair ? <Tag tone="brand">Chair</Tag> : null}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  <Tag>{seat.seat}</Tag>
-                  <Tag tone="info">{MANDATE_LABEL[seat.mandate]}</Tag>
-                  {seat.committees.map((committee) => (
-                    <Tag key={committee}>{committee}</Tag>
-                  ))}
-                </div>
-                <div className="mt-2.5 space-y-2">
-                  <Meter value={seat.independence} label="Independence" />
-                  <Meter value={Math.max(0, (seat.relationshipWithCeo + 100) / 2)} label={`With you · ${formatScore(seat.relationshipWithCeo)}`} showValue={false} />
-                </div>
-              </button>
-            );
-          })}
+      {/* --- the room ------------------------------------------------------- */}
+      <Panel
+        title="The room"
+        subtitle={
+          headProposal === null
+            ? 'Nothing is tabled. The board still has opinions; it has nothing to vote on.'
+            : 'Tap a director for their card, their reasoning and the conversation that would move them.'
+        }
+        actions={
+          openMatters.length > 1 ? (
+            <TabBar
+              variant="segmented"
+              ariaLabel="Matter under discussion"
+              value={headProposal?.id ?? ''}
+              onChange={setTabledId}
+              tabs={openMatters.map((proposal) => ({
+                id: proposal.id,
+                label: proposal.title.length > 22 ? `${proposal.title.slice(0, 21)}…` : proposal.title,
+              }))}
+            />
+          ) : undefined
+        }
+      >
+        <BoardroomScene
+          session={session}
+          board={board}
+          founder={founder}
+          directorsById={directorsById}
+          proposal={headProposal}
+          selectedDirectorId={openDirectorId}
+          onSelectDirector={setOpenDirectorId}
+          onOpenProposal={setOpenProposalId}
+        />
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-hair pt-3">
+          <button type="button" className="btn btn-sm" onClick={() => scrollTo('propose')}>
+            Table a matter
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => scrollTo('lobby')} disabled={openMatters.length === 0}>
+            Lobby a director
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => scrollTo('commitments')}>
+            Commitments ledger
+          </button>
+          {headProposal === null ? null : (
+            <button type="button" className="btn btn-sm" onClick={() => setOpenProposalId(headProposal.id)}>
+              Full tally
+            </button>
+          )}
         </div>
       </Panel>
 
-      <Panel title="Docket" subtitle="Open matters carry a live tally; decided ones carry the minutes" bodyClassName="space-y-2.5">
-        {proposals.length === 0 ? (
+      <div id="propose" className="grid scroll-mt-4 gap-4 lg:grid-cols-2">
+        <ProposePanel session={session} board={board} founder={founder} view={view} directorsById={directorsById} />
+        <div id="lobby" className="flex min-w-0 scroll-mt-4 flex-col">
+          <LobbyPanel session={session} board={board} founder={founder} proposals={proposals} directorsById={directorsById} focus={lobbyFocus} />
+        </div>
+      </div>
+
+      {/* --- decided matters ------------------------------------------------ */}
+      <Panel title="Minutes" subtitle="Matters the board has already settled, with the vote as it was taken" bodyClassName="space-y-2.5">
+        {decided.length === 0 ? (
           <EmptyState
-            title="Nothing is on the agenda"
-            message="Financing, listings, acquisitions, buybacks, restructurings and C-suite appointments all arrive here automatically — the validator turns the action into the proposal that has to precede it."
+            compact
+            title="Nothing has been decided yet"
+            message="A matter tabled this quarter is voted in the board-resolution phase. Its minutes appear here afterwards, with every director's vote and their reasoning."
           />
         ) : (
-          [...openMatters, ...decided].map((proposal) => {
+          decided.map((proposal) => {
             const tally = tallyProposal(session, proposal.id);
             const cast = tally.support + tally.against;
             return (
@@ -186,12 +237,12 @@ export default function BoardroomPage(): React.JSX.Element {
                 key={proposal.id}
                 type="button"
                 onClick={() => setOpenProposalId(proposal.id)}
-                className="raised-surface block w-full p-3 text-left transition-colors hover:border-hair-strong"
+                className="raised-surface hover-lift press-pop block w-full p-3 text-left"
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="label-caps-faint">{PROPOSAL_KIND_LABEL[proposal.kind]}</div>
-                    <div className="mt-0.5 text-[13px] font-medium text-ink">{proposal.title}</div>
+                    <div className="mt-0.5 text-[13px] font-semibold text-ink">{proposal.title}</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {proposal.amountUsd === null ? null : <span className="figure text-[12px] text-ink-dim">{formatMoney(proposal.amountUsd)}</span>}
@@ -216,53 +267,64 @@ export default function BoardroomPage(): React.JSX.Element {
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ProposePanel session={session} board={board} founder={founder} view={view} directorsById={directorsById} />
-        <LobbyPanel session={session} board={board} founder={founder} proposals={proposals} directorsById={directorsById} />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Commitments ledger" subtitle="What directors have promised, and whether it still binds">
-          {commitments.length === 0 ? (
-            <EmptyState
-              compact
-              title="No commitments recorded"
-              message="A conversation that reaches something concrete leaves a structured promise here. Most conversations do not."
-            />
-          ) : (
-            <div className="space-y-2">
-              {commitments.map((commitment) => (
-                <div key={commitment.id} className="raised-surface px-3 py-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[12px] text-ink">{directorsById.get(commitment.actorCharacterId)?.name ?? commitment.actorCharacterId}</span>
-                    <div className="flex items-center gap-1.5">
-                      <Tag tone={commitment.stance === 'support' ? 'gain' : commitment.stance === 'oppose' ? 'loss' : 'neutral'}>{commitment.stance}s</Tag>
-                      <Tag
-                        tone={
-                          commitment.status === 'honoured'
-                            ? 'gain'
-                            : commitment.status === 'broken'
-                              ? 'loss'
-                              : commitment.status === 'active'
-                                ? 'info'
-                                : 'neutral'
-                        }
-                      >
-                        {commitment.status}
-                      </Tag>
+        <div id="commitments" className="flex min-w-0 scroll-mt-4 flex-col">
+          <Panel title="Commitments ledger" subtitle="What directors have promised, and whether it still binds">
+            {commitments.length === 0 ? (
+              <EmptyState
+                compact
+                title="No commitments recorded"
+                message="A conversation that reaches something concrete leaves a structured promise here. Most conversations do not."
+              />
+            ) : (
+              <div className="space-y-2">
+                {commitments.map((commitment) => {
+                  const author = directorsById.get(commitment.actorCharacterId) ?? null;
+                  return (
+                    <div key={commitment.id} className="raised-surface px-3 py-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        {author === null ? (
+                          <span className="text-[12px] text-ink">{commitment.actorCharacterId}</span>
+                        ) : (
+                          <PersonChip
+                            character={author}
+                            size="sm"
+                            className="max-w-[55%]"
+                            onClick={() => setOpenDirectorId(commitment.actorCharacterId)}
+                          />
+                        )}
+                        <div className="flex items-center gap-1.5">
+                          <Tag tone={commitment.stance === 'support' ? 'gain' : commitment.stance === 'oppose' ? 'loss' : 'neutral'}>
+                            {commitment.stance}s
+                          </Tag>
+                          <Tag
+                            tone={
+                              commitment.status === 'honoured'
+                                ? 'gain'
+                                : commitment.status === 'broken'
+                                  ? 'loss'
+                                  : commitment.status === 'active'
+                                    ? 'info'
+                                    : 'neutral'
+                            }
+                          >
+                            {commitment.status}
+                          </Tag>
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[11px] text-ink-dim">
+                        Will {commitment.stance} a {PROPOSAL_KIND_LABEL[commitment.proposalKind].toLowerCase()} {commitmentText(commitment.conditions)}.
+                      </p>
+                      <p className="mt-1 text-[10px] text-ink-faint">
+                        Strength {commitment.commitmentStrength.toFixed(2)} · expires {quarterLabel(session.startYear, commitment.expiresQuarter)}
+                        {commitment.rationale.length === 0 ? '' : ` · “${commitment.rationale}”`}
+                      </p>
                     </div>
-                  </div>
-                  <p className="mt-1 text-[11px] text-ink-dim">
-                    Will {commitment.stance} a {PROPOSAL_KIND_LABEL[commitment.proposalKind].toLowerCase()} {commitmentText(commitment.conditions)}.
-                  </p>
-                  <p className="mt-1 text-[10px] text-ink-faint">
-                    Strength {commitment.commitmentStrength.toFixed(2)} · expires {quarterLabel(session.startYear, commitment.expiresQuarter)}
-                    {commitment.rationale.length === 0 ? '' : ` · “${commitment.rationale}”`}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+        </div>
 
         <Panel title="Governance rules" subtitle="One screen, and no surprises later">
           <KeyValueGrid
@@ -301,18 +363,48 @@ export default function BoardroomPage(): React.JSX.Element {
       <Drawer
         open={openDirector !== null}
         onClose={() => setOpenDirectorId(null)}
-        title={openDirector === null ? '' : (directorsById.get(openDirector.characterId)?.name ?? openDirector.characterId)}
+        title={openDirectorCharacter?.name ?? openDirector?.characterId ?? ''}
         subtitle={openDirector === null ? undefined : `${openDirector.seat} seat · ${MANDATE_LABEL[openDirector.mandate]}`}
       >
         {openDirector === null ? null : (
           <div className="space-y-4">
-            <div className="flex flex-wrap gap-1.5">
-              {openDirector.isChair ? <Tag tone="brand">Chair</Tag> : null}
-              <Tag>{openDirector.seat}</Tag>
-              <Tag tone="info">{MANDATE_LABEL[openDirector.mandate]}</Tag>
-              {openDirector.committees.map((committee) => (
-                <Tag key={committee}>{committee}</Tag>
-              ))}
+            <div className="flex items-start gap-3">
+              <Portrait
+                characterId={openDirector.characterId}
+                name={openDirectorCharacter?.name}
+                role={openDirectorCharacter?.role}
+                size="xl"
+                idle
+                mood={moodFromRelationship(openDirector.relationshipWithCeo)}
+                ring={openDirector.relationshipWithCeo >= 20 ? 'gain' : openDirector.relationshipWithCeo <= -20 ? 'loss' : 'neutral'}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap gap-1.5">
+                  {openDirector.isChair ? <Tag tone="brand">Chair</Tag> : null}
+                  <Tag>{openDirector.seat}</Tag>
+                  <Tag tone="info">{MANDATE_LABEL[openDirector.mandate]}</Tag>
+                  {openDirector.committees.map((committee) => (
+                    <Tag key={committee}>{committee}</Tag>
+                  ))}
+                </div>
+                {openMatters.length === 0 ? (
+                  <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
+                    Nothing is tabled, so there is nothing to lobby them on. A director can only be lobbied on a matter before the board.
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm mt-2"
+                    onClick={() => {
+                      setLobbyFocus({ directorId: openDirector.characterId, proposalId: headProposal?.id ?? null });
+                      setOpenDirectorId(null);
+                      scrollTo('lobby');
+                    }}
+                  >
+                    Lobby them
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -400,20 +492,32 @@ export default function BoardroomPage(): React.JSX.Element {
                 />
               </div>
               <div className="mt-2.5 space-y-1.5">
-                {openTally.perDirector.map((vote) => (
-                  <div key={vote.directorCharacterId} className="raised-surface px-2.5 py-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] text-ink">{directorsById.get(vote.directorCharacterId)?.name ?? vote.directorCharacterId}</span>
-                      <div className="flex items-center gap-1.5">
-                        {vote.honouredCommitmentId === null ? null : <Tag tone="info">commitment honoured</Tag>}
-                        <Tag tone={vote.vote === 'support' ? 'gain' : vote.vote === 'oppose' ? 'loss' : 'neutral'} dot>
-                          {vote.vote}
-                        </Tag>
+                {openTally.perDirector.map((vote) => {
+                  const voter = directorsById.get(vote.directorCharacterId) ?? null;
+                  return (
+                    <div key={vote.directorCharacterId} className="raised-surface px-2.5 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        {voter === null ? (
+                          <span className="text-[11px] text-ink">{vote.directorCharacterId}</span>
+                        ) : (
+                          <PersonChip
+                            character={voter}
+                            size="sm"
+                            className="max-w-[55%]"
+                            ring={vote.vote === 'support' ? 'gain' : vote.vote === 'oppose' ? 'loss' : undefined}
+                          />
+                        )}
+                        <div className="flex items-center gap-1.5">
+                          {vote.honouredCommitmentId === null ? null : <Tag tone="info">commitment honoured</Tag>}
+                          <Tag tone={vote.vote === 'support' ? 'gain' : vote.vote === 'oppose' ? 'loss' : 'neutral'} dot>
+                            {vote.vote}
+                          </Tag>
+                        </div>
                       </div>
+                      {vote.rationale === null ? null : <p className="mt-1 text-[10px] text-ink-faint">{vote.rationale}</p>}
                     </div>
-                    {vote.rationale === null ? null : <p className="mt-1 text-[10px] text-ink-faint">{vote.rationale}</p>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

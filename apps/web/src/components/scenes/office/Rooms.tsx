@@ -38,13 +38,25 @@ export const ROLE_FIGURE: Readonly<Record<OfficeWorkZone['id'], FigureRole>> = {
   operations: 'ops',
 };
 
-/** The floor a room is painted on. Drawn first, under everything. */
+/**
+ * The floor a room is painted on, with the back wall above it. Drawn first,
+ * under everything.
+ *
+ * The wall is a path rather than a second rounded rect: a rect with the floor's
+ * corner radius would round its *bottom* corners too and cut two notches out of
+ * the skirting.
+ */
 export function Floor({ width, height }: { readonly width: number; readonly height: number }): React.JSX.Element {
+  const wall = Math.min(14, height / 3);
+  const radius = Math.min(10, wall);
   return (
     <g>
       <rect x="0" y="0" width={width} height={height} rx="10" fill="var(--fc-floor)" />
-      <rect x="0" y="0" width={width} height={Math.min(14, height / 3)} rx="10" fill="var(--fc-wall)" />
-      <rect x="0" y={Math.min(14, height / 3) - 2} width={width} height="2" fill="var(--fc-wall-shade)" opacity="0.7" />
+      <path
+        d={`M0 ${wall}V${radius}A${radius} ${radius} 0 0 1 ${radius} 0H${width - radius}A${radius} ${radius} 0 0 1 ${width} ${radius}V${wall}Z`}
+        fill="var(--fc-wall)"
+      />
+      <rect x="0" y={wall - 2} width={width} height="2" fill="var(--fc-wall-shade)" opacity="0.7" />
     </g>
   );
 }
@@ -92,20 +104,44 @@ export interface WorkRoomProps {
  * research room and the full-width operations strip.
  */
 export function WorkRoom({ zone, band, width, height, shelfHeight = 0, children }: WorkRoomProps): React.JSX.Element {
-  const columns = Math.max(1, Math.floor((width - 8) / DESK_CELL.width));
-  const gridWidth = columns * DESK_CELL.width;
-  const originX = Math.max(4, (width - gridWidth) / 2);
   const role = ROLE_FIGURE[zone.id];
+  const used = zone.seats.length;
+
+  // Columns come from the room's width; the block of desks is then centred in
+  // what is left below the shelf, so a three-person function reads as a small
+  // team in a room rather than a row of desks pushed against the back wall.
+  const columns = Math.max(1, Math.min(used || 1, Math.floor((width - 8) / DESK_CELL.width)));
+  const rows = Math.max(1, Math.ceil(used / columns));
+  const gridWidth = columns * DESK_CELL.width;
+  const gridHeight = rows * DESK_CELL.height;
+  const originX = Math.max(4, (width - gridWidth) / 2);
+  const originY = shelfHeight + Math.max(0, (height - shelfHeight - gridHeight) / 2);
+
+  // Corner planting, but only where there is floor left over for it.
+  const slack = height - shelfHeight - gridHeight;
+  const planted = slack >= 70 && width >= 160;
+
+  if (used === 0) return <EmptyRoom width={width} height={height} />;
 
   return (
     <g>
       {children}
+      {planted ? (
+        <>
+          <g transform={`translate(6 ${height - 28})`}>
+            <Plant />
+          </g>
+          <g transform={`translate(${width - 26} ${height - 28})`}>
+            <Plant />
+          </g>
+        </>
+      ) : null}
       {zone.seats.map((seat, index) => {
         const column = index % columns;
         const row = Math.floor(index / columns);
         const x = originX + column * DESK_CELL.width;
-        const y = shelfHeight + row * DESK_CELL.height;
-        if (y + DESK_CELL.height > height + 8) return null;
+        const y = originY + row * DESK_CELL.height;
+        if (y + DESK_CELL.height > height + 10) return null;
         const look = seatLook(seat.id);
         return (
           <g key={seat.id} transform={`translate(${x} ${y})`}>
@@ -126,13 +162,47 @@ export function WorkRoom({ zone, band, width, height, shelfHeight = 0, children 
   );
 }
 
-/** The whiteboard strip along the back of the research room. */
+/**
+ * A function with nobody in it.
+ *
+ * An empty room is information — a company with no operations staff is one
+ * supply shock from a bad quarter — so it is drawn as an explicit vacancy
+ * rather than left as blank floor.
+ */
+export function EmptyRoom({ width, height }: { readonly width: number; readonly height: number }): React.JSX.Element {
+  const boxWidth = Math.min(190, Math.max(120, width - 40));
+  const x = (width - boxWidth) / 2;
+  const y = Math.max(20, height / 2 - 26);
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={boxWidth}
+        height="52"
+        rx="10"
+        fill="var(--color-panel)"
+        stroke="var(--color-hair-strong)"
+        strokeWidth="1.2"
+        strokeDasharray="5 4"
+      />
+      <circle cx={x + 26} cy={y + 26} r="11" fill="var(--color-brand-wash)" />
+      <path d={`M${x + 26} ${y + 20}v12M${x + 20} ${y + 26}h12`} stroke="var(--color-brand)" strokeWidth="1.8" strokeLinecap="round" />
+      <text x={x + 46} y={y + 30} fontSize="11" fontWeight="600" fill="var(--color-ink-faint)">
+        Nobody here yet
+      </text>
+    </g>
+  );
+}
+
+/** The whiteboard strip along the back of the research room, one per programme. */
 export function BoardShelf({ count, width }: { readonly count: number; readonly width: number }): React.JSX.Element {
   const drawn = Math.max(0, Math.min(count, Math.floor((width - 12) / 46)));
+  const originX = Math.max(6, (width - drawn * 46 + 6) / 2);
   return (
     <g>
       {Array.from({ length: drawn }, (_, index) => (
-        <g key={index} transform={`translate(${8 + index * 46} 2)`}>
+        <g key={index} transform={`translate(${originX + index * 46} 2)`}>
           <Whiteboard index={index} />
         </g>
       ))}
@@ -140,13 +210,14 @@ export function BoardShelf({ count, width }: { readonly count: number; readonly 
   );
 }
 
-/** The crate stack along the back of the sales room. */
+/** The crate stack along the back of the sales room, one per live product. */
 export function CrateShelf({ count, width }: { readonly count: number; readonly width: number }): React.JSX.Element {
   const drawn = Math.max(0, Math.min(count, Math.floor((width - 12) / 26)));
+  const originX = Math.max(6, (width - drawn * 26 + 6) / 2);
   return (
     <g>
       {Array.from({ length: drawn }, (_, index) => (
-        <g key={index} transform={`translate(${8 + index * 26} 8)`}>
+        <g key={index} transform={`translate(${originX + index * 26} 6)`}>
           <Crate index={index} />
         </g>
       ))}
@@ -171,29 +242,36 @@ export function LobbyRoom({
 }): React.JSX.Element {
   const receptionist = seatLook(`${companyId}/lobby/0`);
   const visitor = seatLook(`${companyId}/lobby/1`);
+  const glass = Math.max(60, width - 96);
+  const mullions = Math.max(2, Math.round(glass / 42));
+  const deskY = height - 44;
   return (
     <g>
       {/* glazed frontage */}
-      <rect x="8" y="18" width={Math.max(40, width - 100)} height="26" rx="4" fill="var(--fc-glass)" opacity="0.85" />
-      <path
-        d={`M8 31h${Math.max(40, width - 100)}`}
-        stroke="var(--color-panel)"
-        strokeWidth="1.6"
-        opacity="0.8"
-      />
+      <rect x="8" y="18" width={glass} height="30" rx="4" fill="var(--fc-glass)" opacity="0.85" />
+      {Array.from({ length: mullions - 1 }, (_, index) => (
+        <path
+          key={index}
+          d={`M${8 + ((index + 1) * glass) / mullions} 18v30`}
+          stroke="var(--color-panel)"
+          strokeWidth="1.6"
+          opacity="0.75"
+        />
+      ))}
+      <path d={`M8 33h${glass}`} stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.75" />
 
-      <g transform={`translate(${Math.max(10, width - 96)} ${height - 30})`}>
+      <g transform={`translate(${Math.max(10, width - 30)} ${height - 30})`}>
         <Plant />
       </g>
 
-      <g transform={`translate(${Math.max(8, (width - 84) / 2 - 26)} ${height - 42})`}>
-        <g transform="translate(14 -22)">
+      <g transform={`translate(${Math.max(6, (width - 84) / 2 - 22)} ${deskY})`}>
+        <g transform="translate(14 -30)">
           <Worker look={receptionist} role="ops" band={band} />
         </g>
         <Reception />
       </g>
 
-      <g transform={`translate(${Math.max(8, width - 44)} ${height - 44})`}>
+      <g transform={`translate(${Math.max(8, width - 64)} ${height - 44})`}>
         <Worker look={visitor} role="sal" band={band} />
       </g>
     </g>
@@ -221,10 +299,66 @@ export function ExecutiveDesk({
         <Desk />
       </g>
       {executive.isCeo ? (
-        <g transform={`translate(${EXEC_CELL.width / 2 - 6} 0)`}>
+        <g transform={`translate(${EXEC_CELL.width / 2 - 4} 0)`}>
           <path d="M0 7 2 3l2 3 2-3 2 4v2H0z" fill="var(--color-pop-4)" stroke="var(--color-panel)" strokeWidth="0.7" />
         </g>
       ) : null}
+    </g>
+  );
+}
+
+/**
+ * The back wall of the executive row: a boardroom table and its chairs.
+ *
+ * Pure decoration, drawn above where the desks sit, so the room reads as a
+ * suite whether one executive occupies it or five. It carries no figure and
+ * makes no claim.
+ */
+export function ExecutiveBackdrop({ width }: { readonly width: number }): React.JSX.Element {
+  const tableWidth = Math.max(76, Math.min(200, width * 0.34));
+  const x = (width - tableWidth) / 2;
+  const seats = 4;
+  const seatX = (index: number): number => x + ((index + 0.5) * tableWidth) / seats;
+  return (
+    <g>
+      {Array.from({ length: seats }, (_, index) => (
+        <circle key={`back-${index}`} cx={seatX(index)} cy="6" r="3.6" fill="var(--fc-chair)" />
+      ))}
+      <rect x={x} y="11" width={tableWidth} height="13" rx="6.5" fill="var(--fc-desk)" />
+      <rect x={x} y="11" width={tableWidth} height="5" rx="2.5" fill="var(--fc-desk-top)" />
+      {Array.from({ length: seats }, (_, index) => (
+        <circle key={`front-${index}`} cx={seatX(index)} cy="29" r="3.6" fill="var(--fc-chair)" />
+      ))}
+      <g transform={`translate(${Math.max(4, x - 34)} 2)`}>
+        <Plant />
+      </g>
+      <g transform={`translate(${Math.min(width - 24, x + tableWidth + 14)} 2)`}>
+        <Plant />
+      </g>
+    </g>
+  );
+}
+
+/**
+ * A desk on the executive row that the payroll says exists but no character in
+ * this session occupies. Drawn, because `EmployeeBase.execs` is committed
+ * state; anonymous, because there is nobody behind it to open.
+ */
+export function AnonymousExecutiveDesk({
+  seatId: id,
+  band,
+}: {
+  readonly seatId: string;
+  readonly band: MoraleBand;
+}): React.JSX.Element {
+  return (
+    <g opacity="0.72">
+      <g transform={`translate(${(EXEC_CELL.width - 24) / 2} 6)`}>
+        <Worker look={seatLook(id)} role="exe" band={band} />
+      </g>
+      <g transform={`translate(${(EXEC_CELL.width - 54) / 2} 0)`}>
+        <Desk />
+      </g>
     </g>
   );
 }
@@ -243,8 +377,11 @@ export function ServerRoom({
   readonly height: number;
 }): React.JSX.Element {
   const columns = Math.max(1, Math.floor((width - 8) / RACK_CELL.width));
-  const drawn = Math.min(server.racks, columns * Math.max(1, Math.floor(height / RACK_CELL.height)));
-  const gridWidth = Math.min(drawn, columns) * RACK_CELL.width;
+  const rows = Math.max(1, Math.floor(height / RACK_CELL.height));
+  const owned = Math.min(server.racks, columns * rows);
+  const rented = Math.max(0, Math.min(server.cloudRacks, columns * rows - owned));
+  const drawn = owned + rented;
+  const gridWidth = Math.min(Math.max(drawn, 1), columns) * RACK_CELL.width;
   const originX = Math.max(4, (width - gridWidth) / 2);
 
   // Utilisation drives how many of the six bays in a rack are lit, and the
@@ -254,19 +391,17 @@ export function ServerRoom({
 
   if (drawn === 0) {
     return (
-      <g>
-        <rect
-          x={width / 2 - 34}
-          y={height / 2 - 24}
-          width="68"
-          height="48"
-          rx="6"
-          fill="var(--fc-vacant)"
-          stroke="var(--color-hair-strong)"
-          strokeWidth="1"
-          strokeDasharray="4 3"
-        />
-      </g>
+      <rect
+        x={width / 2 - 34}
+        y={height / 2 - 24}
+        width="68"
+        height="48"
+        rx="6"
+        fill="var(--fc-vacant)"
+        stroke="var(--color-hair-strong)"
+        strokeWidth="1"
+        strokeDasharray="4 3"
+      />
     );
   }
 
@@ -277,7 +412,7 @@ export function ServerRoom({
         const row = Math.floor(index / columns);
         return (
           <g key={index} transform={`translate(${originX + column * RACK_CELL.width} ${row * RACK_CELL.height})`}>
-            <Rack lit={litBays} tone={tone} delayMs={index * 140} />
+            <Rack lit={litBays} tone={tone} delayMs={index * 140} rented={index >= owned} />
           </g>
         );
       })}

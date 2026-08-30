@@ -112,8 +112,14 @@ export interface OfficeServerRoom {
   readonly held: number;
   readonly utilisation: number;
   readonly trainingAllocation: number;
-  /** Racks drawn, and the accelerators one rack stands for. */
+  /** Solid racks: the accelerators this company owns or has reserved. */
   readonly racks: number;
+  /**
+   * Outlined racks: the on-demand capacity, which is real capacity that the
+   * company does not own. Drawn hollow because it can be gone next quarter.
+   */
+  readonly cloudRacks: number;
+  /** What one rack — solid or hollow — stands for. */
   readonly acceleratorsPerRack: number;
   readonly expiryQuarter: number | null;
   readonly quartersToExpiry: number | null;
@@ -144,6 +150,12 @@ export interface OfficeModel {
   readonly executives: readonly OfficeExecutive[];
   /** Executive *headcount*, which is not the same as the named leadership. */
   readonly execHeadcount: number;
+  /**
+   * Desks for the executive headcount nobody in this session has a name for.
+   * Drawn, because the payroll says they exist; inert, because there is no
+   * character behind them to open.
+   */
+  readonly unnamedExecDesks: number;
   readonly server: OfficeServerRoom;
   /** Active product lines — the crates stacked in the sales zone. */
   readonly activeProducts: number;
@@ -181,22 +193,42 @@ export const EXECUTIVE_DESK_CAP = 5;
 
 /** Never draw more racks than this, however large the fleet. */
 export const RACK_CAP = 10;
-/** The smallest number of accelerators one drawn rack ever stands for. */
-export const BASE_ACCELERATORS_PER_RACK = 256;
 
 /**
- * Racks for a fleet of `accelerators`, and what one rack stands for.
+ * What one drawn rack stands for, given the whole held fleet.
  *
- * The per-rack figure steps up in whole multiples of the base so the room reads
- * as a room rather than a bar chart: a small fleet gets one rack per 256 cards,
- * a very large one gets a coarser rack and the same ten-rack silhouette.
+ * A 1-2-5 ladder, chosen so the room is always roughly full whatever the scale:
+ * a garage lab with 35 rented units gets a rack per 5, and a company holding
+ * two hundred thousand gets a rack per twenty-five thousand. The figure is
+ * printed on the zone, so the scale is never a secret.
  */
-export function rackPlan(accelerators: number): { readonly racks: number; readonly acceleratorsPerRack: number } {
-  const fleet = Math.max(0, Math.floor(accelerators));
-  if (fleet === 0) return { racks: 0, acceleratorsPerRack: BASE_ACCELERATORS_PER_RACK };
-  const steps = Math.max(1, Math.ceil(fleet / (RACK_CAP * BASE_ACCELERATORS_PER_RACK)));
-  const acceleratorsPerRack = steps * BASE_ACCELERATORS_PER_RACK;
-  return { racks: Math.min(RACK_CAP, Math.ceil(fleet / acceleratorsPerRack)), acceleratorsPerRack };
+export function acceleratorsPerRack(total: number): number {
+  const target = Math.max(1, Math.ceil(Math.max(0, total) / RACK_CAP));
+  let magnitude = 1;
+  while (magnitude <= 1e9) {
+    for (const multiplier of [1, 2, 5]) {
+      const step = multiplier * magnitude;
+      if (step >= target) return step;
+    }
+    magnitude *= 10;
+  }
+  return magnitude;
+}
+
+/**
+ * Racks for `accelerators`, at the scale set by the whole held fleet.
+ *
+ * Owned and reserved capacity is passed as `accelerators` and drawn solid; the
+ * on-demand remainder is planned against the same `total`, so a hollow rack and
+ * a solid one are the same size in units as well as in pixels.
+ */
+export function rackPlan(
+  accelerators: number,
+  total: number = accelerators,
+): { readonly racks: number; readonly acceleratorsPerRack: number } {
+  const perRack = acceleratorsPerRack(total);
+  const fleet = Math.max(0, accelerators);
+  return { racks: Math.min(RACK_CAP, Math.ceil(fleet / perRack)), acceleratorsPerRack: perRack };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -291,7 +323,11 @@ export function buildOfficeModel({ session, company, projects, characters }: Bui
   const holdings = company.compute;
   const held = heldComputeUnits(session, company);
   const fleet = holdings.ownedAccelerators + holdings.reservedAccelerators;
-  const plan = rackPlan(fleet);
+  const cloudUnits = Math.max(0, held - fleet);
+  // Both kinds of rack are planned against the whole held fleet, so a hollow
+  // rack of rented capacity is worth exactly as much as a solid owned one.
+  const plan = rackPlan(fleet, held);
+  const cloudRacks = Math.max(0, Math.min(RACK_CAP - plan.racks, Math.ceil(cloudUnits / plan.acceleratorsPerRack)));
   const quartersToExpiry = holdings.reservationExpiryQuarter === null ? null : holdings.reservationExpiryQuarter - session.quarter;
 
   return {
@@ -313,14 +349,16 @@ export function buildOfficeModel({ session, company, projects, characters }: Bui
     zones,
     executives,
     execHeadcount: employees.execs,
+    unnamedExecDesks: Math.max(0, Math.min(EXECUTIVE_DESK_CAP - executives.length, employees.execs - executives.length)),
     server: {
       owned: holdings.ownedAccelerators,
       reserved: holdings.reservedAccelerators,
-      cloudUnits: Math.max(0, held - fleet),
+      cloudUnits,
       held,
       utilisation: holdings.computeUtilisation,
       trainingAllocation: holdings.trainingAllocation,
       racks: plan.racks,
+      cloudRacks,
       acceleratorsPerRack: plan.acceleratorsPerRack,
       expiryQuarter: holdings.reservationExpiryQuarter,
       quartersToExpiry,

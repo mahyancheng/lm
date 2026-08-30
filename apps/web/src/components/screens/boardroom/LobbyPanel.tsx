@@ -14,7 +14,7 @@
  * object.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   ActionValidationResult,
   Board,
@@ -32,12 +32,27 @@ import { AccessBadge, EmptyState, Meter, Panel, PersonChip, SectionHeading, Tag,
 import { useGameActions } from '@/lib/game';
 import { commitmentText, conditionText } from './labels';
 
+/**
+ * A hand-off from the boardroom scene: "lobby this director on this matter".
+ *
+ * It is an object rather than two strings so the panel can tell one hand-off
+ * from the next — the caller holds it in state, so tapping the same seat twice
+ * is two distinct objects and the selects follow both times, while an unrelated
+ * re-render leaves whatever the player has since typed alone.
+ */
+export interface LobbyFocus {
+  readonly directorId: string;
+  readonly proposalId: string | null;
+}
+
 export interface LobbyPanelProps {
   readonly session: SessionState;
   readonly board: Board;
   readonly founder: Character;
   readonly proposals: readonly BoardProposal[];
   readonly directorsById: ReadonlyMap<string, Character>;
+  /** Optional: preselect a director (and matter) chosen elsewhere on the screen. */
+  readonly focus?: LobbyFocus | null;
 }
 
 interface Row {
@@ -48,7 +63,7 @@ interface Row {
 
 const EMPTY_ROW: Row = { field: 'purchasePriceUsd', comparator: 'lte', value: '' };
 
-export function LobbyPanel({ session, board, founder, proposals, directorsById }: LobbyPanelProps): React.JSX.Element {
+export function LobbyPanel({ session, board, founder, proposals, directorsById, focus = null }: LobbyPanelProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
   const [directorId, setDirectorId] = useState('');
   const [proposalId, setProposalId] = useState('');
@@ -57,6 +72,16 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById }
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
   const open = useMemo(() => proposals.filter((proposal) => proposal.status === 'tabled' || proposal.status === 'draft'), [proposals]);
+
+  // A seat tapped at the table fills the selects here. Only the selects: a
+  // half-written message and any concessions already offered are the player's,
+  // and a hand-off from the scene must not throw them away.
+  useEffect(() => {
+    if (focus === null) return;
+    setDirectorId(focus.directorId);
+    if (focus.proposalId !== null) setProposalId(focus.proposalId);
+    setResult(null);
+  }, [focus]);
 
   const director = directorId.length === 0 ? null : (directorsById.get(directorId) ?? null);
   const seat = board.directors.find((entry) => entry.characterId === directorId) ?? null;

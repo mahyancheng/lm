@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Network — the people graph.
+ * Network — the people graph, drawn.
  *
  * The design claim: **networking is gameplay, not a number to grind.** A
  * first-quarter founder on connection 24 cannot open a channel to a sovereign
@@ -9,6 +9,12 @@
  * What it also does is show the way through: who you *can* reach, which of them
  * can reach the person you want, and a `request_introduction` that runs the same
  * reachability check the validator will.
+ *
+ * The primary surface is a web of faces in rings around you — reachable inside,
+ * one introduction away in the middle, out of reach outside — because "how far
+ * away is this person" is a spatial question and a table answers it badly. The
+ * directory is still here, one tab across, for every question a table answers
+ * better: sorting, comparing, scanning.
  *
  * Two boundaries are kept here deliberately:
  *
@@ -32,10 +38,12 @@ import {
   PersonChip,
   SectionHeading,
   StatCard,
+  TabBar,
   Tag,
   type Column,
 } from '@/components/ui';
 import { ConnectionBreakdown } from '@/components/screens/network/ConnectionBreakdown';
+import { PeopleWeb } from '@/components/screens/network/PeopleWeb';
 import { PersonDrawer } from '@/components/screens/network/PersonDrawer';
 import { buildDirectory, characterName, overridesFor, type DirectoryEntry } from '@/components/screens/network/directory';
 import { useLeaderboards, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
@@ -55,6 +63,7 @@ export default function NetworkPage(): React.JSX.Element {
   const founder = usePlayerCharacter();
   const powerBoard = useLeaderboards('network')[0] ?? null;
 
+  const [surface, setSurface] = useState('web');
   const [role, setRole] = useState('all');
   const [reachOnly, setReachOnly] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -78,6 +87,21 @@ export default function NetworkPage(): React.JSX.Element {
   const blocked = directory.filter((entry) => entry.state === 'blocked');
   const routed = blocked.filter((entry) => entry.brokerIds.length > 0);
   const selectedEntry = selected === null ? null : (directory.find((entry) => entry.character.id === selected) ?? null);
+
+  const filters = (
+    <div className="flex items-center gap-1.5">
+      <select className="field h-7 w-auto py-0 text-[11px]" value={role} onChange={(event) => setRole(event.target.value)} aria-label="Filter by role">
+        {ROLE_FILTERS.map((filter) => (
+          <option key={filter.id} value={filter.id}>
+            {filter.label}
+          </option>
+        ))}
+      </select>
+      <button type="button" className="btn btn-sm" onClick={() => setReachOnly((value) => !value)}>
+        {reachOnly ? 'Showing reachable' : 'Show all'}
+      </button>
+    </div>
+  );
 
   const columns: readonly Column<DirectoryEntry>[] = [
     {
@@ -172,6 +196,42 @@ export default function NetworkPage(): React.JSX.Element {
         />
       </div>
 
+      <TabBar
+        ariaLabel="How to read the network"
+        value={surface}
+        onChange={setSurface}
+        tabs={[
+          { id: 'web', label: 'The web' },
+          { id: 'list', label: 'List', badge: rows.length },
+        ]}
+      />
+
+      {surface === 'web' ? (
+        <Panel
+          title="The people web"
+          subtitle={`${rows.length} people, placed by how far away they are. Tap anyone for their card.`}
+          actions={filters}
+        >
+          {rows.length === 0 ? (
+            <EmptyState title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />
+          ) : (
+            <PeopleWeb entries={rows} founder={founder} selectedId={selected} onSelect={setSelected} />
+          )}
+        </Panel>
+      ) : (
+        <Panel title="Directory" subtitle={`${rows.length} of ${directory.length} people`} flush actions={filters}>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(row) => row.character.id}
+            onRowClick={(row) => setSelected(row.character.id)}
+            initialSort={{ key: 'connection', direction: 'desc' }}
+            dense
+            empty={<EmptyState title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />}
+          />
+        </Panel>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           title="Connection level"
@@ -196,7 +256,7 @@ export default function NetworkPage(): React.JSX.Element {
                       <button
                         type="button"
                         onClick={() => setSelected(entry.character.id)}
-                        className="w-full rounded-[4px] px-1 py-1 text-left transition-colors hover:bg-raised"
+                        className="w-full rounded-chip px-1 py-1 text-left transition-colors hover:bg-raised"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate text-[11px] text-ink">{entry.character.name}</span>
@@ -242,36 +302,6 @@ export default function NetworkPage(): React.JSX.Element {
           </div>
         </Panel>
       </div>
-
-      <Panel
-        title="Directory"
-        subtitle={`${rows.length} of ${directory.length} people`}
-        flush
-        actions={
-          <div className="flex items-center gap-1.5">
-            <select className="field h-6 w-auto py-0 text-[11px]" value={role} onChange={(event) => setRole(event.target.value)}>
-              {ROLE_FILTERS.map((filter) => (
-                <option key={filter.id} value={filter.id}>
-                  {filter.label}
-                </option>
-              ))}
-            </select>
-            <button type="button" className="btn btn-sm" onClick={() => setReachOnly((value) => !value)}>
-              {reachOnly ? 'Showing reachable' : 'Show all'}
-            </button>
-          </div>
-        }
-      >
-        <DataTable
-          columns={columns}
-          rows={rows}
-          rowKey={(row) => row.character.id}
-          onRowClick={(row) => setSelected(row.character.id)}
-          initialSort={{ key: 'connection', direction: 'desc' }}
-          dense
-          empty={<EmptyState title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />}
-        />
-      </Panel>
 
       <Panel title="Industry power" subtitle="The network board, recomputed from the ledger every quarter" flush>
         {powerBoard === null ? (

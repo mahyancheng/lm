@@ -248,45 +248,76 @@ export function Desk({ lit = true }: { readonly lit?: boolean }): React.JSX.Elem
   );
 }
 
-/** An empty desk: the seat an open role has not filled yet. */
+/**
+ * An empty desk: the seat an open role has not filled yet.
+ *
+ * The desk is drawn first and the hiring badge above it, so the badge is not
+ * hidden behind the monitor the way a person would be.
+ */
 export function VacantDesk(): React.JSX.Element {
   return (
     <g>
+      <Desk lit={false} />
       <rect
         x="19.5"
-        y="27"
+        y="12"
         width="15"
         height="15"
-        rx="4"
+        rx="5"
         fill="var(--color-brand-wash)"
         stroke="var(--color-brand)"
         strokeWidth="1"
         strokeDasharray="3 2.4"
       />
-      <path d="M27 31.5v6M24 34.5h6" stroke="var(--color-brand)" strokeWidth="1.4" strokeLinecap="round" />
-      <Desk lit={false} />
+      <path d="M27 16.5v6M24 19.5h6" stroke="var(--color-brand)" strokeWidth="1.4" strokeLinecap="round" />
     </g>
   );
 }
 
-/** A server rack. `lit` LEDs of `rows` glow; the rest are dark. */
+/**
+ * A server rack. `lit` LEDs of `rows` glow; the rest are dark.
+ *
+ * `rented` draws the rack hollow: capacity the company pays for by the quarter
+ * rather than owns, which is a materially different thing to be standing on.
+ */
 export function Rack({
   rows = 6,
   lit,
   tone,
   delayMs,
+  rented = false,
 }: {
   readonly rows?: number;
   readonly lit: number;
   readonly tone: string;
   readonly delayMs: number;
+  readonly rented?: boolean;
 }): React.JSX.Element {
   const bays = Array.from({ length: rows }, (_, index) => index);
   return (
     <g>
-      <ellipse cx="13" cy="65" rx="11" ry="2.4" fill="var(--fc-shadow-soft)" />
-      <rect x="1" y="4" width="24" height="60" rx="4" fill="var(--fc-rack)" />
-      <rect x="3.4" y="6.4" width="19.2" height="55.2" rx="3" fill="var(--fc-rack-face)" />
+      <ellipse cx="13" cy="65" rx="11" ry="2.4" fill="var(--fc-shadow-soft)" opacity={rented ? 0.5 : 1} />
+      {rented ? (
+        <>
+          <rect x="1" y="4" width="24" height="60" rx="4" fill="var(--fc-rack-face)" opacity="0.55" />
+          <rect
+            x="1"
+            y="4"
+            width="24"
+            height="60"
+            rx="4"
+            fill="none"
+            stroke="var(--fc-rack)"
+            strokeWidth="1.2"
+            strokeDasharray="4 3"
+          />
+        </>
+      ) : (
+        <>
+          <rect x="1" y="4" width="24" height="60" rx="4" fill="var(--fc-rack)" />
+          <rect x="3.4" y="6.4" width="19.2" height="55.2" rx="3" fill="var(--fc-rack-face)" />
+        </>
+      )}
       {bays.map((bay) => {
         const y = 9 + bay * 8.6;
         const on = bay < lit;

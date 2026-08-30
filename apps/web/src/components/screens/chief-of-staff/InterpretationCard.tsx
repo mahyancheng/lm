@@ -69,9 +69,22 @@ const DRAFT_CONFIDENCE = 0.7;
 export interface InterpretationCardProps {
   readonly entry: TranscriptEntry;
   readonly startYear: number;
+  /**
+   * How the card is framed.
+   *
+   * `card` is the standalone surface: its own border, and the instruction
+   * repeated in a header. `speech` is the same card with the frame removed,
+   * because it is sitting inside the Chief of Staff's speech card and the
+   * player's instruction is already on the screen above it as their own turn.
+   *
+   * **Presentation only.** Every rule below this line — the validator verdicts,
+   * the per-row queueing, the confirmation gate on the thirteen, the mandatory
+   * line — is identical in both, and must stay identical in both.
+   */
+  readonly variant?: 'card' | 'speech';
 }
 
-export function InterpretationCard({ entry, startYear }: InterpretationCardProps): React.JSX.Element {
+export function InterpretationCard({ entry, startYear, variant = 'card' }: InterpretationCardProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
   // `validateIntent` reads the live session, so the verdicts below are only as
   // current as the session they were computed against. The memo is keyed on it:
@@ -104,20 +117,31 @@ export function InterpretationCard({ entry, startYear }: InterpretationCardProps
     setQueued((current) => ({ ...current, [index]: outcome.validation }));
   }
 
+  const speech = variant === 'speech';
+
   return (
     <article
       className={cx(
-        'rounded-[6px] border bg-panel',
-        draft ? 'border-dashed border-warn/40' : 'border-hair',
+        speech
+          ? // Inside a speech card the frame belongs to the card; a low-confidence
+            // interpretation still declares itself as a draft, because a
+            // confident-looking summary of a guess is the failure mode this
+            // screen exists to avoid.
+            draft
+            ? 'rounded-card border border-dashed border-warn/50 bg-warn-wash p-2.5'
+            : ''
+          : cx('rounded-panel border bg-panel', draft ? 'border-dashed border-warn/40' : 'border-hair'),
       )}
     >
       {/* --- the instruction ---------------------------------------------- */}
-      <header className="border-b border-hair px-3.5 py-2.5">
-        <div className="label-caps-faint">You said</div>
-        <p className="mt-1 text-[12px] leading-relaxed whitespace-pre-wrap text-ink">{entry.message}</p>
-      </header>
+      {speech ? null : (
+        <header className="border-b border-hair px-3.5 py-2.5">
+          <div className="label-caps-faint">You said</div>
+          <p className="mt-1 text-[12px] leading-relaxed whitespace-pre-wrap text-ink">{entry.message}</p>
+        </header>
+      )}
 
-      <div className="flex flex-col gap-3.5 px-3.5 py-3">
+      <div className={cx('flex flex-col gap-3.5', speech ? '' : 'px-3.5 py-3')}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="label-caps">Interpreted instructions</span>

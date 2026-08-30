@@ -88,6 +88,17 @@ describe('office scene: source discipline', () => {
     }
   });
 
+  it('scopes its palette to a root that both scenes actually carry', () => {
+    // Every fill in the scene is `var(--fc-*)`, and those variables are
+    // declared on `.fc-office`. A scene root that loses the class does not
+    // degrade — an unresolved `var()` in a `fill` renders *black*, and the
+    // whole office goes to silhouette. Both roots must carry it.
+    expect(OFFICE_STYLES).toContain('.fc-office {');
+    const scene = SOURCES.find((source) => source.name === 'OfficeScene.tsx')?.code ?? '';
+    const roots = scene.match(/fc-office(?![-\w])/g) ?? [];
+    expect(roots.length, 'the full stage and the compact scene each need the fc-office class').toBeGreaterThanOrEqual(2);
+  });
+
   it('reads engine state only through the documented store hooks', () => {
     const scene = SOURCES.find((source) => source.name === 'OfficeScene.tsx')?.code ?? '';
     expect(scene).toMatch(/from '@\/lib\/game'/);

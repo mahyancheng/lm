@@ -21,8 +21,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
-import { EmptyState, KeyValueGrid, PageHeader, Panel, SectionHeading, Tag } from '@/components/ui';
-import { InterpretationCard, ROUTE_OF_ACTION } from '@/components/screens/chief-of-staff/InterpretationCard';
+import { AiLabel, KeyValueGrid, PageHeader, Panel, SectionHeading, Tag } from '@/components/ui';
+import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
+import { ROUTE_OF_ACTION } from '@/components/screens/chief-of-staff/InterpretationCard';
+import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
 import {
   appendTranscript,
   clearTranscript,
@@ -38,6 +40,7 @@ import {
   currentBudgets,
   openDecisions,
   useLlm,
+  usePlayerCharacter,
   usePlayerCompany,
   useQueuedActions,
   useSession,
@@ -64,6 +67,7 @@ const MANUAL_TICKETS: readonly { readonly href: string; readonly label: string; 
 export default function ChiefOfStaffPage(): React.JSX.Element {
   const session = useSession();
   const company = usePlayerCompany();
+  const founder = usePlayerCharacter();
   const llm = useLlm();
   const settings = useSettings();
   const queue = useQueuedActions();
@@ -146,48 +150,76 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
         {/* --- the conversation ---------------------------------------------- */}
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           {entries.length === 0 ? (
-            <Panel>
-              <EmptyState
-                glyph="CS"
-                title="Nothing interpreted yet"
-                message="Type an instruction below. It is read against your company briefing, the world briefing, your current budget lines and every decision open this quarter — and it comes back as typed actions you approve one at a time."
+            <div className="flex items-start gap-2.5">
+              <Portrait
+                characterId={CHIEF_OF_STAFF.id}
+                name={CHIEF_OF_STAFF.name}
+                role={CHIEF_OF_STAFF.role}
+                size="lg"
+                idle
+                mood="content"
+                ring="brand"
+                className="mt-1"
               />
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {EXAMPLES.map((example) => (
-                  <button key={example} type="button" className="btn btn-sm" onClick={() => setMessage(example)}>
-                    {example.length > 52 ? `${example.slice(0, 51)}…` : example}
-                  </button>
-                ))}
-              </div>
-            </Panel>
+              <SpeechCard
+                className="min-w-0 flex-1"
+                bodyClassName="px-3 py-3"
+                speaker={
+                  <>
+                    <span className="text-[12px] font-semibold text-ink">{CHIEF_OF_STAFF.name}</span>
+                    <span className="text-[10px] text-ink-faint">{CHIEF_OF_STAFF.title}</span>
+                    <AiLabel />
+                  </>
+                }
+              >
+                <p className="text-[12px] leading-relaxed text-ink-dim">
+                  Tell me what you want in your own words. I read it against your company briefing, the world briefing, your current budget
+                  lines and every decision open this quarter, and hand it back as typed actions with the validator&rsquo;s answer already on
+                  them. You approve them one at a time — <span className="font-semibold text-ink">I never submit anything myself</span>.
+                </p>
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {EXAMPLES.map((example) => (
+                    <button key={example} type="button" className="btn btn-sm" onClick={() => setMessage(example)}>
+                      {example.length > 52 ? `${example.slice(0, 51)}…` : example}
+                    </button>
+                  ))}
+                </div>
+              </SpeechCard>
+            </div>
           ) : (
-            entries.map((entry) => <InterpretationCard key={entry.id} entry={entry} startYear={session.startYear} />)
+            entries.map((entry) => <Exchange key={entry.id} entry={entry} founder={founder} startYear={session.startYear} />)
           )}
 
           <div ref={bottom} />
 
           <Panel title="Instruction" subtitle="Interpreted, then proposed, then confirmed. Never executed from the text itself.">
-            <textarea
-              className="field"
-              rows={3}
-              maxLength={1200}
-              value={message}
-              placeholder="Cut consumer marketing to six million and move the rest into enterprise sales."
-              disabled={sending}
-              onChange={(event) => setMessage(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send();
-              }}
-            />
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-[10px] text-ink-faint">
-                {llm.available
-                  ? 'Interpreted by a model, validated by the engine, approved by you.'
-                  : 'No model configured: the instruction is echoed back as a question and nothing is translated.'}
-              </span>
-              <button type="button" className="btn btn-primary btn-sm" disabled={sending || message.trim().length === 0} onClick={() => void send()}>
-                {sending ? 'Interpreting…' : 'Interpret'}
-              </button>
+            <div className="flex items-start gap-2.5">
+              <Portrait characterId={founder.id} name={founder.name} role={founder.role} size="md" isPlayer className="mt-1" />
+              <div className="min-w-0 flex-1">
+                <textarea
+                  className="field"
+                  rows={3}
+                  maxLength={1200}
+                  value={message}
+                  placeholder="Cut consumer marketing to six million and move the rest into enterprise sales."
+                  disabled={sending}
+                  aria-label="Your instruction"
+                  onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void send();
+                  }}
+                />
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[10px] text-ink-faint">
+                    {llm.available
+                      ? 'Interpreted by a model, validated by the engine, approved by you.'
+                      : 'No model configured: the instruction is echoed back as a question and nothing is translated.'}
+                  </span>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={sending || message.trim().length === 0} onClick={() => void send()}>
+                    {sending ? 'Interpreting…' : 'Interpret'}
+                  </button>
+                </div>
+              </div>
             </div>
           </Panel>
         </div>

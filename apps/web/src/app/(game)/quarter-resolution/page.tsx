@@ -19,6 +19,10 @@
  * And the sixth case, which matters most when it happens: `committed: false`.
  * An invariant refused the quarter, nothing changed, and the screen says which
  * invariant and what did not reconcile.
+ *
+ * The theatre — the front page, the counting figures, the tape, the podium — is
+ * presentation over exactly those facts. Every animated number's final state is
+ * the state's number, and `skipResolutionReveal` turns the whole show off.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -33,6 +37,7 @@ import {
   PageHeader,
   Panel,
   SectionHeading,
+  StatCard,
   Tag,
   cx,
   toneOfLine,
@@ -40,6 +45,11 @@ import {
 } from '@/components/ui';
 import { LedgerDrawer } from '@/components/screens/quarter-resolution/LedgerDrawer';
 import { lineCount, markOf, playerQuarter } from '@/components/screens/quarter-resolution/sections';
+import { SECTION_TONE, SectionGlyph, GlobeGlyph, LedgerGlyph, PodiumGlyph, TapeGlyph } from '@/components/screens/quarter-resolution/Art';
+import { CountUp } from '@/components/screens/quarter-resolution/CountUp';
+import { Newspaper } from '@/components/screens/quarter-resolution/Newspaper';
+import { PriceTape, type PriceRow } from '@/components/screens/quarter-resolution/Tape';
+import { RankPodium, type RankRow } from '@/components/screens/quarter-resolution/Podium';
 import { requestNarrative } from '@/lib/llm/client';
 import { PLAYER_ID, useGameActions, useLlm, useOutcome, usePlayerCharacter, usePlayerCompany, useSession, useSettings } from '@/lib/game';
 
@@ -48,25 +58,8 @@ const REVEAL_STEP_MS = 55;
 const SECTION_STEP_MS = 220;
 const MAX_REVEAL_DELAY_MS = 2_600;
 
-interface PriceRow {
-  readonly instrumentId: string;
-  readonly symbol: string;
-  readonly name: string;
-  readonly price: number;
-  readonly quarterReturn: number;
-  readonly marketCapUsd: number;
-  readonly volume: number;
-  readonly isOwn: boolean;
-}
-
-interface RankRow {
-  readonly board: string;
-  readonly label: string;
-  readonly rank: number;
-  readonly previousRank: number | null;
-  readonly value: number;
-  readonly percentile: number;
-}
+/** Card pop-in steps, in the order the sections are laid out. */
+const CARD_STAGGER: readonly string[] = ['', 'stagger-1', 'stagger-2', 'stagger-3', 'stagger-4', 'stagger-5'];
 
 export default function QuarterResolutionPage(): React.JSX.Element {
   const session = useSession();
@@ -174,7 +167,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
             title="No quarter has resolved in this tab yet"
             message="Queue your instructions, review them, and lock the quarter. The report that comes back is a rendering of the ledger, not a summary of it."
             action={
-              <Link href="/end-quarter" className="btn btn-primary btn-sm">
+              <Link href="/end-quarter" className="btn btn-primary btn-sm tap-target">
                 Go to End Quarter
               </Link>
             }
@@ -185,6 +178,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
   }
 
   const failed = outcome.invariants.filter((check) => !check.passed);
+  const passed = outcome.invariants.length - failed.length;
   const reveal = !settings.skipResolutionReveal;
   let lineIndex = 0;
 
@@ -196,10 +190,14 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         subtitle={report.headline}
         actions={
           <div className="flex items-center gap-2">
-            <button type="button" className="btn btn-sm" onClick={() => updateSettings({ skipResolutionReveal: !settings.skipResolutionReveal })}>
+            <button
+              type="button"
+              className="btn btn-sm tap-target"
+              onClick={() => updateSettings({ skipResolutionReveal: !settings.skipResolutionReveal })}
+            >
               {settings.skipResolutionReveal ? 'Replay the reveal' : 'Skip to the end'}
             </button>
-            <Link href="/command-centre" className="btn btn-primary btn-sm">
+            <Link href="/command-centre" className="btn btn-primary btn-sm tap-target">
               Continue to next quarter
             </Link>
           </div>
@@ -208,7 +206,13 @@ export default function QuarterResolutionPage(): React.JSX.Element {
 
       {/* --- the refusal case ---------------------------------------------- */}
       {!committed ? (
-        <Panel title="The quarter did not commit" subtitle="An invariant refused it and the pre-resolution state was restored">
+        <Panel
+          title="The quarter did not commit"
+          subtitle="An invariant refused it and the pre-resolution state was restored"
+          icon={<LedgerGlyph />}
+          iconTone="loss"
+          className="border-loss/40"
+        >
           <p className="text-[12px] leading-relaxed text-ink-dim">
             Nothing changed. Your queued instructions are still yours, the world is where it was, and the report below is what the pipeline
             produced before the gate rejected it. A failed check in <span className="figure">ledger_commit</span> aborts the commit — that is
@@ -224,7 +228,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {failed.map((check) => (
-                <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="rounded-[4px] border border-loss/30 bg-loss-wash px-3 py-2">
+                <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="rounded-card border border-loss/30 bg-loss-wash px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="figure text-[12px] text-loss">{check.invariant}</span>
                     {check.subjectId === null ? null : <span className="figure text-[10px] text-ink-faint">{check.subjectId}</span>}
@@ -237,27 +241,64 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         </Panel>
       ) : null}
 
-      {/* --- narrator ------------------------------------------------------- */}
-      {narrative !== null ? (
-        <Panel title="The quarter, in prose" subtitle={`Narrated from committed lines only · ${narrative.tone}`}>
-          <p className="text-[13px] font-medium text-ink">{narrative.headline}</p>
-          <p className="mt-2 text-[12px] leading-relaxed whitespace-pre-wrap text-ink-dim">{narrative.body}</p>
-          <p className="mt-2.5 text-[10px] leading-relaxed text-ink-faint">
-            The narrator's only input is the committed lines below. It may not introduce a number that was not supplied, and it decides
-            nothing.
-          </p>
-        </Panel>
-      ) : narrating ? (
-        <Panel>
-          <p className="text-[11px] text-ink-faint">Asking the narrator for colour over the committed lines…</p>
-        </Panel>
-      ) : null}
+      {/* --- the front page -------------------------------------------------- */}
+      <Newspaper
+        edition={`${quarterLabel(session.startYear, report.quarter)} edition · ${committed ? 'committed' : 'not committed'}`}
+        reportHeadline={report.headline}
+        narrative={narrative}
+        narrating={narrating}
+        sequenceFrom={report.sequenceFrom}
+        sequenceTo={report.sequenceTo}
+      />
+
+      {/* --- the quarter, counted -------------------------------------------- */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Lines"
+          icon={<LedgerGlyph />}
+          iconTone="brand"
+          value={<CountUp value={lineCount(report)} enabled={reveal} format={(v) => formatScore(Math.round(v))} />}
+          hint="Every one opens the ledger rows behind it"
+        />
+        <StatCard
+          label="Ledger rows"
+          icon={<TapeGlyph />}
+          iconTone="info"
+          value={<CountUp value={view.events.length} enabled={reveal} delayMs={90} format={(v) => formatScore(Math.round(v))} />}
+          hint={`Sequence ${report.sequenceFrom}–${report.sequenceTo}`}
+        />
+        <StatCard
+          label="Phases run"
+          icon={<GlobeGlyph />}
+          iconTone="info"
+          value={<CountUp value={report.phases.length} enabled={reveal} delayMs={180} format={(v) => formatScore(Math.round(v))} />}
+          hint="In the order that makes causality work"
+        />
+        <StatCard
+          label="Invariants passed"
+          icon={<PodiumGlyph />}
+          iconTone={failed.length === 0 ? 'gain' : 'loss'}
+          tone={failed.length === 0 ? 'gain' : 'loss'}
+          value={<CountUp value={passed} enabled={reveal} delayMs={270} format={(v) => formatScore(Math.round(v))} />}
+          hint={`of ${outcome.invariants.length} checked before the commit`}
+        />
+      </div>
 
       {/* --- the checklist --------------------------------------------------- */}
       <div className="grid gap-4 lg:grid-cols-2">
         {sections.map((section, sectionIndex) => (
-          <Panel key={section.id} title={section.title} subtitle={section.subtitle} className={section.id === 'rank' || section.id === 'ledger' ? 'lg:col-span-2' : ''}>
-            <ul className="flex flex-col gap-1">
+          <Panel
+            key={section.id}
+            title={section.title}
+            subtitle={section.subtitle}
+            icon={<SectionGlyph id={section.id} />}
+            iconTone={SECTION_TONE[section.id]}
+            className={cx(
+              section.id === 'rank' || section.id === 'ledger' ? 'lg:col-span-2' : '',
+              reveal ? (CARD_STAGGER[Math.min(sectionIndex, CARD_STAGGER.length - 1)] ?? '') : '',
+            )}
+          >
+            <ul className="flex flex-col gap-0.5">
               {section.lines.map((line, index) => {
                 const tone = toneOfLine(line.tone);
                 // Capped so a ninety-line quarter still finishes revealing in a few
@@ -273,13 +314,27 @@ export default function QuarterResolutionPage(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => setOpenLine(line)}
-                      className="flex w-full items-start gap-2.5 rounded-[4px] px-1.5 py-1 text-left transition-colors hover:bg-raised"
+                      className="flex min-h-11 w-full items-start gap-2.5 rounded-chip px-2 py-1.5 text-left transition-colors hover:bg-raised"
                       title={`${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
                     >
-                      <span className={cx('figure mt-px shrink-0 text-[12px]', `tone-${tone}`)}>{markOf(line.tone)}</span>
-                      <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink">{line.text}</span>
+                      <span
+                        aria-hidden="true"
+                        className={cx(
+                          'mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-pill text-[9px] leading-none font-bold',
+                          tone === 'gain'
+                            ? 'bg-gain-wash text-gain'
+                            : tone === 'loss'
+                              ? 'bg-loss-wash text-loss'
+                              : tone === 'warn'
+                                ? 'bg-warn-wash text-warn'
+                                : 'bg-raised text-ink-faint',
+                        )}
+                      >
+                        {markOf(line.tone)}
+                      </span>
+                      <span className="min-w-0 flex-1 self-center text-[12px] leading-snug text-ink">{line.text}</span>
                       {line.deltaLabel === null ? null : (
-                        <span className={cx('figure shrink-0 text-[11px]', `tone-${tone}`)}>{line.deltaLabel}</span>
+                        <span className={cx('figure shrink-0 self-center text-[11px]', `tone-${tone}`)}>{line.deltaLabel}</span>
                       )}
                     </button>
                   </li>
@@ -292,7 +347,14 @@ export default function QuarterResolutionPage(): React.JSX.Element {
 
       {/* --- prices ---------------------------------------------------------- */}
       {committed ? (
-        <Panel title="Price change" subtitle="Closing quotes for the quarter that just resolved" flush>
+        <Panel
+          title="Price change"
+          subtitle="Closing quotes for the quarter that just resolved"
+          icon={<TapeGlyph />}
+          iconTone="gain"
+          flush
+        >
+          <PriceTape rows={prices} />
           <DataTable
             dense
             rows={prices}
@@ -358,7 +420,12 @@ export default function QuarterResolutionPage(): React.JSX.Element {
 
       {/* --- rank ------------------------------------------------------------ */}
       {committed ? (
-        <Panel title="Rank movement" subtitle="Where the quarter left you on each of the ten boards" flush>
+        <Panel title="Rank movement" subtitle="Where the quarter left you on each of the ten boards" icon={<PodiumGlyph />} iconTone="brand" flush>
+          {ranks.length === 0 ? null : (
+            <div className="border-b border-hair px-4 pt-4 pb-3">
+              <RankPodium rows={ranks} />
+            </div>
+          )}
           <DataTable
             dense
             rows={ranks}
@@ -409,7 +476,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
 
       {/* --- footer ---------------------------------------------------------- */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Invariants" subtitle="Checked before the ledger committed">
+        <Panel title="Invariants" subtitle="Checked before the ledger committed" icon={<LedgerGlyph />} iconTone={failed.length === 0 ? 'gain' : 'loss'}>
           <ul className="flex flex-col gap-1">
             {outcome.invariants.map((check) => (
               <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="flex items-baseline justify-between gap-3 text-[11px]">
@@ -420,7 +487,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           </ul>
         </Panel>
 
-        <Panel title="State hashes" subtitle="Same state, same decisions, same seed">
+        <Panel title="State hashes" subtitle="Same state, same decisions, same seed" icon={<GlobeGlyph />} iconTone="info">
           <ul className="flex flex-col gap-1 text-[11px]">
             <li className="flex items-baseline justify-between gap-3">
               <span className="text-ink-dim">Before</span>
@@ -440,7 +507,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           </p>
         </Panel>
 
-        <Panel title="Phase timings" subtitle="Diagnostics only; never an input">
+        <Panel title="Phase timings" subtitle="Diagnostics only; never an input" icon={<TapeGlyph />} iconTone="neutral">
           <ul className="flex flex-col gap-0.5">
             {outcome.phaseTimings.map((timing) => (
               <li key={timing.phase} className="flex items-baseline justify-between gap-3 text-[11px]">
@@ -454,8 +521,8 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         </Panel>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[6px] border border-hair bg-panel px-3.5 py-3">
-        <div>
+      <div className="panel-surface flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
+        <div className="min-w-0">
           <p className="text-[12px] text-ink">
             {committed
               ? `${quarterLabel(session.startYear, report.quarter)} is committed. ${quarterLabel(session.startYear, session.quarter)} is open.`
@@ -467,7 +534,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
               : 'Fix what the failed invariant names, or remove the instruction that caused it, and resolve again.'}
           </p>
         </div>
-        <Link href={committed ? '/command-centre' : '/end-quarter'} className="btn btn-primary">
+        <Link href={committed ? '/command-centre' : '/end-quarter'} className="btn btn-primary tap-target">
           {committed ? 'Continue to next quarter' : 'Back to End Quarter'}
         </Link>
       </div>

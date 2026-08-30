@@ -23,6 +23,8 @@ import {
   toActiveModifier,
 } from '../src/economy';
 import { makeContext, makeRng, makeState, cloneState, type HarnessContext } from './_economyMarketsHarness';
+import { createDefaultEngine } from '../src/engine';
+import { createDemoSession } from '../src/scenario/demo';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -623,5 +625,57 @@ describe('the world phase as a whole', () => {
         expect(sector.multiple).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  The compute cycle                                                          */
+/* -------------------------------------------------------------------------- */
+
+describe('accelerator supply', () => {
+  /** Resolve `quarters` baseline quarters of the demo world and trace the compute domain. */
+  function traceSupply(seed: number, quarters: number): { supply: number[]; spot: number[] } {
+    const engine = createDefaultEngine();
+    let state = createDemoSession(seed);
+    const supply: number[] = [];
+    const spot: number[] = [];
+    for (let quarter = 0; quarter < quarters; quarter += 1) {
+      const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+      expect(`q${quarter} committed: ${outcome.committed}`).toBe(`q${quarter} committed: true`);
+      state = outcome.nextState;
+      supply.push(state.world.compute.acceleratorSupply);
+      spot.push(state.world.compute.spotPrice);
+    }
+    return { supply, spot };
+  }
+
+  it('recovers after the shortage families have decayed, on every seed', () => {
+    // Three event families multiply this path down and none multiplies it back
+    // up. Without a supply-side response to price it is a one-way ratchet to
+    // zero: the crunch becomes permanent, every reservation is pinned at the
+    // floor and the compute pillar stops being a decision.
+    for (const seed of [424242, 99991, 31337]) {
+      const { supply } = traceSupply(seed, 24);
+      const late = supply.slice(12);
+      expect(`seed ${seed}: floor ${Math.min(...supply) > 0.05}`).toBe(`seed ${seed}: floor true`);
+      expect(`seed ${seed}: recovers ${Math.max(...late) >= 0.35}`).toBe(`seed ${seed}: recovers true`);
+    }
+  }, 60_000);
+
+  it('turns a shortage into capacity: the supply target rises with the spot price', () => {
+    const cheap = makeState();
+    const dear = makeState();
+    cheap.world.compute.spotPrice = 1;
+    dear.world.compute.spotPrice = 3;
+    for (const state of [cheap, dear]) {
+      state.world.compute.acceleratorSupply = 0.1;
+      state.world.compute.fabCapacity = 0.2;
+    }
+
+    driftWorld(cheap.world, makeRng('supply-cheap'));
+    driftWorld(dear.world, makeRng('supply-cheap'));
+
+    expect(dear.world.compute.acceleratorSupply).toBeGreaterThan(cheap.world.compute.acceleratorSupply);
+    expect(dear.world.compute.fabCapacity).toBeGreaterThan(cheap.world.compute.fabCapacity);
   });
 });

@@ -51,12 +51,14 @@ import type {
   WorldState,
 } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
+import { projectResolutionOutcomeForPlayer } from '@frontier/simulation';
 import { llmHealth, requestNpcBundle, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
 import {
   DEMO_SEED,
   PLAYER_ID,
   buildSubmittedAction,
   createSession,
+  createSequenceAllocator,
   getEngine,
   needsConfirmation,
   playerCharacterOf,
@@ -65,12 +67,17 @@ import {
 } from './engine';
 import { buildNpcStrategistInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
 import {
-  MAX_REPLAY_QUARTERS,
+  buildSaveFile,
   clearSaveFile,
-  loadSavedGame,
+  exportSave,
+  importSave,
+  inspectSave,
+  loadSavedGameAsync,
   readSaveFile,
   writeSaveFile,
   type LoadedGame,
+  type QuarterRecord,
+  type ReplayProgress,
 } from './persistence';
 import {
   founderNetWorth,
@@ -110,7 +117,14 @@ export interface GameStoreState {
   readonly session: SessionState;
   readonly queuedActions: readonly SubmittedAction[];
   readonly validations: Readonly<Record<string, ActionValidationResult>>;
-  readonly actionLog: readonly (readonly SubmittedAction[])[];
+  /** Every input to every resolved quarter, in order: the save, in memory. */
+  readonly actionLog: readonly QuarterRecord[];
+  /**
+   * The last outcome **projected to this seat**. The engine returns the whole
+   * quarter; a screen may only ever be handed the part of it this player is
+   * entitled to, so the projection happens here, once, rather than in each
+   * screen that reads a report or a ledger row.
+   */
   readonly lastOutcome: FrontierResolutionOutcome | null;
   /** The world as it stood before the last resolve, for quarter-over-quarter deltas. */
   readonly previousWorld: WorldState | null;
@@ -120,6 +134,15 @@ export interface GameStoreState {
   readonly settings: GameSettings;
   /** False during the first render pass, before localStorage has been consulted. */
   readonly hydrated: boolean;
+  /** True while a save is being replayed, with `loadProgress` for the indicator. */
+  readonly loading: boolean;
+  readonly loadProgress: ReplayProgress | null;
+  /**
+   * False when the store must not write over the stored save: a replay that did
+   * not finish leaves the file alone rather than truncating it to the prefix
+   * that happened to load.
+   */
+  readonly saveWritable: boolean;
   readonly llm: LlmHealth;
   /** A transient message for the shell to surface, or null. */
   readonly notice: string | null;
@@ -136,11 +159,21 @@ export interface GameStoreActions {
   /** Record the explicit human confirmation a `CONFIRMATION_REQUIRED_ACTIONS` type needs. */
   confirmAction(actionId: string): void;
   clearQueue(): void;
-  /** Resolve the open quarter. Always completes, with or without a model. */
-  endQuarter(): Promise<void>;
+  /**
+   * Resolve the open quarter. Always completes, with or without a model, and
+   * never leaves the resolving overlay up. Resolves to true when there is an
+   * outcome to show — including a refused one — and false when the engine threw
+   * and the quarter is still open.
+   */
+  endQuarter(): Promise<boolean>;
   saveGame(): void;
-  loadGame(): boolean;
+  /** Replay the stored save into memory. Asynchronous: the tab keeps painting. */
+  loadGame(): Promise<boolean>;
   deleteSave(): void;
+  /** The stored save as text, for the player to keep. Null when there is none. */
+  exportSave(): string | null;
+  /** Adopt a pasted save and load it. False when it will not parse. */
+  importSave(text: string): Promise<boolean>;
   updateSettings(partial: Partial<GameSettings>): void;
   dismissNotice(): void;
   /** Re-check whether a live model is configured. */
@@ -153,7 +186,10 @@ export interface GameStoreActions {
 
 type Action =
   | { type: 'new_game'; session: SessionState; settings: GameSettings }
+  | { type: 'load_start' }
+  | { type: 'load_progress'; progress: ReplayProgress }
   | { type: 'loaded'; loaded: LoadedGame }
+  | { type: 'load_failed'; notice: string }
   | { type: 'hydrated' }
   | { type: 'queue'; action: SubmittedAction; validation: ActionValidationResult }
   | { type: 'unqueue'; actionId: string }
@@ -161,7 +197,13 @@ type Action =
   | { type: 'clear_queue' }
   | { type: 'resolve_start' }
   | { type: 'resolve_status'; status: string }
-  | { type: 'resolve_done'; outcome: FrontierResolutionOutcome; submitted: readonly SubmittedAction[] }
+  | {
+      type: 'resolve_done';
+      outcome: FrontierResolutionOutcome;
+      /** The inputs the resolver was actually handed, recorded verbatim for replay. */
+      record: QuarterRecord;
+    }
+  | { type: 'resolve_failed'; notice: string }
   | { type: 'settings'; partial: Partial<GameSettings> }
   | { type: 'llm'; health: LlmHealth }
   | { type: 'notice'; notice: string | null };
@@ -195,10 +237,32 @@ function initialState(): GameStoreState {
     resolveStatus: '',
     settings: DEFAULT_SETTINGS,
     hydrated: false,
+    loading: false,
+    loadProgress: null,
+    saveWritable: true,
     llm: { available: false, transportKind: 'none', model: null },
     notice: null,
     nextSequence: 0,
   };
+}
+
+/**
+ * The outcome as this seat may be handed it.
+ *
+ * `resolveQuarter` returns the whole quarter — every rival's morale, runway,
+ * churn and internal confidence — because the engine is the one thing that sees
+ * all of canonical reality. A screen may not. The projection runs once, here,
+ * so no screen can accidentally read the unprojected report.
+ */
+function projectForPlayer(outcome: FrontierResolutionOutcome, session: SessionState): FrontierResolutionOutcome {
+  try {
+    const projected = projectResolutionOutcomeForPlayer(outcome, session, PLAYER_ID);
+    return { ...outcome, report: projected.report, events: projected.events };
+  } catch {
+    // A projection that cannot be computed withholds everything rather than
+    // falling back to the unprojected quarter.
+    return { ...outcome, report: { ...outcome.report, phases: [] }, events: [] };
+  }
 }
 
 function reducer(state: GameStoreState, action: Action): GameStoreState {
@@ -217,22 +281,35 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         resolveStatus: '',
         notice: null,
         nextSequence: 0,
+        saveWritable: true,
+        loading: false,
+        loadProgress: null,
       };
+
+    case 'load_start':
+      return { ...state, loading: true, loadProgress: null, notice: null };
+
+    case 'load_progress':
+      return { ...state, loadProgress: action.progress };
 
     case 'loaded': {
       const settings: GameSettings = {
         ...state.settings,
         seed: action.loaded.seed,
         difficulty: action.loaded.difficulty,
+        autoExecuteRoutine: action.loaded.autoExecuteRoutine,
       };
-      const notice =
-        action.loaded.rejectedQuarters.length > 0
-          ? `Replay stopped at quarter ${action.loaded.rejectedQuarters[0]}: a recorded quarter no longer commits under the current engine.`
-          : null;
+      // A partial replay is read-only. The stored file still holds every quarter
+      // the player recorded; writing the prefix that happened to load back over
+      // it would destroy the rest permanently, and no engine fix could recover
+      // them afterwards.
+      const notice = action.loaded.complete
+        ? null
+        : `Replay stopped at quarter ${action.loaded.rejectedQuarters[0] ?? action.loaded.session.quarter}: a recorded quarter no longer commits under the current engine. Your saved session has been left exactly as it was — nothing will be written over it until you start a new game.`;
       return {
         ...state,
         session: action.loaded.session,
-        actionLog: action.loaded.actionLog,
+        actionLog: action.loaded.log,
         settings,
         queuedActions: [],
         validations: {},
@@ -240,20 +317,31 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         previousWorld: null,
         notice,
         hydrated: true,
+        loading: false,
+        loadProgress: null,
+        saveWritable: action.loaded.complete,
         nextSequence: 0,
       };
     }
 
+    case 'load_failed':
+      return { ...state, hydrated: true, loading: false, loadProgress: null, saveWritable: false, notice: action.notice };
+
     case 'hydrated':
       return state.hydrated ? state : { ...state, hydrated: true };
 
-    case 'queue':
+    case 'queue': {
+      // The allocator, not the reducer, owns the sequence: two actions queued
+      // from one event handler must not share an id.
+      const duplicate = state.queuedActions.some((entry) => entry.actionId === action.action.actionId);
+      if (duplicate) return state;
       return {
         ...state,
         queuedActions: [...state.queuedActions, action.action],
         validations: { ...state.validations, [action.action.actionId]: action.validation },
-        nextSequence: state.nextSequence + 1,
+        nextSequence: Math.max(state.nextSequence, action.action.sequence + 1),
       };
+    }
 
     case 'unqueue': {
       const validations = { ...state.validations };
@@ -290,7 +378,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
           ...state,
           resolving: false,
           resolveStatus: '',
-          lastOutcome: outcome,
+          lastOutcome: projectForPlayer(outcome, state.session),
           notice: 'The quarter did not commit: an engine invariant refused it. Nothing changed — the report explains what failed.',
         };
       }
@@ -300,13 +388,18 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         previousWorld: state.session.world,
         queuedActions: [],
         validations: {},
-        actionLog: [...state.actionLog, [...action.submitted]].slice(-MAX_REPLAY_QUARTERS),
-        lastOutcome: outcome,
+        actionLog: [...state.actionLog, action.record],
+        lastOutcome: projectForPlayer(outcome, outcome.nextState),
         resolving: false,
         resolveStatus: '',
         nextSequence: 0,
       };
     }
+
+    case 'resolve_failed':
+      // The overlay covers the whole application and has no dismiss control, so
+      // the one thing this path may never do is leave `resolving` true.
+      return { ...state, resolving: false, resolveStatus: '', notice: action.notice };
 
     case 'settings': {
       const settings = { ...state.settings, ...action.partial };
@@ -350,13 +443,53 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // Ids are minted from this, never from rendered state: see the allocator's
+  // note in engine.ts for why a bulk approve would otherwise collide.
+  const sequences = useRef(createSequenceAllocator()).current;
 
-  /* --- hydrate from the save file, once ----------------------------------- */
+  /* --- replay the save file, once ------------------------------------------ */
+  const runLoad = useCallback(async (): Promise<boolean> => {
+    const inspection = inspectSave();
+    if (inspection.status === 'unsupported') {
+      dispatch({
+        type: 'load_failed',
+        notice: `This browser holds a save written by a newer build (version ${inspection.version ?? 'unknown'}). It has been left untouched rather than overwritten; nothing will be saved over it in this session.`,
+      });
+      return false;
+    }
+    if (inspection.file === null) return false;
+
+    dispatch({ type: 'load_start' });
+    const loaded = await loadSavedGameAsync({
+      onProgress: (progress) => dispatch({ type: 'load_progress', progress }),
+      yieldControl: nextPaint,
+    });
+    if (loaded === null) {
+      dispatch({
+        type: 'load_failed',
+        notice: 'The saved session could not be replayed. It has been left in place, so nothing is lost — start a new session or import a save.',
+      });
+      return false;
+    }
+    sequences.reset(0);
+    dispatch({ type: 'loaded', loaded });
+    return loaded.complete;
+  }, [sequences]);
+
   useEffect(() => {
-    const loaded = loadSavedGame();
-    if (loaded === null) dispatch({ type: 'hydrated' });
-    else dispatch({ type: 'loaded', loaded });
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      const inspection = inspectSave();
+      if (inspection.status === 'absent' || inspection.status === 'unreadable') {
+        if (!cancelled) dispatch({ type: 'hydrated' });
+        return;
+      }
+      await runLoad();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runLoad]);
 
   /* --- ask whether a model is configured ---------------------------------- */
   useEffect(() => {
@@ -371,16 +504,31 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   /* --- persist the decision log ------------------------------------------- */
   useEffect(() => {
-    if (!state.hydrated) return;
+    if (!state.hydrated || state.loading) return;
+    // A replay that did not finish, or a file this build cannot read, is never
+    // written over: the stored decisions outrank whatever is in this tab.
+    if (!state.saveWritable) return;
     if (state.actionLog.length === 0 && readSaveFile() === null) return;
-    writeSaveFile({
-      version: 1,
-      seed: state.settings.seed,
-      difficulty: state.settings.difficulty,
-      actionLog: state.actionLog,
-      savedQuarter: state.session.quarter,
-    });
-  }, [state.actionLog, state.hydrated, state.session.quarter, state.settings.difficulty, state.settings.seed]);
+    writeSaveFile(
+      buildSaveFile({
+        seed: state.settings.seed,
+        difficulty: state.settings.difficulty,
+        autoExecuteRoutine: state.settings.autoExecuteRoutine,
+        log: state.actionLog,
+        session: state.session,
+        previous: readSaveFile(),
+      }),
+    );
+  }, [
+    state.actionLog,
+    state.hydrated,
+    state.loading,
+    state.saveWritable,
+    state.session,
+    state.settings.autoExecuteRoutine,
+    state.settings.difficulty,
+    state.settings.seed,
+  ]);
 
   /* --- actions ------------------------------------------------------------- */
 
@@ -392,7 +540,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   const queueAction = useCallback<GameStoreActions['queueAction']>((intent, options) => {
     const current = stateRef.current;
     const confirmed = options?.confirmed ?? !needsConfirmation(intent.type);
-    const submitted = buildSubmittedAction(current.session, intent, current.nextSequence, {
+    const submitted = buildSubmittedAction(current.session, intent, sequences.next(), {
       origin: options?.origin ?? 'player_ui',
       confirmedByHuman: confirmed,
     });
@@ -405,7 +553,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       needsConfirmation: needsConfirmation(intent.type),
       blocked: needsConfirmation(intent.type) && !submitted.confirmedByHuman,
     };
-  }, []);
+  }, [sequences]);
 
   const unqueueAction = useCallback((actionId: string) => {
     dispatch({ type: 'unqueue', actionId });
@@ -421,9 +569,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   const clearQueue = useCallback(() => dispatch({ type: 'clear_queue' }), []);
 
-  const endQuarter = useCallback(async () => {
+  const endQuarter = useCallback(async (): Promise<boolean> => {
     const current = stateRef.current;
-    if (current.resolving) return;
+    if (current.resolving) return false;
 
     dispatch({ type: 'resolve_start' });
     // Let the overlay paint before the engine takes the thread.
@@ -463,18 +611,50 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     dispatch({ type: 'resolve_status', status: 'Resolving eighteen phases' });
     await nextPaint();
 
+    // The record is the inputs the resolver was *actually* handed. When the
+    // first attempt throws and the offline retry succeeds, the agent inputs the
+    // record carries are the offline ones — a replay reproduces the quarter that
+    // happened, not the one that was attempted.
     let outcome: FrontierResolutionOutcome;
+    let usedGmProposal: GmProposalBatch | null = gmProposal;
+    let usedNpcBundles: readonly NpcActionBundle[] = npcBundles;
     const engine = getEngine();
     try {
-      outcome = engine.resolver.resolveQuarter(session, submitted, gmProposal, npcBundles);
-    } catch {
-      // Anything the model contributed is discarded and the quarter resolves
-      // fully offline. The game never blocks on a model.
-      outcome = engine.resolver.resolveQuarter(session, submitted, null, []);
+      try {
+        outcome = engine.resolver.resolveQuarter(session, submitted, gmProposal, npcBundles);
+      } catch {
+        // Anything the model contributed is discarded and the quarter resolves
+        // fully offline. The game never blocks on a model.
+        usedGmProposal = null;
+        usedNpcBundles = [];
+        outcome = engine.resolver.resolveQuarter(session, submitted, null, []);
+      }
+    } catch (error) {
+      // Both attempts threw, so the fault is in the engine and not in anything
+      // the model said. The queue is preserved and the overlay comes down: a
+      // full-screen overlay with no dismiss control is the one state this
+      // function may never leave behind.
+      const detail = error instanceof Error ? error.message : String(error);
+      dispatch({
+        type: 'resolve_failed',
+        notice: `The quarter could not be resolved: ${detail}. Nothing was committed and your queue is intact.`,
+      });
+      return false;
     }
 
-    dispatch({ type: 'resolve_done', outcome, submitted });
-  }, []);
+    dispatch({
+      type: 'resolve_done',
+      outcome,
+      record: {
+        quarter: session.quarter,
+        actions: submitted,
+        gmProposal: usedGmProposal,
+        npcBundles: [...usedNpcBundles],
+      },
+    });
+    if (outcome.committed) sequences.reset(0);
+    return true;
+  }, [sequences]);
 
   const newGame = useCallback<GameStoreActions['newGame']>((options) => {
     const current = stateRef.current;
@@ -490,35 +670,61 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       autoExecuteRoutine: settings.autoExecuteRoutine,
     });
     clearSaveFile();
+    sequences.reset(0);
     dispatch({ type: 'new_game', session, settings });
-  }, []);
+  }, [sequences]);
 
   const saveGame = useCallback(() => {
     const current = stateRef.current;
-    writeSaveFile({
-      version: 1,
-      seed: current.settings.seed,
-      difficulty: current.settings.difficulty,
-      actionLog: current.actionLog,
-      savedQuarter: current.session.quarter,
+    if (!current.saveWritable) {
+      dispatch({
+        type: 'notice',
+        notice: 'This session will not be saved: the stored file could not be replayed in full and is being preserved as it is.',
+      });
+      return;
+    }
+    const wrote = writeSaveFile(
+      buildSaveFile({
+        seed: current.settings.seed,
+        difficulty: current.settings.difficulty,
+        autoExecuteRoutine: current.settings.autoExecuteRoutine,
+        log: current.actionLog,
+        session: current.session,
+        previous: readSaveFile(),
+      }),
+    );
+    dispatch({
+      type: 'notice',
+      notice: wrote ? 'Session saved.' : 'The session could not be saved: this browser refused the write and the stored file is unchanged.',
     });
-    dispatch({ type: 'notice', notice: 'Session saved.' });
   }, []);
 
-  const loadGame = useCallback(() => {
-    const loaded = loadSavedGame();
-    if (loaded === null) {
+  const loadGame = useCallback(async (): Promise<boolean> => {
+    if (inspectSave().status === 'absent') {
       dispatch({ type: 'notice', notice: 'No saved session found in this browser.' });
       return false;
     }
-    dispatch({ type: 'loaded', loaded });
-    return true;
-  }, []);
+    return await runLoad();
+  }, [runLoad]);
 
   const deleteSave = useCallback(() => {
     clearSaveFile();
     dispatch({ type: 'notice', notice: 'Saved session deleted.' });
   }, []);
+
+  const exportSaveText = useCallback(() => exportSave(), []);
+
+  const importSaveText = useCallback(
+    async (text: string): Promise<boolean> => {
+      const file = importSave(text);
+      if (file === null) {
+        dispatch({ type: 'notice', notice: 'That is not a Frontier Capital save this build can read. Nothing was changed.' });
+        return false;
+      }
+      return await runLoad();
+    },
+    [runLoad],
+  );
 
   const updateSettings = useCallback((partial: Partial<GameSettings>) => {
     dispatch({ type: 'settings', partial });
@@ -543,6 +749,8 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveGame,
       loadGame,
       deleteSave,
+      exportSave: exportSaveText,
+      importSave: importSaveText,
       updateSettings,
       dismissNotice,
       refreshLlmHealth,
@@ -558,6 +766,8 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveGame,
       loadGame,
       deleteSave,
+      exportSaveText,
+      importSaveText,
       updateSettings,
       dismissNotice,
       refreshLlmHealth,
@@ -696,6 +906,12 @@ export function useFounderNetWorth(): number {
 export function useResolving(): { resolving: boolean; status: string } {
   const { resolving, resolveStatus } = useStore();
   return useMemo(() => ({ resolving, status: resolveStatus }), [resolving, resolveStatus]);
+}
+
+/** True while a saved session is being replayed, with how far it has got. */
+export function useLoading(): { loading: boolean; progress: ReplayProgress | null } {
+  const { loading, loadProgress } = useStore();
+  return useMemo(() => ({ loading, progress: loadProgress }), [loading, loadProgress]);
 }
 
 /** Player preferences. */

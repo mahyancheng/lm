@@ -108,10 +108,21 @@ export default function EndQuarterPage(): React.JSX.Element {
   const timings = outcome?.phaseTimings ?? [];
   const canSubmit = blocked.length === 0 && !resolving;
 
+  /**
+   * The arming state and the navigation are settled on every path.
+   *
+   * `endQuarter` resolves to false when the engine threw on both attempts: the
+   * quarter is still open, there is no report to read, and the player stays here
+   * with the notice and their queue rather than being sent to an empty screen.
+   */
   async function resolve(): Promise<void> {
     setArming(false);
-    await endQuarter();
-    router.push('/quarter-resolution');
+    let resolved = false;
+    try {
+      resolved = await endQuarter();
+    } finally {
+      if (resolved) router.push('/quarter-resolution');
+    }
   }
 
   return (

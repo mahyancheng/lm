@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { SESSION_DIFFICULTIES, quarterLabel, type SessionDifficulty } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
-import { DEMO_SEED, readSaveFile, useGame, useGameActions, useLlm } from '@/lib/game';
+import { DEMO_SEED, readSaveFile, useGame, useGameActions, useLlm, useLoading } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { Panel, Tag, cx } from '@/components/ui';
@@ -22,11 +22,13 @@ export default function LandingPage(): React.JSX.Element {
   const { hydrated, session } = useGame();
   const { newGame, loadGame } = useGameActions();
   const llm = useLlm();
+  const { loading, progress } = useLoading();
 
   const [seedText, setSeedText] = useState(String(DEMO_SEED));
   const [difficulty, setDifficulty] = useState<SessionDifficulty>('standard');
   const [save, setSave] = useState<ReturnType<typeof readSaveFile>>(null);
   const [showMultiplayer, setShowMultiplayer] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   useEffect(() => {
     if (hydrated) setSave(readSaveFile());
@@ -37,6 +39,13 @@ export default function LandingPage(): React.JSX.Element {
     return Number.isFinite(parsed) ? parsed : DEMO_SEED;
   }, [seedText]);
 
+  /** What a resume actually costs: quarters after the newest checkpoint, not the whole log. */
+  const replayDepth = useMemo(() => {
+    if (save === null) return 0;
+    const from = save.checkpoint?.quarter ?? 0;
+    return save.log.filter((record) => record.quarter >= from).length;
+  }, [save]);
+
   const supabaseReady = isSupabaseConfigured();
 
   function startNewGame(): void {
@@ -44,8 +53,16 @@ export default function LandingPage(): React.JSX.Element {
     router.push(HOME_ROUTE);
   }
 
-  function continueGame(): void {
-    if (loadGame()) router.push(HOME_ROUTE);
+  async function continueGame(): Promise<void> {
+    setResuming(true);
+    try {
+      await loadGame();
+      // A partial replay still lands the player in the session it produced; the
+      // shell carries the notice explaining that the save was left untouched.
+      router.push(HOME_ROUTE);
+    } finally {
+      setResuming(false);
+    }
   }
 
   return (
@@ -147,11 +164,16 @@ export default function LandingPage(): React.JSX.Element {
                       <dd className="text-[12px] text-ink capitalize">{save.difficulty}</dd>
                     </div>
                   </dl>
-                  <button type="button" className="btn mt-3 w-full" onClick={continueGame}>
-                    Resume — replays {save.actionLog.length} quarter{save.actionLog.length === 1 ? '' : 's'}
+                  <button type="button" className="btn mt-3 w-full" onClick={() => void continueGame()} disabled={resuming || loading}>
+                    {resuming || loading
+                      ? progress === null
+                        ? 'Replaying…'
+                        : `Replaying quarter ${progress.quarter} — ${progress.completed} of ${progress.total}`
+                      : `Resume — replays ${replayDepth} quarter${replayDepth === 1 ? '' : 's'}`}
                   </button>
                   <p className="mt-2 text-[10px] text-ink-faint">
-                    Saves store the seed and your decisions, not the world. Loading re-resolves them.
+                    Saves store the seed, your decisions and what the model contributed — not the world. Loading re-resolves them from the
+                    last checkpoint.
                   </p>
                 </>
               )}

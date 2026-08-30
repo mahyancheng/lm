@@ -19,7 +19,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionType, ActionValidationResult } from '@frontier/contracts';
 import { ConfirmDialog, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
-import { needsConfirmation, useGameActions } from '@/lib/game';
+import { needsConfirmation, useGameActions, useSession } from '@/lib/game';
 import { describeIntent } from '@/components/screens/end-quarter/intents';
 import type { TranscriptEntry } from './transcript';
 

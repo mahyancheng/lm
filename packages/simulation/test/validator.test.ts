@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ActionIntent, ActionRejectionCode, ActionValidationResult, SessionState, SubmittedAction } from '@frontier/contracts';
 import { ACTION_TYPES, CONFIRMATION_REQUIRED_ACTIONS, SessionStateSchema } from '@frontier/contracts';
 import { CEO_ONLY_ACTIONS, RULES, createActionValidator } from '../src/validator';
+import { PRICE_MOVE_BAND } from '../src/validator/balance';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, createDemoSession } from '../src/scenario';
 
 const validator = createActionValidator();
@@ -1076,5 +1077,183 @@ describe('validate (single, from a player seat)', () => {
   it('refuses a player who holds no seat in this session', () => {
     const result = validator.validate(state, { type: 'hire', role: 'engineers', count: 2, compBand: 'market' }, 'player_9');
     expect(result.codes).toContain('not_controller_of_company');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Repricing bounds                                                           */
+/* -------------------------------------------------------------------------- */
+
+describe('repricing', () => {
+  const productId = 'prd_player_assistant';
+  const currentPrice = (): number => {
+    const company = state.companies.find((candidate) => candidate.id === DEMO_COMPANIES.player);
+    const product = company?.products.find((candidate) => candidate.id === productId);
+    if (product === undefined) throw new Error('demo player has no product');
+    return product.pricePerSeat;
+  };
+
+  it('clamps a price rise to the top of the band the demand model is defined on', () => {
+    const before = currentPrice();
+    const result = run(act({ type: 'set_product_price', productId, pricePerSeatUsd: before * 1_000 }));
+    expect(result.status).toBe('clamped');
+    expect(codes(result)).toContain('illegal_value');
+    expect(result.clampedAction?.type).toBe('set_product_price');
+    if (result.clampedAction?.type !== 'set_product_price') throw new Error('wrong clamp');
+    expect(result.clampedAction.pricePerSeatUsd).toBe(before * PRICE_MOVE_BAND.max);
+  });
+
+  it('clamps a price collapse to the bottom of the same band', () => {
+    const before = currentPrice();
+    const result = run(act({ type: 'set_product_price', productId, pricePerSeatUsd: 0.01 }));
+    expect(result.status).toBe('clamped');
+    if (result.clampedAction?.type !== 'set_product_price') throw new Error('wrong clamp');
+    expect(result.clampedAction.pricePerSeatUsd).toBe(before * PRICE_MOVE_BAND.min);
+  });
+
+  it('leaves a move inside the band exactly as submitted', () => {
+    const before = currentPrice();
+    const result = run(act({ type: 'set_product_price', productId, pricePerSeatUsd: before * 2 }));
+    expect(result.status).toBe('accepted');
+    expect(result.clampedAction).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  The deposed founder                                                        */
+/* -------------------------------------------------------------------------- */
+
+describe('a shareholder who no longer directs the company', () => {
+  /** Exactly what `dismissChiefExecutive` leaves behind: no control, every share. */
+  function dismissTheFounder(): void {
+    const company = state.companies.find((candidate) => candidate.id === DEMO_COMPANIES.player);
+    if (company === undefined) throw new Error('demo has no player company');
+    company.controllerPlayerId = null;
+    company.ceoCharacterId = DEMO_CHARACTERS.eleanor;
+    const successor = state.characters.find((candidate) => candidate.id === DEMO_CHARACTERS.eleanor);
+    if (successor !== undefined) successor.companyId = company.id;
+  }
+
+  it('still cannot run the company', () => {
+    dismissTheFounder();
+    const result = run(act({ type: 'set_research_budget', budgetUsd: 100_000 }));
+    expect(codes(result)).toContain('not_controller_of_company');
+  });
+
+  it('keeps every action that belongs to ownership rather than to the office', () => {
+    dismissTheFounder();
+    // The connection gap is a separate rule and still applies; this is the
+    // standing access the founder already has to their own former investor.
+    state.accessOverrides.push({
+      id: 'aco_test_founder_maya',
+      kind: 'shared_investor',
+      fromId: DEMO_CHARACTERS.player,
+      toId: DEMO_CHARACTERS.maya,
+      grantedQuarter: 0,
+      expiresQuarter: null,
+      isPermanent: true,
+      grantedByCharacterId: null,
+      reason: 'A shared investor from the seed round.',
+    });
+    const surface: ActionIntent[] = [
+      { type: 'buy_shares', securityId: 'sec_nexus_common', shares: 10, targetPct: null, maxPricePerShareUsd: 90 },
+      {
+        type: 'propose_deal',
+        proposal: {
+          counterpartyId: DEMO_COMPANIES.nexus,
+          counterpartyKind: 'company',
+          gives: [],
+          gets: [],
+          confidentiality: 'private',
+          expiresQuarter: state.quarter + 2,
+          binding: false,
+          intentStatements: [],
+          summary: 'A standstill while the board settles down, with a seat for me at the end of it.',
+        },
+      },
+      {
+        type: 'social_post',
+        draft: {
+          authorCharacterId: DEMO_CHARACTERS.player,
+          network: 'professional',
+          text: 'I built this company and I am still its largest shareholder. I will be talking to the board.',
+          intent: 'defend',
+          targetCompanyId: null,
+        },
+      },
+      {
+        type: 'request_introduction',
+        viaCharacterId: DEMO_CHARACTERS.maya,
+        targetCharacterId: DEMO_CHARACTERS.eleanor,
+        purpose: 'To discuss the composition of the board before the next meeting.',
+      },
+      {
+        type: 'submit_board_proposal',
+        kind: 'csuite_appointment',
+        title: 'Reinstate the founder as chief executive',
+        summary: 'The shareholder holding the majority of the company requisitions a vote on the leadership of it.',
+        amountUsd: null,
+        stockComponentPct: null,
+        targetCompanyId: null,
+      },
+    ];
+
+    for (const intent of surface) {
+      const result = run(act(intent));
+      expect(`${intent.type}: ${result.status === 'rejected' ? result.reasons.join(' ') : 'allowed'}`).toBe(`${intent.type}: allowed`);
+    }
+  });
+
+  it('refuses the same actions to somebody holding nothing', () => {
+    const result = run(
+      act(
+        {
+          type: 'social_post',
+          draft: {
+            authorCharacterId: DEMO_CHARACTERS.player,
+            network: 'professional',
+            text: 'Speaking for a company I hold no shares in and do not run.',
+            intent: 'defend',
+            targetCompanyId: null,
+          },
+        },
+        { companyId: DEMO_COMPANIES.nexus },
+      ),
+    );
+    expect(codes(result)).toContain('not_controller_of_company');
+    expect(result.reasons.join(' ')).toContain('shareholder');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Malformed input                                                            */
+/* -------------------------------------------------------------------------- */
+
+describe('instructions that are not in the contract', () => {
+  it('refuses an enum value the contract does not carry instead of letting a phase index it', () => {
+    const smuggled = {
+      type: 'social_post',
+      draft: {
+        authorCharacterId: DEMO_CHARACTERS.player,
+        network: 'professional',
+        text: 'An intent nobody defined.',
+        intent: 'thought_leadership',
+        targetCompanyId: null,
+      },
+    } as unknown as ActionIntent;
+    const result = run(act(smuggled));
+    expect(result.status).toBe('rejected');
+    expect(codes(result)).toContain('illegal_value');
+  });
+
+  it('refuses an intent whose numbers are out of contract', () => {
+    const smuggled = { type: 'allocate_compute', trainingFraction: 4 } as unknown as ActionIntent;
+    expect(run(act(smuggled)).status).toBe('rejected');
+  });
+
+  it('refuses a structurally broken intent without throwing', () => {
+    const smuggled = { type: 'set_product_price' } as unknown as ActionIntent;
+    expect(() => run(act(smuggled))).not.toThrow();
+    expect(run(act(smuggled)).status).toBe('rejected');
   });
 });

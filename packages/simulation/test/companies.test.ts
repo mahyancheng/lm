@@ -1291,9 +1291,65 @@ function starve(state: SessionState, companyId: string): void {
     (target.balanceSheet.liabilities.debt + target.balanceSheet.liabilities.payables + target.balanceSheet.liabilities.deferredRevenue);
 }
 
+/**
+ * Give a fixture company the ownership it needs to be financed: one common
+ * class, one security and one founder position. The company fixture above is
+ * about operations and carries no cap table of its own.
+ */
+function withCapTable(state: SessionState, companyId: string, issued: number, authorised: number): void {
+  const shareClassId = `shc_${companyId}_common`;
+  const securityId = `sec_${companyId}_common`;
+  const target = company(state, companyId);
+  target.primarySecurityId = securityId;
+  state.securities.push({
+    id: securityId,
+    companyId,
+    shareClassId,
+    symbol: null,
+    isTradable: false,
+    instrumentId: null,
+    parValueUsd: 0.0001,
+  });
+  state.capTables.push({
+    companyId,
+    shareClasses: [
+      {
+        id: shareClassId,
+        companyId,
+        kind: 'common',
+        label: 'Common',
+        votesPerShare: 1,
+        liquidationPreferenceMultiple: 0,
+        participating: false,
+        authorisedShares: authorised,
+        issuedShares: issued,
+        createdQuarter: 0,
+      },
+    ],
+    holdings: [
+      {
+        id: `hld_${companyId}_founder`,
+        holderId: `chr_${companyId}_founder`,
+        holderKind: 'character',
+        securityId,
+        shares: issued,
+        costBasisUsd: 1_000,
+        acquiredQuarter: 0,
+        lockupUntilQuarter: null,
+        isDisclosed: true,
+      },
+    ],
+    totalIssuedByClass: { [shareClassId]: issued },
+    fullyDilutedShares: issued,
+    optionPoolShares: 0,
+    lastUpdatedQuarter: 0,
+  });
+}
+
 describe('forced bridge rounds', () => {
   it('funds the bridge the next quarter, taking cash in and issuing the shares that dilute the cap table', () => {
     const state = makeState();
+    withCapTable(state, 'cmp_vector', 300_000_000, 900_000_000);
     starve(state, 'cmp_vector');
     runQuarter(state, START_QUARTER, '424242');
 
@@ -1304,7 +1360,9 @@ describe('forced bridge rounds', () => {
 
     const { events } = runQuarter(state, START_QUARTER + 1, '424242');
     const settled = state.fundingRounds.find((round) => round.id === bridge?.id);
-    expect(settled?.status).toBe('closed');
+    expect(`${settled?.status}: ${String(events.find((event) => event.type === 'funding_round_failed')?.payload['reason'] ?? 'funded')}`).toBe(
+      'closed: funded',
+    );
     expect(settled?.dilution ?? 0).toBeGreaterThan(0);
     expect(table?.fullyDilutedShares ?? 0).toBeGreaterThan(sharesBefore);
     expect(events.some((event) => event.type === 'shares_issued' && event.payload['reason'] === 'forced_bridge')).toBe(true);
@@ -1316,6 +1374,7 @@ describe('forced bridge rounds', () => {
 
   it('never leaves a bridge open for two consecutive quarters', () => {
     const state = makeState();
+    withCapTable(state, 'cmp_vector', 300_000_000, 900_000_000);
     starve(state, 'cmp_vector');
     for (let quarter = START_QUARTER; quarter < START_QUARTER + 6; quarter += 1) {
       runQuarter(state, quarter, '424242');
@@ -1331,6 +1390,7 @@ describe('insolvency', () => {
     // Nobody is funding anything: every bridge this company forces will fail.
     state.world.capitalMarkets.ventureLiquidity = 0;
     state.world.capitalMarkets.riskAppetite = 0;
+    withCapTable(state, 'cmp_vector', 300_000_000, 900_000_000);
     starve(state, 'cmp_vector');
 
     let administered = false;
@@ -1355,6 +1415,7 @@ describe('insolvency', () => {
 
   it('leaves a rescued company alone', () => {
     const state = makeState();
+    withCapTable(state, 'cmp_vector', 300_000_000, 900_000_000);
     starve(state, 'cmp_vector');
     for (let quarter = START_QUARTER; quarter < START_QUARTER + 6; quarter += 1) runQuarter(state, quarter, '424242');
     expect(company(state, 'cmp_vector').products.some((product) => product.isActive)).toBe(true);

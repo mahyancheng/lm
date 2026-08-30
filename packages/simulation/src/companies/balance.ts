@@ -134,8 +134,13 @@ export const PRICE_DEVIATION_BOUNDS = { min: -0.35, max: 0.6 } as const;
  */
 export const PRICE_MOVE_BAND = { min: 0.25, max: 4 } as const;
 
-/** Extra churn caused by a price rise to the top of the move band, in the quarter it lands. */
-export const PRICE_SHOCK_CHURN = 0.55;
+/**
+ * Extra churn caused by a price rise to the top of the move band, in the
+ * quarter it lands. Set so that a move to the top of the band loses more of the
+ * base than the price gains: repricing is a strategy with a cost, not a lever
+ * that prints revenue.
+ */
+export const PRICE_SHOCK_CHURN = 0.75;
 
 /**
  * Churn ceiling a full-band price rise lifts the segment cap to. A company that

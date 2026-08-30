@@ -165,6 +165,41 @@ export function buildSubmittedAction(
   };
 }
 
+/**
+ * A monotonic sequence allocator, held outside React state.
+ *
+ * `actionId` is derived from the sequence number, so two actions queued from
+ * one event handler must not read the same one. React batches a discrete event
+ * — the component does not re-render between the iterations of a bulk approve —
+ * so a sequence read from rendered state is the *same* number every time round
+ * the loop, and every action minted in that loop collides on its id. The
+ * allocator increments on call rather than on render, which is the only thing
+ * that makes the ids unique. It is reset when the queue is emptied for a new
+ * quarter, a new game or a load.
+ */
+export interface SequenceAllocator {
+  /** Take the next number. Never returns the same value twice between resets. */
+  next(): number;
+  reset(value?: number): void;
+  /** The number `next()` will return, without taking it. */
+  peek(): number;
+}
+
+export function createSequenceAllocator(start = 0): SequenceAllocator {
+  let value = start;
+  return {
+    next: () => {
+      const current = value;
+      value += 1;
+      return current;
+    },
+    reset: (next = 0) => {
+      value = next;
+    },
+    peek: () => value,
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /*  World Director candidates                                                  */
 /* -------------------------------------------------------------------------- */

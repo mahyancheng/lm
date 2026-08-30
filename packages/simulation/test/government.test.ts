@@ -23,8 +23,16 @@ import {
   engineCostEstimate,
   bidTeam,
   costRealism,
+  isEntryTier,
+  requirementsFor,
+  resolveOpportunityResponses,
   PAST_PERFORMANCE_MOVES,
+  PROGRAMME_TEMPLATES,
 } from '../src/government/index';
+import { applyNpcDefaults } from '../src/companies/index';
+import { createActionValidator } from '../src/validator/index';
+import { createDefaultEngine } from '../src/engine';
+import { createDemoSession } from '../src/scenario/demo';
 import {
   cloneState,
   companyOf,
@@ -399,5 +407,177 @@ describe('opportunity generation', () => {
     const second = run(cloneState(competitiveState()));
     expect(JSON.stringify(second.events)).toBe(JSON.stringify(first.events));
     expect(JSON.stringify(second.state.governmentContracts)).toBe(JSON.stringify(first.state.governmentContracts));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Reachability: who can bid, and who actually does                           */
+/* -------------------------------------------------------------------------- */
+
+describe('archetype default bidding', () => {
+  it('puts a bid in for an eligible company whose archetype wants public revenue', () => {
+    const state = makeState();
+    // VectorWorks is enterprise_ai and is not directed by a player: exactly the
+    // kind of company the deterministic path has to be able to field, or every
+    // competition is cancelled unbid.
+    companyOf(state, 'cmp_vector').tier = 'significant';
+    companyOf(state, 'cmp_vector').governmentPastPerformance = 60;
+    const harness = makeContext(0);
+    applyNpcDefaults(state, harness.ctx);
+
+    const bid = state.pendingActions.find((action) => action.actorCompanyId === 'cmp_vector' && action.intent.type === 'bid_government');
+    expect(bid?.intent.type).toBe('bid_government');
+    if (bid?.intent.type !== 'bid_government') throw new Error('no bid');
+    expect(bid.intent.bid.opportunityId).toBe(bid.intent.opportunityId);
+    expect(bid.intent.bid.price).toBeGreaterThan(0);
+    expect(bid.intent.bid.staffCommitment.clearedStaff).toBeGreaterThanOrEqual(12);
+    expect(bid.origin).toBe('npc_default');
+  });
+
+  it('does not bid on a competition the company cannot meet the floor for', () => {
+    const state = makeState();
+    companyOf(state, 'cmp_vector').tier = 'significant';
+    for (const opportunity of state.procurementOpportunities) opportunity.requirements.minimumPastPerformance = 99;
+    const harness = makeContext(0);
+    applyNpcDefaults(state, harness.ctx);
+    expect(state.pendingActions.some((action) => action.intent.type === 'bid_government')).toBe(false);
+  });
+
+  it('awards a contract inside eight deterministic quarters with no player and no model', () => {
+    const engine = createDefaultEngine();
+    let state = createDemoSession();
+    for (let quarter = 0; quarter < 8; quarter += 1) {
+      const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+      expect(outcome.committed).toBe(true);
+      state = outcome.nextState;
+    }
+    expect(state.governmentBids.length).toBeGreaterThan(0);
+    expect(state.governmentContracts.length).toBeGreaterThan(0);
+    expect(state.procurementOpportunities.some((opportunity) => opportunity.status === 'awarded')).toBe(true);
+  }, 60_000);
+});
+
+describe('the way in', () => {
+  it('opens small unclassified programmes to a company with no record at all', () => {
+    const state = makeState();
+    const agency = state.agencies[0];
+    if (agency === undefined) throw new Error('fixture has no agency');
+    const partnership = PROGRAMME_TEMPLATES.find((template) => template.id === 'prg_research_partnership');
+    const platform = PROGRAMME_TEMPLATES.find((template) => template.id === 'prg_sovereign_platform');
+    if (partnership === undefined || platform === undefined) throw new Error('missing template');
+
+    const entry = requirementsFor(partnership, agency, state.world, 0.012);
+    const flagship = requirementsFor(platform, agency, state.world, 0.04);
+    expect(isEntryTier(partnership, 0.012)).toBe(true);
+    expect(entry.minimumPastPerformance).toBe(0);
+    // The gate still exists everywhere else: this is an on-ramp, not an amnesty.
+    expect(isEntryTier(platform, 0.04)).toBe(false);
+    expect(flagship.minimumPastPerformance).toBeGreaterThan(40);
+  });
+
+  it('lets a company with no past performance legally bid on an entry-tier competition', () => {
+    const state = makeState();
+    const opportunity = state.procurementOpportunities[0];
+    if (opportunity === undefined) throw new Error('fixture has no opportunity');
+    opportunity.requirements.minimumPastPerformance = 0;
+    // The player's own company, stripped of any record with the agencies.
+    const newcomer = companyOf(state, 'cmp_nexus');
+    newcomer.governmentPastPerformance = 0;
+    state.contractorReputations = [];
+
+    const validator = createActionValidator();
+    const result = validator.validate(
+      state,
+      {
+        type: 'bid_government',
+        opportunityId: opportunity.id,
+        bid: makeBid({ id: 'unused', bidderCompanyId: newcomer.id, opportunityId: opportunity.id }),
+      },
+      'ply_01',
+    );
+    expect(`${result.status}: ${result.reasons.join(' | ')}`).not.toContain('rejected');
+  });
+
+  it('credits a consortium member and a subcontractor with past performance on the award', () => {
+    const state = competitiveState();
+    // Orbit takes this competition on the seeded scores; the partners ride in
+    // on the winning bid.
+    const bid = state.governmentBids.find((candidate) => candidate.id === 'bid_orbit');
+    if (bid === undefined) throw new Error('missing bid');
+    bid.consortiumMemberIds = ['cmp_meridian'];
+    bid.subcontractors = [{ companyId: 'cmp_vector', sharePct: 0.1, role: 'domestic inference capacity' }];
+    const before = companyOf(state, 'cmp_vector').governmentPastPerformance;
+
+    const harness = makeContext(1);
+    const government = createGovernmentSubsystem();
+    government.scoreBids(state, harness.ctx);
+    government.awardContracts(state, harness.ctx);
+
+    expect(state.governmentContracts.map((contract) => contract.primeCompanyId)).toEqual(['cmp_orbit']);
+    const meridianBefore = makeState().companies.find((candidate) => candidate.id === 'cmp_meridian')?.governmentPastPerformance ?? 0;
+    expect(companyOf(state, 'cmp_meridian').governmentPastPerformance).toBe(meridianBefore + PAST_PERFORMANCE_MOVES.partnered);
+    expect(companyOf(state, 'cmp_vector').governmentPastPerformance).toBe(before + PAST_PERFORMANCE_MOVES.partnered);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Declining and forming consortia                                            */
+/* -------------------------------------------------------------------------- */
+
+describe('responses to an open competition', () => {
+  function queue(state: SessionState, companyId: string, intent: SessionState['pendingActions'][number]['intent']): void {
+    state.pendingActions.push({
+      actionId: `act_${state.pendingActions.length}`,
+      sessionId: state.sessionId,
+      quarter: state.quarter,
+      sequence: state.pendingActions.length,
+      actorPlayerId: null,
+      actorCompanyId: companyId,
+      actorCharacterId: companyOf(state, companyId).ceoCharacterId ?? 'chr_maya_chen',
+      origin: 'player_ui',
+      intent,
+      confirmedByHuman: true,
+    });
+  }
+
+  it('takes a decliner off the invitation list and marks it down with the agency', () => {
+    const state = makeState();
+    const opportunity = state.procurementOpportunities[0];
+    if (opportunity === undefined) throw new Error('fixture has no opportunity');
+    opportunity.invitedCompanyIds = ['cmp_orbit', 'cmp_nexus'];
+    const before = companyOf(state, 'cmp_orbit').governmentPastPerformance;
+    queue(state, 'cmp_orbit', { type: 'decline_opportunity', opportunityId: opportunity.id, reason: 'The compliance burden is not worth the backlog.' });
+
+    const harness = makeContext(state.quarter);
+    resolveOpportunityResponses(state, harness.ctx);
+
+    expect(opportunity.invitedCompanyIds).toEqual(['cmp_nexus']);
+    expect(companyOf(state, 'cmp_orbit').governmentPastPerformance).toBeLessThan(before);
+    expect(eventsOfType(harness, 'information_revealed').some((event) => event.payload['kind'] === 'opportunity_declined')).toBe(true);
+  });
+
+  it('turns a consortium into a deal each invitee has to accept', () => {
+    const state = makeState();
+    const opportunity = state.procurementOpportunities.find((candidate) => candidate.allowsConsortium);
+    if (opportunity === undefined) throw new Error('fixture has no consortium-friendly opportunity');
+    queue(state, 'cmp_meridian', {
+      type: 'form_consortium',
+      opportunityId: opportunity.id,
+      inviteeCompanyIds: ['cmp_helix', 'cmp_vector'],
+      leadCompanyId: 'cmp_helix',
+      sharePct: 0.3,
+    });
+
+    const harness = makeContext(state.quarter);
+    resolveOpportunityResponses(state, harness.ctx);
+
+    const deals = state.deals.filter((deal) => deal.proposerId === 'cmp_meridian');
+    expect(deals.map((deal) => deal.counterpartyId).sort()).toEqual(['cmp_helix', 'cmp_vector']);
+    for (const deal of deals) {
+      expect(deal.status).toBe('proposed');
+      expect(deal.gives[0]?.kind).toBe('consortium_membership');
+      expect(deal.expiresQuarter).toBeLessThanOrEqual(opportunity.closeQuarter);
+    }
+    expect(eventsOfType(harness, 'deal_proposed').length).toBe(2);
   });
 });

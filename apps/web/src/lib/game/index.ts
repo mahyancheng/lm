@@ -27,6 +27,7 @@ export {
   useMarketCap,
   useFounderNetWorth,
   useResolving,
+  useLoading,
   useSettings,
   useLlm,
 } from './provider';
@@ -39,6 +40,7 @@ export {
   DEMO_SEED,
   PLAYER_ID,
   buildSubmittedAction,
+  createSequenceAllocator,
   createSession,
   drawWorldCandidates,
   getEngine,
@@ -48,7 +50,7 @@ export {
   playerSeat,
   seedOf,
 } from './engine';
-export type { NewGameOptions } from './engine';
+export type { NewGameOptions, SequenceAllocator } from './engine';
 
 export {
   buildAlerts,
@@ -75,13 +77,30 @@ export {
 } from './briefings';
 
 export {
+  CHECKPOINT_INTERVAL,
   MAX_REPLAY_QUARTERS,
   SAVE_KEY,
+  SAVE_VERSION,
+  buildSaveFile,
   clearSaveFile,
+  exportSave,
   hasSavedGame,
+  importSave,
+  inspectSave,
   loadSavedGame,
+  loadSavedGameAsync,
   readSaveFile,
   replay,
+  replayAsync,
   writeSaveFile,
 } from './persistence';
-export type { LoadedGame, SaveFile } from './persistence';
+export type {
+  LoadedGame,
+  QuarterRecord,
+  ReplayOptions,
+  ReplayProgress,
+  SaveCheckpoint,
+  SaveFile,
+  SaveInspection,
+  SaveStatus,
+} from './persistence';

@@ -274,7 +274,10 @@ export function enterAdministration(draft: SessionState, ctx: ResolverContext, c
 
   /* --- programmes and obligations ---------------------------------------- */
   // Everything the company was in the middle of stops, so the husk cannot keep
-  // accruing costs it has no way of paying.
+  // accruing costs it has no way of paying. Instructions queued earlier this
+  // quarter are dropped with the rest: a company in administration is not
+  // executing anybody's plan.
+  draft.pendingActions = draft.pendingActions.filter((action) => action.actorCompanyId !== company.id);
   for (const project of draft.researchProjects) {
     if (project.companyId !== company.id || (project.status !== 'active' && project.status !== 'paused')) continue;
     project.status = 'abandoned';

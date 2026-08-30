@@ -425,3 +425,51 @@ describe('director assessment', () => {
     expect(state.commitments.length).toBe(1);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/*  The way back                                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('a shareholder-requisitioned appointment', () => {
+  it('returns the office, and with it executive control, to the person who won the vote', () => {
+    const state = makeState();
+    // Exactly the state a dismissal leaves behind: no controller, somebody else
+    // in the chief executive's chair, the founder still holding their shares.
+    const company = companyOf(state, 'cmp_nexus');
+    company.controllerPlayerId = null;
+    company.ceoCharacterId = 'chr_eleanor_vance';
+    state.boardProposals = [
+      makeProposal({
+        id: 'prp_reinstate',
+        kind: 'csuite_appointment',
+        title: 'Reinstate the founder as chief executive',
+        proposedByCharacterId: 'chr_maya_chen',
+      }),
+    ];
+
+    const harness = makeContext(2);
+    createBoardsSubsystem().resolveProposals(state, harness.ctx);
+
+    expect(state.boardProposals[0]?.status).toBe('passed');
+    expect(companyOf(state, 'cmp_nexus').ceoCharacterId).toBe('chr_maya_chen');
+    // The seat that holds the character holds the company again.
+    expect(companyOf(state, 'cmp_nexus').controllerPlayerId).toBe('ply_01');
+    const appointments = eventsOfType(harness, 'ceo_appointed');
+    expect(appointments.length).toBe(1);
+    expect(appointments[0]?.payload['controllerPlayerIdAfter']).toBe('ply_01');
+  });
+
+  it('changes nothing when the chief executive tables an appointment themselves', () => {
+    const state = makeState();
+    const before = companyOf(state, 'cmp_nexus').ceoCharacterId;
+    state.boardProposals = [
+      makeProposal({ id: 'prp_hire_cfo', kind: 'csuite_appointment', title: 'Appoint a chief financial officer', proposedByCharacterId: 'chr_maya_chen' }),
+    ];
+
+    const harness = makeContext(2);
+    createBoardsSubsystem().resolveProposals(state, harness.ctx);
+
+    expect(companyOf(state, 'cmp_nexus').ceoCharacterId).toBe(before);
+    expect(eventsOfType(harness, 'ceo_appointed').length).toBe(0);
+  });
+});

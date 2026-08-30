@@ -24,8 +24,18 @@ export type CredentialKind = 'oauth' | 'api_key';
 /** Where the credential the server is using came from. */
 export type CredentialSource = 'runtime' | 'env' | 'none';
 
-/** Who may write the credential on this deployment. */
-export type TokenAuthGate = 'admin' | 'open-local';
+/**
+ * Who may write the credential on this deployment.
+ *
+ * - `admin` — Supabase is configured, so there are real accounts and writing
+ *   the credential is an administrative act.
+ * - `open-local` — no accounts, and the request reached a process the caller is
+ *   sitting in front of. The owner may write it.
+ * - `disabled` — no accounts *and* the connection is not local. Nobody may
+ *   write it: a dev server binds every interface, so "no Supabase" alone is not
+ *   evidence that the caller is the owner of the machine.
+ */
+export type TokenAuthGate = 'admin' | 'open-local' | 'disabled';
 
 export type LlmTransportKind = 'claude-session' | 'api' | 'none';
 
@@ -99,8 +109,14 @@ export function tokenDraftIssue(draft: string): string | null {
 /*  Wire types                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** `GET /api/llm/token`. Carries a descriptor, never a value. */
-export interface TokenStatus {
+/**
+ * What `GET /api/llm/token` tells **any** admitted caller.
+ *
+ * Four facts, and each of them is something the caller can already observe:
+ * whether roles will reach a model, which transport they run on, and who this
+ * deployment lets write the credential. Nothing here describes the secret.
+ */
+export interface TokenStatusPublic {
   /** True when a credential is known to the server, from the runtime store or the environment. */
   readonly configured: boolean;
   /**
@@ -109,15 +125,42 @@ export interface TokenStatus {
    * no credential in the process at all.
    */
   readonly available: boolean;
-  readonly source: CredentialSource;
   readonly transportKind: LlmTransportKind;
+  readonly authGate: TokenAuthGate;
+}
+
+/**
+ * The descriptor, for a caller who could have written the credential anyway.
+ *
+ * The extra five fields describe the secret in force — including the one the
+ * *environment* supplies — so they are disclosed on exactly the authority that
+ * would let the caller replace it. A player on a Supabase deployment has no
+ * business knowing the last four characters of the operator's token, or when
+ * it was set, and a reader who cannot write has no use for either.
+ */
+export interface TokenStatusFull extends TokenStatusPublic {
+  readonly source: CredentialSource;
   readonly model: string | null;
   /** Last four characters, or null. Never more. */
   readonly masked: string | null;
   readonly kind: CredentialKind | null;
   /** ISO timestamp, set only for a credential pasted into this process. */
   readonly setAt: string | null;
-  readonly authGate: TokenAuthGate;
+}
+
+/** `GET /api/llm/token`. Carries a descriptor for an authorised caller, never a value, and never a secret. */
+export type TokenStatus = TokenStatusFull | TokenStatusPublic;
+
+/**
+ * Did this answer carry the descriptor?
+ *
+ * `source` is the discriminator because it is present on every full answer and
+ * absent from every reduced one — unlike `masked` or `kind`, which are `null`
+ * in perfectly ordinary full answers and would make "unconfigured" and
+ * "undisclosed" the same shape.
+ */
+export function isFullStatus(status: TokenStatus): status is TokenStatusFull {
+  return typeof (status as TokenStatusFull).source === 'string';
 }
 
 /** `POST`/`DELETE /api/llm/token`. */
@@ -217,7 +260,15 @@ async function call<T>(path: string, init: RequestInit, timeoutMs: number): Prom
   }
 }
 
-/** Read the credential descriptor. Never returns the credential. */
+/**
+ * Read the credential descriptor. Never returns the credential.
+ *
+ * This is also what establishes the anonymous cookie the write routes require:
+ * only `GET` may mint a principal, so the settings sheet's opening status call
+ * is what makes the subsequent Connect legal. Every caller of the mutations
+ * below is a component that has already read the status, so nothing in the
+ * interface has to know that.
+ */
 export function fetchTokenStatus(): Promise<TokenFetch<TokenStatus>> {
   return call<TokenStatus>(TOKEN_ROUTE, { method: 'GET' }, TOKEN_TIMEOUT_MS);
 }
@@ -236,7 +287,21 @@ export function disconnectToken(): Promise<TokenFetch<TokenMutationResult>> {
   return call<TokenMutationResult>(TOKEN_ROUTE, { method: 'DELETE' }, TOKEN_TIMEOUT_MS);
 }
 
-/** Spend one real model call to prove the credential works. Only ever from an explicit click. */
+/**
+ * Spend one real model call to prove the credential works. Only ever from an
+ * explicit click.
+ *
+ * The empty JSON body is not decoration: this route spends the operator's
+ * subscription, so it is gated like a write, and a write demands
+ * `content-type: application/json`. A cross-site form can post
+ * `text/plain`, `multipart/form-data` or `application/x-www-form-urlencoded`
+ * and nothing else without a preflight — so declaring JSON is what makes a
+ * silent cross-site POST impossible rather than merely unlikely.
+ */
 export function testToken(): Promise<TokenFetch<TokenTestResult>> {
-  return call<TokenTestResult>(`${TOKEN_ROUTE}/test`, { method: 'POST' }, TEST_TIMEOUT_MS);
+  return call<TokenTestResult>(
+    `${TOKEN_ROUTE}/test`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    TEST_TIMEOUT_MS,
+  );
 }

@@ -53,7 +53,13 @@ import {
   originKey,
   resolvePrincipal,
 } from './_identity';
-import { type LlmEnv, TOKEN_WRITE_RATE_LIMIT, createGenerationCache, resolveLlmEnv } from './_runtime';
+import {
+  type LlmEnv,
+  TOKEN_WRITE_RATE_LIMIT,
+  createGenerationCache,
+  processSingleton,
+  resolveLlmEnv,
+} from './_runtime';
 
 /** Every LLM route runs on Node and is never cached. */
 export const LLM_ROUTE_RUNTIME = 'nodejs';
@@ -149,15 +155,26 @@ export function ok<T>(output: T | null, fallback: boolean, reason?: string): Nex
 /*  Admission                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The three buckets, held on the process rather than on this module.
+ *
+ * A limiter that starts empty whenever the module registry is rebuilt is not a
+ * limit under `next dev`, where compiling a route the process has not served
+ * yet re-evaluates everything. Same reasoning, and the same slot, as the
+ * runtime credential store.
+ */
+
 /** One limiter for the process, shared by every role route. */
-const limiter = createRateLimiter();
+const limiter = processSingleton('llm.roleLimiter', () => createRateLimiter());
 
 /**
  * The second bucket, charged only to callers who presented no id we minted.
  * Without it, discarding the cookie makes every request a fresh principal and
  * the window above never binds.
  */
-const cookielessLimiter = createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_WINDOW });
+const cookielessLimiter = processSingleton('llm.cookielessLimiter', () =>
+  createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_WINDOW }),
+);
 
 /**
  * A third, much tighter bucket for writing the Claude credential.
@@ -167,11 +184,17 @@ const cookielessLimiter = createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_W
  * minute, and the endpoint is the one place in the app where guessing is worth
  * an attacker's time.
  */
-const tokenWriteLimiter = createRateLimiter({ limit: TOKEN_WRITE_RATE_LIMIT });
+const tokenWriteLimiter = processSingleton('llm.tokenWriteLimiter', () => createRateLimiter({ limit: TOKEN_WRITE_RATE_LIMIT }));
 
-/** Charge one credential write to this principal. */
-export function takeTokenWriteBudget(principalId: string, now: number = Date.now()): RateDecision {
-  return tokenWriteLimiter.take(principalId, now);
+/**
+ * Charge one credential write.
+ *
+ * The key is composite — see `tokenWriteBudgetKey` — and the caller builds it,
+ * because deciding *what a bucket is* is an authority question and belongs
+ * beside the rest of them rather than in this plumbing.
+ */
+export function takeTokenWriteBudget(budgetKey: string, now: number = Date.now()): RateDecision {
+  return tokenWriteLimiter.take(budgetKey, now);
 }
 
 /** Headers every route in this folder answers with. */
@@ -180,6 +203,15 @@ export const NO_STORE_HEADERS: Readonly<Record<string, string>> = NO_STORE;
 /** What a route needs once it has been let in. */
 export interface Admission {
   readonly principal: Principal;
+  /**
+   * True when this request presented no anonymous id and one was minted for it.
+   *
+   * Role routes do not care — a first call is as legitimate as any other. The
+   * credential routes very much do: a minted principal is a caller with no
+   * cookie, which is what a cross-site POST looks like and what makes a
+   * per-principal rate limit meaningless.
+   */
+  readonly mintedPrincipal: boolean;
   /**
    * The conversation key for this principal and thread. Derived, never
    * accepted — see `_identity.ts`.
@@ -238,6 +270,7 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
     ok: true,
     admission: {
       principal,
+      mintedPrincipal: issuedAnonymousId !== null,
       conversationKey: (role, parts) => deriveConversationKey(role, principal, parts, secret),
       finish(response: NextResponse): NextResponse {
         if (issuedAnonymousId !== null) {

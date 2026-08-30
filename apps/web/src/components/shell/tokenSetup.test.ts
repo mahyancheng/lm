@@ -15,12 +15,19 @@
  * 3. **A machine already logged into Claude Code counts as configured**, even
  *    with no credential in the process.
  * 4. No label ever renders more of a secret than the mask it was given.
+ * 5. **The reduced answer is a first-class shape.** The server describes the
+ *    credential only to a caller who could change it, so every label has to
+ *    read a status that carries four fields rather than nine — and the panel
+ *    has to say *why* rather than render an empty row.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
+  DISABLED_LINE,
   NO_SERVER_LINE,
   credentialLine,
+  pasteFieldLabel,
+  pasteMode,
   refusalLine,
   sourceChip,
   statusHeadline,
@@ -28,9 +35,9 @@ import {
   tokenPanelState,
   transportLabel,
 } from './tokenSetup';
-import type { TokenFetch, TokenStatus, TokenTestResult } from '../../lib/llm/token';
+import type { TokenFetch, TokenStatus, TokenStatusFull, TokenStatusPublic, TokenTestResult } from '../../lib/llm/token';
 
-function status(overrides: Partial<TokenStatus> = {}): TokenStatus {
+function status(overrides: Partial<TokenStatusFull> = {}): TokenStatusFull {
   return {
     configured: false,
     available: false,
@@ -43,6 +50,11 @@ function status(overrides: Partial<TokenStatus> = {}): TokenStatus {
     authGate: 'open-local',
     ...overrides,
   };
+}
+
+/** What a caller who may not write the credential is told: four facts, no descriptor. */
+function publicStatus(overrides: Partial<TokenStatusPublic> = {}): TokenStatusPublic {
+  return { configured: false, available: false, transportKind: 'none', authGate: 'admin', ...overrides };
 }
 
 const ok = (value: TokenStatus): TokenFetch<TokenStatus> => ({ kind: 'ok', value });
@@ -62,7 +74,7 @@ const CONFIGURED = status({
 
 describe('phases', () => {
   it('waits while the status call is in flight', () => {
-    expect(tokenPanelState(null)).toEqual({ phase: 'loading', message: '', canWrite: false, status: null });
+    expect(tokenPanelState(null)).toEqual({ phase: 'loading', message: '', canWrite: false, status: null, descriptor: null });
   });
 
   it('shows the paste form when a server answered and nothing is configured', () => {
@@ -109,6 +121,86 @@ describe('phases', () => {
     expect(state.phase).toBe('restricted');
     expect(state.message).toMatch(/minute/i);
   });
+
+  it('explains a deployment that takes no pasted credential at all, and names both ways out', () => {
+    // A dev server binds every interface, so "no Supabase" is not evidence the
+    // caller owns the machine. Reached from the network, the honest answer is
+    // that this path is closed — with the two that are not.
+    const state = tokenPanelState(ok(publicStatus({ authGate: 'disabled', available: true, transportKind: 'claude-session' })));
+    expect(state.phase).toBe('disabled');
+    expect(state.message).toBe(DISABLED_LINE);
+    expect(state.message).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(state.message).toMatch(/LLM_TOKEN_SETUP=local/);
+    expect(state.canWrite).toBe(false);
+    // The headline is still worth rendering: whether roles reach a model is a
+    // public fact, and it is what the player opened this section to check.
+    expect(state.status).not.toBeNull();
+    expect(state.descriptor).toBeNull();
+  });
+
+  it('says disabled even when a credential is in force, because it is still not writable', () => {
+    const state = tokenPanelState(ok(status({ authGate: 'disabled', configured: true, available: true, masked: '…wxyz' })));
+    expect(state.phase).toBe('disabled');
+    expect(state.canWrite).toBe(false);
+  });
+
+  it('treats a withheld descriptor as the refusal it is', () => {
+    // On an admin deployment a signed-in player is admitted and told the four
+    // public facts. There is no form to draw for them, and no masked row.
+    const state = tokenPanelState(ok(publicStatus({ configured: true, available: true, transportKind: 'claude-session' })));
+    expect(state.phase).toBe('restricted');
+    expect(state.message).toMatch(/administrator/);
+    expect(state.canWrite).toBe(false);
+    expect(state.descriptor).toBeNull();
+    expect(state.status).not.toBeNull();
+  });
+
+  it('hands the narrowed descriptor to the caller who was given one', () => {
+    const state = tokenPanelState(ok(CONFIGURED));
+    expect(state.descriptor).toEqual(CONFIGURED);
+    expect(state.descriptor?.masked).toBe('…wxyz');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('pasting a replacement', () => {
+  const configured = tokenPanelState(ok(CONFIGURED));
+  const unconfigured = tokenPanelState(ok(status()));
+
+  it('keeps the three-step guide exclusive to the unconfigured phase', () => {
+    expect(pasteMode(unconfigured, false)).toBe('guided');
+    expect(pasteMode(unconfigured, true)).toBe('guided');
+    expect(pasteMode(configured, false)).toBe('none');
+  });
+
+  it('offers the same field again once a credential is in force', () => {
+    // The dead end this closes: an expired env token still reports Live, and
+    // Disconnect renders only for a runtime credential, so there was no way to
+    // paste a new one without editing a dotfile and restarting.
+    expect(pasteMode(configured, true)).toBe('replace');
+    expect(pasteFieldLabel('replace')).toMatch(/replacement/);
+    expect(pasteFieldLabel('guided')).toBe('Paste the token');
+  });
+
+  it('works for an environment credential, which is the case that needed it', () => {
+    const fromEnv = tokenPanelState(ok(status({ configured: true, available: true, source: 'env', masked: '…envv' })));
+    expect(fromEnv.phase).toBe('configured');
+    expect(pasteMode(fromEnv, true)).toBe('replace');
+  });
+
+  it('offers nothing to a phase that may not write, however the disclosure is toggled', () => {
+    for (const state of [
+      tokenPanelState({ kind: 'unreachable' }),
+      tokenPanelState({ kind: 'refused', status: 403, reason: 'admin_only' }),
+      tokenPanelState(ok(publicStatus({ authGate: 'disabled', available: true }))),
+      tokenPanelState(ok(publicStatus({ configured: true, available: true }))),
+      tokenPanelState(null),
+    ]) {
+      expect(pasteMode(state, true)).toBe('none');
+      expect(pasteMode(state, false)).toBe('none');
+    }
+  });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -143,6 +235,13 @@ describe('labels', () => {
     expect(statusHeadline(status({ available: true }))).toBe('Live');
     expect(statusHeadline(status())).toBe('Offline');
     expect(statusHeadline(null)).toBe('Offline');
+  });
+
+  it('still answers live or offline from the four public facts alone', () => {
+    // The model name is part of the descriptor, so a caller who was not shown
+    // one gets the plain headline rather than a crash or an "undefined".
+    expect(statusHeadline(publicStatus({ available: true }))).toBe('Live');
+    expect(statusHeadline(publicStatus())).toBe('Offline');
   });
 });
 
@@ -183,5 +282,16 @@ describe('outcomes', () => {
     expect(refusalLine(403, 'admin_only')).toMatch(/administrator/);
     expect(refusalLine(429, 'rate_limited')).toMatch(/minute/i);
     expect(refusalLine(400, 'A credential is at least 20 characters.')).toBe('A credential is at least 20 characters.');
+  });
+
+  it('gives each hardened refusal its own instruction, because they are not the same problem', () => {
+    // Three 403s and two 401s that would otherwise read identically, and the
+    // right response to each is completely different.
+    expect(refusalLine(403, 'setup_disabled')).toBe(DISABLED_LINE);
+    expect(refusalLine(401, 'cookie_required')).toMatch(/session cookie/i);
+    expect(refusalLine(401, 'cookie_required')).not.toMatch(/Sign in/);
+    for (const reason of ['cross_site', 'origin_unverified', 'unsupported_media_type']) {
+      expect(refusalLine(403, reason)).toMatch(/did not look like it came from this page/);
+    }
   });
 });

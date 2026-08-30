@@ -192,10 +192,17 @@ SUPABASE_SERVICE_ROLE_KEY=
 # your Claude subscription OAuth token (not metered API billing).
 # Generate with:  claude setup-token
 LLM_TRANSPORT=claude-session        # claude-session | api | none
-# Optional — can also be pasted in-app under Settings -> AI. See below.
+# Optional — can also be pasted in-app under Settings -> AI when the request
+# comes from the machine the server runs on. See § 5.1.
 CLAUDE_CODE_OAUTH_TOKEN=
 # All in-game roles use Sonnet.
 LLM_MODEL=sonnet
+
+# Optional. The in-app paste form is offered only to a local connection, which
+# a route handler can only infer. Set this to `local` to say so out loud (a
+# container, a tunnel, a reverse proxy); set it to anything else to turn the
+# in-app path off entirely. Unset means: infer it. See § 5.1.
+LLM_TOKEN_SETUP=
 
 # Optional fallback transport (LLM_TRANSPORT=api): metered Anthropic API key.
 ANTHROPIC_API_KEY=
@@ -230,8 +237,16 @@ model call — the only route in the app that does so, and only on an explicit
 click. `Disconnect` drops it and falls back to the environment.
 
 `/api/llm/token` is the route behind it. `GET` returns a descriptor only —
-kind, the last four characters, and when it was set. The value is never
-returned, never logged, and never stored in the browser.
+kind, the last four characters, and when it was set — and returns even that
+only to a caller who could have written the credential. Everyone else is
+answered with four public facts (`configured`, `available`, `transportKind`,
+`authGate`) and nothing that describes the secret, including the environment's.
+The value itself is never returned, never logged, and never stored in the
+browser.
+
+Once a credential is in force, **Replace credential** in the same panel reveals
+the paste field again. An expired token looks exactly like a working one from
+the server's side, so replacing one must not require editing a dotfile.
 
 **Precedence.** The environment is the baseline; a pasted token overrides it
 for that process, including `LLM_TRANSPORT` (an `sk-ant-api…` key selects the
@@ -243,10 +258,34 @@ clearing it falls back to the baseline. The gateway is rebuilt on every change.
 | Deployment | Who may POST/DELETE |
 |---|---|
 | Supabase configured | A verified JWT whose `profiles.is_admin` is true, read server-side. `GET` reports `authGate: "admin"`. |
-| No Supabase (demo/local) | The existing per-browser anonymous cookie principal. `GET` reports `authGate: "open-local"`. |
+| No Supabase, local connection | The per-browser anonymous cookie principal, which must **already exist**. `GET` reports `authGate: "open-local"`. |
+| No Supabase, connection from elsewhere | Nobody. `GET` reports `authGate: "disabled"` and the panel says so. Set `CLAUDE_CODE_OAUTH_TOKEN` in the environment, or `LLM_TOKEN_SETUP=local` if the deployment really is a local one. |
 
-Either posture is additionally capped at **5 credential writes per principal
-per minute**, on top of the ordinary 20/min LLM route window.
+The third row exists because `next dev` binds every interface: "Supabase is not
+configured" says nothing about who is calling, and without it anyone on the same
+network could overwrite the credential and then spend the owner's subscription
+through `Test connection`. A route handler is not given the socket, so locality
+is inferred from a loopback `Host` with no non-loopback forwarding hop — which a
+browser cannot forge — and `LLM_TOKEN_SETUP` is there to state it explicitly
+when the inference is wrong in either direction. A caller that forges both
+headers from the LAN is not stopped by this; bind the server to loopback
+(`next dev -H 127.0.0.1`) or use the environment variable if that matters.
+
+Every write additionally requires all of:
+
+| Requirement | Because |
+|---|---|
+| `Sec-Fetch-Site: same-origin`, or an `Origin` whose authority equals `Host` | Otherwise a page on any other origin could set this credential in a visiting developer's process. |
+| `content-type: application/json` on `POST` | A cross-site form is the one cross-origin POST that needs no preflight, and a form cannot send JSON. |
+| An anonymous cookie issued by an **earlier** request | Only `GET` mints one. Minting for a cookieless writer undid `SameSite=Lax` and handed every request a fresh rate-limit bucket. The settings panel always reads the status first, so this is invisible in the UI. |
+
+`/api/llm/token/test` is gated identically, because spending the operator's
+subscription is the same privilege as setting the credential.
+
+Either posture is additionally capped at **5 credential writes per minute**,
+charged to a composite of the principal and an origin key that deliberately
+ignores `x-forwarded-for` — a bucket a caller can rotate by editing a header is
+not a bucket — on top of the ordinary 20/min LLM route window.
 
 **Lifetime, stated plainly.** The pasted credential lives in **one server
 process's memory, for the life of that process**. Nothing is written to disk
@@ -255,7 +294,9 @@ deployment this exists for — `pnpm dev` or `pnpm start` on the owner's machine
 — and it is not persistence:
 
 - **Restart the server** and the token is gone; the environment variable takes
-  over again.
+  over again. (It does survive a `next dev` hot reload: the store is held on a
+  process-wide slot, because a module-scope value is not process state when the
+  module registry is rebuilt on demand.)
 - **Vercel, or any multi-instance serverless host**, runs many instances and
   recycles them. A token pasted into one instance is unknown to the next
   request's instance, so the in-app path is unreliable there by construction.

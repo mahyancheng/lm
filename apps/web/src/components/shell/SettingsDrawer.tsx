@@ -40,6 +40,8 @@ import type { SettingsSection } from './settingsBus';
 import {
   NO_SERVER_LINE,
   credentialLine,
+  pasteFieldLabel,
+  pasteMode,
   refusalLine,
   sourceChip,
   statusHeadline,
@@ -124,6 +126,63 @@ const SETUP_STEPS: readonly { readonly step: string; readonly detail: string }[]
 ];
 
 /**
+ * The paste field and its Connect button.
+ *
+ * Shared by the two phases that can accept a credential, because they are the
+ * same act: the unconfigured phase leads with the three-step guide, and the
+ * configured phase hides the identical field behind "Replace credential". A
+ * credential that has expired looks exactly like a working one from here — the
+ * server can only say what it holds, not whether Anthropic still honours it —
+ * so a configured panel with no way to paste a new value was a dead end an
+ * operator could only escape by editing a dotfile, which is the thing this
+ * whole feature exists to avoid.
+ */
+function PasteField({
+  draft,
+  issue,
+  busy,
+  label,
+  onDraft,
+  onSubmit,
+}: {
+  readonly draft: string;
+  readonly issue: string | null;
+  readonly busy: boolean;
+  readonly label: string;
+  readonly onDraft: (next: string) => void;
+  readonly onSubmit: () => void;
+}): React.JSX.Element {
+  const blocked = draft.trim().length === 0 || issue !== null || busy;
+  return (
+    <>
+      <label className="block">
+        <span className="label-caps-faint">{label}</span>
+        <input
+          type="password"
+          className="field mt-1 font-mono text-[10px]"
+          value={draft}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="sk-ant-oat01-…"
+          aria-label="Claude credential"
+          onChange={(event) => onDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !blocked) onSubmit();
+          }}
+        />
+      </label>
+      {issue === null ? null : <p className="px-1 text-[10px] text-warn">{issue}</p>}
+      <div className="flex items-center gap-1.5">
+        <button type="button" className="btn btn-primary btn-sm" disabled={blocked} onClick={onSubmit}>
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+        <span className="text-[10px] text-ink-faint">An sk-ant-api… key switches to the metered API instead.</span>
+      </div>
+    </>
+  );
+}
+
+/**
  * The Claude credential, end to end: what is in force, how to get one, and how
  * to prove it works.
  *
@@ -143,6 +202,8 @@ function ClaudeSection({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState<'connect' | 'disconnect' | 'test' | null>(null);
   const [notice, setNotice] = useState<{ readonly tone: NoticeTone; readonly text: string } | null>(null);
+  /** Whether the configured phase has its paste field open. Closed by default; a successful write closes it again. */
+  const [replacing, setReplacing] = useState(false);
   const anchor = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
@@ -166,6 +227,8 @@ function ClaudeSection({
 
   const panel = tokenPanelState(fetched);
   const status = panel.status;
+  const descriptor = panel.descriptor;
+  const paste = pasteMode(panel, replacing);
   const trimmed = draft.trim();
   const draftIssue = tokenDraftIssue(draft);
 
@@ -176,6 +239,7 @@ function ClaudeSection({
     const result = await connectToken(trimmed);
     if (result.kind === 'ok' && result.value.ok) {
       setDraft('');
+      setReplacing(false);
       setNotice({ tone: 'gain', text: `Connected. Roles now run on the ${transportLabel(result.value.transportKind)}.` });
       await settle();
     } else if (result.kind === 'refused') {
@@ -219,7 +283,7 @@ function ClaudeSection({
     setBusy(null);
   }
 
-  const chip = status === null ? null : sourceChip(status.source);
+  const chip = descriptor === null ? null : sourceChip(descriptor.source);
 
   return (
     <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
@@ -237,63 +301,33 @@ function ClaudeSection({
           </span>
           {status === null ? null : <Tag tone={status.available ? 'gain' : 'neutral'}>{transportLabel(status.transportKind)}</Tag>}
         </div>
-        {status === null ? null : (
+        {descriptor === null ? null : (
           <div className="flex items-center justify-between gap-2">
-            <span className="figure truncate text-[10.5px] text-ink-dim">{credentialLine(status)}</span>
-            {chip === null ? null : <Tag tone={status.source === 'runtime' ? 'brand' : 'neutral'}>{chip}</Tag>}
+            <span className="figure truncate text-[10.5px] text-ink-dim">{credentialLine(descriptor)}</span>
+            {chip === null ? null : <Tag tone={descriptor.source === 'runtime' ? 'brand' : 'neutral'}>{chip}</Tag>}
           </div>
         )}
       </div>
 
       {/* --- the phases --------------------------------------------------- */}
-      {panel.phase === 'no-server' || panel.phase === 'restricted' ? (
+      {panel.phase === 'no-server' || panel.phase === 'restricted' || panel.phase === 'disabled' ? (
         <p className="px-1 text-[10.5px] leading-relaxed text-ink-faint">{panel.message}</p>
       ) : null}
 
-      {panel.phase === 'unconfigured' ? (
-        <>
-          <ol className="flex flex-col gap-1.5">
-            {SETUP_STEPS.map((entry, index) => (
-              <li key={entry.step} className="flex items-start gap-2.5">
-                <span className="figure mt-px flex size-4 shrink-0 items-center justify-center rounded-pill bg-brand-wash text-[9px] font-bold text-brand">
-                  {index + 1}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[11.5px] font-semibold text-ink">{entry.step}</span>
-                  <span className="block text-[10px] leading-relaxed text-ink-faint">{entry.detail}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
-          <label className="block">
-            <span className="label-caps-faint">Paste the token</span>
-            <input
-              type="password"
-              className="field mt-1 font-mono text-[10px]"
-              value={draft}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="sk-ant-oat01-…"
-              aria-label="Claude credential"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void connect();
-              }}
-            />
-          </label>
-          {draftIssue === null ? null : <p className="px-1 text-[10px] text-warn">{draftIssue}</p>}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={trimmed.length === 0 || draftIssue !== null || busy !== null}
-              onClick={() => void connect()}
-            >
-              {busy === 'connect' ? 'Connecting…' : 'Connect'}
-            </button>
-            <span className="text-[10px] text-ink-faint">An sk-ant-api… key switches to the metered API instead.</span>
-          </div>
-        </>
+      {paste === 'guided' ? (
+        <ol className="flex flex-col gap-1.5">
+          {SETUP_STEPS.map((entry, index) => (
+            <li key={entry.step} className="flex items-start gap-2.5">
+              <span className="figure mt-px flex size-4 shrink-0 items-center justify-center rounded-pill bg-brand-wash text-[9px] font-bold text-brand">
+                {index + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11.5px] font-semibold text-ink">{entry.step}</span>
+                <span className="block text-[10px] leading-relaxed text-ink-faint">{entry.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
       ) : null}
 
       {panel.phase === 'configured' ? (
@@ -301,7 +335,19 @@ function ClaudeSection({
           <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void test()}>
             {busy === 'test' ? 'Testing…' : 'Test connection'}
           </button>
-          {status?.source === 'runtime' ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-expanded={replacing}
+            disabled={busy !== null}
+            onClick={() => {
+              setReplacing((open) => !open);
+              setDraft('');
+            }}
+          >
+            {replacing ? 'Cancel replacement' : 'Replace credential'}
+          </button>
+          {descriptor?.source === 'runtime' ? (
             <button type="button" className="btn btn-sm btn-danger" disabled={busy !== null} onClick={() => void disconnect()}>
               {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
             </button>
@@ -312,10 +358,29 @@ function ClaudeSection({
         </div>
       ) : null}
 
-      {panel.phase === 'configured' && status?.source === 'env' ? (
+      {/* The field itself, under whichever of the two openings led to it. */}
+      {paste === 'replace' ? (
         <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
-          This credential comes from the server environment. Clear the variable there to change it, or paste a token to override it for
-          this process.
+          Run <span className="figure">claude setup-token</span> again and paste the new value. It replaces whatever is in force for this
+          process — including a credential from the environment — with no restart.
+        </p>
+      ) : null}
+
+      {paste === 'none' ? null : (
+        <PasteField
+          draft={draft}
+          issue={draftIssue}
+          busy={busy !== null}
+          label={pasteFieldLabel(paste)}
+          onDraft={setDraft}
+          onSubmit={() => void connect()}
+        />
+      )}
+
+      {panel.phase === 'configured' && descriptor?.source === 'env' && paste !== 'replace' ? (
+        <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+          This credential comes from the server environment. Clear the variable there to change it, or use Replace credential to override it
+          for this process.
         </p>
       ) : null}
 

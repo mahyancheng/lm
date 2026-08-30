@@ -25,12 +25,16 @@
  *
  * Authority is the same gate as writing the credential: if a caller may not set
  * a token, there is no reason to let them burn the operator's subscription.
+ * That includes the cross-site checks — this route spends money, so a page on
+ * another origin must not be able to make a visiting developer's browser press
+ * "Test connection" in a loop — and the established-cookie rule, which is why
+ * the request carries a JSON content type it has no body for.
  */
 
 import type { NarratorInput } from '@frontier/contracts';
 import { type TokenTestResult, classifyTestFailure } from '@/lib/llm/token';
 import { admit, gateway, modelName, transportAvailable } from '../../_gateway';
-import { gateTokenWrite, json } from '../_shared';
+import { gateTokenWrite, guardWriteRequest, json } from '../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,11 +52,14 @@ const PROBE: NarratorInput = {
 };
 
 export async function POST(request: Request): Promise<Response> {
+  const forged = guardWriteRequest(request, true);
+  if (forged !== null) return forged;
+
   const admission = await admit(request);
   if (!admission.ok) return admission.response;
-  const { finish, principal } = admission.admission;
+  const { finish, principal, mintedPrincipal } = admission.admission;
 
-  const refusal = await gateTokenWrite(principal);
+  const refusal = await gateTokenWrite(request, { principal, mintedPrincipal });
   if (refusal !== null) return finish(refusal);
 
   if (!transportAvailable()) {

@@ -49,6 +49,13 @@ or stored in the browser, so it is the right path for `pnpm dev` and
 `pnpm start` on your own machine. A multi-instance deployment (Vercel) starts
 each instance empty — set `CLAUDE_CODE_OAUTH_TOKEN` in the environment there.
 
+The form is offered only when the request comes from the machine the server is
+running on: a dev server listens on every interface, and nobody else on your
+network should be able to set the credential their calls — and your Claude
+subscription — would be spent on. Reached over the network it says so and
+explains the two alternatives (`CLAUDE_CODE_OAUTH_TOKEN`, or `LLM_TOKEN_SETUP=local`
+when the deployment really is a local one behind a proxy or in a container).
+
 ## Full stack setup
 
 1. **Supabase**: create a project, then `supabase db push` (or apply

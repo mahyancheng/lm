@@ -17,16 +17,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type TokenStatus,
+  type TokenStatusFull,
+  type TokenStatusPublic,
   classifyCredential,
   classifyTestFailure,
   connectToken,
   disconnectToken,
   fetchTokenStatus,
+  isFullStatus,
   maskCredential,
   testToken,
 } from './token';
 
-const STATUS: TokenStatus = {
+const STATUS: TokenStatusFull = {
   configured: true,
   available: true,
   source: 'runtime',
@@ -114,6 +117,35 @@ describe('mutations', () => {
     await testToken();
     expect(calls[0]?.url).toBe('/api/llm/token/test');
     expect(calls[0]?.init.method).toBe('POST');
+  });
+
+  it('declares JSON on every write, including the one with nothing to say', async () => {
+    // The route refuses a body-carrying POST that does not declare JSON,
+    // because a cross-site form can send everything *but* JSON without a
+    // preflight. The connection test spends real money, so it is gated the same
+    // way — which is why it carries a content type it has no need of.
+    const { calls } = stubFetch(200, { ok: true, modelId: 'sonnet', latencyMs: 800 });
+    await testToken();
+    await connectToken('sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaa');
+    for (const call of calls) {
+      expect((call.init.headers as Record<string, string>)['content-type']).toBe('application/json');
+    }
+  });
+});
+
+describe('the two shapes of a status', () => {
+  it('reads a descriptor when the server disclosed one', () => {
+    expect(isFullStatus(STATUS)).toBe(true);
+  });
+
+  it('reads the reduced answer as reduced, even though it is a valid status', () => {
+    // `source` is the discriminator rather than `masked` or `kind`, which are
+    // null in a perfectly ordinary full answer — collapsing "unconfigured" into
+    // "undisclosed" would send the settings sheet to the wrong phase.
+    const reduced: TokenStatusPublic = { configured: true, available: true, transportKind: 'claude-session', authGate: 'admin' };
+    expect(isFullStatus(reduced)).toBe(false);
+    const unconfigured: TokenStatus = { ...STATUS, configured: false, source: 'none', masked: null, kind: null, setAt: null };
+    expect(isFullStatus(unconfigured)).toBe(true);
   });
 });
 

@@ -37,6 +37,21 @@
  * every clear — not a timestamp. A clock would make the cache key depend on
  * wall time, which is the one thing the rest of this codebase is careful never
  * to do, and two changes inside the same millisecond would compare equal.
+ *
+ * ## Why the store hangs off `globalThis`
+ *
+ * A module-level `let` is process state only if the module is evaluated once,
+ * and under `next dev` it is not: compiling a route the process has not served
+ * yet recreates the module registry, and every module-scope value in it starts
+ * again from its initialiser. The observed failure was exact and silent — paste
+ * a token, visit a page whose route had not been compiled, and the credential
+ * was gone with the UI still showing it connected. Holding the store on a
+ * `Symbol.for` slot is the standard dev-HMR singleton: the registry may be
+ * rebuilt as often as it likes, the process keeps one store.
+ *
+ * The slot is defined **non-enumerable**, so nothing that walks the global
+ * object — a logger, a serialiser, a crash reporter — can reach a live secret
+ * by accident.
  */
 
 // Relative rather than `@/`: this module is imported directly by its test, and
@@ -46,13 +61,41 @@ import {
   type CredentialSource,
   type LlmTransportKind,
   type TokenAuthGate,
-  type TokenStatus,
+  type TokenStatusFull,
+  type TokenStatusPublic,
   TOKEN_MAX_LENGTH,
   TOKEN_MIN_LENGTH,
   classifyCredential,
   maskCredential,
 } from '../../../lib/llm/token';
 import type { Principal } from './_identity';
+
+/* -------------------------------------------------------------------------- */
+/*  Process-wide singletons                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A value that must outlive the module that declares it.
+ *
+ * Keyed by a registered symbol so two evaluations of the same module find the
+ * same slot, and defined non-enumerable and non-configurable so nothing
+ * enumerating the global object can find it and nothing can replace it.
+ *
+ * This is for **process state**, not for caches that merely benefit from
+ * living longer: everything stored this way survives a hot reload, which is
+ * exactly as useful for a rate limiter as it is dangerous for a value a
+ * developer expects their edit to reset.
+ */
+export function processSingleton<T extends object>(name: string, create: () => T): T {
+  const key = Symbol.for(`frontier.${name}`);
+  const host = globalThis as unknown as Record<symbol, T | undefined>;
+  const existing = host[key];
+  if (existing !== undefined) return existing;
+
+  const value = create();
+  Object.defineProperty(globalThis, key, { value, writable: false, enumerable: false, configurable: false });
+  return value;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  The store                                                                  */
@@ -74,17 +117,30 @@ export interface RuntimeCredentialDescriptor {
   readonly setAt: string;
 }
 
-let credential: RuntimeCredential | null = null;
-
 /**
- * Bumped on every mutation. The gateway cache compares against it, so a stale
- * gateway can never outlive a credential change.
+ * The one store, and the one counter.
+ *
+ * `generation` is bumped on every mutation. The gateway cache compares against
+ * it, so a stale gateway can never outlive a credential change — and because
+ * the counter lives beside the credential in the same process-wide slot, a
+ * module re-evaluation cannot rewind it and hand out a gateway built for a
+ * credential that is no longer there.
  */
-let generation = 0;
+interface RuntimeStore {
+  credential: RuntimeCredential | null;
+  generation: number;
+}
+
+/** The name is part of the contract: two module instances must agree on it. */
+export const RUNTIME_STORE_KEY = 'llm.runtimeCredentialStore';
+
+function store(): RuntimeStore {
+  return processSingleton<RuntimeStore>(RUNTIME_STORE_KEY, () => ({ credential: null, generation: 0 }));
+}
 
 /** The current generation. Monotonic, process-local, and not a clock. */
 export function runtimeGeneration(): number {
-  return generation;
+  return store().generation;
 }
 
 export interface SetCredentialOptions {
@@ -105,22 +161,24 @@ export function setRuntimeCredential(token: string, options: SetCredentialOption
     masked: maskCredential(value),
     setAt: (options.now ?? (() => new Date().toISOString()))(),
   };
-  credential = { kind: descriptor.kind, value, descriptor };
-  generation += 1;
+  const held = store();
+  held.credential = { kind: descriptor.kind, value, descriptor };
+  held.generation += 1;
   return descriptor;
 }
 
 /** Forget the runtime credential. Returns true when there was one to forget. */
 export function clearRuntimeCredential(): boolean {
-  const had = credential !== null;
-  credential = null;
-  generation += 1;
+  const held = store();
+  const had = held.credential !== null;
+  held.credential = null;
+  held.generation += 1;
   return had;
 }
 
 /** The descriptor for the held credential, or null. Never carries the value. */
 export function runtimeCredentialDescriptor(): RuntimeCredentialDescriptor | null {
-  return credential?.descriptor ?? null;
+  return store().credential?.descriptor ?? null;
 }
 
 /**
@@ -130,8 +188,9 @@ export function runtimeCredentialDescriptor(): RuntimeCredentialDescriptor | nul
  * gateway, which is the exact bug the counter exists to prevent.
  */
 export function resetRuntimeCredential(): void {
-  credential = null;
-  generation += 1;
+  const held = store();
+  held.credential = null;
+  held.generation += 1;
 }
 
 /**
@@ -144,7 +203,7 @@ export function resetRuntimeCredential(): void {
 export function createGenerationCache<T>(build: () => T): () => T {
   let held: { readonly value: T; readonly generation: number } | null = null;
   return (): T => {
-    const current = generation;
+    const current = store().generation;
     if (held === null || held.generation !== current) held = { value: build(), generation: current };
     return held.value;
   };
@@ -171,7 +230,7 @@ function hasValue(value: string | undefined): boolean {
  * that is what the dotfile said.
  */
 export function resolveLlmEnv(base: LlmEnv): LlmEnv {
-  const held = credential;
+  const held = store().credential;
   if (held === null) return base;
   return held.kind === 'api_key'
     ? { ...base, LLM_TRANSPORT: 'api', ANTHROPIC_API_KEY: held.value }
@@ -196,7 +255,7 @@ const UNCONFIGURED: CredentialStatus = { configured: false, source: 'none', kind
  * live credential while the process is running on `claude-session`.
  */
 export function credentialStatus(base: LlmEnv, transport: 'claude-session' | 'api' | 'none'): CredentialStatus {
-  const held = credential;
+  const held = store().credential;
   if (held !== null) {
     return { configured: true, source: 'runtime', kind: held.kind, masked: held.descriptor.masked, setAt: held.descriptor.setAt };
   }
@@ -223,16 +282,18 @@ export interface TransportFacts {
   /** True when a role call has any chance of reaching a model. */
   readonly available: boolean;
   readonly supabaseConfigured: boolean;
+  /** True when this request looks like it came from the machine the process runs on. */
+  readonly localConnection: boolean;
 }
 
 /**
- * The exact body `GET /api/llm/token` answers with.
+ * The full body `GET /api/llm/token` answers an authorised caller with.
  *
  * Assembled here rather than in the route so that "this response never carries
  * the credential" is a property a test can hold the whole object up against,
  * instead of a claim about a handler that needs a request scope to run.
  */
-export function buildTokenStatus(facts: TransportFacts): TokenStatus {
+export function buildTokenStatus(facts: TransportFacts): TokenStatusFull {
   const status = credentialStatus(facts.base, facts.transport);
   return {
     configured: status.configured,
@@ -243,8 +304,180 @@ export function buildTokenStatus(facts: TransportFacts): TokenStatus {
     masked: status.masked,
     kind: status.kind,
     setAt: status.setAt,
-    authGate: tokenAuthGate(facts.supabaseConfigured),
+    authGate: tokenAuthGate(facts.supabaseConfigured, facts.localConnection),
   };
+}
+
+/**
+ * The same body with everything that describes the secret removed.
+ *
+ * This is what a caller who may not write the credential is told, and the
+ * subtraction is deliberate rather than incidental: `masked` and `setAt`
+ * describe the *environment's* credential too, so returning them to any
+ * admitted caller told every signed-in player the last four characters of the
+ * operator's token and when it was rotated. What survives is what the caller
+ * can observe anyway — whether roles reach a model, on what transport, and who
+ * this deployment lets change that.
+ */
+export function publicTokenStatus(status: TokenStatusFull): TokenStatusPublic {
+  return {
+    configured: status.configured,
+    available: status.available,
+    transportKind: status.transportKind,
+    authGate: status.authGate,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Is the caller actually sitting at this machine?                            */
+/* -------------------------------------------------------------------------- */
+
+/** The variable an operator sets to state the posture rather than have it inferred. */
+export const TOKEN_SETUP_ENV = 'LLM_TOKEN_SETUP';
+
+/** Addresses that mean "this machine", including the IPv4-mapped IPv6 spellings. */
+function isLoopbackAddress(value: string): boolean {
+  const address = value.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (address.length === 0) return false;
+  if (address === 'localhost' || address === '::1' || address === '::ffff:127.0.0.1') return true;
+  // The whole of 127.0.0.0/8, not just 127.0.0.1.
+  const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
+  return v4 !== null && v4[1] === '127' && v4.slice(1).every((part) => Number(part) <= 255);
+}
+
+/** The host part of an authority, without the port. `[::1]:3000` keeps its brackets stripped. */
+function authorityHost(authority: string): string {
+  const trimmed = authority.trim();
+  if (trimmed.startsWith('[')) return trimmed.slice(0, trimmed.indexOf(']') + 1);
+  const colon = trimmed.lastIndexOf(':');
+  return colon === -1 ? trimmed : trimmed.slice(0, colon);
+}
+
+/** What `isLocalConnection` may look at. Every field is a header value or an environment variable. */
+export interface ConnectionFacts {
+  /** `LLM_TOKEN_SETUP`, the explicit statement of posture. */
+  readonly optIn: string | undefined;
+  /** The `Host` header — what the browser was pointed at. */
+  readonly host: string | null;
+  /**
+   * `x-forwarded-for`. Next fills this from the socket's `remoteAddress` when
+   * the client did not send one, so on a direct connection it is the truth; a
+   * client that sends one keeps its own value, which is why a non-loopback
+   * entry is disqualifying and a forged loopback one is not sufficient on its
+   * own.
+   */
+  readonly forwardedFor: string | null;
+  /** Connection address, when a platform hands one over. Nothing in Next does today. */
+  readonly connectionAddress?: string | null;
+}
+
+/**
+ * Did this request come from the machine the process is running on?
+ *
+ * This exists because "Supabase is not configured" was being read as "this is
+ * the owner's laptop", and it is not: `next dev` binds every interface, so on
+ * any shared network the credential form was reachable — and writable — by
+ * everyone on that network, who could then spend the owner's subscription
+ * through the connection test.
+ *
+ * A Next route handler is not given the socket, so this is inference, and the
+ * inference is stated honestly:
+ *
+ * - `LLM_TOKEN_SETUP=local` is an operator saying *yes* out loud, and wins.
+ *   Any other non-empty value is an operator saying *no*, and also wins.
+ * - Otherwise the request must have been aimed at a loopback authority **and**
+ *   carry no non-loopback forwarding hop. A browser cannot forge either: it
+ *   sets `Host` from the address bar and cannot set `x-forwarded-for` on a
+ *   cross-site request at all. That is precisely the LAN-browser attack, closed.
+ *
+ * What it does not close is a scripted caller on the LAN that forges both
+ * headers. Nothing readable from a route handler can, and saying so here is
+ * better than implying otherwise: an operator who needs certainty binds the
+ * server to loopback (`next dev -H 127.0.0.1`) or leaves the credential in the
+ * environment, and both are documented.
+ */
+export function isLocalConnection(facts: ConnectionFacts): boolean {
+  const declared = facts.optIn?.trim().toLowerCase() ?? '';
+  if (declared.length > 0) return declared === 'local';
+
+  const address = facts.connectionAddress ?? null;
+  if (address !== null) return isLoopbackAddress(address);
+
+  if (facts.host === null || !isLoopbackAddress(authorityHost(facts.host))) return false;
+
+  const chain = facts.forwardedFor;
+  if (chain === null || chain.trim().length === 0) return true;
+  return chain.split(',').every((hop) => isLoopbackAddress(hop));
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Cross-site request forgery                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** The headers a state-changing request is judged on. All four are set by the browser, not by the page. */
+export interface WriteGuardFacts {
+  /** `sec-fetch-site`. Every current browser sends it; nothing else does. */
+  readonly secFetchSite: string | null;
+  readonly origin: string | null;
+  readonly host: string | null;
+  readonly contentType: string | null;
+  /** POST carries a body and must declare JSON; DELETE carries none and is not asked to. */
+  readonly requiresJson: boolean;
+}
+
+export type WriteGuardDecision = { readonly ok: true } | { readonly ok: false; readonly status: 403; readonly reason: string };
+
+const CSRF_OK: WriteGuardDecision = { ok: true };
+
+/**
+ * Is this state-changing request one the app's own page made?
+ *
+ * The defect this closes was worse than a missing header check. `SameSite=Lax`
+ * kept the anonymous cookie off a cross-site POST, but the route then **minted
+ * a fresh principal for the cookieless caller and let it write** — so the
+ * cookie's protection was undone by the very thing that was supposed to
+ * identify the caller. An attacker's page could set the credential of any
+ * developer who visited it.
+ *
+ * Three rules, each of which a browser enforces and a page cannot escape:
+ *
+ * 1. `Sec-Fetch-Site` must say `same-origin` when it is present. The browser
+ *    computes it; script cannot set it, because it is a forbidden header name.
+ * 2. With no `Sec-Fetch-Site` (an older browser, or a non-browser client), the
+ *    `Origin` must be present and its authority must equal the `Host`. Absent
+ *    both, the request is refused: a state-changing call that will not say
+ *    where it came from does not get the benefit of the doubt.
+ * 3. A body-carrying write must declare `application/json`. A cross-site form —
+ *    the one cross-origin POST that needs no preflight — can only send
+ *    `text/plain`, `multipart/form-data` or `application/x-www-form-urlencoded`,
+ *    so this alone makes the silent form POST impossible.
+ *
+ * Ordinary same-origin `fetch` from this app satisfies all three without
+ * knowing they exist.
+ */
+export function checkWriteRequest(facts: WriteGuardFacts): WriteGuardDecision {
+  const site = facts.secFetchSite?.trim().toLowerCase() ?? null;
+  if (site !== null) {
+    if (site !== 'same-origin') return { ok: false, status: 403, reason: 'cross_site' };
+  } else {
+    const origin = facts.origin?.trim() ?? '';
+    const host = facts.host?.trim() ?? '';
+    if (origin.length === 0 || host.length === 0) return { ok: false, status: 403, reason: 'origin_unverified' };
+    let originAuthority: string;
+    try {
+      originAuthority = new URL(origin).host;
+    } catch {
+      return { ok: false, status: 403, reason: 'origin_unverified' };
+    }
+    if (originAuthority.toLowerCase() !== host.toLowerCase()) return { ok: false, status: 403, reason: 'cross_site' };
+  }
+
+  if (facts.requiresJson) {
+    const mediaType = facts.contentType?.split(';')[0]?.trim().toLowerCase() ?? '';
+    if (mediaType !== 'application/json') return { ok: false, status: 403, reason: 'unsupported_media_type' };
+  }
+
+  return CSRF_OK;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -256,14 +489,22 @@ export function buildTokenStatus(facts: TransportFacts): TokenStatus {
  *
  * With Supabase configured there are real accounts, so writing the credential
  * that every player's model calls will be billed against is an administrative
- * act. With no Supabase there is nobody to be an administrator: the deployment
- * is one person's machine, the anonymous cookie is the only principal there is,
- * and refusing the owner access to their own settings would make the feature
- * useless in exactly the configuration it exists for.
+ * act — and that is true wherever the request came from.
+ *
+ * With no Supabase there is nobody to be an administrator, so the only thing
+ * that can stand in for authority is *being at the machine*. When the request
+ * did not come from there the answer is `disabled` rather than a softer gate:
+ * an unauthenticated stranger on the network is not a lesser administrator, and
+ * the honest thing to tell them is that this deployment does not take a pasted
+ * credential at all.
  */
-export function tokenAuthGate(supabaseConfigured: boolean): TokenAuthGate {
-  return supabaseConfigured ? 'admin' : 'open-local';
+export function tokenAuthGate(supabaseConfigured: boolean, localConnection: boolean): TokenAuthGate {
+  if (supabaseConfigured) return 'admin';
+  return localConnection ? 'open-local' : 'disabled';
 }
+
+/** Reading the descriptor and writing the credential are gated by the same rule, with one difference. */
+export type TokenIntent = 'read' | 'write';
 
 export interface TokenWriteRequest {
   readonly supabaseConfigured: boolean;
@@ -274,6 +515,12 @@ export interface TokenWriteRequest {
    * false when it could not be read — an unverifiable claim is not a grant.
    */
   readonly isAdmin: boolean;
+  /** True when this request's anonymous principal was minted for it, because it presented no cookie. */
+  readonly mintedPrincipal: boolean;
+  /** Whether the request looks like it came from the machine the process runs on. */
+  readonly localConnection: boolean;
+  /** `write` additionally requires an established principal; `read` only decides disclosure. */
+  readonly intent: TokenIntent;
 }
 
 export type TokenWriteDecision =
@@ -281,12 +528,25 @@ export type TokenWriteDecision =
   | { readonly ok: false; readonly status: 401 | 403; readonly reason: string };
 
 /**
- * May this caller set or clear the credential?
+ * May this caller set or clear the credential — or, for `read`, be told what it
+ * is?
  *
  * Fails closed in both postures, and never treats an anonymous cookie as an
  * identity on a deployment that has real ones: a Supabase-configured
  * deployment that somehow admitted an anonymous principal is a bug, and the
  * answer to a bug here is 401, not a shrug.
+ *
+ * The demo branch used to end here, reasoning that anyone who reached the
+ * process was its owner. Two things were wrong with that. The process is
+ * reachable from the whole network, which `localConnection` now answers; and
+ * *minting a principal for a caller who presented no cookie* meant every
+ * cookieless request was a brand-new principal — a fresh rate-limit bucket
+ * every time, and a write that `SameSite=Lax` had specifically arranged should
+ * not happen. So a write now requires a principal that already existed.
+ *
+ * That costs the interface nothing: the settings sheet reads the status before
+ * it can offer any control, `GET` still mints, and the cookie is therefore in
+ * place long before a Connect button exists to press.
  */
 export function authorizeTokenWrite(request: TokenWriteRequest): TokenWriteDecision {
   if (request.principal === null) return { ok: false, status: 401, reason: 'unauthenticated' };
@@ -298,15 +558,9 @@ export function authorizeTokenWrite(request: TokenWriteRequest): TokenWriteDecis
   }
 
   if (request.principal.kind !== 'anonymous') return { ok: false, status: 401, reason: 'unauthenticated' };
+  if (!request.localConnection) return { ok: false, status: 403, reason: 'setup_disabled' };
+  if (request.intent === 'write' && request.mintedPrincipal) return { ok: false, status: 401, reason: 'cookie_required' };
 
-  // The per-browser cookie is a partition, not an identity, and it is not
-  // pretended to be one here: on a deployment with no accounts, *any* caller
-  // who reaches this process is the owner of it or is already inside their
-  // network. What actually bounds this branch is the 5/min write budget above
-  // and the fact that the process is a local one. Refusing a caller who has not
-  // yet been issued a cookie would add no security — accepting one costs an
-  // attacker a single extra request — while breaking the player whose browser
-  // declines it.
   return { ok: true, gate: 'open-local' };
 }
 
@@ -316,5 +570,30 @@ export function authorizeTokenWrite(request: TokenWriteRequest): TokenWriteDecis
 
 /** Writes per principal per minute. Far stricter than the role window: this is configuration, not play. */
 export const TOKEN_WRITE_RATE_LIMIT = 5;
+
+/**
+ * The origin half of the write-budget key.
+ *
+ * It takes the headers and reads **none** of them, and that is the point: the
+ * general-purpose `originKey()` in `_identity.ts` reads `x-forwarded-for`,
+ * which any caller may set and change on every request. Charging the five-a-
+ * minute budget to a value the caller chooses is the same defect as charging it
+ * to a principal the caller can rotate — a fresh bucket per request, and a
+ * limit that never binds. Written as a function taking headers so that "no
+ * header rotates this bucket" is a property a test can hold two wildly
+ * different header sets against.
+ *
+ * `connectionAddress` is the seam for a platform that does expose the socket;
+ * Next does not, so today this is one bucket per process and the principal is
+ * what separates callers.
+ */
+export function tokenWriteOriginKey(_headers: Headers, connectionAddress: string | null = null): string {
+  return connectionAddress === null ? 'process' : connectionAddress.trim().toLowerCase();
+}
+
+/** The composite the tight budget is charged to: who, and from where. */
+export function tokenWriteBudgetKey(principalId: string, origin: string): string {
+  return `${origin}|${principalId}`;
+}
 
 export { TOKEN_MAX_LENGTH, TOKEN_MIN_LENGTH };

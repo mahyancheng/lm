@@ -43,43 +43,82 @@ let healthCache: { readonly at: number; readonly value: LlmHealth } | null = nul
 let healthInFlight: Promise<LlmHealth> | null = null;
 
 /**
+ * Bumped whenever the answer this module holds stops being about the current
+ * configuration — which is exactly when the player changes the credential.
+ *
+ * The bug this closes: `resetLlmHealth()` dropped the cache but left the
+ * in-flight request alone, so a health check that started **before** a token
+ * was pasted would land afterwards and write its stale `offline` into the cache
+ * with a brand-new timestamp. The status dot then stayed wrong for the whole
+ * TTL — and every settings mutation resets health, so the race was not exotic,
+ * it was the ordinary sequence of clicking Connect while the status bar polled.
+ *
+ * A request now carries the generation it was issued under and simply declines
+ * to write a cache it no longer speaks for.
+ */
+let healthGeneration = 0;
+
+/**
  * Is a live model available?
  *
  * `Date.now` here is a UI-only concern (cache expiry) and never reaches the
  * simulation.
+ *
+ * `force` means *ask again now*: it skips the memo and, unlike the shared path,
+ * refuses to join a request that is already in flight, because a caller forcing
+ * a re-check has just changed something the older request cannot know about.
  */
 export async function llmHealth(force = false): Promise<LlmHealth> {
   if (typeof window === 'undefined') return OFFLINE;
   const now = Date.now();
-  if (!force && healthCache !== null && now - healthCache.at < HEALTH_TTL_MS) return healthCache.value;
-  if (healthInFlight !== null) return healthInFlight;
+  if (!force) {
+    if (healthCache !== null && now - healthCache.at < HEALTH_TTL_MS) return healthCache.value;
+    if (healthInFlight !== null) return healthInFlight;
+  }
 
-  healthInFlight = (async () => {
+  const generation = healthGeneration;
+  /** Only the newest request may speak for the module. */
+  const publish = (value: LlmHealth): LlmHealth => {
+    if (generation === healthGeneration) healthCache = { at: Date.now(), value };
+    return value;
+  };
+
+  // Declared before it is built so the `finally` below can compare identities:
+  // a request must only retract the in-flight slot if the slot is still its own.
+  let request: Promise<LlmHealth> | null = null;
+  request = (async () => {
     try {
       const response = await fetch('/api/llm/health', { cache: 'no-store' });
       if (!response.ok) return OFFLINE;
       const body = (await response.json()) as Partial<LlmHealth>;
-      const value: LlmHealth = {
+      return publish({
         available: body.available === true,
         transportKind: body.transportKind ?? 'none',
         model: body.model ?? null,
-      };
-      healthCache = { at: Date.now(), value };
-      return value;
+      });
     } catch {
-      healthCache = { at: Date.now(), value: OFFLINE };
-      return OFFLINE;
+      return publish(OFFLINE);
     } finally {
-      healthInFlight = null;
+      // Never clear a newer request's promise: this one may be the loser of a
+      // race it started first.
+      if (healthInFlight === request) healthInFlight = null;
     }
   })();
 
-  return healthInFlight;
+  healthInFlight = request;
+  return request;
 }
 
-/** Drop the memo, e.g. after the player edits their configuration. */
+/**
+ * Drop the memo, e.g. after the player edits their configuration.
+ *
+ * Bumps the generation as well as clearing both slots, so an answer already on
+ * its way back cannot overwrite the fresh one behind it.
+ */
 export function resetLlmHealth(): void {
+  healthGeneration += 1;
   healthCache = null;
+  healthInFlight = null;
 }
 
 /* -------------------------------------------------------------------------- */

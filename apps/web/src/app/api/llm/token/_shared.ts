@@ -24,7 +24,7 @@ import {
   TOKEN_MAX_LENGTH,
   TOKEN_MIN_LENGTH,
 } from '@/lib/llm/token';
-import { getServiceClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { getServiceClient, isSupabaseAdminConfigured } from '@/lib/supabase/server';
 import { NO_STORE_HEADERS, chargeSetupSecretAttempt, modelName, takeTokenWriteBudget, transportAvailable, transportKind } from '../_gateway';
 import type { Principal } from '../_identity';
 import {
@@ -126,7 +126,9 @@ export function describeCredential(request: Request): TokenStatusFull {
     transport: transportKind(),
     model: modelName(),
     available: transportAvailable(),
-    supabaseConfigured: isSupabaseConfigured(),
+    // Admin gate only when the server can actually verify an admin (service
+    // role present) — otherwise the setup-secret / local gates apply.
+    supabaseConfigured: isSupabaseAdminConfigured(),
     localConnection: isLocalConnection(connectionFacts(request)),
     secretConfigured: setupSecretConfigured(process.env),
     serverless: isServerless(process.env),
@@ -171,7 +173,11 @@ export interface TokenCaller {
 }
 
 export async function decideTokenWrite(request: Request, caller: TokenCaller, intent: TokenIntent): Promise<TokenWriteDecision> {
-  const supabaseConfigured = isSupabaseConfigured();
+  // The admin gate stands only when the server can actually verify an admin —
+  // i.e. the service-role key is present. With just the public URL/anon key set
+  // (no service role), no admin can be checked, so the setup-secret / local
+  // gates apply instead of a lock with no key.
+  const supabaseConfigured = isSupabaseAdminConfigured();
   const isAdmin = supabaseConfigured && caller.principal.kind === 'supabase' ? await isAdminUser(caller.principal.id) : false;
   const secret = setupSecretFacts(request);
   return authorizeTokenWrite({

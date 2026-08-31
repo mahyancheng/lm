@@ -76,4 +76,4 @@ export function getRouteClient(bridge: CookieBridge): SupabaseClient | null {
   });
 }
 
-export { isSupabaseConfigured, publicSupabaseConfig, REQUIRED_SUPABASE_VARS } from './config';
+export { isSupabaseAdminConfigured, isSupabaseConfigured, publicSupabaseConfig, REQUIRED_SUPABASE_VARS } from './config';

@@ -36,7 +36,7 @@ import {
   type LlmGateway,
   type LlmTransportKind,
 } from '@frontier/llm';
-import { getRouteClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { getRouteClient, isSupabaseAdminConfigured } from '@/lib/supabase/server';
 import {
   ANONYMOUS_ID_COOKIE,
   ANONYMOUS_ID_MAX_AGE_SECONDS,
@@ -260,7 +260,11 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
 
   const store = await cookies();
   const outcome = await resolvePrincipal({
-    supabaseConfigured: isSupabaseConfigured(),
+    // Admin-verifiable, not merely public-configured: without a service-role
+    // key the server cannot check a Supabase session against the admin flag, so
+    // demanding a Supabase login would strand every caller. Fall to the
+    // anonymous principal (which the setup-secret / local gates build on).
+    supabaseConfigured: isSupabaseAdminConfigured(),
     getUserId: async () => {
       const supabase = getRouteClient({
         getAll: () => store.getAll(),

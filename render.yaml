@@ -1,0 +1,42 @@
+# Render Blueprint — one always-on Node server that CAN run the Claude
+# subscription session (unlike Vercel's serverless functions).
+#
+# Deploy: render.com -> New -> Blueprint -> pick the public repo mahyancheng/lm
+# -> Render reads this file and provisions the service. Then open the game ->
+# Settings -> AI -> Connect with Claude, and the subscription runs live with no
+# API charges (a single always-on instance keeps the connection).
+#
+# Free plan sleeps after ~15 min idle and takes ~30s to wake; that is fine for
+# personal play.
+services:
+  - type: web
+    name: frontier-capital
+    runtime: node
+    plan: free
+    region: singapore
+    branch: claude/opus5-agents-vercel-supabase-kz1ehf
+    # Corepack pins pnpm 10.33; the build installs the workspace and builds the
+    # Next app. The Agent SDK's native CLI is allowed to build (see the
+    # `pnpm.onlyBuiltDependencies` allowlist in the root package.json) so the
+    # subscription transport can spawn its session at runtime.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @frontier/web build
+    startCommand: pnpm --filter @frontier/web exec next start -H 0.0.0.0 -p $PORT
+    healthCheckPath: /api/llm/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_PUBLIC_DEMO_MODE
+        value: "true"
+      - key: LLM_TRANSPORT
+        value: claude-session
+      - key: LLM_MODEL
+        value: sonnet
+      # Generated once by Render and kept — the game reads them; you never type
+      # them. LLM_SETUP_SECRET unlocks the in-app AI panel; check its value in
+      # the Render dashboard (Environment tab) and enter it once in the game's
+      # "Unlock setup" field.
+      - key: LLM_SETUP_SECRET
+        generateValue: true
+      - key: LLM_KEY_SECRET
+        generateValue: true

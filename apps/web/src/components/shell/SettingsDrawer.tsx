@@ -24,8 +24,17 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Drawer, Tag, cx } from '@/components/ui';
-import { useGame, useGameActions, useLlm, useLoading, useSettings } from '@/lib/game';
+import { Drawer, Icon, Tag, cx } from '@/components/ui';
+import {
+  slotOverwriteLabel,
+  slotSummaries,
+  useGame,
+  useGameActions,
+  useLlm,
+  useLoading,
+  useSettings,
+  type SlotSummary,
+} from '@/lib/game';
 import {
   type TokenFetch,
   type TokenStatus,
@@ -646,15 +655,23 @@ function ClaudeSection({
 }
 
 export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerProps): React.JSX.Element {
-  const { actionLog, saveWritable } = useGame();
+  const { actionLog, gameStarted, notice, saveWritable } = useGame();
   const settings = useSettings();
   const llm = useLlm();
   const { loading, progress } = useLoading();
-  const { updateSettings, saveGame, loadGame, deleteSave, exportSave, importSave, refreshLlmHealth } = useGameActions();
+  const { updateSettings, saveGame, saveToSlot, loadGame, deleteSave, exportSave, importSave, refreshLlmHealth } = useGameActions();
 
   const [exported, setExported] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [showImport, setShowImport] = useState(false);
+  const [slots, setSlots] = useState<readonly SlotSummary[]>([]);
+
+  // The slots live in localStorage, which does not re-render React: re-read
+  // them when the sheet opens and after any store notice, since every slot
+  // write announces itself through one.
+  useEffect(() => {
+    if (open) setSlots(slotSummaries());
+  }, [open, notice]);
 
   return (
     <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Claude, preferences and the save file">
@@ -705,6 +722,25 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
             {actionLog.length} resolved quarter{actionLog.length === 1 ? '' : 's'} recorded. A save holds the seed, your decisions and what
             the World Director and the rival strategists contributed — not the world, which is re-resolved from them.
           </p>
+          {/* The tag tells the truth for the default just-visited session too:
+              the persist effect gates on gameStarted, so until a company is
+              founded nothing is being written and the tag must not claim it is. */}
+          {saveWritable && gameStarted ? (
+            <p className="flex items-center gap-1.5 px-1 text-[10px] text-ink-dim">
+              <Tag tone="gain" dot>
+                Auto-save on
+              </Tag>
+              Saves itself after every move.
+            </p>
+          ) : null}
+          {saveWritable && !gameStarted ? (
+            <p className="flex items-center gap-1.5 px-1 text-[10px] text-ink-dim">
+              <Tag tone="neutral" dot>
+                Auto-save idle
+              </Tag>
+              Begins the moment you found a company.
+            </p>
+          ) : null}
           {!saveWritable ? (
             <p className="rounded-card border border-warn/25 bg-warn-wash px-3.5 py-2.5 text-[11px] text-warn">
               This session is not being written to disk: the stored save could not be replayed in full, so it is being preserved exactly as
@@ -732,6 +768,32 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
             <button type="button" className="btn btn-sm btn-danger" onClick={deleteSave} disabled={loading}>
               Delete save
             </button>
+          </div>
+
+          {/* Manual slots. No confirm dialog: the label itself says what the
+              press will overwrite, and an unsupported slot's button is
+              disabled because that file is preserved, not replaced. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="label-caps-faint px-1">Save to a slot</span>
+            {slots.map((summary) => (
+              <button
+                key={summary.slot}
+                type="button"
+                className="btn tap-target press-pop w-full justify-start"
+                disabled={loading || !saveWritable || summary.status === 'unsupported'}
+                onClick={() => {
+                  saveToSlot(summary.slot);
+                  setSlots(slotSummaries());
+                }}
+              >
+                <Icon name="save" size={15} accent={summary.status === 'unsupported' ? 'neutral' : 'brand'} />
+                <span className="min-w-0 truncate text-left">{slotOverwriteLabel(summary)}</span>
+              </button>
+            ))}
+            <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+              A slot is a banked copy of this position. Load one from the landing page — loading replaces the session in this browser,
+              autosave included.
+            </p>
           </div>
 
           {exported !== null ? (

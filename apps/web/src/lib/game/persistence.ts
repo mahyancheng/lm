@@ -4,10 +4,11 @@
  * A saved game is not a serialised world. It is the seed and the *inputs to F*:
  *
  * ```json
- * { "version": 3, "seed": 424242, "difficulty": "standard",
+ * { "version": 4, "seed": 424242, "difficulty": "standard",
  *   "setup": { "companyName": "Acme AI", "founderName": "Dana Vale", "backgroundId": "consumer_ai" },
  *   "log": [{ "quarter": 0, "actions": [...], "gmProposal": null, "npcBundles": [] }],
- *   "checkpoint": { "quarter": 8, "state": { ... } } }
+ *   "checkpoint": { "quarter": 8, "state": { ... } },
+ *   "queue": [...], "savedAtIso": "2027-01-01T00:00:00.000Z" }
  * ```
  *
  * `S_{t+1} = F(S_t, actions, agents, seed)`, so a save that records only the
@@ -51,14 +52,24 @@ import {
 import { getEngine, createSession, DEMO_SEED } from './engine';
 
 export const SAVE_KEY = 'frontier-demo-v1';
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /**
  * Versions this build can read. A save written by any of these loads; anything
  * else is preserved untouched, never overwritten. v1 recorded only the player's
- * actions; v2 added agent proposals and checkpoints; v3 adds the new-game setup.
+ * actions; v2 added agent proposals and checkpoints; v3 added the new-game
+ * setup; v4 adds the unresolved action queue and an advisory timestamp.
  */
-export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3];
+export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4];
+
+/** Manual save slots, beside the autosave. */
+export const SAVE_SLOT_COUNT = 3;
+
+/** The `localStorage` keys the slots live under, in slot order. */
+export const SLOT_KEYS: readonly string[] = Array.from(
+  { length: SAVE_SLOT_COUNT },
+  (_, index) => `frontier-demo-slot-${index + 1}`,
+);
 
 /** Replay depth ceiling for a save with no usable checkpoint. Ten years of quarters. */
 export const MAX_REPLAY_QUARTERS = 40;
@@ -98,6 +109,16 @@ export interface SaveFile {
   readonly checkpoint: SaveCheckpoint | null;
   /** Advisory only; never trusted on load. */
   readonly savedQuarter: number;
+  /**
+   * Actions queued but not yet resolved, so a tab discarded mid-turn loses
+   * nothing. Re-validated against the replayed session on load, never trusted.
+   */
+  readonly queue: readonly SubmittedAction[];
+  /**
+   * When the file was written, for display only. Advisory metadata: never
+   * trusted for any logic, ordering or replay decision. Null in a v1–v3 file.
+   */
+  readonly savedAtIso: string | null;
 }
 
 export interface LoadedGame {
@@ -116,6 +137,11 @@ export interface LoadedGame {
   /** The quarter the replay resumed from: a checkpoint, or 0 from the seed. */
   readonly replayedFrom: number;
   readonly replayedCount: number;
+  /**
+   * The stored unresolved queue, verbatim. The caller re-validates each entry
+   * against the replayed session before queuing it; nothing here is trusted.
+   */
+  readonly queue: readonly SubmittedAction[];
 }
 
 /** Why a stored file could not be read. `unsupported` is preserved, never overwritten. */
@@ -189,6 +215,17 @@ function parseSetup(raw: unknown): NewGameSetup | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** Read a stored unresolved queue, dropping entries that will not parse. */
+function parseQueue(raw: unknown): SubmittedAction[] {
+  if (!Array.isArray(raw)) return [];
+  const queue: SubmittedAction[] = [];
+  for (const entry of raw) {
+    const parsed = SubmittedActionSchema.safeParse(entry);
+    if (parsed.success) queue.push(parsed.data);
+  }
+  return queue;
+}
+
 function parseCheckpoint(raw: unknown): SaveCheckpoint | null {
   if (raw === null || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
@@ -199,19 +236,13 @@ function parseCheckpoint(raw: unknown): SaveCheckpoint | null {
   return { quarter: value.quarter, state: parsed.data };
 }
 
-/**
- * Read the stored file and say what it is.
- *
- * A version this build does not know is reported as `unsupported` rather than
- * as absent, so nothing downstream mistakes it for an empty slot and writes
- * over it.
- */
-export function inspectSave(): SaveInspection {
+/** Inspect whatever sits under one storage key. Shared by the autosave and the slots. */
+function inspectKey(key: string): SaveInspection {
   const store = storage();
   if (store === null) return { status: 'absent', version: null, file: null };
   let raw: string | null;
   try {
-    raw = store.getItem(SAVE_KEY);
+    raw = store.getItem(key);
   } catch {
     return { status: 'unreadable', version: null, file: null };
   }
@@ -255,8 +286,22 @@ export function inspectSave(): SaveInspection {
       log,
       checkpoint,
       savedQuarter,
+      // The queue and the timestamp arrive with v4. A v1–v3 file has neither.
+      queue: parseQueue(parsed.queue),
+      savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
     },
   };
+}
+
+/**
+ * Read the stored autosave and say what it is.
+ *
+ * A version this build does not know is reported as `unsupported` rather than
+ * as absent, so nothing downstream mistakes it for an empty slot and writes
+ * over it.
+ */
+export function inspectSave(): SaveInspection {
+  return inspectKey(SAVE_KEY);
 }
 
 /**
@@ -287,12 +332,12 @@ export function hasStoredSave(): boolean {
   }
 }
 
-/** The stored file's version, or null when absent or unreadable. */
-export function storedSaveVersion(): number | null {
+/** The version stored under one key, or null when absent or unreadable. */
+function storedVersionAt(key: string): number | null {
   const store = storage();
   if (store === null) return null;
   try {
-    const raw = store.getItem(SAVE_KEY);
+    const raw = store.getItem(key);
     if (raw === null) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (parsed === null || typeof parsed !== 'object') return null;
@@ -301,6 +346,11 @@ export function storedSaveVersion(): number | null {
   } catch {
     return null;
   }
+}
+
+/** The stored autosave's version, or null when absent or unreadable. */
+export function storedSaveVersion(): number | null {
+  return storedVersionAt(SAVE_KEY);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -315,9 +365,13 @@ export function buildSaveFile(input: {
   /** The new-game setup, or null for the default world. */
   readonly setup: NewGameSetup | null;
   readonly log: readonly QuarterRecord[];
+  /** The actions queued but not yet resolved, so a discarded tab keeps its turn. */
+  readonly queue: readonly SubmittedAction[];
   /** The session as it now stands, i.e. with `quarter` open and unresolved. */
   readonly session: SessionState;
   readonly previous?: SaveFile | null;
+  /** The clock, injectable so a test can stamp a fixed `savedAtIso`. */
+  readonly now?: () => string;
 }): SaveFile {
   const previous = input.previous ?? null;
   const due = input.session.quarter > 0 && input.session.quarter % CHECKPOINT_INTERVAL === 0;
@@ -336,25 +390,20 @@ export function buildSaveFile(input: {
     log: input.log,
     checkpoint,
     savedQuarter: input.session.quarter,
+    queue: input.queue,
+    savedAtIso: (input.now ?? (() => new Date().toISOString()))(),
   };
 }
 
-/**
- * Persist the seed, the decision log and the checkpoint.
- *
- * Refuses to overwrite a stored file whose version this build cannot read —
- * losing a save to a downgrade is worse than not saving. Returns whether it
- * wrote. A quota failure prunes the entries the checkpoint has already absorbed
- * and tries once more; a second failure is silent by design.
- */
-export function writeSaveFile(file: SaveFile): boolean {
+/** Write a file under one key with the shared refusal and quota-prune rules. */
+function writeFileAt(key: string, file: SaveFile): boolean {
   const store = storage();
   if (store === null) return false;
-  const stored = storedSaveVersion();
+  const stored = storedVersionAt(key);
   if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) return false;
 
   try {
-    store.setItem(SAVE_KEY, JSON.stringify(file));
+    store.setItem(key, JSON.stringify(file));
     return true;
   } catch {
     /* Quota: fall through to the pruned form. */
@@ -367,11 +416,23 @@ export function writeSaveFile(file: SaveFile): boolean {
   if (floor === undefined) return false;
   const pruned: SaveFile = { ...file, log: file.log.filter((record) => record.quarter >= floor) };
   try {
-    store.setItem(SAVE_KEY, JSON.stringify(pruned));
+    store.setItem(key, JSON.stringify(pruned));
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Persist the seed, the decision log and the checkpoint.
+ *
+ * Refuses to overwrite a stored file whose version this build cannot read —
+ * losing a save to a downgrade is worse than not saving. Returns whether it
+ * wrote. A quota failure prunes the entries the checkpoint has already absorbed
+ * and tries once more; a second failure is silent by design.
+ */
+export function writeSaveFile(file: SaveFile): boolean {
+  return writeFileAt(SAVE_KEY, file);
 }
 
 /** Remove the save. */
@@ -383,6 +444,125 @@ export function clearSaveFile(): void {
   } catch {
     /* nothing to do */
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Slots                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** The key for a 1-based slot, or null out of range: every slot call no-ops then. */
+function slotKey(slot: number): string | null {
+  if (!Number.isInteger(slot) || slot < 1 || slot > SAVE_SLOT_COUNT) return null;
+  return SLOT_KEYS[slot - 1] ?? null;
+}
+
+/** Inspect one slot, with the same unsupported-version preservation as the autosave. */
+export function readSlotFile(slot: number): SaveInspection {
+  const key = slotKey(slot);
+  if (key === null) return { status: 'absent', version: null, file: null };
+  return inspectKey(key);
+}
+
+/** Write one slot, with the same refusal and quota-prune rules as the autosave. */
+export function writeSlotFile(slot: number, file: SaveFile): boolean {
+  const key = slotKey(slot);
+  if (key === null) return false;
+  return writeFileAt(key, file);
+}
+
+/** Empty one slot. True only when the slot is verifiably gone afterwards. */
+export function clearSlot(slot: number): boolean {
+  const key = slotKey(slot);
+  const store = storage();
+  if (key === null || store === null) return false;
+  try {
+    store.removeItem(key);
+    // Verified, not assumed: a browser that swallows the remove would otherwise
+    // let a "deleted" toast stand over a slot row that is still there.
+    return store.getItem(key) === null;
+  } catch {
+    return false;
+  }
+}
+
+/** What a slot picker shows for one slot. Every field but `slot` may be null. */
+export interface SlotSummary {
+  readonly slot: number;
+  readonly status: SaveStatus;
+  readonly version: number | null;
+  readonly savedQuarter: number | null;
+  readonly seed: number | null;
+  readonly difficulty: SessionDifficulty | null;
+  readonly companyName: string | null;
+  readonly founderName: string | null;
+  readonly savedAtIso: string | null;
+}
+
+/**
+ * Describe every slot without paying for a full inspection: a checkpoint is a
+ * whole `SessionState` and validating three of them through
+ * `SessionStateSchema` just to label a menu is work a picker never needs. The
+ * summary reads only the scalar fields and the stored setup, so an `ok` here
+ * promises the file parses as JSON with a known version — not that it replays.
+ */
+export function slotSummaries(): SlotSummary[] {
+  const summaries: SlotSummary[] = [];
+  for (let slot = 1; slot <= SAVE_SLOT_COUNT; slot += 1) {
+    summaries.push(summariseKey(slot, slotKey(slot)));
+  }
+  return summaries;
+}
+
+function summariseKey(slot: number, key: string | null): SlotSummary {
+  const empty: SlotSummary = {
+    slot,
+    status: 'absent',
+    version: null,
+    savedQuarter: null,
+    seed: null,
+    difficulty: null,
+    companyName: null,
+    founderName: null,
+    savedAtIso: null,
+  };
+  const store = storage();
+  if (key === null || store === null) return empty;
+  let raw: string | null;
+  try {
+    raw = store.getItem(key);
+  } catch {
+    return { ...empty, status: 'unreadable' };
+  }
+  if (raw === null) return empty;
+
+  let parsed: Record<string, unknown>;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (value === null || typeof value !== 'object') return { ...empty, status: 'unreadable' };
+    parsed = value as Record<string, unknown>;
+  } catch {
+    return { ...empty, status: 'unreadable' };
+  }
+
+  const version = typeof parsed.version === 'number' ? parsed.version : null;
+  if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) {
+    return { ...empty, status: 'unsupported', version };
+  }
+  const setup = parseSetup(parsed.setup);
+  return {
+    slot,
+    status: 'ok',
+    version,
+    savedQuarter:
+      typeof parsed.savedQuarter === 'number' && Number.isInteger(parsed.savedQuarter) ? parsed.savedQuarter : null,
+    seed: typeof parsed.seed === 'number' && Number.isFinite(parsed.seed) ? parsed.seed : null,
+    difficulty: SESSION_DIFFICULTIES.includes(parsed.difficulty as SessionDifficulty)
+      ? (parsed.difficulty as SessionDifficulty)
+      : null,
+    companyName: setup?.companyName ?? null,
+    founderName: setup?.founderName ?? null,
+    savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
+  };
 }
 
 /** The stored file as text, for the player to keep somewhere we do not control. */
@@ -422,16 +602,16 @@ export function importSave(text: string): SaveFile | null {
       typeof value.savedQuarter === 'number' && Number.isInteger(value.savedQuarter)
         ? value.savedQuarter
         : (log[log.length - 1]?.quarter ?? -1) + 1,
+    queue: parseQueue(value.queue),
+    savedAtIso: typeof value.savedAtIso === 'string' ? value.savedAtIso : null,
   };
 
   const store = storage();
   if (store === null) return file;
-  try {
-    store.setItem(SAVE_KEY, JSON.stringify(file));
-  } catch {
-    return null;
-  }
-  return file;
+  // Through the guarded writer, never a raw setItem: an import is the easiest
+  // way to hand this build a file while a newer build's save sits under the
+  // key, and that save is preserved here exactly as it is everywhere else.
+  return writeFileAt(SAVE_KEY, file) ? file : null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -529,6 +709,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     complete,
     replayedFrom,
     replayedCount,
+    queue: file.queue,
   };
 }
 

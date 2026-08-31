@@ -11,7 +11,21 @@ import {
   type SessionDifficulty,
 } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
-import { DEMO_SEED, readSaveFile, useGame, useGameActions, useLlm, useLoading } from '@/lib/game';
+import {
+  DEMO_SEED,
+  continueLabel,
+  inspectSave,
+  savedCompanyName,
+  savedFounderName,
+  slotDetailLine,
+  slotSummaries,
+  useGame,
+  useGameActions,
+  useLlm,
+  useLoading,
+  type SaveInspection,
+  type SlotSummary,
+} from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
@@ -222,8 +236,8 @@ const FEATURES: readonly {
 
 export default function LandingPage(): React.JSX.Element {
   const router = useRouter();
-  const { hydrated, session } = useGame();
-  const { newGame, loadGame } = useGameActions();
+  const { hydrated, notice, session } = useGame();
+  const { deleteSlot, dismissNotice, loadFromSlot, loadGame, newGame } = useGameActions();
   const llm = useLlm();
   const { loading, progress } = useLoading();
 
@@ -232,18 +246,37 @@ export default function LandingPage(): React.JSX.Element {
   const [companyName, setCompanyName] = useState('');
   const [founderName, setFounderName] = useState('');
   const [backgroundId, setBackgroundId] = useState<NewGameBackgroundId>('enterprise_ai');
-  const [save, setSave] = useState<ReturnType<typeof readSaveFile>>(null);
+  const [saveState, setSaveState] = useState<SaveInspection | null>(null);
+  const [slots, setSlots] = useState<readonly SlotSummary[]>([]);
   const [showMultiplayer, setShowMultiplayer] = useState(false);
   const [resuming, setResuming] = useState(false);
+  /** The slot a load is in flight for, so only its own button says "Loading…". */
+  const [slotBusy, setSlotBusy] = useState<number | null>(null);
+  /** The slot whose Delete is armed: destroying a save takes two taps, not one. */
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+
+  // The full inspection, not `readSaveFile`: that helper folds an
+  // unsupported-version save into null, and this page must tell "nothing here"
+  // from "a newer build's save is preserved here" — they get different panels.
+  const save = saveState?.status === 'ok' ? saveState.file : null;
+  const savePreserved = saveState?.status === 'unsupported';
+  /** Every replay- or slot-touching control locks while any of them runs. */
+  const busy = resuming || loading || slotBusy !== null;
 
   const trimmedCompany = companyName.trim();
   const trimmedFounder = founderName.trim();
   const namesValid =
     trimmedCompany.length > 0 && trimmedCompany.length <= NAME_MAX && trimmedFounder.length > 0 && trimmedFounder.length <= NAME_MAX;
 
+  // localStorage does not re-render React, and every slot write, delete and
+  // load announces itself through the store's notice — so the notice is also
+  // the signal to re-read what this page shows of storage.
   useEffect(() => {
-    if (hydrated) setSave(readSaveFile());
-  }, [hydrated]);
+    if (!hydrated) return;
+    setSaveState(inspectSave());
+    setSlots(slotSummaries());
+    setConfirmDelete(null);
+  }, [hydrated, notice]);
 
   const seed = useMemo(() => {
     const parsed = Number.parseInt(seedText, 10);
@@ -260,6 +293,10 @@ export default function LandingPage(): React.JSX.Element {
   const supabaseReady = isSupabaseConfigured();
 
   function startNewGame(): void {
+    // Founding during a replay would race it: the in-flight load would land on
+    // top of the fresh company. The buttons are disabled too; this guard covers
+    // the keyboard.
+    if (busy) return;
     if (!namesValid) {
       // A phone may have the button in view before the fields; send the founder
       // to them rather than starting a nameless company.
@@ -280,6 +317,36 @@ export default function LandingPage(): React.JSX.Element {
     } finally {
       setResuming(false);
     }
+  }
+
+  async function loadSlot(slot: number): Promise<void> {
+    setSlotBusy(slot);
+    setConfirmDelete(null);
+    try {
+      const complete = await loadFromSlot(slot);
+      // A complete load adopted the slot as the autosave; a refused one changed
+      // nothing — either way what this page shows of storage is re-read.
+      setSaveState(inspectSave());
+      setSlots(slotSummaries());
+      // Only a complete load goes straight into the game. A partial one stays
+      // here, where the notice says what was preserved and the Continue panel
+      // already shows the session that did load.
+      if (complete) router.push(HOME_ROUTE);
+    } finally {
+      setSlotBusy(null);
+    }
+  }
+
+  // Destroying a save is the one action here with no undo, so the first tap
+  // arms and relabels the button and only the second one deletes.
+  function removeSlot(slot: number): void {
+    if (confirmDelete !== slot) {
+      setConfirmDelete(slot);
+      return;
+    }
+    setConfirmDelete(null);
+    deleteSlot(slot);
+    setSlots(slotSummaries());
   }
 
   return (
@@ -325,16 +392,17 @@ export default function LandingPage(): React.JSX.Element {
                   type="button"
                   className="icon-knockout-brand btn btn-primary btn-lg press-pop w-full sm:w-auto"
                   onClick={() => void continueGame()}
-                  disabled={resuming || loading}
+                  disabled={busy}
                 >
                   <Icon name="playMark" size={18} accent="inherit" />
-                  {resuming || loading ? 'Replaying…' : `Continue ${quarterLabel(2027, save.savedQuarter)}`}
+                  {resuming || loading ? 'Replaying…' : continueLabel(save)}
                 </button>
               ) : null}
               <button
                 type="button"
                 className={cx('btn btn-lg press-pop w-full sm:w-auto', save === null ? 'btn-primary' : '')}
                 onClick={startNewGame}
+                disabled={busy}
               >
                 <Icon name="plus" size={18} accent={save === null ? 'current' : 'brand'} />
                 Start a new company
@@ -489,7 +557,7 @@ export default function LandingPage(): React.JSX.Element {
                 type="button"
                 className="btn btn-primary tap-target press-pop w-full sm:w-auto"
                 onClick={startNewGame}
-                disabled={!namesValid}
+                disabled={!namesValid || busy}
               >
                 <Icon name="plus" size={16} accent="current" />
                 {trimmedCompany.length > 0 ? `Found ${trimmedCompany} — 2027 Q1` : 'Found your company — 2027 Q1'}
@@ -504,13 +572,29 @@ export default function LandingPage(): React.JSX.Element {
             <Panel title="Continue" iconName="playMark" iconTone={save === null ? 'neutral' : 'brand'}>
               {!hydrated ? (
                 <p className="text-[12.5px] text-ink-faint">Checking this browser for a saved session…</p>
+              ) : savePreserved ? (
+                // Not "no saved session": there is one, from a newer build, and
+                // every write path preserves it. Starting a new company is safe
+                // — that game simply plays unsaved and says so.
+                <p className="text-[12.5px] leading-relaxed text-ink-faint">
+                  A saved session written by a newer build lives in this browser. This build cannot read it, and it is preserved exactly as
+                  it is — starting a new company will not touch it, but that game will not be saved.
+                </p>
               ) : save === null ? (
                 <p className="text-[12.5px] leading-relaxed text-ink-faint">
-                  No saved session in this browser. A session saves itself after every quarter you resolve.
+                  No saved session in this browser. A session saves itself from the moment you found a company, and again after every move.
                 </p>
               ) : (
                 <>
                   <dl className="space-y-2">
+                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+                      <dt className="label-caps-faint">Company</dt>
+                      <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{savedCompanyName(save.setup)}</dd>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+                      <dt className="label-caps-faint">Founder</dt>
+                      <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{savedFounderName(save.setup)}</dd>
+                    </div>
                     <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
                       <dt className="label-caps-faint">Quarter</dt>
                       <dd className="figure text-[12.5px] font-semibold text-ink">{quarterLabel(2027, save.savedQuarter)}</dd>
@@ -528,7 +612,7 @@ export default function LandingPage(): React.JSX.Element {
                     type="button"
                     className="icon-knockout-brand btn btn-primary tap-target press-pop mt-3.5 w-full"
                     onClick={() => void continueGame()}
-                    disabled={resuming || loading}
+                    disabled={busy}
                   >
                     {resuming || loading ? null : <Icon name="playMark" size={16} accent="inherit" />}
                     {resuming || loading
@@ -542,6 +626,120 @@ export default function LandingPage(): React.JSX.Element {
                     last checkpoint.
                   </p>
                 </>
+              )}
+            </Panel>
+
+            {/* Three manual slots beside the autosave. A slot this build cannot
+                read keeps its row — and loses its Load button — rather than
+                masquerading as empty and inviting an overwrite. */}
+            <Panel title="Saved games" subtitle="Three slots, kept in this browser" iconName="save" iconTone="neutral">
+              {!hydrated || slots.length === 0 ? (
+                <p className="text-[12.5px] text-ink-faint">Checking this browser for saved games…</p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {slots.map((slot) => (
+                    <li key={slot.slot} className="rounded-card border border-hair bg-raised p-2.5">
+                      {slot.status === 'ok' ? (
+                        <>
+                          <div className="flex items-center gap-2.5">
+                            <IconChip name="save" tone="brand" size="sm" />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-[12.5px] font-bold text-ink">{slot.companyName ?? savedCompanyName(null)}</p>
+                              <p className="truncate text-[10.5px] text-ink-faint">{slotDetailLine(slot)}</p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              className="btn tap-target press-pop flex-1"
+                              onClick={() => void loadSlot(slot.slot)}
+                              disabled={busy}
+                            >
+                              <Icon name="playMark" size={15} accent="brand" />
+                              {slotBusy === slot.slot ? 'Loading…' : 'Load'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger tap-target press-pop"
+                              onClick={() => removeSlot(slot.slot)}
+                              disabled={busy}
+                            >
+                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
+                            </button>
+                          </div>
+                        </>
+                      ) : slot.status === 'unsupported' ? (
+                        <>
+                          <div className="flex items-center gap-2.5">
+                            <IconChip name="warning" tone="warn" size="sm" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[12.5px] font-bold text-ink">Slot {slot.slot} — saved by a newer build</p>
+                              <p className="text-[10.5px] leading-relaxed text-ink-faint">
+                                Preserved exactly as it is; this build cannot read it.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-danger tap-target press-pop flex-1"
+                              onClick={() => removeSlot(slot.slot)}
+                              disabled={busy}
+                            >
+                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
+                            </button>
+                          </div>
+                        </>
+                      ) : slot.status === 'unreadable' ? (
+                        <>
+                          <div className="flex items-center gap-2.5">
+                            <IconChip name="warning" tone="warn" size="sm" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[12.5px] font-bold text-ink">Slot {slot.slot} — unreadable</p>
+                              <p className="text-[10.5px] leading-relaxed text-ink-faint">
+                                What is stored here is not a save this build can parse.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-danger tap-target press-pop flex-1"
+                              onClick={() => removeSlot(slot.slot)}
+                              disabled={busy}
+                            >
+                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex min-h-11 items-center gap-2.5">
+                          <IconChip name="save" tone="neutral" size="sm" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[12.5px] font-bold text-ink-faint">Slot {slot.slot} — empty</p>
+                            <p className="text-[10.5px] text-ink-faint">Bank a position here from Settings, mid-game.</p>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2.5 text-[10.5px] leading-relaxed text-ink-faint">
+                Loading a slot replaces the session in this browser, autosave included.
+              </p>
+              {notice === null ? null : (
+                <div className="animate-rise mt-2 flex items-start justify-between gap-2 rounded-card border border-hair bg-raised px-2.5 py-2">
+                  <p className="min-w-0 text-[10.5px] leading-relaxed text-ink-dim">{notice}</p>
+                  <button
+                    type="button"
+                    className="tap-target -my-1.5 flex shrink-0 items-center justify-center rounded-chip opacity-70 hover:opacity-100"
+                    onClick={dismissNotice}
+                    aria-label="Dismiss"
+                  >
+                    <Icon name="close" size={13} accent="current" />
+                  </button>
+                </div>
               )}
             </Panel>
 

@@ -70,16 +70,21 @@ import {
 import { buildNpcStrategistInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
 import {
   MAX_REPLAY_QUARTERS,
+  SUPPORTED_SAVE_VERSIONS,
   buildSaveFile,
   clearSaveFile,
+  clearSlot,
   exportSave,
   importSave,
-  hasStoredSave,
   inspectSave,
-  loadSavedGameAsync,
+  readSlotFile,
+  replayAsync,
+  storedSaveVersion,
   writeSaveFile,
+  writeSlotFile,
   type LoadedGame,
   type SaveFile,
+  type SaveInspection,
   type QuarterRecord,
   type ReplayProgress,
 } from './persistence';
@@ -149,6 +154,13 @@ export interface GameStoreState {
    * that happened to load.
    */
   readonly saveWritable: boolean;
+  /**
+   * True once this tab holds a game the player actually started — a new game or
+   * a loaded save. The persist effect gates on this, not on resolved quarters:
+   * a founding must survive a refresh, but the default just-visited session
+   * must never write a save the player did not ask for.
+   */
+  readonly gameStarted: boolean;
   readonly llm: LlmHealth;
   /** A transient message for the shell to surface, or null. */
   readonly notice: string | null;
@@ -182,6 +194,12 @@ export interface GameStoreActions {
   /** Replay the stored save into memory. Asynchronous: the tab keeps painting. */
   loadGame(): Promise<boolean>;
   deleteSave(): void;
+  /** Copy the current session into a manual slot, 1-based. */
+  saveToSlot(slot: number): void;
+  /** Adopt a slot as the autosave and load it, exactly as `loadGame` would. */
+  loadFromSlot(slot: number): Promise<boolean>;
+  /** Empty a manual slot. The autosave is untouched. */
+  deleteSlot(slot: number): void;
   /** The stored save as text, for the player to keep. Null when there is none. */
   exportSave(): string | null;
   /** Adopt a pasted save and load it. False when it will not parse. */
@@ -197,10 +215,26 @@ export interface GameStoreActions {
 /* -------------------------------------------------------------------------- */
 
 type Action =
-  | { type: 'new_game'; session: SessionState; settings: GameSettings }
+  | {
+      type: 'new_game';
+      session: SessionState;
+      settings: GameSettings;
+      /** False when an unsupported stored save is being preserved: the game plays unsaved. */
+      saveWritable: boolean;
+    }
   | { type: 'load_start' }
   | { type: 'load_progress'; progress: ReplayProgress }
-  | { type: 'loaded'; loaded: LoadedGame }
+  | {
+      type: 'loaded';
+      loaded: LoadedGame;
+      /** The stored queue entries that still validate against the replayed session. */
+      queue: readonly SubmittedAction[];
+      validations: Readonly<Record<string, ActionValidationResult>>;
+      /** How many stored entries no longer validated and were dropped. */
+      droppedCount: number;
+      /** One past the highest restored sequence, so new ids never collide with restored ones. */
+      nextSequence: number;
+    }
   | { type: 'load_failed'; notice: string }
   | { type: 'hydrated' }
   | { type: 'queue'; action: SubmittedAction; validation: ActionValidationResult }
@@ -253,6 +287,7 @@ function initialState(): GameStoreState {
     loading: false,
     loadProgress: null,
     saveWritable: true,
+    gameStarted: false,
     llm: { available: false, transportKind: 'none', model: null },
     notice: null,
     nextSequence: 0,
@@ -294,7 +329,8 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         resolveStatus: '',
         notice: null,
         nextSequence: 0,
-        saveWritable: true,
+        saveWritable: action.saveWritable,
+        gameStarted: true,
         loading: false,
         loadProgress: null,
       };
@@ -319,18 +355,23 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       // them afterwards.
       const preserved =
         'Your saved session has been left exactly as it was — nothing will be written over it until you start a new game.';
-      const notice = action.loaded.complete
+      const base = action.loaded.complete
         ? null
         : action.loaded.rejectedQuarters.length > 0
           ? `Replay stopped at quarter ${action.loaded.rejectedQuarters[0]}: a recorded quarter no longer commits under the current engine. ${preserved}`
           : `This save is longer than the ${MAX_REPLAY_QUARTERS}-quarter ceiling a replay from the seed can rebuild, and its checkpoint could not be read. You are at quarter ${action.loaded.session.quarter}. ${preserved}`;
+      const dropped =
+        action.droppedCount > 0
+          ? `${action.droppedCount} queued action${action.droppedCount === 1 ? '' : 's'} from the save no longer validated and ${action.droppedCount === 1 ? 'was' : 'were'} dropped.`
+          : null;
+      const notice = base === null ? dropped : dropped === null ? base : `${base} ${dropped}`;
       return {
         ...state,
         session: action.loaded.session,
         actionLog: action.loaded.log,
         settings,
-        queuedActions: [],
-        validations: {},
+        queuedActions: action.queue,
+        validations: action.validations,
         lastOutcome: null,
         previousWorld: null,
         notice,
@@ -338,7 +379,8 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         loading: false,
         loadProgress: null,
         saveWritable: action.loaded.complete,
-        nextSequence: 0,
+        gameStarted: true,
+        nextSequence: action.nextSequence,
       };
     }
 
@@ -468,10 +510,32 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   // effect does not re-parse a checkpointed session out of localStorage — and
   // back through `SessionStateSchema` — after every quarter.
   const savedFile = useRef<SaveFile | null>(null);
+  // The debounced write in flight, reachable from outside the persist effect:
+  // a pagehide must flush it, and a delete or a new game must cancel it so a
+  // timer armed moments earlier cannot resurrect what was just replaced.
+  const pendingPersist = useRef<{ timer: ReturnType<typeof setTimeout>; write: () => void } | null>(null);
+  // The resolved-quarter count last written to storage. A mismatch means a
+  // quarter (or a founding) exists only in memory, which is written through
+  // immediately rather than debounced.
+  const persistedLogLength = useRef(-1);
+  // One warning per session when the browser refuses storage writes.
+  const saveHealthWarned = useRef(false);
+  // Set by a load: the next persist run would only rewrite what storage already
+  // holds (upgrading its version as a side effect), so it is skipped once.
+  const suppressNextPersist = useRef(false);
+
+  const cancelPendingPersist = useCallback((): void => {
+    if (pendingPersist.current !== null) {
+      clearTimeout(pendingPersist.current.timer);
+      pendingPersist.current = null;
+    }
+  }, []);
 
   /* --- replay the save file, once ------------------------------------------ */
-  const runLoad = useCallback(async (): Promise<boolean> => {
-    const inspection = inspectSave();
+  // An already-inspected file (a slot copied to the autosave key) skips the
+  // re-read; everything after that point is identical to a plain load.
+  const runLoad = useCallback(async (preInspected?: SaveInspection): Promise<boolean> => {
+    const inspection = preInspected ?? inspectSave();
     if (inspection.status === 'unsupported') {
       dispatch({
         type: 'load_failed',
@@ -485,10 +549,15 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     }
 
     dispatch({ type: 'load_start' });
-    const loaded = await loadSavedGameAsync({
-      onProgress: (progress) => dispatch({ type: 'load_progress', progress }),
-      yieldControl: nextPaint,
-    });
+    let loaded: LoadedGame | null;
+    try {
+      loaded = await replayAsync(inspection.file, {
+        onProgress: (progress) => dispatch({ type: 'load_progress', progress }),
+        yieldControl: nextPaint,
+      });
+    } catch {
+      loaded = null;
+    }
     if (loaded === null) {
       dispatch({
         type: 'load_failed',
@@ -496,9 +565,41 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       });
       return false;
     }
-    sequences.reset(0);
+
+    // The stored queue is a proposal, not state: each entry is re-validated
+    // against the session the replay actually produced, and an entry the
+    // validator now rejects is dropped rather than queued unrunnable. Dropped
+    // for the same reason: an entry stamped for a different quarter than the
+    // replay reached (the resolver's collector would discard it without a
+    // ledger row), and a duplicated actionId (the live queue path refuses
+    // those too).
+    const restored: SubmittedAction[] = [];
+    const validations: Record<string, ActionValidationResult> = {};
+    const seenIds = new Set<string>();
+    for (const entry of loaded.queue) {
+      if (entry.quarter !== loaded.session.quarter || seenIds.has(entry.actionId)) continue;
+      const raw = getEngine().validator.validate(loaded.session, entry.intent, entry.actorPlayerId);
+      if (raw.status === 'rejected') continue;
+      seenIds.add(entry.actionId);
+      restored.push(entry);
+      validations[entry.actionId] = { ...raw, actionId: entry.actionId };
+    }
+    const nextSequence = restored.reduce((max, entry) => Math.max(max, entry.sequence + 1), 0);
+    sequences.reset(nextSequence);
     savedFile.current = inspection.file;
-    dispatch({ type: 'loaded', loaded });
+    // What just loaded is what storage holds; the persist effect's first run
+    // after this would only rewrite it (stamping the current SAVE_VERSION on a
+    // file an older build could still read), so that one run is skipped.
+    persistedLogLength.current = loaded.log.length;
+    suppressNextPersist.current = true;
+    dispatch({
+      type: 'loaded',
+      loaded,
+      queue: restored,
+      validations,
+      droppedCount: loaded.queue.length - restored.length,
+      nextSequence,
+    });
     return loaded.complete;
   }, [sequences]);
 
@@ -528,27 +629,78 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     };
   }, []);
 
-  /* --- persist the decision log ------------------------------------------- */
+  /* --- persist the decision log and the open queue -------------------------- */
   useEffect(() => {
     if (!state.hydrated || state.loading) return;
     // A replay that did not finish, or a file this build cannot read, is never
     // written over: the stored decisions outrank whatever is in this tab.
     if (!state.saveWritable) return;
-    if (state.actionLog.length === 0 && !hasStoredSave()) return;
-    const file = buildSaveFile({
-      seed: state.settings.seed,
-      difficulty: state.settings.difficulty,
-      autoExecuteRoutine: state.settings.autoExecuteRoutine,
-      setup: state.settings.setup,
-      log: state.actionLog,
-      session: state.session,
-      previous: savedFile.current,
-    });
-    if (writeSaveFile(file)) savedFile.current = file;
+    // Only a game the player started is saved. Gating on resolved quarters
+    // instead used to lose a founding to a refresh; gating on the flag also
+    // keeps the default just-visited session from writing a save nobody asked
+    // for.
+    if (!state.gameStarted) return;
+    // A load primes this effect with state that is byte-for-byte what storage
+    // already holds; skipping that one run keeps a v1–v3 file readable by the
+    // build that wrote it until the player actually changes something.
+    if (suppressNextPersist.current) {
+      suppressNextPersist.current = false;
+      return;
+    }
+    const write = (): void => {
+      pendingPersist.current = null;
+      const file = buildSaveFile({
+        seed: state.settings.seed,
+        difficulty: state.settings.difficulty,
+        autoExecuteRoutine: state.settings.autoExecuteRoutine,
+        setup: state.settings.setup,
+        log: state.actionLog,
+        queue: state.queuedActions,
+        session: state.session,
+        previous: savedFile.current,
+      });
+      if (writeSaveFile(file)) {
+        savedFile.current = file;
+        persistedLogLength.current = state.actionLog.length;
+      } else if (!saveHealthWarned.current) {
+        // Said once, not per write: a browser that refuses storage refuses it
+        // for the whole session, and the player needs the fact, not a drumbeat.
+        saveHealthWarned.current = true;
+        dispatch({
+          type: 'notice',
+          notice:
+            'This browser refused the save write, so progress will not survive closing the tab. Private browsing and blocked site data do this.',
+        });
+      }
+    };
+    // A newly resolved quarter (or a just-committed load/founding) is written
+    // immediately: a decision may never sit only in memory behind a timer.
+    // Everything else — queue taps, settings — debounces, collapsing a burst
+    // into one localStorage write.
+    if (state.actionLog.length !== persistedLogLength.current) {
+      if (pendingPersist.current !== null) {
+        clearTimeout(pendingPersist.current.timer);
+        pendingPersist.current = null;
+      }
+      write();
+      return;
+    }
+    const timer = setTimeout(write, 300);
+    pendingPersist.current = { timer, write };
+    return () => {
+      // Clear only our own timer: an action (delete, new game) may already have
+      // cancelled and replaced what this cleanup would otherwise tear down.
+      if (pendingPersist.current !== null && pendingPersist.current.timer === timer) {
+        clearTimeout(timer);
+        pendingPersist.current = null;
+      }
+    };
   }, [
     state.actionLog,
+    state.gameStarted,
     state.hydrated,
     state.loading,
+    state.queuedActions,
     state.saveWritable,
     state.session,
     state.settings.autoExecuteRoutine,
@@ -556,6 +708,37 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     state.settings.seed,
     state.settings.setup,
   ]);
+
+  /* --- flush the pending write before the tab can vanish -------------------- */
+  useEffect(() => {
+    // A phone backgrounds a tab and may never resume it; `pagehide` covers
+    // navigation and close, the hidden-visibility flush covers the discard path
+    // where `pagehide` never fires. Flushing runs the exact write the timer
+    // would have run.
+    const flush = (): void => {
+      const pending = pendingPersist.current;
+      if (pending === null) return;
+      clearTimeout(pending.timer);
+      pending.write();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    // Guarded, not assumed: the store also mounts under test in a pared-down
+    // window that has storage but no event target.
+    const canListen =
+      typeof window !== 'undefined' &&
+      typeof window.addEventListener === 'function' &&
+      typeof document !== 'undefined' &&
+      typeof document.addEventListener === 'function';
+    if (!canListen) return;
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   /* --- actions ------------------------------------------------------------- */
 
@@ -686,11 +869,53 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       autoExecuteRoutine: settings.autoExecuteRoutine,
       setup: setup ?? undefined,
     });
-    clearSaveFile();
+    // A timer armed by the previous game must not fire after the founding save
+    // lands and rewrite it with the world that was just left.
+    cancelPendingPersist();
+    // The one thing a new game may not do is destroy a save this build cannot
+    // read: that file belongs to a newer build, and clearing it here would be
+    // the exact overwrite every other path refuses. The new game still starts —
+    // it just plays unsaved, and says so.
+    const storedVersion = storedSaveVersion();
+    const preserved = storedVersion !== null && !SUPPORTED_SAVE_VERSIONS.includes(storedVersion);
+    if (!preserved) clearSaveFile();
     savedFile.current = null;
     sequences.reset(0);
-    dispatch({ type: 'new_game', session, settings });
-  }, [sequences]);
+    dispatch({ type: 'new_game', session, settings, saveWritable: !preserved });
+    if (preserved) {
+      dispatch({
+        type: 'notice',
+        notice:
+          'This browser holds a save written by a newer build, and it has been preserved untouched — so this new game will not be saved. Delete the stored session in Settings if you want saving back.',
+      });
+      return;
+    }
+    // The founding save is written here, synchronously, not left to the
+    // debounced effect: a refresh inside the debounce window would otherwise
+    // lose the company the player just founded.
+    const file = buildSaveFile({
+      seed: settings.seed,
+      difficulty: settings.difficulty,
+      autoExecuteRoutine: settings.autoExecuteRoutine,
+      setup,
+      log: [],
+      queue: [],
+      session,
+      previous: null,
+    });
+    if (writeSaveFile(file)) {
+      savedFile.current = file;
+      persistedLogLength.current = 0;
+      suppressNextPersist.current = true;
+    } else if (!saveHealthWarned.current) {
+      saveHealthWarned.current = true;
+      dispatch({
+        type: 'notice',
+        notice:
+          'This browser refused the save write, so progress will not survive closing the tab. Private browsing and blocked site data do this.',
+      });
+    }
+  }, [sequences, cancelPendingPersist]);
 
   const saveGame = useCallback(() => {
     const current = stateRef.current;
@@ -707,6 +932,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       autoExecuteRoutine: current.settings.autoExecuteRoutine,
       setup: current.settings.setup,
       log: current.actionLog,
+      queue: current.queuedActions,
       session: current.session,
       previous: savedFile.current,
     });
@@ -727,23 +953,125 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   }, [runLoad]);
 
   const deleteSave = useCallback(() => {
+    // Cancelled first: a debounced write armed by a tap moments before the
+    // delete would otherwise fire into the now-empty key and quietly undo it.
+    cancelPendingPersist();
     clearSaveFile();
     savedFile.current = null;
     dispatch({ type: 'notice', notice: 'Saved session deleted.' });
+  }, [cancelPendingPersist]);
+
+  const saveToSlot = useCallback((slot: number) => {
+    const current = stateRef.current;
+    if (!current.saveWritable) {
+      dispatch({
+        type: 'notice',
+        notice: 'This session will not be saved: the stored file could not be replayed in full and is being preserved as it is.',
+      });
+      return;
+    }
+    // A slot holding a newer build's save is preserved for the same reason the
+    // autosave is; `writeSlotFile` would refuse anyway, but checking first lets
+    // the notice say why.
+    if (readSlotFile(slot).status === 'unsupported') {
+      dispatch({
+        type: 'notice',
+        notice: `Slot ${slot} holds a save written by a newer build and has been left untouched. Pick another slot.`,
+      });
+      return;
+    }
+    const file = buildSaveFile({
+      seed: current.settings.seed,
+      difficulty: current.settings.difficulty,
+      autoExecuteRoutine: current.settings.autoExecuteRoutine,
+      setup: current.settings.setup,
+      log: current.actionLog,
+      queue: current.queuedActions,
+      session: current.session,
+      previous: savedFile.current,
+    });
+    const wrote = writeSlotFile(slot, file);
+    dispatch({
+      type: 'notice',
+      notice: wrote
+        ? `Saved to slot ${slot}.`
+        : `Slot ${slot} could not be written: this browser refused the write and the slot is unchanged.`,
+    });
+  }, []);
+
+  const loadFromSlot = useCallback(
+    async (slot: number): Promise<boolean> => {
+      const inspection = readSlotFile(slot);
+      if (inspection.status === 'unsupported') {
+        dispatch({
+          type: 'notice',
+          notice: `Slot ${slot} holds a save written by a newer build (version ${inspection.version ?? 'unknown'}). It has been left untouched and cannot be loaded here.`,
+        });
+        return false;
+      }
+      if (inspection.file === null) {
+        dispatch({ type: 'notice', notice: `Slot ${slot} holds no save this build can read.` });
+        return false;
+      }
+      // Adoption is decided before anything replays: an autosave written by a
+      // newer build is preserved, and a slot load that would displace it is
+      // refused outright rather than half-done with persistence silently off.
+      const stored = storedSaveVersion();
+      if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) {
+        dispatch({
+          type: 'notice',
+          notice:
+            'The saved session in this browser was written by a newer build and is preserved untouched, so a slot cannot replace it. Delete the saved session in Settings first.',
+        });
+        return false;
+      }
+      cancelPendingPersist();
+      const complete = await runLoad(inspection);
+      // The slot becomes the autosave only after the replay proved it loads in
+      // full: a slot that fails or half-loads must not have cost the previous
+      // game its autosave along the way.
+      if (complete) {
+        if (writeSaveFile(inspection.file)) {
+          savedFile.current = inspection.file;
+        } else {
+          dispatch({
+            type: 'notice',
+            notice: `Loaded slot ${slot}, but this browser refused to adopt it as the autosave — the previous autosave is unchanged.`,
+          });
+        }
+      }
+      return complete;
+    },
+    [runLoad, cancelPendingPersist],
+  );
+
+  const deleteSlot = useCallback((slot: number) => {
+    const removed = clearSlot(slot);
+    dispatch({
+      type: 'notice',
+      notice: removed ? `Slot ${slot} deleted.` : `Slot ${slot} could not be deleted: this browser refused the removal.`,
+    });
   }, []);
 
   const exportSaveText = useCallback(() => exportSave(), []);
 
   const importSaveText = useCallback(
     async (text: string): Promise<boolean> => {
+      // Cancelled for the same reason as a delete: the import just replaced the
+      // stored file, and a timer armed by the outgoing game must not overwrite it.
+      cancelPendingPersist();
       const file = importSave(text);
       if (file === null) {
-        dispatch({ type: 'notice', notice: 'That is not a Frontier Capital save this build can read. Nothing was changed.' });
+        dispatch({
+          type: 'notice',
+          notice:
+            'Nothing was changed: either that is not a save this build can read, or the stored save here was written by a newer build and is preserved.',
+        });
         return false;
       }
       return await runLoad();
     },
-    [runLoad],
+    [runLoad, cancelPendingPersist],
   );
 
   const updateSettings = useCallback((partial: Partial<GameSettings>) => {
@@ -769,6 +1097,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveGame,
       loadGame,
       deleteSave,
+      saveToSlot,
+      loadFromSlot,
+      deleteSlot,
       exportSave: exportSaveText,
       importSave: importSaveText,
       updateSettings,
@@ -786,6 +1117,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveGame,
       loadGame,
       deleteSave,
+      saveToSlot,
+      loadFromSlot,
+      deleteSlot,
       exportSaveText,
       importSaveText,
       updateSettings,

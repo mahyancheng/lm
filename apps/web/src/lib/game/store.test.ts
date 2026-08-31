@@ -76,6 +76,8 @@ describe('demo store surfaces', () => {
       log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
       checkpoint: null,
       savedQuarter: 1,
+      queue: [],
+      savedAtIso: null,
     });
     expect(loaded.session.quarter).toBe(1);
     expect(loaded.rejectedQuarters).toHaveLength(0);

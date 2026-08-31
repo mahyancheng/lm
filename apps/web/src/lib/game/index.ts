@@ -80,9 +80,12 @@ export {
   CHECKPOINT_INTERVAL,
   MAX_REPLAY_QUARTERS,
   SAVE_KEY,
+  SAVE_SLOT_COUNT,
   SAVE_VERSION,
+  SLOT_KEYS,
   buildSaveFile,
   clearSaveFile,
+  clearSlot,
   exportSave,
   hasSavedGame,
   hasStoredSave,
@@ -91,10 +94,13 @@ export {
   loadSavedGame,
   loadSavedGameAsync,
   readSaveFile,
+  readSlotFile,
   replay,
   replayAsync,
+  slotSummaries,
   storedSaveVersion,
   writeSaveFile,
+  writeSlotFile,
 } from './persistence';
 export type {
   LoadedGame,
@@ -105,4 +111,17 @@ export type {
   SaveFile,
   SaveInspection,
   SaveStatus,
+  SlotSummary,
 } from './persistence';
+
+export {
+  DEFAULT_COMPANY_NAME,
+  DEFAULT_FOUNDER_NAME,
+  DEMO_START_YEAR,
+  continueLabel,
+  savedCompanyName,
+  savedFounderName,
+  shortSavedAt,
+  slotDetailLine,
+  slotOverwriteLabel,
+} from './saveDisplay';

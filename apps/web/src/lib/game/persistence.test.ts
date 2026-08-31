@@ -11,8 +11,9 @@
  *    quarter after the one that failed, permanently.
  * 4. A file written by a newer build read as absent and was overwritten.
  *
- * Relative imports throughout: `apps/web` has no vitest config, so the `@/`
- * alias is a Next-only convenience and does not resolve here.
+ * Relative imports throughout: the `@/` alias is wired up in vitest.config.mts
+ * only so the modules under test can resolve their own imports; test files
+ * keep to relative paths.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,15 +23,22 @@ import {
   CHECKPOINT_INTERVAL,
   MAX_REPLAY_QUARTERS,
   SAVE_KEY,
+  SAVE_SLOT_COUNT,
   SAVE_VERSION,
+  SLOT_KEYS,
   buildSaveFile,
+  clearSlot,
   exportSave,
+  hasSavedGame,
   importSave,
   inspectSave,
   readSaveFile,
+  readSlotFile,
   replay,
   replayAsync,
+  slotSummaries,
   writeSaveFile,
+  writeSlotFile,
   type QuarterRecord,
   type SaveFile,
 } from './persistence';
@@ -69,6 +77,9 @@ afterEach(() => {
 
 const SEED = 424242;
 
+/** A stamp no real clock produces mid-test, so it can only appear via the injected `now`. */
+const STAMP = '2030-01-02T03:04:05.000Z';
+
 /** A World Director proposal that fires nothing: a legal, quiet quarter. */
 const QUIET_GM: GmProposalBatch = {
   proposals: [],
@@ -96,6 +107,8 @@ function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'
     log,
     checkpoint,
     savedQuarter: (log[log.length - 1]?.quarter ?? -1) + 1,
+    queue: [],
+    savedAtIso: null,
   };
 }
 
@@ -151,6 +164,7 @@ describe('the replay ceiling never destroys a decision', () => {
           autoExecuteRoutine: false,
           setup: null,
           log,
+          queue: [],
           session,
           previous: file,
         });
@@ -330,6 +344,7 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
       autoExecuteRoutine: false,
       setup,
       log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+      queue: [],
       session: getEngine().resolver.resolveQuarter(start, [a], null, []).nextState,
     });
     expect(file.version).toBe(SAVE_VERSION);
@@ -376,5 +391,251 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
     expect(importSave('not json at all')).toBeNull();
     // The rejected import left the stored file alone.
     expect(readSaveFile()?.log).toHaveLength(1);
+  });
+});
+
+describe('a v4 file carries the open queue and the advisory timestamp', () => {
+  it('stamps savedAtIso from the injected clock', () => {
+    const start = createSession({ seed: SEED });
+    const file = buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup: null,
+      log: [],
+      queue: [],
+      session: start,
+      now: () => STAMP,
+    });
+    expect(file.savedAtIso).toBe(STAMP);
+  });
+
+  it('survives write → inspect → replay with the queue verbatim', () => {
+    const engine = getEngine();
+    const start = createSession({ seed: SEED });
+    const resolved = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
+    const outcome = engine.resolver.resolveQuarter(start, [resolved], null, []);
+    expect(outcome.committed).toBe(true);
+    // Queued against the open quarter: exactly what a tab discarded mid-turn holds.
+    const queued = buildSubmittedAction(outcome.nextState, { type: 'set_research_budget', budgetUsd: 750_000 }, 0);
+
+    const file = buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup: null,
+      log: [{ quarter: 0, actions: [resolved], gmProposal: null, npcBundles: [] }],
+      queue: [queued],
+      session: outcome.nextState,
+      now: () => STAMP,
+    });
+    expect(writeSaveFile(file)).toBe(true);
+
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('ok');
+    expect(inspection.version).toBe(SAVE_VERSION);
+    expect(inspection.file?.savedAtIso).toBe(STAMP);
+    expect(inspection.file?.queue).toEqual([queued]);
+
+    const loaded = replay(inspection.file as SaveFile);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.session.quarter).toBe(1);
+    // Verbatim: the loader hands the queue back for the caller to re-validate,
+    // it never filters or adopts it.
+    expect(loaded.queue).toEqual([queued]);
+  });
+
+  it('drops a queue entry that does not parse and keeps the rest, in order', () => {
+    const start = createSession({ seed: SEED });
+    const keepA = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 100_000 }, 0);
+    const keepB = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 200_000 }, 1);
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({
+        version: SAVE_VERSION,
+        seed: SEED,
+        difficulty: 'standard',
+        setup: null,
+        log: [],
+        checkpoint: null,
+        savedQuarter: 0,
+        savedAtIso: STAMP,
+        queue: [keepA, { rubbish: true }, 17, null, keepB],
+      }),
+    );
+    expect(readSaveFile()?.queue.map((entry) => entry.actionId)).toEqual([keepA.actionId, keepB.actionId]);
+  });
+
+  it('reads a queue that is not an array as empty', () => {
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({ version: SAVE_VERSION, seed: SEED, difficulty: 'standard', log: [], queue: 'oops' }),
+    );
+    expect(readSaveFile()?.queue).toEqual([]);
+  });
+});
+
+describe('a founding save with no resolved quarters', () => {
+  it('replays an empty log to quarter 0 with the setup applied, as a complete load', () => {
+    const setup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+    const session = createSession({ seed: SEED, setup });
+    const file = buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup,
+      log: [],
+      queue: [],
+      session,
+      now: () => STAMP,
+    });
+    expect(writeSaveFile(file)).toBe(true);
+    expect(hasSavedGame()).toBe(true);
+
+    const loaded = replay(readSaveFile() as SaveFile);
+    // Complete, so the load is writable: an incomplete verdict here would make
+    // every freshly founded company read-only until its first resolve.
+    expect(loaded.complete).toBe(true);
+    expect(loaded.replayedCount).toBe(0);
+    expect(loaded.rejectedQuarters).toHaveLength(0);
+    expect(loaded.session.quarter).toBe(0);
+    expect(loaded.session.companies.find((company) => company.controllerPlayerId !== null)?.name).toBe('Northwind AI');
+    expect(JSON.stringify(loaded.session)).toBe(JSON.stringify(session));
+  });
+});
+
+describe('files from other builds of the save format', () => {
+  it('reads a v3 file as ok, with an empty queue and no timestamp', () => {
+    const start = createSession({ seed: SEED });
+    const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({
+        version: 3,
+        seed: SEED,
+        difficulty: 'standard',
+        autoExecuteRoutine: false,
+        setup: null,
+        log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+        checkpoint: null,
+        savedQuarter: 1,
+      }),
+    );
+
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('ok');
+    expect(inspection.version).toBe(3);
+    expect(inspection.file?.queue).toEqual([]);
+    expect(inspection.file?.savedAtIso).toBeNull();
+
+    const loaded = replay(inspection.file as SaveFile);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.queue).toEqual([]);
+  });
+
+  it('treats versions on either side of [1..4] as unsupported and never writes over them', () => {
+    for (const version of [0, 5]) {
+      globals.window = { localStorage: fakeStorage() };
+      const alien = JSON.stringify({ version, seed: SEED, log: [] });
+      globals.window.localStorage.setItem(SAVE_KEY, alien);
+
+      const inspection = inspectSave();
+      expect(inspection.status).toBe('unsupported');
+      expect(inspection.version).toBe(version);
+      expect(writeSaveFile(fileOf([]))).toBe(false);
+      expect(globals.window.localStorage.getItem(SAVE_KEY)).toBe(alien);
+    }
+  });
+});
+
+describe('manual slots beside the autosave', () => {
+  const SETUP = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+
+  function slotFile(): SaveFile {
+    const session = createSession({ seed: SEED, setup: SETUP });
+    return buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup: SETUP,
+      log: [],
+      queue: [],
+      session,
+      now: () => STAMP,
+    });
+  }
+
+  it('keeps every slot key distinct from the autosave key and from each other', () => {
+    expect(SLOT_KEYS).toHaveLength(SAVE_SLOT_COUNT);
+    // A collision anywhere in this set would make one save silently shadow another.
+    expect(new Set([...SLOT_KEYS, SAVE_KEY]).size).toBe(SAVE_SLOT_COUNT + 1);
+  });
+
+  it('round-trips write → read → clear without touching the autosave', () => {
+    expect(writeSlotFile(2, slotFile())).toBe(true);
+    expect(globals.window?.localStorage.getItem(SAVE_KEY)).toBeNull();
+
+    const inspection = readSlotFile(2);
+    expect(inspection.status).toBe('ok');
+    expect(inspection.file?.setup).toEqual(SETUP);
+    expect(inspection.file?.savedAtIso).toBe(STAMP);
+    expect(replay(inspection.file as SaveFile).complete).toBe(true);
+
+    clearSlot(2);
+    expect(readSlotFile(2).status).toBe('absent');
+  });
+
+  it("refuses to overwrite a slot holding a newer build's save", () => {
+    const alien = JSON.stringify({ version: 9, seed: SEED, log: [] });
+    globals.window?.localStorage.setItem(SLOT_KEYS[0]!, alien);
+
+    expect(writeSlotFile(1, slotFile())).toBe(false);
+    expect(globals.window?.localStorage.getItem(SLOT_KEYS[0]!)).toBe(alien);
+    const inspection = readSlotFile(1);
+    expect(inspection.status).toBe('unsupported');
+    expect(inspection.version).toBe(9);
+  });
+
+  it('no-ops for a slot number outside the range', () => {
+    expect(writeSlotFile(0, slotFile())).toBe(false);
+    expect(writeSlotFile(SAVE_SLOT_COUNT + 1, slotFile())).toBe(false);
+    expect(readSlotFile(0).status).toBe('absent');
+    expect(globals.window?.localStorage.length).toBe(0);
+  });
+
+  it('summarises slots from scalar fields alone, so a bogus checkpoint cannot break the menu', () => {
+    // The checkpoint state here would fail `SessionStateSchema`: a summary that
+    // validated checkpoints would report the slot broken (or pay for three full
+    // parses per menu render); a cheap one reads the scalars and the setup and
+    // never notices.
+    globals.window?.localStorage.setItem(
+      SLOT_KEYS[0]!,
+      JSON.stringify({
+        version: SAVE_VERSION,
+        seed: SEED,
+        difficulty: 'standard',
+        setup: SETUP,
+        log: [],
+        checkpoint: { quarter: 5, state: { nothing: 'a session' } },
+        savedQuarter: 5,
+        savedAtIso: STAMP,
+      }),
+    );
+    globals.window?.localStorage.setItem(SLOT_KEYS[2]!, JSON.stringify({ version: 9 }));
+
+    const summaries = slotSummaries();
+    expect(summaries.map((summary) => summary.slot)).toEqual([1, 2, 3]);
+    expect(summaries[0]).toMatchObject({
+      status: 'ok',
+      version: SAVE_VERSION,
+      savedQuarter: 5,
+      seed: SEED,
+      difficulty: 'standard',
+      companyName: 'Northwind AI',
+      founderName: 'Rae Fontaine',
+      savedAtIso: STAMP,
+    });
+    expect(summaries[1]?.status).toBe('absent');
+    expect(summaries[2]).toMatchObject({ status: 'unsupported', version: 9, companyName: null, founderName: null });
   });
 });

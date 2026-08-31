@@ -36,6 +36,8 @@ import type {
   Company,
   CompanyQuarterMetrics,
   MarketInstrument,
+  NewGameBackgroundId,
+  NewGameSetup,
   ProcurementOpportunity,
   Quote,
   ResearchProject,
@@ -44,7 +46,10 @@ import type {
   SocialAccount,
   TechNode,
 } from '@frontier/contracts';
-import { DEFAULT_QUORUM_RULE, SessionStateSchema, makeId } from '@frontier/contracts';
+import { DEFAULT_QUORUM_RULE, NEW_GAME_BACKGROUND_IDS, SessionStateSchema, makeId } from '@frontier/contracts';
+
+export type { NewGameSetup, NewGameBackgroundId } from '@frontier/contracts';
+export { NEW_GAME_BACKGROUNDS, NEW_GAME_BACKGROUND_IDS } from '@frontier/contracts';
 
 /* -------------------------------------------------------------------------- */
 /*  Identifiers                                                                */
@@ -516,6 +521,182 @@ const COMPANY_SEEDS: readonly CompanySeed[] = [
     pastPerformance: 0,
   },
 ];
+
+/* -------------------------------------------------------------------------- */
+/*  Starting backgrounds                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The default player seed — the "Enterprise AI" shape. Every background is a
+ * deviation from this, and the one background that *is* this reuses its fields
+ * so it reproduces today's Player Ventures balance byte for byte.
+ */
+const BASE_PLAYER_SEED: CompanySeed = COMPANY_SEEDS.find((seed) => seed.id === DEMO_COMPANIES.player) as CompanySeed;
+
+/**
+ * The shape a starting background gives the player company. Identity fields (id,
+ * slug, ticker, tier, isPublic, controllerPlayerId, ceoCharacterId, boardId,
+ * instrumentId, and the product id) never change with a background, so
+ * relationships, the board, the cap table and the seed round all still resolve.
+ * Everything here is a constant, so a background is a pure, deterministic
+ * function of nothing.
+ */
+interface PlayerBackgroundShape {
+  readonly archetype: Company['archetype'];
+  readonly sectorId: string;
+  readonly city: string;
+  readonly posture: Company['posture'];
+  readonly riskTolerance: number;
+  readonly financials: CompanySeed['financials'];
+  readonly assets: CompanySeed['assets'];
+  readonly liabilities: CompanySeed['liabilities'];
+  readonly employees: CompanySeed['employees'];
+  readonly compute: CompanySeed['compute'];
+  /** The product minus its id, which stays stable across backgrounds. */
+  readonly product: Omit<CompanySeed['product'], 'id'>;
+  readonly capabilities: Readonly<Record<string, number>>;
+  readonly reputation: CompanySeed['reputation'];
+  readonly pastPerformance: number;
+  /** Private-company valuation anchor for the opening quarter (display only). */
+  readonly anchorValueUsd: number;
+}
+
+const { id: _basePlayerProductId, ...BASE_PLAYER_PRODUCT } = BASE_PLAYER_SEED.product;
+
+/**
+ * The five backgrounds, as a data table. Each keeps the player company's cap
+ * table, balance sheet and financials internally consistent: `buildCompany`
+ * derives equity from assets less liabilities, so every opening sheet below
+ * reconciles, and each resolves quarter 1 through the real engine with the
+ * invariant gate passing.
+ */
+const PLAYER_BACKGROUNDS: Readonly<Record<NewGameBackgroundId, PlayerBackgroundShape>> = {
+  // Train ahead of revenue: a research house with owned and reserved compute,
+  // heavy R&D and a long cash runway, but no product revenue yet.
+  frontier_lab: {
+    archetype: 'frontier_lab',
+    sectorId: 'frontier_models',
+    city: 'Cascade Valley',
+    posture: 'aggressive_growth',
+    riskTolerance: 0.83,
+    financials: { revenue: 0, cogs: 0, payroll: 1.28 * M, marketing: 0.06 * M, rd: 2.6 * M, capex: 0.3 * M, interest: 0, cash: 15 * M, debt: 0, burn: -3.1 * M, deferred: 0, backlog: 0 },
+    assets: { ppe: 1.2 * M, goodwill: 0, investments: 0, receivables: 0 },
+    liabilities: { payables: 0.1 * M },
+    employees: { engineers: 6, researchers: 8, sales: 0, ops: 1, execs: 1, avgComp: 320_000, morale: 84, attrition: 0.03, openRoles: 5 },
+    compute: { owned: 800, reserved: 600, expiry: 6, cloud: 0.4 * M, utilisation: 0.6, training: 0.85 },
+    product: { name: 'Frontier Preview', segment: 'developer_api', price: 900, customers: 0, churn: 0, growth: 0, margin: 0.55, intensity: 0.8, quality: 0.35 },
+    capabilities: { reasoning: 0.52, agents: 0.4, multimodal: 0.38, training_systems: 0.55, efficiency: 0.34, evaluation: 0.44 },
+    reputation: { pub: 18, dev: 46, ent: 12, gov: 10, inv: 34 },
+    pastPerformance: 0,
+    anchorValueUsd: 30 * M,
+  },
+  // The default: a seat-based enterprise product with real customers and modest
+  // revenue. Reuses the base seed so the balance is byte-identical to today's.
+  enterprise_ai: {
+    archetype: BASE_PLAYER_SEED.archetype,
+    sectorId: BASE_PLAYER_SEED.sectorId,
+    city: BASE_PLAYER_SEED.city,
+    posture: BASE_PLAYER_SEED.posture,
+    riskTolerance: BASE_PLAYER_SEED.riskTolerance,
+    financials: BASE_PLAYER_SEED.financials,
+    assets: BASE_PLAYER_SEED.assets,
+    liabilities: BASE_PLAYER_SEED.liabilities,
+    employees: BASE_PLAYER_SEED.employees,
+    compute: BASE_PLAYER_SEED.compute,
+    product: BASE_PLAYER_PRODUCT,
+    capabilities: BASE_PLAYER_SEED.capabilities,
+    reputation: BASE_PLAYER_SEED.reputation,
+    pastPerformance: BASE_PLAYER_SEED.pastPerformance,
+    anchorValueUsd: 18 * M,
+  },
+  // Millions of small accounts at a low price, thin margins, high churn, cloud
+  // serving and a public-facing reputation.
+  consumer_ai: {
+    archetype: 'consumer_ai',
+    sectorId: 'consumer_ai',
+    city: 'Lakeshore',
+    posture: 'aggressive_growth',
+    riskTolerance: 0.74,
+    financials: { revenue: 6 * M, cogs: 3.48 * M, payroll: 0.78 * M, marketing: 1.2 * M, rd: 0.6 * M, capex: 0.05 * M, interest: 0, cash: 5 * M, debt: 0, burn: -0.4 * M, deferred: 0.1 * M, backlog: 0.05 * M },
+    assets: { ppe: 0.3 * M, goodwill: 0, investments: 0, receivables: 0.4 * M },
+    liabilities: { payables: 0.5 * M },
+    employees: { engineers: 8, researchers: 1, sales: 0, ops: 2, execs: 1, avgComp: 260_000, morale: 80, attrition: 0.06, openRoles: 4 },
+    compute: { owned: 0, reserved: 0, expiry: null, cloud: 1 * M, utilisation: 0.7, training: 0.2 },
+    // 750,000 accounts × $8/quarter = $6.0m revenue, mirroring how the seeded
+    // rivals set seats × price = revenue.
+    product: { name: 'Everyday Copilot', segment: 'consumer', price: 8, customers: 750_000, churn: 0.16, growth: 0.22, margin: 0.42, intensity: 0.55, quality: 0.5 },
+    capabilities: { reasoning: 0.44, agents: 0.4, multimodal: 0.55, retrieval: 0.4, efficiency: 0.42 },
+    reputation: { pub: 44, dev: 30, ent: 18, gov: 8, inv: 28 },
+    pastPerformance: 0,
+    anchorValueUsd: 22 * M,
+  },
+  // Capital-heavy: a datacentre, owned accelerators and some debt against them,
+  // steadier margins and a government-and-enterprise reputation.
+  infrastructure: {
+    archetype: 'infrastructure',
+    sectorId: 'cloud_infrastructure',
+    city: 'Meridian Bay',
+    posture: 'balanced',
+    riskTolerance: 0.5,
+    financials: { revenue: 12.48 * M, cogs: 7.5 * M, payroll: 1.25 * M, marketing: 0.2 * M, rd: 0.4 * M, capex: 1 * M, interest: 0.16 * M, cash: 6 * M, debt: 8 * M, burn: 0.2 * M, deferred: 0.3 * M, backlog: 2 * M },
+    assets: { ppe: 18 * M, goodwill: 0, investments: 0, receivables: 0.6 * M },
+    liabilities: { payables: 1.2 * M },
+    employees: { engineers: 10, researchers: 1, sales: 2, ops: 6, execs: 1, avgComp: 250_000, morale: 78, attrition: 0.03, openRoles: 4 },
+    compute: { owned: 4_000, reserved: 0, expiry: null, cloud: 0, utilisation: 0.85, training: 0.1 },
+    // 2,600 capacity contracts × $4,800/quarter = $12.48m revenue.
+    product: { name: 'Ventures Capacity', segment: 'enterprise', price: 4_800, customers: 2_600, churn: 0.03, growth: 0.06, margin: 0.4, intensity: 0.9, quality: 0.62 },
+    capabilities: { infrastructure: 0.7, efficiency: 0.55, security: 0.5, training_systems: 0.42 },
+    reputation: { pub: 30, dev: 26, ent: 40, gov: 34, inv: 36 },
+    pastPerformance: 20,
+    anchorValueUsd: 40 * M,
+  },
+  // The scrappy start: a four-person shop, one product, no debt and little
+  // runway. A harder game that leans on building connections and revenue fast.
+  bootstrapper: {
+    archetype: 'enterprise_ai',
+    sectorId: 'enterprise_software',
+    city: 'Old Quarter',
+    posture: 'balanced',
+    riskTolerance: 0.6,
+    financials: { revenue: 0.162 * M, cogs: 0.06 * M, payroll: 0.22 * M, marketing: 0.02 * M, rd: 0.08 * M, capex: 0.01 * M, interest: 0, cash: 1.2 * M, debt: 0, burn: -0.2 * M, deferred: 0.01 * M, backlog: 0.05 * M },
+    assets: { ppe: 0.05 * M, goodwill: 0, investments: 0, receivables: 0.03 * M },
+    liabilities: { payables: 0.04 * M },
+    employees: { engineers: 2, researchers: 0, sales: 1, ops: 0, execs: 1, avgComp: 220_000, morale: 82, attrition: 0.04, openRoles: 2 },
+    compute: { owned: 0, reserved: 0, expiry: null, cloud: 0.05 * M, utilisation: 0.45, training: 0.3 },
+    // 900 seats × $180/quarter = $0.162m revenue.
+    product: { name: 'Copilot Lite', segment: 'enterprise', price: 180, customers: 900, churn: 0.1, growth: 0.2, margin: 0.6, intensity: 0.3, quality: 0.45 },
+    capabilities: { reasoning: 0.36, agents: 0.34, retrieval: 0.4, evaluation: 0.3, efficiency: 0.32 },
+    reputation: { pub: 14, dev: 24, ent: 20, gov: 8, inv: 20 },
+    pastPerformance: 0,
+    anchorValueUsd: 6 * M,
+  },
+};
+
+/**
+ * Apply a background to the base player seed. Only the shape changes; the name
+ * comes from the setup and every identity field is carried through unchanged.
+ */
+function playerSeedFor(setup: NewGameSetup): CompanySeed {
+  const shape = PLAYER_BACKGROUNDS[setup.backgroundId];
+  return {
+    ...BASE_PLAYER_SEED,
+    name: setup.companyName,
+    archetype: shape.archetype,
+    sectorId: shape.sectorId,
+    city: shape.city,
+    posture: shape.posture,
+    riskTolerance: shape.riskTolerance,
+    financials: shape.financials,
+    assets: shape.assets,
+    liabilities: shape.liabilities,
+    employees: shape.employees,
+    compute: shape.compute,
+    product: { id: BASE_PLAYER_SEED.product.id, ...shape.product },
+    capabilities: shape.capabilities,
+    reputation: shape.reputation,
+    pastPerformance: shape.pastPerformance,
+  };
+}
 
 function buildCompany(seed: CompanySeed): Company {
   const f = seed.financials;
@@ -1690,14 +1871,31 @@ function buildMetrics(seed: CompanySeed, marketCap: number, enterpriseValue: num
  *
  * `seed` sets `SessionState.seed` and the session id; the world data itself is
  * fixed, so the same seed always produces a byte-identical state.
+ *
+ * An optional `setup` overrides only the player company (its name and starting
+ * shape) and the founder character's display name. When it is omitted, the
+ * result is byte-identical to today's Player Ventures / Avery Sinclair world.
  */
-export function createDemoSession(seed: number = DEMO_SEED): SessionState {
-  return SessionStateSchema.parse(demoSessionInput(seed));
+export function createDemoSession(seed: number = DEMO_SEED, setup?: NewGameSetup): SessionState {
+  return SessionStateSchema.parse(demoSessionInput(seed, setup));
 }
 
 /** The unparsed input, for fixtures that want to vary one field before parsing. */
-export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
+export function demoSessionInput(seed: number = DEMO_SEED, setup?: NewGameSetup): SessionStateInput {
   const sessionId = makeId('sess', 'demo', String(seed));
+
+  // The player company and founder change with the setup; everything else in the
+  // world is fixed. With no setup, these are the base seeds unchanged, so the
+  // output is byte-identical to today's.
+  const companySeeds = setup === undefined ? COMPANY_SEEDS : COMPANY_SEEDS.map((seed) => (seed.id === DEMO_COMPANIES.player ? playerSeedFor(setup) : seed));
+  const founderName = setup?.founderName ?? 'Avery Sinclair';
+  const founderTitle = setup === undefined ? 'Founder and CEO — Player Ventures' : `Founder and CEO — ${setup.companyName}`;
+  const characterSeeds =
+    setup === undefined
+      ? CHARACTER_SEEDS
+      : CHARACTER_SEEDS.map((seed) => (seed.id === DEMO_CHARACTERS.player ? { ...seed, name: founderName, title: founderTitle } : seed));
+  const playerAnchorValue = setup === undefined ? 18 * M : PLAYER_BACKGROUNDS[setup.backgroundId].anchorValueUsd;
+
   const anchors: Readonly<Record<string, { value: number; method: 'revenue_multiple' | 'forward_revenue_quality' | 'earnings_fcf' | 'asset_cashflow_utilisation' | 'technology_option_value' }>> = {
     [DEMO_COMPANIES.nexus]: { value: 44.1 * BN, method: 'technology_option_value' },
     [DEMO_COMPANIES.orbit]: { value: 24.3 * BN, method: 'forward_revenue_quality' },
@@ -1705,7 +1903,7 @@ export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
     [DEMO_COMPANIES.vectorworks]: { value: 7.35 * BN, method: 'forward_revenue_quality' },
     [DEMO_COMPANIES.aurora]: { value: 84 * BN, method: 'earnings_fcf' },
     [DEMO_COMPANIES.meridian]: { value: 7.9 * BN, method: 'revenue_multiple' },
-    [DEMO_COMPANIES.player]: { value: 18 * M, method: 'revenue_multiple' },
+    [DEMO_COMPANIES.player]: { value: playerAnchorValue, method: 'revenue_multiple' },
   };
   const marketCaps = new Map(QUOTE_SEEDS.filter((q) => q.shares !== null).map((q) => [q.instrumentId, q.price * (q.shares ?? 0)]));
 
@@ -1763,14 +1961,14 @@ export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
     // family it knows about on the first quarter it resolves.
     eventHazards: {},
 
-    companies: COMPANY_SEEDS.map(buildCompany),
-    companyMetrics: COMPANY_SEEDS.map((seed) => {
+    companies: companySeeds.map(buildCompany),
+    companyMetrics: companySeeds.map((seed) => {
       const instrumentId = seed.instrumentId;
       const marketCap = instrumentId === null ? (anchors[seed.id]?.value ?? 0) : marketCaps.get(instrumentId) ?? 0;
       return buildMetrics(seed, marketCap, anchors[seed.id]?.value ?? marketCap);
     }),
     capTables: CAP_SEEDS.map(buildCapTable),
-    securities: COMPANY_SEEDS.map((seed) => ({
+    securities: companySeeds.map((seed) => ({
       id: SEC(seed.slug),
       companyId: seed.id,
       shareClassId: SHC(seed.slug),
@@ -1801,7 +1999,7 @@ export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
     marketInstruments: INSTRUMENTS.map((entry) => ({ ...entry })),
     quotes: QUOTE_SEEDS.map(buildQuote),
     quoteHistoryQuarters: 24,
-    valuationAnchors: COMPANY_SEEDS.map((seed) => {
+    valuationAnchors: companySeeds.map((seed) => {
       const anchor = anchors[seed.id];
       const cap = CAP_SEEDS.find((entry) => entry.companyId === seed.id);
       const issued = cap?.issued ?? 0;
@@ -1891,7 +2089,7 @@ export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
     },
     researchProjects: RESEARCH_PROJECTS.map((project) => ({ ...project })),
 
-    characters: CHARACTER_SEEDS.map(buildCharacter),
+    characters: characterSeeds.map(buildCharacter),
     relationships: RELATIONSHIPS.map((relationship) => ({ ...relationship })),
     memories: MEMORIES.map((memory) => ({ ...memory })),
     accessOverrides: BOARDS.flatMap((board) =>
@@ -1996,7 +2194,7 @@ export function demoSessionInput(seed: number = DEMO_SEED): SessionStateInput {
         characterId: DEMO_CHARACTERS.player,
         companyId: DEMO_COMPANIES.player,
         isHuman: true,
-        displayName: 'Avery Sinclair',
+        displayName: founderName,
         joinedQuarter: 0,
         autoExecuteRoutine: false,
         hasSubmittedThisQuarter: false,

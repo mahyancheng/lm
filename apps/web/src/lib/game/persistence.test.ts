@@ -22,6 +22,7 @@ import {
   CHECKPOINT_INTERVAL,
   MAX_REPLAY_QUARTERS,
   SAVE_KEY,
+  SAVE_VERSION,
   buildSaveFile,
   exportSave,
   importSave,
@@ -87,10 +88,11 @@ function bundleFor(companyId: string): NpcActionBundle {
 
 function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'] = null): SaveFile {
   return {
-    version: 2,
+    version: SAVE_VERSION,
     seed: SEED,
     difficulty: 'standard',
     autoExecuteRoutine: false,
+    setup: null,
     log,
     checkpoint,
     savedQuarter: (log[log.length - 1]?.quarter ?? -1) + 1,
@@ -147,6 +149,7 @@ describe('the replay ceiling never destroys a decision', () => {
           seed: SEED,
           difficulty: 'standard',
           autoExecuteRoutine: false,
+          setup: null,
           log,
           session,
           previous: file,
@@ -315,6 +318,43 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
     expect(file?.log[0]?.actions).toHaveLength(1);
     expect(file?.log[0]?.gmProposal).toBeNull();
     expect(replay(file as SaveFile).complete).toBe(true);
+  });
+
+  it('records the new-game setup and rebuilds the renamed company on replay', () => {
+    const setup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+    const start = createSession({ seed: SEED, setup });
+    const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 200_000 }, 0);
+    const file = buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup,
+      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+      session: getEngine().resolver.resolveQuarter(start, [a], null, []).nextState,
+    });
+    expect(file.version).toBe(SAVE_VERSION);
+    expect(file.setup).toEqual(setup);
+
+    const loaded = replay(file);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.setup).toEqual(setup);
+    const player = loaded.session.companies.find((company) => company.controllerPlayerId !== null);
+    expect(player?.name).toBe('Northwind AI');
+    expect(player?.archetype).toBe('consumer_ai');
+  });
+
+  it('reads a v2 file (no setup) as the default world', () => {
+    const start = createSession({ seed: SEED });
+    const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({ version: 2, seed: SEED, difficulty: 'standard', log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }], checkpoint: null, savedQuarter: 1 }),
+    );
+    const file = readSaveFile();
+    expect(file?.setup).toBeNull();
+    const loaded = replay(file as SaveFile);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.session.companies.find((company) => company.controllerPlayerId !== null)?.name).toBe('Player Ventures');
   });
 
   it('round-trips an export through an import', () => {

@@ -17,4 +17,7 @@ export {
   DEMO_CHARACTERS,
   DEMO_PLAYER_ID,
   DEMO_SEED,
+  NEW_GAME_BACKGROUNDS,
+  NEW_GAME_BACKGROUND_IDS,
 } from './demo';
+export type { NewGameSetup, NewGameBackgroundId } from './demo';

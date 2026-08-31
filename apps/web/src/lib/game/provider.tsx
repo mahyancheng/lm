@@ -42,6 +42,7 @@ import type {
   CompanyQuarterMetrics,
   GmProposalBatch,
   Leaderboard,
+  NewGameSetup,
   NpcActionBundle,
   PlayerView,
   Quote,
@@ -98,6 +99,8 @@ import {
 export interface GameSettings {
   readonly seed: number;
   readonly difficulty: SessionDifficulty;
+  /** The new-game setup this session was started with, or null for the default world. Immutable once set. */
+  readonly setup: NewGameSetup | null;
   /** Whether low-risk interpreted instructions may execute without a click. Never applies to the thirteen. */
   readonly autoExecuteRoutine: boolean;
   /** Player opt-out for the live model even when one is configured. */
@@ -159,7 +162,7 @@ export interface GameStoreState {
 }
 
 export interface GameStoreActions {
-  newGame(options?: { seed?: number; difficulty?: SessionDifficulty; autoExecuteRoutine?: boolean }): void;
+  newGame(options?: { seed?: number; difficulty?: SessionDifficulty; autoExecuteRoutine?: boolean; setup?: NewGameSetup }): void;
   /** Validate an intent without queuing it. Use for live previews and disabled states. */
   validateIntent(intent: ActionIntent): ActionValidationResult;
   /** Validate and queue. Returns the entry so a caller can render the outcome immediately. */
@@ -220,6 +223,7 @@ type Action =
 const DEFAULT_SETTINGS: GameSettings = {
   seed: DEMO_SEED,
   difficulty: 'standard',
+  setup: null,
   autoExecuteRoutine: false,
   useLiveModel: true,
   skipResolutionReveal: false,
@@ -306,6 +310,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         ...state.settings,
         seed: action.loaded.seed,
         difficulty: action.loaded.difficulty,
+        setup: action.loaded.setup,
         autoExecuteRoutine: action.loaded.autoExecuteRoutine,
       };
       // A partial replay is read-only. The stored file still holds every quarter
@@ -534,6 +539,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       seed: state.settings.seed,
       difficulty: state.settings.difficulty,
       autoExecuteRoutine: state.settings.autoExecuteRoutine,
+      setup: state.settings.setup,
       log: state.actionLog,
       session: state.session,
       previous: savedFile.current,
@@ -548,6 +554,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     state.settings.autoExecuteRoutine,
     state.settings.difficulty,
     state.settings.seed,
+    state.settings.setup,
   ]);
 
   /* --- actions ------------------------------------------------------------- */
@@ -663,16 +670,21 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   const newGame = useCallback<GameStoreActions['newGame']>((options) => {
     const current = stateRef.current;
+    // The setup is per-game: a new game takes what it was given, and defaults to
+    // the classic world when none is supplied.
+    const setup = options?.setup ?? null;
     const settings: GameSettings = {
       ...current.settings,
       seed: options?.seed ?? current.settings.seed,
       difficulty: options?.difficulty ?? current.settings.difficulty,
+      setup,
       autoExecuteRoutine: options?.autoExecuteRoutine ?? current.settings.autoExecuteRoutine,
     };
     const session = createSession({
       seed: settings.seed,
       difficulty: settings.difficulty,
       autoExecuteRoutine: settings.autoExecuteRoutine,
+      setup: setup ?? undefined,
     });
     clearSaveFile();
     savedFile.current = null;
@@ -693,6 +705,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       seed: current.settings.seed,
       difficulty: current.settings.difficulty,
       autoExecuteRoutine: current.settings.autoExecuteRoutine,
+      setup: current.settings.setup,
       log: current.actionLog,
       session: current.session,
       previous: savedFile.current,

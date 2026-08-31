@@ -63,6 +63,128 @@ export const SessionConfigSchema = z
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 
 /* -------------------------------------------------------------------------- */
+/*  New-game setup                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The five starting backgrounds a founder chooses at New Game. Each one shapes
+ * the player company's opening balance sheet, product, compute and posture; the
+ * numeric shape lives in the scenario (`createDemoSession`), and the copy the
+ * picker shows lives in `NEW_GAME_BACKGROUNDS` below.
+ */
+export const NEW_GAME_BACKGROUND_IDS = ['frontier_lab', 'enterprise_ai', 'consumer_ai', 'infrastructure', 'bootstrapper'] as const;
+
+export const NewGameBackgroundIdSchema = z
+  .enum(NEW_GAME_BACKGROUND_IDS)
+  .describe('Which starting background the founder picked. Selects the player company\'s opening shape; everything else in the world is unchanged.');
+export type NewGameBackgroundId = z.infer<typeof NewGameBackgroundIdSchema>;
+
+export const NewGameSetupSchema = z
+  .object({
+    companyName: z.string().trim().min(1).max(40).describe('The player company\'s display name. Trimmed; one to forty characters.'),
+    founderName: z.string().trim().min(1).max(40).describe('The founder character\'s display name. Trimmed; one to forty characters.'),
+    backgroundId: NewGameBackgroundIdSchema,
+  })
+  .describe('The three choices a player makes at New Game: company name, founder name and a starting background. Plain state, never handed to a model.');
+export type NewGameSetup = z.infer<typeof NewGameSetupSchema>;
+
+/** One player-facing headline stat on a background card, e.g. `{ label: "Cash", value: "$15M" }`. */
+export interface NewGameBackgroundHighlight {
+  readonly label: string;
+  readonly value: string;
+}
+
+/** Everything the New Game picker needs to render one background card. */
+export interface NewGameBackground {
+  readonly id: NewGameBackgroundId;
+  /** A short icon key (matches the app icon set), e.g. "flask". */
+  readonly icon: string;
+  readonly label: string;
+  readonly tagline: string;
+  readonly blurb: string;
+  /** Three or four opening stats to show on the card. */
+  readonly highlights: readonly NewGameBackgroundHighlight[];
+}
+
+/**
+ * The copy and headline stats for the five backgrounds, in pick order. The
+ * numbers here mirror the scenario's starting shape; the scenario is the source
+ * of truth for what actually reaches the engine.
+ */
+export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
+  {
+    id: 'frontier_lab',
+    icon: 'flask',
+    label: 'Frontier Lab',
+    tagline: 'Train ahead of revenue',
+    blurb:
+      'A research house chasing a forecast node on the Frontier Map. No product revenue yet, a lot of compute reserved, and a burn that only makes sense if the models land.',
+    highlights: [
+      { label: 'Cash', value: '$15M' },
+      { label: 'Compute', value: '800 owned' },
+      { label: 'Revenue', value: 'Pre-revenue' },
+      { label: 'Posture', value: 'Aggressive growth' },
+    ],
+  },
+  {
+    id: 'enterprise_ai',
+    icon: 'briefcase',
+    label: 'Enterprise AI',
+    tagline: 'Sell seats to businesses',
+    blurb:
+      'The classic start: a seat-based enterprise product with real customers, modest revenue and a sales motion. Steady, and the shape the rest of the game is balanced around.',
+    highlights: [
+      { label: 'Cash', value: '$4M' },
+      { label: 'Customers', value: '1,600 seats' },
+      { label: 'Revenue', value: '$0.32M/qtr' },
+      { label: 'Posture', value: 'Aggressive growth' },
+    ],
+  },
+  {
+    id: 'consumer_ai',
+    icon: 'people',
+    label: 'Consumer App',
+    tagline: 'Millions of small accounts',
+    blurb:
+      'A consumer product with a big, low-priced user base, thin margins and high churn. You live on hype and word of mouth, and the market watches your numbers in public.',
+    highlights: [
+      { label: 'Cash', value: '$5M' },
+      { label: 'Customers', value: '750K users' },
+      { label: 'Margin', value: 'Thin' },
+      { label: 'Posture', value: 'Aggressive growth' },
+    ],
+  },
+  {
+    id: 'infrastructure',
+    icon: 'network',
+    label: 'AI Infrastructure',
+    tagline: 'Own the capacity',
+    blurb:
+      'Capital-heavy from day one: datacentre, owned accelerators and some debt against them. Steadier margins and a government-and-enterprise reputation, but the balance sheet is leveraged.',
+    highlights: [
+      { label: 'Cash', value: '$6M' },
+      { label: 'Compute', value: '4,000 owned' },
+      { label: 'Debt', value: '$8M' },
+      { label: 'Posture', value: 'Balanced' },
+    ],
+  },
+  {
+    id: 'bootstrapper',
+    icon: 'compass',
+    label: 'Lean Bootstrapper',
+    tagline: 'Scrappy and short on cash',
+    blurb:
+      'A four-person shop with one product, no debt and not much runway. The hardest start: you have to build connections and revenue before the money runs out.',
+    highlights: [
+      { label: 'Cash', value: '$1.2M' },
+      { label: 'Team', value: '4 people' },
+      { label: 'Debt', value: 'None' },
+      { label: 'Posture', value: 'Balanced' },
+    ],
+  },
+];
+
+/* -------------------------------------------------------------------------- */
 /*  Players                                                                    */
 /* -------------------------------------------------------------------------- */
 

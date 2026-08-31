@@ -32,6 +32,9 @@ import {
   FOUNDER_INDEX_WEIGHTS,
   GmEventProposalSchema,
   InnovationProposalSchema,
+  NEW_GAME_BACKGROUNDS,
+  NEW_GAME_BACKGROUND_IDS,
+  NewGameSetupSchema,
   NpcActionBundleSchema,
   OWNERSHIP_THRESHOLDS,
   PATTERN_TARGET_PATHS,
@@ -405,6 +408,26 @@ describe('valid fixtures parse', () => {
     expect(parsed.lastResolvedQuarter).toBeNull();
     expect(parsed.quoteHistoryQuarters).toBe(24);
     expect(parsed.world.compute.spotPrice).toBeCloseTo(1.24);
+  });
+
+  it('parses a new-game setup, trims the names and rejects an empty or over-long one', () => {
+    const parsed = NewGameSetupSchema.parse({ companyName: '  Acme AI  ', founderName: '  Dana Vale ', backgroundId: 'frontier_lab' });
+    expect(parsed.companyName).toBe('Acme AI');
+    expect(parsed.founderName).toBe('Dana Vale');
+    expect(NewGameSetupSchema.safeParse({ companyName: '   ', founderName: 'x', backgroundId: 'enterprise_ai' }).success).toBe(false);
+    expect(NewGameSetupSchema.safeParse({ companyName: 'x'.repeat(41), founderName: 'x', backgroundId: 'enterprise_ai' }).success).toBe(false);
+    expect(NewGameSetupSchema.safeParse({ companyName: 'x', founderName: 'y', backgroundId: 'not_a_background' }).success).toBe(false);
+  });
+
+  it('describes every background id exactly once, with copy and highlights', () => {
+    expect(NEW_GAME_BACKGROUND_IDS).toHaveLength(5);
+    expect(NEW_GAME_BACKGROUNDS.map((background) => background.id)).toEqual([...NEW_GAME_BACKGROUND_IDS]);
+    for (const background of NEW_GAME_BACKGROUNDS) {
+      expect(background.label.length).toBeGreaterThan(0);
+      expect(background.tagline.length).toBeGreaterThan(0);
+      expect(background.blurb.length).toBeGreaterThan(0);
+      expect(background.highlights.length).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it('parses a conditional commitment produced by a director conversation', () => {

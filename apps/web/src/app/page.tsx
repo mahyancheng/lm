@@ -3,12 +3,21 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { SESSION_DIFFICULTIES, quarterLabel, type SessionDifficulty } from '@frontier/contracts';
+import {
+  NEW_GAME_BACKGROUNDS,
+  SESSION_DIFFICULTIES,
+  quarterLabel,
+  type NewGameBackgroundId,
+  type SessionDifficulty,
+} from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import { DEMO_SEED, readSaveFile, useGame, useGameActions, useLlm, useLoading } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
+
+/** The longest a company or founder name may be, mirroring `NewGameSetupSchema`. */
+const NAME_MAX = 40;
 
 const DIFFICULTY_BLURB: Readonly<Record<SessionDifficulty, string>> = {
   sandbox: 'A quiet world. Two events a quarter at most, and rivals that rarely reach for your throat.',
@@ -220,9 +229,17 @@ export default function LandingPage(): React.JSX.Element {
 
   const [seedText, setSeedText] = useState(String(DEMO_SEED));
   const [difficulty, setDifficulty] = useState<SessionDifficulty>('standard');
+  const [companyName, setCompanyName] = useState('');
+  const [founderName, setFounderName] = useState('');
+  const [backgroundId, setBackgroundId] = useState<NewGameBackgroundId>('enterprise_ai');
   const [save, setSave] = useState<ReturnType<typeof readSaveFile>>(null);
   const [showMultiplayer, setShowMultiplayer] = useState(false);
   const [resuming, setResuming] = useState(false);
+
+  const trimmedCompany = companyName.trim();
+  const trimmedFounder = founderName.trim();
+  const namesValid =
+    trimmedCompany.length > 0 && trimmedCompany.length <= NAME_MAX && trimmedFounder.length > 0 && trimmedFounder.length <= NAME_MAX;
 
   useEffect(() => {
     if (hydrated) setSave(readSaveFile());
@@ -243,7 +260,13 @@ export default function LandingPage(): React.JSX.Element {
   const supabaseReady = isSupabaseConfigured();
 
   function startNewGame(): void {
-    newGame({ seed, difficulty });
+    if (!namesValid) {
+      // A phone may have the button in view before the fields; send the founder
+      // to them rather than starting a nameless company.
+      document.getElementById('new-company')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    newGame({ seed, difficulty, setup: { companyName: trimmedCompany, founderName: trimmedFounder, backgroundId } });
     router.push(HOME_ROUTE);
   }
 
@@ -346,15 +369,84 @@ export default function LandingPage(): React.JSX.Element {
         </section>
 
         {/* --- entry points ------------------------------------------------ */}
-        <div className="order-3 grid gap-4 lg:order-4 lg:grid-cols-3">
+        <div id="new-company" className="order-3 grid scroll-mt-4 gap-4 lg:order-4 lg:grid-cols-3">
           <Panel
-            title="Session setup"
-            subtitle="The two dials that decide what world you get"
-            iconName="settings"
+            title="Start a new company"
+            subtitle="Name it and choose how it starts"
+            iconName="building"
             iconTone="brand"
             className={cx(save === null ? 'order-1' : 'order-2', 'lg:order-1 lg:col-span-2')}
           >
-            <div className="grid gap-4 sm:grid-cols-[170px_1fr]">
+            {/* --- identity: who you are and what you are building ---------- */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className="label-caps-faint">Company name</span>
+                <input
+                  className="field mt-1 min-h-11 sm:min-h-0"
+                  value={companyName}
+                  onChange={(event) => setCompanyName(event.target.value.slice(0, NAME_MAX))}
+                  maxLength={NAME_MAX}
+                  placeholder="e.g. Northwind AI"
+                  aria-label="Company name"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="block">
+                <span className="label-caps-faint">Founder name</span>
+                <input
+                  className="field mt-1 min-h-11 sm:min-h-0"
+                  value={founderName}
+                  onChange={(event) => setFounderName(event.target.value.slice(0, NAME_MAX))}
+                  maxLength={NAME_MAX}
+                  placeholder="e.g. Rae Fontaine"
+                  aria-label="Founder name"
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+
+            {/* --- background: how the company starts ----------------------- */}
+            <fieldset className="mt-4 min-w-0">
+              <legend className="label-caps-faint">Starting background</legend>
+              <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+                {NEW_GAME_BACKGROUNDS.map((background) => {
+                  const selected = backgroundId === background.id;
+                  return (
+                    <button
+                      key={background.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setBackgroundId(background.id)}
+                      className={cx(
+                        'press-pop flex min-h-11 w-full flex-col gap-2 rounded-card border p-3 text-left',
+                        selected ? 'icon-knockout-wash border-brand bg-brand-wash' : 'border-hair bg-raised hover:border-brand',
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <IconChip name={background.icon as IconName} tone={selected ? 'brand' : 'neutral'} size="sm" />
+                        <span className="min-w-0">
+                          <span className="block text-[13px] font-bold text-ink">{background.label}</span>
+                          <span className="block text-[10.5px] text-ink-faint">{background.tagline}</span>
+                        </span>
+                        {selected ? <Icon name="check" size={15} accent="brand" className="ml-auto" /> : null}
+                      </div>
+                      <p className="text-[11.5px] leading-relaxed text-ink-dim">{background.blurb}</p>
+                      <dl className="flex flex-wrap gap-x-3 gap-y-1">
+                        {background.highlights.map((highlight) => (
+                          <div key={highlight.label} className="flex items-baseline gap-1">
+                            <dt className="label-caps-faint">{highlight.label}</dt>
+                            <dd className="figure text-[11px] font-semibold text-ink">{highlight.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            {/* --- the two world dials -------------------------------------- */}
+            <div className="mt-4 grid gap-4 border-t border-hair pt-4 sm:grid-cols-[170px_1fr]">
               <label className="block">
                 <span className="label-caps-faint">Seed</span>
                 <input
@@ -393,11 +485,18 @@ export default function LandingPage(): React.JSX.Element {
             </div>
 
             <div className="mt-5 flex flex-col gap-2 border-t border-hair pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-              <button type="button" className="btn btn-primary tap-target press-pop w-full sm:w-auto" onClick={startNewGame}>
+              <button
+                type="button"
+                className="btn btn-primary tap-target press-pop w-full sm:w-auto"
+                onClick={startNewGame}
+                disabled={!namesValid}
+              >
                 <Icon name="plus" size={16} accent="current" />
-                Found Player Ventures — 2027 Q1
+                {trimmedCompany.length > 0 ? `Found ${trimmedCompany} — 2027 Q1` : 'Found your company — 2027 Q1'}
               </button>
-              <span className="text-[11px] text-ink-faint">Seed {seed}, {difficulty} world.</span>
+              <span className="text-[11px] text-ink-faint">
+                {namesValid ? `Seed ${seed}, ${difficulty} world.` : 'Enter a company and founder name to start.'}
+              </span>
             </div>
           </Panel>
 

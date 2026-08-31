@@ -14,6 +14,7 @@ import type {
   ActionIntent,
   ActionType,
   GmProposalBatch,
+  NewGameSetup,
   NpcActionBundle,
   ResolverContext,
   SessionDifficulty,
@@ -60,17 +61,21 @@ export interface NewGameOptions {
   readonly seed?: number;
   readonly difficulty?: SessionDifficulty;
   readonly autoExecuteRoutine?: boolean;
+  /** Company name, founder name and starting background. Omit for the default world. */
+  readonly setup?: NewGameSetup;
 }
 
 /**
  * Build a fresh demo session at 2027 Q1.
  *
  * The world data is fixed; the seed enters through `SessionState.seed` and the
- * session id. Same seed, same starting state, byte for byte.
+ * session id. Same seed, same starting state, byte for byte. An optional `setup`
+ * renames the player company and founder and reshapes the player company; with
+ * none, the world is today's default.
  */
 export function createSession(options: NewGameOptions = {}): SessionState {
   const seed = Number.isFinite(options.seed) ? Number(options.seed) : DEMO_SEED;
-  const input = demoSessionInput(seed);
+  const input = demoSessionInput(seed, options.setup);
   const difficulty = options.difficulty ?? 'standard';
   const autoExecute = options.autoExecuteRoutine ?? false;
 

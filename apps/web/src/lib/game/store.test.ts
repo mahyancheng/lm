@@ -72,6 +72,7 @@ describe('demo store surfaces', () => {
       seed: 424242,
       difficulty: 'standard',
       autoExecuteRoutine: false,
+      setup: null,
       log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
       checkpoint: null,
       savedQuarter: 1,

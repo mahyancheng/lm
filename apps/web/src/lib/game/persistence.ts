@@ -4,7 +4,8 @@
  * A saved game is not a serialised world. It is the seed and the *inputs to F*:
  *
  * ```json
- * { "version": 2, "seed": 424242, "difficulty": "standard",
+ * { "version": 3, "seed": 424242, "difficulty": "standard",
+ *   "setup": { "companyName": "Acme AI", "founderName": "Dana Vale", "backgroundId": "consumer_ai" },
  *   "log": [{ "quarter": 0, "actions": [...], "gmProposal": null, "npcBundles": [] }],
  *   "checkpoint": { "quarter": 8, "state": { ... } } }
  * ```
@@ -33,6 +34,7 @@
 
 import type {
   GmProposalBatch,
+  NewGameSetup,
   NpcActionBundle,
   SessionDifficulty,
   SessionState,
@@ -40,6 +42,7 @@ import type {
 } from '@frontier/contracts';
 import {
   GmProposalBatchSchema,
+  NewGameSetupSchema,
   NpcActionBundleSchema,
   SESSION_DIFFICULTIES,
   SessionStateSchema,
@@ -48,7 +51,14 @@ import {
 import { getEngine, createSession, DEMO_SEED } from './engine';
 
 export const SAVE_KEY = 'frontier-demo-v1';
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
+
+/**
+ * Versions this build can read. A save written by any of these loads; anything
+ * else is preserved untouched, never overwritten. v1 recorded only the player's
+ * actions; v2 added agent proposals and checkpoints; v3 adds the new-game setup.
+ */
+export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3];
 
 /** Replay depth ceiling for a save with no usable checkpoint. Ten years of quarters. */
 export const MAX_REPLAY_QUARTERS = 40;
@@ -81,6 +91,8 @@ export interface SaveFile {
   readonly difficulty: SessionDifficulty;
   /** Part of the starting state, so a replay must restore it too. */
   readonly autoExecuteRoutine: boolean;
+  /** The new-game setup (company name, founder name, background), or null for the default world. */
+  readonly setup: NewGameSetup | null;
   /** One entry per resolved quarter, in order, holding every input to it. */
   readonly log: readonly QuarterRecord[];
   readonly checkpoint: SaveCheckpoint | null;
@@ -95,6 +107,8 @@ export interface LoadedGame {
   readonly seed: number;
   readonly difficulty: SessionDifficulty;
   readonly autoExecuteRoutine: boolean;
+  /** The new-game setup the save was made with, or null for the default world. */
+  readonly setup: NewGameSetup | null;
   /** Quarters that were replayed but did not commit, if any. */
   readonly rejectedQuarters: number[];
   /** True when every recorded quarter replayed and committed. */
@@ -168,6 +182,13 @@ function migrateV1(raw: unknown): QuarterRecord[] {
   });
 }
 
+/** Read a stored new-game setup, or null when absent (a v1/v2 file) or malformed. */
+function parseSetup(raw: unknown): NewGameSetup | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = NewGameSetupSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 function parseCheckpoint(raw: unknown): SaveCheckpoint | null {
   if (raw === null || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
@@ -206,7 +227,7 @@ export function inspectSave(): SaveInspection {
   }
 
   const version = typeof parsed.version === 'number' ? parsed.version : null;
-  if (version !== 1 && version !== SAVE_VERSION) return { status: 'unsupported', version, file: null };
+  if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) return { status: 'unsupported', version, file: null };
 
   const seed = typeof parsed.seed === 'number' && Number.isFinite(parsed.seed) ? parsed.seed : DEMO_SEED;
   const difficulty = SESSION_DIFFICULTIES.includes(parsed.difficulty as SessionDifficulty)
@@ -214,6 +235,9 @@ export function inspectSave(): SaveInspection {
     : 'standard';
   const log = version === 1 ? migrateV1(parsed.actionLog) : parseRecords(parsed.log);
   const checkpoint = version === 1 ? null : parseCheckpoint(parsed.checkpoint ?? null);
+  // The setup arrives with v3. A v1/v2 file has none, so it replays as the
+  // default Player Ventures world.
+  const setup = parseSetup(parsed.setup);
   const savedQuarter =
     typeof parsed.savedQuarter === 'number' && Number.isInteger(parsed.savedQuarter)
       ? parsed.savedQuarter
@@ -227,6 +251,7 @@ export function inspectSave(): SaveInspection {
       seed,
       difficulty,
       autoExecuteRoutine: parsed.autoExecuteRoutine === true,
+      setup,
       log,
       checkpoint,
       savedQuarter,
@@ -287,6 +312,8 @@ export function buildSaveFile(input: {
   readonly seed: number;
   readonly difficulty: SessionDifficulty;
   readonly autoExecuteRoutine: boolean;
+  /** The new-game setup, or null for the default world. */
+  readonly setup: NewGameSetup | null;
   readonly log: readonly QuarterRecord[];
   /** The session as it now stands, i.e. with `quarter` open and unresolved. */
   readonly session: SessionState;
@@ -305,6 +332,7 @@ export function buildSaveFile(input: {
     seed: input.seed,
     difficulty: input.difficulty,
     autoExecuteRoutine: input.autoExecuteRoutine,
+    setup: input.setup,
     log: input.log,
     checkpoint,
     savedQuarter: input.session.quarter,
@@ -323,7 +351,7 @@ export function writeSaveFile(file: SaveFile): boolean {
   const store = storage();
   if (store === null) return false;
   const stored = storedSaveVersion();
-  if (stored !== null && stored !== 1 && stored !== SAVE_VERSION) return false;
+  if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) return false;
 
   try {
     store.setItem(SAVE_KEY, JSON.stringify(file));
@@ -377,7 +405,7 @@ export function importSave(text: string): SaveFile | null {
   if (parsed === null || typeof parsed !== 'object') return null;
   const value = parsed as Record<string, unknown>;
   const version = typeof value.version === 'number' ? value.version : null;
-  if (version !== 1 && version !== SAVE_VERSION) return null;
+  if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) return null;
 
   const log = version === 1 ? migrateV1(value.actionLog) : parseRecords(value.log);
   const file: SaveFile = {
@@ -387,6 +415,7 @@ export function importSave(text: string): SaveFile | null {
       ? (value.difficulty as SessionDifficulty)
       : 'standard',
     autoExecuteRoutine: value.autoExecuteRoutine === true,
+    setup: parseSetup(value.setup),
     log,
     checkpoint: version === 1 ? null : parseCheckpoint(value.checkpoint ?? null),
     savedQuarter:
@@ -450,7 +479,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
   const usable = candidate !== null && (after.length === 0 || after[0]?.quarter === candidate.quarter) ? candidate : null;
   let session =
     usable === null
-      ? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine })
+      ? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine, setup: file.setup ?? undefined })
       : usable.state;
   const replayedFrom = usable === null ? 0 : usable.quarter;
 
@@ -495,6 +524,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     seed: file.seed,
     difficulty: file.difficulty,
     autoExecuteRoutine: file.autoExecuteRoutine,
+    setup: file.setup,
     rejectedQuarters,
     complete,
     replayedFrom,

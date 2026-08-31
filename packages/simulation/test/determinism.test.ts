@@ -17,7 +17,15 @@ import { describe, expect, it } from 'vitest';
 import type { NpcActionBundle, SessionState, SubmittedAction } from '@frontier/contracts';
 import { TECH_EPISTEMIC_STATES, balanceSheetReconciles } from '@frontier/contracts';
 import { createStateHasher, hashState, stableStringify } from '@frontier/shared';
-import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, DEMO_SEED, createDemoSession } from '../src/scenario';
+import {
+  DEMO_CHARACTERS,
+  DEMO_COMPANIES,
+  DEMO_PLAYER_ID,
+  DEMO_SEED,
+  NEW_GAME_BACKGROUND_IDS,
+  createDemoSession,
+  type NewGameSetup,
+} from '../src/scenario';
 
 /* -------------------------------------------------------------------------- */
 /*  The scenario                                                               */
@@ -378,6 +386,120 @@ describe.skipIf(engineModule === null)('eight quarters, twice', () => {
       expect(replay.committed).toBe(false);
       expect(replay.events).toHaveLength(0);
       expect(replay.invariants.some((result) => result.invariant === 'idempotency' && !result.passed)).toBe(true);
+    },
+    60_000,
+  );
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Starting backgrounds                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A new-game setup renames the player company and founder and reshapes only the
+ * player company. The world is otherwise the fixed demo world, and every
+ * background must open on a reconciling balance sheet and resolve quarter 1
+ * through the real engine with the invariant gate intact.
+ */
+describe('starting backgrounds', () => {
+  const playerCompany = (state: SessionState) => {
+    const company = state.companies.find((entry) => entry.id === DEMO_COMPANIES.player);
+    if (company === undefined) throw new Error('no player company');
+    return company;
+  };
+  const founder = (state: SessionState) => {
+    const character = state.characters.find((entry) => entry.id === DEMO_CHARACTERS.player);
+    if (character === undefined) throw new Error('no founder character');
+    return character;
+  };
+
+  it('leaves createDemoSession() byte-identical when no setup is given', () => {
+    expect(hashState(createDemoSession())).toBe(hashState(createDemoSession(DEMO_SEED, undefined)));
+    // The default is the enterprise_ai shape, but the default path never routes
+    // through a background, so it keeps the original name and founder.
+    expect(playerCompany(createDemoSession()).name).toBe('Player Ventures');
+    expect(founder(createDemoSession()).name).toBe('Avery Sinclair');
+  });
+
+  it('renames only the player company and the founder, and keeps their ids stable', () => {
+    const setup: NewGameSetup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' };
+    const state = createDemoSession(DEMO_SEED, setup);
+
+    expect(playerCompany(state).id).toBe(DEMO_COMPANIES.player);
+    expect(playerCompany(state).name).toBe('Northwind AI');
+    expect(playerCompany(state).controllerPlayerId).toBe(DEMO_PLAYER_ID);
+    expect(founder(state).id).toBe(DEMO_CHARACTERS.player);
+    expect(founder(state).name).toBe('Rae Fontaine');
+    expect(state.players.find((seat) => seat.playerId === DEMO_PLAYER_ID)?.displayName).toBe('Rae Fontaine');
+
+    // Everyone else is untouched: the six rivals and the fifteen seeded people.
+    expect(state.companies).toHaveLength(7);
+    expect(state.companies.filter((c) => c.id !== DEMO_COMPANIES.player).map((c) => c.name).sort()).toEqual(
+      createDemoSession().companies.filter((c) => c.id !== DEMO_COMPANIES.player).map((c) => c.name).sort(),
+    );
+    // The board, cap table and seed round still resolve to the player company.
+    expect(state.boards.some((b) => b.companyId === DEMO_COMPANIES.player)).toBe(true);
+    expect(state.capTables.some((t) => t.companyId === DEMO_COMPANIES.player)).toBe(true);
+  });
+
+  it('reproduces today\'s Player Ventures balance for the enterprise_ai background', () => {
+    const base = playerCompany(createDemoSession());
+    const shaped = playerCompany(createDemoSession(DEMO_SEED, { companyName: 'X', founderName: 'Y', backgroundId: 'enterprise_ai' }));
+    expect(shaped.financials).toEqual(base.financials);
+    expect(shaped.balanceSheet).toEqual(base.balanceSheet);
+    expect(shaped.archetype).toBe(base.archetype);
+    expect(shaped.compute).toEqual(base.compute);
+    expect(shaped.products.map((p) => ({ ...p, name: null }))).toEqual(base.products.map((p) => ({ ...p, name: null })));
+  });
+
+  it('opens every background on a reconciling player balance sheet', () => {
+    for (const backgroundId of NEW_GAME_BACKGROUND_IDS) {
+      const state = createDemoSession(DEMO_SEED, { companyName: 'Test Co', founderName: 'Test Founder', backgroundId });
+      expect(balanceSheetReconciles(playerCompany(state).balanceSheet)).toBe(true);
+    }
+  });
+
+  it('is deterministic for a given seed and setup', () => {
+    const setup: NewGameSetup = { companyName: 'Deterministic Inc', founderName: 'Sam Okafor', backgroundId: 'infrastructure' };
+    expect(hashState(createDemoSession(DEMO_SEED, setup))).toBe(hashState(createDemoSession(DEMO_SEED, setup)));
+    expect(stableStringify(createDemoSession(7, setup))).toBe(stableStringify(createDemoSession(7, setup)));
+    // A different background is a different world.
+    expect(hashState(createDemoSession(DEMO_SEED, setup))).not.toBe(
+      hashState(createDemoSession(DEMO_SEED, { ...setup, backgroundId: 'bootstrapper' })),
+    );
+  });
+});
+
+describe.skipIf(engineModule === null)('starting backgrounds resolve quarter 1', () => {
+  it(
+    'commits quarter 1 through the real engine for each of the five backgrounds, invariant gate passing',
+    () => {
+      if (engineModule === null) return;
+      for (const backgroundId of NEW_GAME_BACKGROUND_IDS) {
+        const engine = engineModule.createDefaultEngine();
+        const state = createDemoSession(DEMO_SEED, { companyName: 'Frontier Co', founderName: 'Alex Rivera', backgroundId });
+        const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+        expect(outcome.committed, `${backgroundId} should commit quarter 1`).toBe(true);
+        expect(outcome.invariants.every((result) => result.passed), `${backgroundId} invariants`).toBe(true);
+        const player = outcome.nextState.companies.find((c) => c.id === DEMO_COMPANIES.player);
+        expect(player).toBeDefined();
+        if (player !== undefined) expect(balanceSheetReconciles(player.balanceSheet)).toBe(true);
+      }
+    },
+    120_000,
+  );
+
+  it(
+    'resolves a given (seed, setup) to an identical state hash twice',
+    () => {
+      if (engineModule === null) return;
+      const setup: NewGameSetup = { companyName: 'Twin AI', founderName: 'Jo Meyer', backgroundId: 'frontier_lab' };
+      const resolveOnce = (): string => {
+        const engine = engineModule.createDefaultEngine();
+        const outcome = engine.resolver.resolveQuarter(createDemoSession(DEMO_SEED, setup), [], null, []);
+        return outcome.report.stateHashAfter;
+      };
+      expect(resolveOnce()).toBe(resolveOnce());
     },
     60_000,
   );

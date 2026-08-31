@@ -20,21 +20,26 @@ import { z } from 'zod';
 import {
   type TokenMutationResult,
   type TokenStatusFull,
+  SETUP_SECRET_HEADER,
   TOKEN_MAX_LENGTH,
   TOKEN_MIN_LENGTH,
 } from '@/lib/llm/token';
 import { getServiceClient, isSupabaseConfigured } from '@/lib/supabase/server';
-import { NO_STORE_HEADERS, modelName, takeTokenWriteBudget, transportAvailable, transportKind } from '../_gateway';
+import { NO_STORE_HEADERS, chargeSetupSecretAttempt, modelName, takeTokenWriteBudget, transportAvailable, transportKind } from '../_gateway';
 import type { Principal } from '../_identity';
 import {
   type ConnectionFacts,
   type TokenIntent,
   type TokenWriteDecision,
+  SETUP_SECRET_ENV,
   TOKEN_SETUP_ENV,
   authorizeTokenWrite,
   buildTokenStatus,
+  checkSetupSecret,
   checkWriteRequest,
   isLocalConnection,
+  isServerless,
+  setupSecretConfigured,
   tokenWriteBudgetKey,
   tokenWriteOriginKey,
 } from '../_runtime';
@@ -63,6 +68,22 @@ export function connectionFacts(request: Request): ConnectionFacts {
     optIn: process.env[TOKEN_SETUP_ENV],
     host: request.headers.get('host'),
     forwardedFor: request.headers.get('x-forwarded-for'),
+  };
+}
+
+/**
+ * Whether this deployment offers the secret gate, and whether this request
+ * carried the matching secret.
+ *
+ * The comparison is constant-time and happens here, in the impure layer, so the
+ * pure authority function only ever sees the boolean `secretPresented` — the
+ * secret itself never reaches it, is never logged, and cannot be returned.
+ */
+export function setupSecretFacts(request: Request): { readonly secretConfigured: boolean; readonly secretPresented: boolean } {
+  const configured = process.env[SETUP_SECRET_ENV];
+  return {
+    secretConfigured: setupSecretConfigured(process.env),
+    secretPresented: checkSetupSecret(request.headers.get(SETUP_SECRET_HEADER), configured),
   };
 }
 
@@ -107,6 +128,8 @@ export function describeCredential(request: Request): TokenStatusFull {
     available: transportAvailable(),
     supabaseConfigured: isSupabaseConfigured(),
     localConnection: isLocalConnection(connectionFacts(request)),
+    secretConfigured: setupSecretConfigured(process.env),
+    serverless: isServerless(process.env),
   });
 }
 
@@ -150,6 +173,7 @@ export interface TokenCaller {
 export async function decideTokenWrite(request: Request, caller: TokenCaller, intent: TokenIntent): Promise<TokenWriteDecision> {
   const supabaseConfigured = isSupabaseConfigured();
   const isAdmin = supabaseConfigured && caller.principal.kind === 'supabase' ? await isAdminUser(caller.principal.id) : false;
+  const secret = setupSecretFacts(request);
   return authorizeTokenWrite({
     supabaseConfigured,
     principal: caller.principal,
@@ -157,6 +181,8 @@ export async function decideTokenWrite(request: Request, caller: TokenCaller, in
     mintedPrincipal: caller.mintedPrincipal,
     localConnection: isLocalConnection(connectionFacts(request)),
     intent,
+    secretConfigured: secret.secretConfigured,
+    secretPresented: secret.secretPresented,
   });
 }
 
@@ -187,7 +213,19 @@ export async function mayReadDescriptor(request: Request, caller: TokenCaller): 
  */
 export async function gateTokenWrite(request: Request, caller: TokenCaller): Promise<NextResponse | null> {
   const decision = await decideTokenWrite(request, caller, 'write');
-  if (!decision.ok) return json({ ok: false, reason: decision.reason }, decision.status);
+  if (!decision.ok) {
+    // Throttle brute-force of the setup secret before answering: a wrong or
+    // absent secret is refused before the per-principal budget is ever charged,
+    // so without this a guesser is unbounded. Charged to the origin bucket
+    // (process-wide, header-blind) so no header rotation buys a fresh window.
+    if (decision.reason === 'setup_secret_required') {
+      const attempt = chargeSetupSecretAttempt(tokenWriteOriginKey(request.headers));
+      if (!attempt.allowed) {
+        return json({ ok: false, reason: 'rate_limited' }, 429, { 'retry-after': String(attempt.retryAfterSeconds) });
+      }
+    }
+    return json({ ok: false, reason: decision.reason }, decision.status);
+  }
 
   const budgetKey = tokenWriteBudgetKey(caller.principal.id, tokenWriteOriginKey(request.headers));
   const budget = takeTokenWriteBudget(budgetKey);

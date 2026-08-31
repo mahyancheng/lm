@@ -24,12 +24,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   DISABLED_LINE,
+  LOCKED_LINE,
   NO_SERVER_LINE,
   credentialLine,
+  isServerlessClaudeSession,
+  runtimeServerlessCaveat,
+  oauthFailureLine,
   pasteFieldLabel,
   pasteMode,
   refusalLine,
+  serverlessNotice,
   sourceChip,
+  statusDotTone,
   statusHeadline,
   testResultLine,
   tokenPanelState,
@@ -48,13 +54,14 @@ function status(overrides: Partial<TokenStatusFull> = {}): TokenStatusFull {
     kind: null,
     setAt: null,
     authGate: 'open-local',
+    serverless: false,
     ...overrides,
   };
 }
 
-/** What a caller who may not write the credential is told: four facts, no descriptor. */
+/** What a caller who may not write the credential is told: the public facts, no descriptor. */
 function publicStatus(overrides: Partial<TokenStatusPublic> = {}): TokenStatusPublic {
-  return { configured: false, available: false, transportKind: 'none', authGate: 'admin', ...overrides };
+  return { configured: false, available: false, transportKind: 'none', authGate: 'admin', serverless: false, ...overrides };
 }
 
 const ok = (value: TokenStatus): TokenFetch<TokenStatus> => ({ kind: 'ok', value });
@@ -160,6 +167,77 @@ describe('phases', () => {
     expect(state.descriptor).toEqual(CONFIGURED);
     expect(state.descriptor?.masked).toBe('…wxyz');
   });
+
+  it('leads with the unlock field when the deployment offers the secret gate and this caller has not unlocked', () => {
+    // authGate `secret` with no descriptor: not "you may never write" but "you
+    // have not unlocked yet". The panel shows the one-time secret field, not the
+    // administrator dead end.
+    const state = tokenPanelState(ok(publicStatus({ authGate: 'secret', available: false, transportKind: 'none' })));
+    expect(state.phase).toBe('locked');
+    expect(state.message).toBe(LOCKED_LINE);
+    expect(state.canWrite).toBe(false);
+    expect(state.descriptor).toBeNull();
+  });
+
+  it('becomes an ordinary configured panel once the secret unlocks the descriptor', () => {
+    // After the secret is accepted the server discloses the descriptor, so the
+    // same `secret` gate now flows through to the live check.
+    const unlocked = tokenPanelState(ok(status({ authGate: 'secret', configured: true, available: true, masked: '…wxyz', source: 'runtime', transportKind: 'claude-session' })));
+    expect(unlocked.phase).toBe('configured');
+    expect(unlocked.canWrite).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('serverless honesty', () => {
+  const serverlessOauth = status({
+    configured: true,
+    available: false,
+    serverless: true,
+    transportKind: 'claude-session',
+    source: 'runtime',
+    masked: '…wxyz',
+    authGate: 'secret',
+  });
+
+  it('recognises a subscription credential that cannot run on this host', () => {
+    expect(isServerlessClaudeSession(serverlessOauth)).toBe(true);
+    // An API key on the same host runs fine; a self-hosted subscription runs fine.
+    expect(isServerlessClaudeSession({ ...serverlessOauth, transportKind: 'api' })).toBe(false);
+    expect(isServerlessClaudeSession({ ...serverlessOauth, serverless: false })).toBe(false);
+  });
+
+  it('never claims Live for it — it is connected, not live', () => {
+    expect(statusHeadline(serverlessOauth)).toBe('Subscription connected');
+    // And the dot is a caution, not the green live pulse and not plain idle.
+    expect(statusDotTone(serverlessOauth)).toBe('caution');
+    expect(statusDotTone(status({ available: true }))).toBe('live');
+    expect(statusDotTone(status())).toBe('idle');
+  });
+
+  it('spells out both truths: it runs self-hosted, and this host wants an API key', () => {
+    const note = serverlessNotice(serverlessOauth);
+    expect(note).toMatch(/self-hosted/);
+    expect(note).toMatch(/API key/);
+    // Nothing to caveat when the transport can actually run here.
+    expect(serverlessNotice(status({ available: true, transportKind: 'claude-session' }))).toBeNull();
+    expect(serverlessNotice(null)).toBeNull();
+  });
+
+  it('warns that an in-app credential reaches only one serverless instance', () => {
+    // An API key pasted in-app on Vercel: the transport is fine, but it lives in
+    // one lambda — the caveat names the env-var fix.
+    const apiRuntime = status({ configured: true, available: true, serverless: true, transportKind: 'api', source: 'runtime', masked: '…api1', kind: 'api_key' });
+    const note = runtimeServerlessCaveat(apiRuntime);
+    expect(note).toMatch(/one server instance/);
+    expect(note).toMatch(/environment variable/);
+    // An env-sourced credential is on every instance; a non-serverless host has one process.
+    expect(runtimeServerlessCaveat({ ...apiRuntime, source: 'env' })).toBeNull();
+    expect(runtimeServerlessCaveat({ ...apiRuntime, serverless: false })).toBeNull();
+    // A public (reduced) status carries no source, so no runtime claim to caveat.
+    expect(runtimeServerlessCaveat(publicStatus({ configured: true, serverless: true }))).toBeNull();
+  });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -180,7 +258,7 @@ describe('pasting a replacement', () => {
     // paste a new one without editing a dotfile and restarting.
     expect(pasteMode(configured, true)).toBe('replace');
     expect(pasteFieldLabel('replace')).toMatch(/replacement/);
-    expect(pasteFieldLabel('guided')).toBe('Paste the token');
+    expect(pasteFieldLabel('guided')).toBe('Paste a token or API key');
   });
 
   it('works for an environment credential, which is the case that needed it', () => {
@@ -288,10 +366,21 @@ describe('outcomes', () => {
     // Three 403s and two 401s that would otherwise read identically, and the
     // right response to each is completely different.
     expect(refusalLine(403, 'setup_disabled')).toBe(DISABLED_LINE);
+    expect(refusalLine(403, 'setup_secret_required')).toMatch(/setup secret/i);
     expect(refusalLine(401, 'cookie_required')).toMatch(/session cookie/i);
     expect(refusalLine(401, 'cookie_required')).not.toMatch(/Sign in/);
     for (const reason of ['cross_site', 'origin_unverified', 'unsupported_media_type']) {
       expect(refusalLine(403, reason)).toMatch(/did not look like it came from this page/);
     }
+  });
+
+  it('turns each in-app connect failure into its own next step', () => {
+    expect(oauthFailureLine('expired_code', 'HTTP 401')).toMatch(/expired/i);
+    // The flow-level failures already carry an actionable sentence from the server.
+    expect(oauthFailureLine('bad_state', 'Start again and use the newest link.')).toMatch(/newest link/);
+    expect(oauthFailureLine('expired_flow', 'This connect attempt has expired or was already used. Start again.')).toMatch(/expired/i);
+    expect(oauthFailureLine('network', 'ECONNRESET')).toMatch(/ECONNRESET/);
+    // An exchange failure points at the manual paste fallback rather than a dead end.
+    expect(oauthFailureLine('exchange_failed', 'HTTP 500')).toMatch(/setup-token/);
   });
 });

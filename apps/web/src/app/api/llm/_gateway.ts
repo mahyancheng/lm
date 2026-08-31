@@ -59,6 +59,7 @@ import {
   createGenerationCache,
   processSingleton,
   resolveLlmEnv,
+  transportCannotRunHere,
 } from './_runtime';
 
 /** Every LLM route runs on Node and is never cached. */
@@ -131,6 +132,12 @@ export function transportAvailable(): boolean {
   const env = llmEnv();
   const kind = resolveTransportKind(env['LLM_TRANSPORT']);
   if (kind === 'none') return false;
+  // A credential can be configured and still be unable to run on this host: the
+  // Claude-session transport spawns the CLI as a subprocess, which a serverless
+  // function cannot do. Report *unavailable* there rather than let every role
+  // call discover it by burning a spawn timeout, and rather than claim live AI
+  // the deployment cannot deliver.
+  if (transportCannotRunHere(kind, env)) return false;
   if (kind === 'api') return hasValue(env['ANTHROPIC_API_KEY']);
   return hasValue(env['CLAUDE_CODE_OAUTH_TOKEN']) || hasValue(env['LLM_TRANSPORT']);
 }
@@ -195,6 +202,20 @@ const tokenWriteLimiter = processSingleton('llm.tokenWriteLimiter', () => create
  */
 export function takeTokenWriteBudget(budgetKey: string, now: number = Date.now()): RateDecision {
   return tokenWriteLimiter.take(budgetKey, now);
+}
+
+/**
+ * A wrong or absent setup secret is the one refusal an attacker can grind, and
+ * the per-principal write budget never sees it (authority is decided before the
+ * budget is charged). This bucket throttles the guess itself: a process-wide
+ * 10-per-minute ceiling makes a long random `LLM_SETUP_SECRET` uncrackable
+ * online, while a legitimate operator fat-fingering the field a few times is
+ * nowhere near it.
+ */
+const setupSecretFailLimiter = processSingleton('llm.setupSecretFailLimiter', () => createRateLimiter({ limit: 10 }));
+
+export function chargeSetupSecretAttempt(originKey: string, now: number = Date.now()): RateDecision {
+  return setupSecretFailLimiter.take(originKey, now);
 }
 
 /** Headers every route in this folder answers with. */

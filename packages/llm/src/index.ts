@@ -116,6 +116,25 @@ export { AGENT_VERSION, contextHashFor, createLlmRoles } from './roles';
 export type { MemoryRunSink, RunSink } from './runSink';
 export { createMemoryRunSink, createNullRunSink, safeRunSink } from './runSink';
 
+/* ---------------------------- subscription oauth -------------------------- */
+
+export type {
+  ClaudeOAuthExchangeError,
+  ClaudeOAuthExchangeResult,
+  ClaudePkcePair,
+  ExchangeInput,
+  FetchLike,
+  RandomBytes,
+} from './oauth';
+export {
+  CLAUDE_OAUTH_CONFIG,
+  base64Url,
+  buildClaudeAuthorizeUrl,
+  createOAuthState,
+  createPkcePair,
+  exchangeClaudeOAuthCode,
+} from './oauth';
+
 /* -------------------------------------------------------------------------- */
 /*  Gateway                                                                    */
 /* -------------------------------------------------------------------------- */

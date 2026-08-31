@@ -204,7 +204,16 @@ LLM_MODEL=sonnet
 # in-app path off entirely. Unset means: infer it. See § 5.1.
 LLM_TOKEN_SETUP=
 
+# Optional. Unlocks in-app AI setup on a PUBLIC deployment with no Supabase
+# admin that is not a local connection. A long random string; a visitor enters
+# it once in the panel's "Unlock setup" field and the browser sends it as the
+# `x-setup-secret` header on setup calls (constant-time checked, never logged,
+# never returned). Unset keeps in-app setup closed on network deployments. § 5.1.
+LLM_SETUP_SECRET=
+
 # Optional fallback transport (LLM_TRANSPORT=api): metered Anthropic API key.
+# On serverless (Vercel), this is the ONLY transport that yields live AI — the
+# claude-session subprocess cannot spawn there. See § 5.2.
 ANTHROPIC_API_KEY=
 ```
 
@@ -230,11 +239,23 @@ LLM_ROLES_DISABLED=              # comma-separated AgentRole list to force fallb
 
 ### 5.1 Setting the Claude credential in-app
 
-`claude setup-token` prints a token, and **Settings → AI · Claude** in the
-running app accepts it directly: paste, Connect, and the live-Sonnet roles
-switch on with no restart and no dotfile. `Test connection` spends one real
-model call — the only route in the app that does so, and only on an explicit
-click. `Disconnect` drops it and falls back to the environment.
+**Settings → AI · Claude** in the running app sets the credential three ways,
+all with no restart and no dotfile:
+
+- **Connect with Claude (subscription)** — one button asks the server for a
+  one-time authorize link; a big *Open Claude to approve* button opens it; you
+  approve and paste the code the callback page prints back into the panel. The
+  server exchanges it and stores the resulting subscription token. This is the
+  self-service flow the whole feature exists for — no terminal required. See
+  § 5.2.
+- **Paste a token or API key** — an `sk-ant-api…` key (metered `api` transport)
+  or a subscription token from `claude setup-token` (default `claude-session`).
+- On a machine already logged into Claude Code, roles work with no credential in
+  the process at all.
+
+`Test connection` spends one real model call — the only route in the app that
+does so, and only on an explicit click. `Disconnect` drops a pasted credential
+and falls back to the environment.
 
 `/api/llm/token` is the route behind it. `GET` returns a descriptor only —
 kind, the last four characters, and when it was set — and returns even that
@@ -259,9 +280,19 @@ clearing it falls back to the baseline. The gateway is rebuilt on every change.
 |---|---|
 | Supabase configured | A verified JWT whose `profiles.is_admin` is true, read server-side. `GET` reports `authGate: "admin"`. |
 | No Supabase, local connection | The per-browser anonymous cookie principal, which must **already exist**. `GET` reports `authGate: "open-local"`. |
-| No Supabase, connection from elsewhere | Nobody. `GET` reports `authGate: "disabled"` and the panel says so. Set `CLAUDE_CODE_OAUTH_TOKEN` in the environment, or `LLM_TOKEN_SETUP=local` if the deployment really is a local one. |
+| No Supabase, not local, `LLM_SETUP_SECRET` set | A caller who presents that secret in the `x-setup-secret` header. `GET` reports `authGate: "secret"` and the panel shows a one-time **Unlock setup** field. This is the row that makes in-app setup work on a public deployment without Supabase admin. |
+| No Supabase, not local, no secret | Nobody. `GET` reports `authGate: "disabled"` and the panel says so. Set `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` in the environment, or `LLM_TOKEN_SETUP=local` if the deployment really is a local one. |
 
-The third row exists because `next dev` binds every interface: "Supabase is not
+The **setup secret** is an *unlock*, not a replacement for the CSRF and
+established-cookie rules below — it sits on top of them, is compared in constant
+time, is never logged, and is never returned by `GET`. The browser keeps the
+entered value in `sessionStorage` and sends it as a header on later setup calls;
+`GET` discloses the descriptor only once the secret is presented, so an
+un-unlocked panel sees `authGate: "secret"` with no descriptor and leads with the
+unlock field. Local wins over the secret: a request already known to be from the
+machine needs none.
+
+The `disabled` row exists because `next dev` binds every interface: "Supabase is not
 configured" says nothing about who is calling, and without it anyone on the same
 network could overwrite the credential and then spend the owner's subscription
 through `Test connection`. A route handler is not given the socket, so locality
@@ -306,6 +337,51 @@ deployment this exists for — `pnpm dev` or `pnpm start` on the owner's machine
 
 The same caveat applies to the conversation-key secret and the rate limiter, which
 are process-local for the same reason (§ `_identity.ts`).
+
+### 5.2 In-app subscription connect, and the serverless reality
+
+**The connect flow.** *Connect with Claude (subscription)* runs the same OAuth
+authorization-code flow as `claude setup-token`, driven from the server so the
+player never opens a terminal:
+
+1. `POST /api/llm/oauth/start` (write-gated) generates a PKCE verifier + S256
+   challenge and a state, holds `{verifier, state}` in the process against a
+   random `flowId` (15-minute TTL, single use), and returns `{ flowId,
+   authorizeUrl }`. The **verifier never leaves the server** — a copied link is
+   useless without it.
+2. The player opens the link, approves, and the callback page prints the code as
+   `code#state`.
+3. `POST /api/llm/oauth/finish` (write-gated) takes `{ flowId, code }`, splits
+   `code#state`, checks the state against the stored one, exchanges the code +
+   verifier at `https://platform.claude.com/v1/oauth/token`, and on success
+   stores the resulting `access_token` as the runtime credential. It returns
+   only the mask and transport — **never the token**. Failures are named
+   (`expired_code`, `bad_state`, `expired_flow`, `exchange_failed`, `network`)
+   and the panel maps each to a next step, falling back to "paste a token from
+   `claude setup-token`" if the exchange is unavailable.
+
+The endpoints and request shapes are taken from the installed Claude Code CLI
+(`@anthropic-ai/claude-agent-sdk`), not guessed: client id
+`9d1c250a-e61b-44d9-88ed-5944d1962f5e`, authorize
+`https://claude.com/cai/oauth/authorize`, manual redirect
+`https://platform.claude.com/oauth/code/callback`, scope `user:inference`.
+
+**The serverless reality — read this before deploying to Vercel.** The default
+`claude-session` transport spawns the Claude Code CLI as a **subprocess**, which
+a Vercel serverless function **cannot do**. So on the hosted (serverless) game:
+
+- A **subscription** token — pasted or connected in-app — is stored and valid,
+  but it does **not** run here. The status is honest about it: the panel shows
+  *"Subscription connected — runs when self-hosted. For live AI on this hosted
+  game, use an API key."*, never a green "Live", and `available` is reported
+  `false` so roles fall back to the deterministic rules instead of burning a
+  subprocess-spawn timeout on every call. The status carries a `serverless`
+  flag (from `VERCEL=1`) for this.
+- For **live AI on the hosted game**, use `LLM_TRANSPORT=api` +
+  `ANTHROPIC_API_KEY` (or paste an `sk-ant-api…` key in the panel — it selects
+  the `api` transport, which is a plain HTTPS call and works fine on a function).
+- The **subscription path is for self-hosting** on a normal Node process
+  (`pnpm start`, a container, a VM), where the subprocess can spawn.
 
 ## 6. Demo mode versus the full stack
 

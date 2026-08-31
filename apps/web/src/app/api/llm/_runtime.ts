@@ -56,6 +56,7 @@
 
 // Relative rather than `@/`: this module is imported directly by its test, and
 // the path alias is a tsconfig/bundler concern the test runner does not share.
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   type CredentialKind,
   type CredentialSource,
@@ -284,6 +285,10 @@ export interface TransportFacts {
   readonly supabaseConfigured: boolean;
   /** True when this request looks like it came from the machine the process runs on. */
   readonly localConnection: boolean;
+  /** True when `LLM_SETUP_SECRET` is set, so the deployment offers the secret-unlock gate. */
+  readonly secretConfigured: boolean;
+  /** True when this host is serverless (e.g. `VERCEL=1`), where `claude-session` cannot spawn its subprocess. */
+  readonly serverless: boolean;
 }
 
 /**
@@ -304,7 +309,8 @@ export function buildTokenStatus(facts: TransportFacts): TokenStatusFull {
     masked: status.masked,
     kind: status.kind,
     setAt: status.setAt,
-    authGate: tokenAuthGate(facts.supabaseConfigured, facts.localConnection),
+    authGate: tokenAuthGate(facts.supabaseConfigured, facts.localConnection, facts.secretConfigured),
+    serverless: facts.serverless,
   };
 }
 
@@ -325,6 +331,7 @@ export function publicTokenStatus(status: TokenStatusFull): TokenStatusPublic {
     available: status.available,
     transportKind: status.transportKind,
     authGate: status.authGate,
+    serverless: status.serverless,
   };
 }
 
@@ -491,16 +498,84 @@ export function checkWriteRequest(facts: WriteGuardFacts): WriteGuardDecision {
  * that every player's model calls will be billed against is an administrative
  * act — and that is true wherever the request came from.
  *
- * With no Supabase there is nobody to be an administrator, so the only thing
- * that can stand in for authority is *being at the machine*. When the request
- * did not come from there the answer is `disabled` rather than a softer gate:
- * an unauthenticated stranger on the network is not a lesser administrator, and
- * the honest thing to tell them is that this deployment does not take a pasted
- * credential at all.
+ * With no Supabase there is nobody to be an administrator, so authority has to
+ * come from somewhere else:
+ *
+ * - *Being at the machine* (`open-local`) — the demo and local-dev posture.
+ * - A *shared setup secret* (`secret`) — the operator has set
+ *   `LLM_SETUP_SECRET`, so a caller who can present it in the `x-setup-secret`
+ *   header may write. This is what lets a public serverless deployment offer
+ *   in-app setup without wiring up Supabase admin.
+ *
+ * Local wins over the secret: a request already known to be from the machine
+ * needs no secret. When none of these apply the answer is `disabled` rather
+ * than a softer gate — an unauthenticated stranger on the network is not a
+ * lesser administrator, and the honest thing to tell them is that this
+ * deployment does not take a pasted credential at all.
  */
-export function tokenAuthGate(supabaseConfigured: boolean, localConnection: boolean): TokenAuthGate {
+export function tokenAuthGate(supabaseConfigured: boolean, localConnection: boolean, secretConfigured = false): TokenAuthGate {
   if (supabaseConfigured) return 'admin';
-  return localConnection ? 'open-local' : 'disabled';
+  if (localConnection) return 'open-local';
+  if (secretConfigured) return 'secret';
+  return 'disabled';
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The setup secret, and the serverless host                                  */
+/* -------------------------------------------------------------------------- */
+
+/** The variable that unlocks in-app setup on a public deployment. Unset means the secret gate does not exist. */
+export const SETUP_SECRET_ENV = 'LLM_SETUP_SECRET';
+
+/** Is a non-empty setup secret configured for this deployment? */
+export function setupSecretConfigured(env: LlmEnv): boolean {
+  return hasValue(env[SETUP_SECRET_ENV]);
+}
+
+/**
+ * Does the presented secret match the configured one, in constant time?
+ *
+ * False whenever there is nothing to match against — an unset or empty
+ * `LLM_SETUP_SECRET` never unlocks anything, so a deployment that forgot to set
+ * it does not silently accept an empty header. Both sides are hashed to a
+ * fixed-width digest before comparison, so neither the match nor the length of
+ * the secret leaks through timing.
+ */
+export function checkSetupSecret(presented: string | null, configured: string | undefined): boolean {
+  const expected = (configured ?? '').trim();
+  const candidate = (presented ?? '').trim();
+  if (expected.length === 0 || candidate.length === 0) return false;
+  const a = createHash('sha256').update(candidate).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * The variable a serverless platform sets on its function runtime.
+ *
+ * `VERCEL=1` on Vercel. It is the signal that `claude-session` cannot work
+ * here: that transport spawns the Claude Code CLI as a subprocess, which a
+ * serverless function may not do. A normal Node process — `pnpm start` on a
+ * server, a container — never sets it, which is exactly where the subscription
+ * transport does work.
+ */
+export const SERVERLESS_ENV = 'VERCEL';
+
+/** True when this deployment runs on a serverless host. */
+export function isServerless(env: LlmEnv): boolean {
+  return env[SERVERLESS_ENV] === '1';
+}
+
+/**
+ * True when the resolved transport cannot actually reach a model on this host.
+ *
+ * The one case today: `claude-session` on a serverless function, which would
+ * spawn a subprocess it is not allowed to spawn. Saying so up front is both
+ * more honest than a green light and cheaper than discovering it once per role
+ * call by burning the whole timeout.
+ */
+export function transportCannotRunHere(transport: LlmTransportKind, env: LlmEnv): boolean {
+  return transport === 'claude-session' && isServerless(env);
 }
 
 /** Reading the descriptor and writing the credential are gated by the same rule, with one difference. */
@@ -521,6 +596,10 @@ export interface TokenWriteRequest {
   readonly localConnection: boolean;
   /** `write` additionally requires an established principal; `read` only decides disclosure. */
   readonly intent: TokenIntent;
+  /** True when `LLM_SETUP_SECRET` is set on this deployment. Optional so callers that predate the secret gate are unaffected. */
+  readonly secretConfigured?: boolean;
+  /** True when the request presented the matching setup secret (compared in constant time by the caller). */
+  readonly secretPresented?: boolean;
 }
 
 export type TokenWriteDecision =
@@ -558,10 +637,25 @@ export function authorizeTokenWrite(request: TokenWriteRequest): TokenWriteDecis
   }
 
   if (request.principal.kind !== 'anonymous') return { ok: false, status: 401, reason: 'unauthenticated' };
-  if (!request.localConnection) return { ok: false, status: 403, reason: 'setup_disabled' };
-  if (request.intent === 'write' && request.mintedPrincipal) return { ok: false, status: 401, reason: 'cookie_required' };
 
-  return { ok: true, gate: 'open-local' };
+  // Local wins: a request already known to be from the machine needs no secret,
+  // and this keeps the demo posture exactly as it was.
+  if (request.localConnection) {
+    if (request.intent === 'write' && request.mintedPrincipal) return { ok: false, status: 401, reason: 'cookie_required' };
+    return { ok: true, gate: 'open-local' };
+  }
+
+  // The setup secret is the only other thing that can stand in for authority on
+  // a networked deployment with no accounts. It sits *on top of* the same CSRF
+  // and established-cookie rules the local path is held to — it is an unlock,
+  // never a replacement for them.
+  if (request.secretConfigured === true) {
+    if (request.secretPresented !== true) return { ok: false, status: 403, reason: 'setup_secret_required' };
+    if (request.intent === 'write' && request.mintedPrincipal) return { ok: false, status: 401, reason: 'cookie_required' };
+    return { ok: true, gate: 'secret' };
+  }
+
+  return { ok: false, status: 403, reason: 'setup_disabled' };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -594,6 +688,90 @@ export function tokenWriteOriginKey(_headers: Headers, connectionAddress: string
 /** The composite the tight budget is charged to: who, and from where. */
 export function tokenWriteBudgetKey(principalId: string, origin: string): string {
   return `${origin}|${principalId}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The in-flight OAuth flows                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One pending in-app connect.
+ *
+ * The `verifier` is the PKCE secret and **never leaves the server** — it is the
+ * whole reason a copied authorize link cannot be completed by anyone but the
+ * browser that started the flow through this process. The `state` is echoed on
+ * the way back and checked, so a code minted for a different flow is rejected.
+ */
+interface OAuthFlowRecord {
+  readonly verifier: string;
+  readonly state: string;
+  /** Millisecond clock, for the TTL only. Never an engine input. */
+  readonly createdAt: number;
+}
+
+/** How long a started flow may sit unfinished. Fifteen minutes is longer than an approval takes and short enough to bound the map. */
+export const OAUTH_FLOW_TTL_MS = 15 * 60 * 1000;
+
+/** The name is part of the contract: two module instances must agree on it, exactly like the credential store. */
+export const OAUTH_FLOW_STORE_KEY = 'llm.oauthFlowStore';
+
+function oauthFlows(): Map<string, OAuthFlowRecord> {
+  return processSingleton<Map<string, OAuthFlowRecord>>(OAUTH_FLOW_STORE_KEY, () => new Map());
+}
+
+/** Drop every flow older than the TTL. Cheap, and keeps a never-finished flow from lingering. */
+function pruneOAuthFlows(now: number): void {
+  const flows = oauthFlows();
+  for (const [id, record] of flows) {
+    if (now - record.createdAt >= OAUTH_FLOW_TTL_MS) flows.delete(id);
+  }
+}
+
+export interface StartedOAuthFlow {
+  readonly flowId: string;
+}
+
+/**
+ * Store a started flow and return its id.
+ *
+ * The id is what the browser holds; the verifier and state are held here. The
+ * id is injectable so a test is deterministic, and defaults to a random UUID.
+ */
+export function startOAuthFlow(input: {
+  readonly verifier: string;
+  readonly state: string;
+  readonly now?: number;
+  readonly flowId?: string;
+}): StartedOAuthFlow {
+  const now = input.now ?? Date.now();
+  pruneOAuthFlows(now);
+  const flowId = input.flowId ?? randomUUID();
+  oauthFlows().set(flowId, { verifier: input.verifier, state: input.state, createdAt: now });
+  return { flowId };
+}
+
+export type OAuthFlowLookup =
+  | { readonly ok: true; readonly verifier: string; readonly state: string }
+  | { readonly ok: false; readonly reason: 'not_found' | 'expired' };
+
+/**
+ * Take a flow by id — **single use**. Whether it is found, expired, or missing,
+ * it is removed, so a code can be tried against a flow exactly once and a
+ * replay finds nothing.
+ */
+export function takeOAuthFlow(flowId: string, now: number = Date.now()): OAuthFlowLookup {
+  const flows = oauthFlows();
+  const record = flows.get(flowId);
+  flows.delete(flowId);
+  pruneOAuthFlows(now);
+  if (record === undefined) return { ok: false, reason: 'not_found' };
+  if (now - record.createdAt >= OAUTH_FLOW_TTL_MS) return { ok: false, reason: 'expired' };
+  return { ok: true, verifier: record.verifier, state: record.state };
+}
+
+/** Test-only: forget every pending flow so one suite's start cannot leak into another's finish. */
+export function resetOAuthFlows(): void {
+  oauthFlows().clear();
 }
 
 export { TOKEN_MAX_LENGTH, TOKEN_MIN_LENGTH };

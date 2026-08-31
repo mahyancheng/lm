@@ -37,24 +37,38 @@ and every screen live — no Supabase project or Anthropic key needed.
 
 ### Turning on the live model without editing a file
 
-Run `claude setup-token`, then open **Settings → AI · Claude** (the gear in the
-status bar, or the "Offline" chip beside it) and paste the token. The status
-dot flips to **Live · sonnet** and every role — World Director, Chief of Staff,
-NPC rivals, characters — runs on Sonnet from that moment. **Test connection**
-spends one real call to prove it; **Disconnect** falls back to whatever the
-environment supplies.
+Open **Settings → AI · Claude** (the gear in the status bar, or the "Offline"
+chip beside it). Three ways to connect, all with no restart:
 
-The pasted token lives in that one server process and is never written to disk
-or stored in the browser, so it is the right path for `pnpm dev` and
-`pnpm start` on your own machine. A multi-instance deployment (Vercel) starts
-each instance empty — set `CLAUDE_CODE_OAUTH_TOKEN` in the environment there.
+- **Connect with Claude (subscription)** — tap the button, a link comes out, tap
+  *Open Claude to approve*, approve, and paste the code the page shows back into
+  the panel. The server runs the same OAuth flow as `claude setup-token` and
+  stores the token for you. No terminal.
+- **Paste a token or API key** — an `sk-ant-api…` key, or a subscription token
+  from `claude setup-token`.
 
-The form is offered only when the request comes from the machine the server is
-running on: a dev server listens on every interface, and nobody else on your
-network should be able to set the credential their calls — and your Claude
-subscription — would be spent on. Reached over the network it says so and
-explains the two alternatives (`CLAUDE_CODE_OAUTH_TOKEN`, or `LLM_TOKEN_SETUP=local`
-when the deployment really is a local one behind a proxy or in a container).
+The status dot flips to **Live · sonnet** and every role — World Director, Chief
+of Staff, NPC rivals, characters — runs on Sonnet. **Test connection** spends one
+real call to prove it; **Disconnect** falls back to whatever the environment
+supplies. A pasted or connected token lives in that one server process and is
+never written to disk or stored in the browser.
+
+**On the public (Vercel) game, use an API key for live AI.** The subscription
+transport spawns the Claude Code CLI as a subprocess, which serverless functions
+cannot do — so a subscription token there is *connected but runs only when
+self-hosted*, and the panel says exactly that instead of a false "Live". Paste an
+`sk-ant-api…` key (or set `LLM_TRANSPORT=api` + `ANTHROPIC_API_KEY`) for live AI
+on the hosted game; keep the subscription path for `pnpm start` on your own
+machine, a container, or a VM.
+
+**Who may set it.** On your own machine the form is offered to the local
+connection only — a dev server listens on every interface, and nobody else on
+your network should spend your subscription. On a **public deployment** with no
+Supabase admin, set `LLM_SETUP_SECRET` to a long random string: the panel then
+shows a one-time **Unlock setup** field, and whoever has the secret can connect.
+Reached over the network with neither, it says so and names the alternatives
+(`CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` in the env, `LLM_SETUP_SECRET`, or
+`LLM_TOKEN_SETUP=local` behind a proxy). See `docs/DEPLOYMENT.md` § 5.1–5.2.
 
 ## Full stack setup
 
@@ -69,10 +83,13 @@ when the deployment really is a local one behind a proxy or in a container).
 3. **Env**: copy `.env.example` to `apps/web/.env.local` and fill in the
    Supabase URL/keys and the OAuth token; set `NEXT_PUBLIC_DEMO_MODE=false`.
 4. **Vercel**: import the repo, set the root directory to `apps/web`, add the
-   same environment variables, deploy. LLM routes run on the Node.js runtime
-   (the Agent SDK spawns a Claude Code session per call). If your Vercel plan
-   can't run them, self-host the resolver worker (`docs/DEPLOYMENT.md`) or
-   set `LLM_TRANSPORT=api` as fallback.
+   same environment variables, deploy. Because Vercel functions are serverless,
+   the `claude-session` subprocess **cannot spawn there** — set
+   `LLM_TRANSPORT=api` and `ANTHROPIC_API_KEY` for live AI on the hosted game
+   (or let a player paste an `sk-ant-api…` key in-app). The subscription path is
+   for self-hosting on a normal Node process. To let players set the credential
+   in-app on the public deployment, also set `LLM_SETUP_SECRET` to a long random
+   string and share it with them (§ 5.1 of `docs/DEPLOYMENT.md`).
 
 ## Commands
 

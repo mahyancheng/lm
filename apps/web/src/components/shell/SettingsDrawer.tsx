@@ -29,9 +29,13 @@ import { useGame, useGameActions, useLlm, useLoading, useSettings } from '@/lib/
 import {
   type TokenFetch,
   type TokenStatus,
+  clearSetupSecret,
   connectToken,
   disconnectToken,
   fetchTokenStatus,
+  finishOAuthConnect,
+  setSetupSecret,
+  startOAuthConnect,
   testToken,
   tokenDraftIssue,
 } from '@/lib/llm/token';
@@ -40,10 +44,14 @@ import type { SettingsSection } from './settingsBus';
 import {
   NO_SERVER_LINE,
   credentialLine,
+  oauthFailureLine,
   pasteFieldLabel,
   pasteMode,
   refusalLine,
+  runtimeServerlessCaveat,
+  serverlessNotice,
   sourceChip,
+  statusDotTone,
   statusHeadline,
   testResultLine,
   tokenPanelState,
@@ -176,9 +184,142 @@ function PasteField({
         <button type="button" className="btn btn-primary btn-sm" disabled={blocked} onClick={onSubmit}>
           {busy ? 'Connecting…' : 'Connect'}
         </button>
-        <span className="text-[10px] text-ink-faint">An sk-ant-api… key switches to the metered API instead.</span>
       </div>
+      <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+        An <span className="figure">sk-ant-api…</span> key is live AI that works on this hosted game. A subscription token (from{' '}
+        <span className="figure">claude setup-token</span>) runs when the game is self-hosted.
+      </p>
     </>
+  );
+}
+
+/**
+ * The one-time "unlock setup" field, shown when the deployment is protected by a
+ * setup secret and this browser has not presented it yet.
+ *
+ * The secret is stored in this tab's `sessionStorage` and sent as a header on
+ * every later call; entering it and re-reading the status is the whole of the
+ * unlock. A wrong secret simply comes back locked again.
+ */
+function UnlockField({
+  draft,
+  busy,
+  onDraft,
+  onSubmit,
+}: {
+  readonly draft: string;
+  readonly busy: boolean;
+  readonly onDraft: (next: string) => void;
+  readonly onSubmit: () => void;
+}): React.JSX.Element {
+  const blocked = draft.trim().length === 0 || busy;
+  return (
+    <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
+      <label className="block">
+        <span className="label-caps-faint">Unlock setup</span>
+        <input
+          type="password"
+          className="field mt-1 font-mono text-[11px]"
+          value={draft}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="setup secret"
+          aria-label="Setup secret"
+          onChange={(event) => onDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !blocked) onSubmit();
+          }}
+        />
+      </label>
+      <button type="button" className="btn btn-primary btn-sm self-start" disabled={blocked} onClick={onSubmit}>
+        {busy ? 'Unlocking…' : 'Unlock'}
+      </button>
+    </div>
+  );
+}
+
+/** A started in-app connect: the link to open and the id the finish call needs. */
+interface OAuthFlow {
+  readonly flowId: string;
+  readonly authorizeUrl: string;
+}
+
+/**
+ * The "Connect with Claude (subscription)" path.
+ *
+ * One button asks the server for a one-time link; once it has one, a big
+ * tappable link opens Claude to approve, and a field takes the code the person
+ * pastes back. This is the "click and a link comes out, then paste it back"
+ * flow — the subscription equivalent of the API-key paste field beside it.
+ */
+function ConnectWithClaude({
+  flow,
+  code,
+  busy,
+  disabled,
+  onStart,
+  onCode,
+  onFinish,
+  onCancel,
+}: {
+  readonly flow: OAuthFlow | null;
+  readonly code: string;
+  /** Which step, if any, is in flight — for the button label. */
+  readonly busy: 'start' | 'finish' | null;
+  /** True while any Claude-section action is running, so the controls lock together. */
+  readonly disabled: boolean;
+  readonly onStart: () => void;
+  readonly onCode: (next: string) => void;
+  readonly onFinish: () => void;
+  readonly onCancel: () => void;
+}): React.JSX.Element {
+  if (flow === null) {
+    return (
+      <button type="button" className="btn btn-primary tap-target w-full justify-center" disabled={disabled} onClick={onStart}>
+        {busy === 'start' ? 'Preparing link…' : 'Connect with Claude (subscription)'}
+      </button>
+    );
+  }
+
+  const blocked = code.trim().length === 0 || disabled;
+  return (
+    <div className="raised-surface flex flex-col gap-2 px-3.5 py-3">
+      <a
+        href={flow.authorizeUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="btn btn-primary tap-target w-full justify-center"
+      >
+        Open Claude to approve
+      </a>
+      <p className="px-0.5 text-[10px] leading-relaxed text-ink-faint">
+        Approve there, then copy the code the page shows and paste it here.
+      </p>
+      <label className="block">
+        <span className="label-caps-faint">Paste the code here</span>
+        <input
+          type="text"
+          className="field mt-1 font-mono text-[11px]"
+          value={code}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="code#state"
+          aria-label="Authorization code"
+          onChange={(event) => onCode(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !blocked) onFinish();
+          }}
+        />
+      </label>
+      <div className="flex items-center gap-1.5">
+        <button type="button" className="btn btn-primary btn-sm" disabled={blocked} onClick={onFinish}>
+          {busy === 'finish' ? 'Finishing…' : 'Finish connecting'}
+        </button>
+        <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -200,10 +341,15 @@ function ClaudeSection({
 }): React.JSX.Element {
   const [fetched, setFetched] = useState<TokenFetch<TokenStatus> | null>(null);
   const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState<'connect' | 'disconnect' | 'test' | null>(null);
+  const [busy, setBusy] = useState<'connect' | 'disconnect' | 'test' | 'oauth-start' | 'oauth-finish' | 'unlock' | null>(null);
   const [notice, setNotice] = useState<{ readonly tone: NoticeTone; readonly text: string } | null>(null);
   /** Whether the configured phase has its paste field open. Closed by default; a successful write closes it again. */
   const [replacing, setReplacing] = useState(false);
+  /** The unlock field, when the deployment is gated by a setup secret. */
+  const [secretDraft, setSecretDraft] = useState('');
+  /** A started in-app subscription connect, and the code being pasted back into it. */
+  const [oauth, setOauth] = useState<OAuthFlow | null>(null);
+  const [oauthCode, setOauthCode] = useState('');
   const anchor = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
@@ -240,6 +386,8 @@ function ClaudeSection({
     if (result.kind === 'ok' && result.value.ok) {
       setDraft('');
       setReplacing(false);
+      setOauth(null);
+      setOauthCode('');
       setNotice({ tone: 'gain', text: `Connected. Roles now run on the ${transportLabel(result.value.transportKind)}.` });
       await settle();
     } else if (result.kind === 'refused') {
@@ -283,7 +431,73 @@ function ClaudeSection({
     setBusy(null);
   }
 
+  /** Store the entered secret for this tab and re-read: a wrong one simply comes back locked. */
+  async function unlock(): Promise<void> {
+    const secret = secretDraft.trim();
+    if (secret.length === 0 || busy !== null) return;
+    setBusy('unlock');
+    setNotice(null);
+    setSetupSecret(secret);
+    const next = await fetchTokenStatus();
+    setFetched(next);
+    const unlocked = next.kind === 'ok' && tokenPanelState(next).phase !== 'locked';
+    if (unlocked) {
+      setSecretDraft('');
+      onChanged();
+    } else {
+      // Do not keep a rejected secret around to be sent on later reads.
+      clearSetupSecret();
+      setNotice({ tone: 'loss', text: 'That setup secret was not accepted. Check it and try again.' });
+    }
+    setBusy(null);
+  }
+
+  /** Ask the server for a one-time authorize link. */
+  async function startOAuth(): Promise<void> {
+    if (busy !== null) return;
+    setBusy('oauth-start');
+    setNotice(null);
+    const result = await startOAuthConnect();
+    if (result.kind === 'ok' && result.value.ok) {
+      setOauth({ flowId: result.value.flowId, authorizeUrl: result.value.authorizeUrl });
+      setOauthCode('');
+    } else if (result.kind === 'refused') {
+      setNotice({ tone: 'loss', text: refusalLine(result.status, result.reason) });
+    } else {
+      setNotice({ tone: 'loss', text: NO_SERVER_LINE });
+    }
+    setBusy(null);
+  }
+
+  /** Finish the flow with the pasted code. On success the token is already stored server-side. */
+  async function finishOAuth(): Promise<void> {
+    if (oauth === null || oauthCode.trim().length === 0 || busy !== null) return;
+    setBusy('oauth-finish');
+    setNotice(null);
+    const result = await finishOAuthConnect(oauth.flowId, oauthCode.trim());
+    if (result.kind === 'ok') {
+      if (result.value.ok) {
+        setOauth(null);
+        setOauthCode('');
+        setReplacing(false);
+        setNotice({ tone: 'gain', text: `Connected. Roles now run on the ${transportLabel(result.value.transportKind)}.` });
+        await settle();
+      } else {
+        setNotice({ tone: 'loss', text: oauthFailureLine(result.value.failure, result.value.detail) });
+      }
+    } else if (result.kind === 'refused') {
+      setNotice({ tone: 'loss', text: refusalLine(result.status, result.reason) });
+    } else {
+      setNotice({ tone: 'loss', text: NO_SERVER_LINE });
+    }
+    setBusy(null);
+  }
+
   const chip = descriptor === null ? null : sourceChip(descriptor.source);
+  const serverlessLine = serverlessNotice(status);
+  const runtimeCaveat = status === null ? null : runtimeServerlessCaveat(status);
+  const dotTone = statusDotTone(status);
+  const dotClass = dotTone === 'live' ? 'bg-gain pulse-dot' : dotTone === 'caution' ? 'bg-warn' : 'bg-ink-faint';
 
   return (
     <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
@@ -293,13 +507,12 @@ function ClaudeSection({
       <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
-            <span
-              aria-hidden="true"
-              className={cx('inline-block size-1.5 rounded-full', status?.available === true ? 'bg-gain pulse-dot' : 'bg-ink-faint')}
-            />
+            <span aria-hidden="true" className={cx('inline-block size-1.5 rounded-full', dotClass)} />
             {panel.phase === 'loading' ? 'Checking…' : statusHeadline(status)}
           </span>
-          {status === null ? null : <Tag tone={status.available ? 'gain' : 'neutral'}>{transportLabel(status.transportKind)}</Tag>}
+          {status === null ? null : (
+            <Tag tone={dotTone === 'live' ? 'gain' : dotTone === 'caution' ? 'warn' : 'neutral'}>{transportLabel(status.transportKind)}</Tag>
+          )}
         </div>
         {descriptor === null ? null : (
           <div className="flex items-center justify-between gap-2">
@@ -307,28 +520,22 @@ function ClaudeSection({
             {chip === null ? null : <Tag tone={descriptor.source === 'runtime' ? 'brand' : 'neutral'}>{chip}</Tag>}
           </div>
         )}
+        {serverlessLine === null ? null : (
+          <p className="rounded-card border border-warn/25 bg-warn-wash px-2.5 py-2 text-[10px] leading-relaxed text-warn">{serverlessLine}</p>
+        )}
+        {runtimeCaveat === null ? null : (
+          <p className="rounded-card border border-warn/25 bg-warn-wash px-2.5 py-2 text-[10px] leading-relaxed text-warn">{runtimeCaveat}</p>
+        )}
       </div>
 
       {/* --- the phases --------------------------------------------------- */}
-      {panel.phase === 'no-server' || panel.phase === 'restricted' || panel.phase === 'disabled' ? (
+      {panel.phase === 'no-server' || panel.phase === 'restricted' || panel.phase === 'disabled' || panel.phase === 'locked' ? (
         <p className="px-1 text-[10.5px] leading-relaxed text-ink-faint">{panel.message}</p>
       ) : null}
 
-      {paste === 'guided' ? (
-        <ol className="flex flex-col gap-1.5">
-          {SETUP_STEPS.map((entry, index) => (
-            <li key={entry.step} className="flex items-start gap-2.5">
-              <span className="figure mt-px flex size-4 shrink-0 items-center justify-center rounded-pill bg-brand-wash text-[9px] font-bold text-brand">
-                {index + 1}
-              </span>
-              <span className="min-w-0">
-                <span className="block text-[11.5px] font-semibold text-ink">{entry.step}</span>
-                <span className="block text-[10px] leading-relaxed text-ink-faint">{entry.detail}</span>
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      {/* Locked: this deployment takes a setup secret. Unlock, then the phase
+          becomes configured or unconfigured like any other. */}
+      {panel.phase === 'locked' ? <UnlockField draft={secretDraft} busy={busy === 'unlock'} onDraft={setSecretDraft} onSubmit={() => void unlock()} /> : null}
 
       {panel.phase === 'configured' ? (
         <div className="flex flex-wrap gap-1.5">
@@ -358,23 +565,62 @@ function ClaudeSection({
         </div>
       ) : null}
 
-      {/* The field itself, under whichever of the two openings led to it. */}
+      {/* The two ways to connect, under whichever of the openings led here:
+          the subscription button-and-paste flow, then the direct paste field. */}
       {paste === 'replace' ? (
         <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
-          Run <span className="figure">claude setup-token</span> again and paste the new value. It replaces whatever is in force for this
-          process — including a credential from the environment — with no restart.
+          Connect a new subscription below, or paste a fresh token or API key. It replaces whatever is in force for this process — including a
+          credential from the environment — with no restart.
         </p>
       ) : null}
 
       {paste === 'none' ? null : (
-        <PasteField
-          draft={draft}
-          issue={draftIssue}
-          busy={busy !== null}
-          label={pasteFieldLabel(paste)}
-          onDraft={setDraft}
-          onSubmit={() => void connect()}
-        />
+        <div className="flex flex-col gap-2.5">
+          <ConnectWithClaude
+            flow={oauth}
+            code={oauthCode}
+            busy={busy === 'oauth-start' ? 'start' : busy === 'oauth-finish' ? 'finish' : null}
+            disabled={busy !== null}
+            onStart={() => void startOAuth()}
+            onCode={setOauthCode}
+            onFinish={() => void finishOAuth()}
+            onCancel={() => {
+              setOauth(null);
+              setOauthCode('');
+            }}
+          />
+          <div className="flex items-center gap-2 px-1">
+            <span className="h-px flex-1 bg-hair" />
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-ink-faint">or paste a credential</span>
+            <span className="h-px flex-1 bg-hair" />
+          </div>
+          <PasteField
+            draft={draft}
+            issue={draftIssue}
+            busy={busy !== null}
+            label={pasteFieldLabel(paste)}
+            onDraft={setDraft}
+            onSubmit={() => void connect()}
+          />
+          {paste === 'guided' ? (
+            <details className="rounded-card border border-hair bg-raised px-3 py-2">
+              <summary className="cursor-pointer text-[10.5px] font-semibold text-ink-dim">Prefer your terminal? Get a token yourself</summary>
+              <ol className="mt-2 flex flex-col gap-1.5">
+                {SETUP_STEPS.map((entry, index) => (
+                  <li key={entry.step} className="flex items-start gap-2.5">
+                    <span className="figure mt-px flex size-4 shrink-0 items-center justify-center rounded-pill bg-brand-wash text-[9px] font-bold text-brand">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[11.5px] font-semibold text-ink">{entry.step}</span>
+                      <span className="block text-[10px] leading-relaxed text-ink-faint">{entry.detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ) : null}
+        </div>
       )}
 
       {panel.phase === 'configured' && descriptor?.source === 'env' && paste !== 'replace' ? (

@@ -31,11 +31,16 @@ export type CredentialSource = 'runtime' | 'env' | 'none';
  *   the credential is an administrative act.
  * - `open-local` — no accounts, and the request reached a process the caller is
  *   sitting in front of. The owner may write it.
- * - `disabled` — no accounts *and* the connection is not local. Nobody may
- *   write it: a dev server binds every interface, so "no Supabase" alone is not
- *   evidence that the caller is the owner of the machine.
+ * - `secret` — no accounts and not local, but the operator has set
+ *   `LLM_SETUP_SECRET`. A caller who presents that secret in the
+ *   `x-setup-secret` header may write. This is the posture that makes in-app
+ *   setup possible on a public deployment without wiring up Supabase admin.
+ * - `disabled` — none of the above. Nobody may write it: a dev server binds
+ *   every interface, so "no Supabase" alone is not evidence that the caller is
+ *   the owner of the machine, and with no setup secret there is nothing to
+ *   stand in for authority.
  */
-export type TokenAuthGate = 'admin' | 'open-local' | 'disabled';
+export type TokenAuthGate = 'admin' | 'open-local' | 'secret' | 'disabled';
 
 export type LlmTransportKind = 'claude-session' | 'api' | 'none';
 
@@ -123,10 +128,24 @@ export interface TokenStatusPublic {
    * True when a role call has a chance of reaching a model. Wider than
    * `configured`: a machine already logged into Claude Code is available with
    * no credential in the process at all.
+   *
+   * On a serverless host it is *narrower* for `claude-session`: that transport
+   * spawns the Claude Code CLI as a subprocess, which a Vercel function cannot
+   * do, so a subscription token there is `configured` but not `available`. The
+   * game correctly falls back to its deterministic rules rather than burning a
+   * subprocess-spawn timeout on every role call.
    */
   readonly available: boolean;
   readonly transportKind: LlmTransportKind;
   readonly authGate: TokenAuthGate;
+  /**
+   * True when this deployment runs on a serverless host (detected server-side,
+   * e.g. `VERCEL=1`). A public, observable fact — never a secret — and the one
+   * the panel needs to be honest that a `claude-session` credential set here
+   * runs only when the app is self-hosted, and that live AI on this host wants
+   * an API key.
+   */
+  readonly serverless: boolean;
 }
 
 /**
@@ -181,6 +200,32 @@ export type TokenTestResult =
   | { readonly ok: true; readonly modelId: string; readonly latencyMs: number; readonly note?: string }
   | { readonly ok: false; readonly failure: TokenTestFailure; readonly detail: string; readonly latencyMs: number };
 
+/**
+ * `POST /api/llm/oauth/start`. The server holds the PKCE verifier; the browser
+ * only ever sees the link to open and an opaque flow id to hand back.
+ */
+export type OAuthStartResult =
+  | { readonly ok: true; readonly flowId: string; readonly authorizeUrl: string }
+  | { readonly ok: false; readonly reason: string };
+
+/** Why an in-app OAuth connection did not complete. Each maps to a distinct instruction. */
+export type OAuthFinishFailure =
+  | 'expired_code'
+  | 'bad_state'
+  | 'expired_flow'
+  | 'exchange_failed'
+  | 'network'
+  | 'invalid_request';
+
+/**
+ * `POST /api/llm/oauth/finish`. On success the token is already stored on the
+ * server as the runtime credential; the browser is told only the mask and the
+ * transport, never the token.
+ */
+export type OAuthFinishResult =
+  | { readonly ok: true; readonly masked: string | null; readonly transportKind: LlmTransportKind; readonly kind: CredentialKind | null }
+  | { readonly ok: false; readonly failure: OAuthFinishFailure; readonly detail: string };
+
 /** Mirrors `LlmFallbackRecord.reason`, spelled out here so no client bundle needs the contracts to read it. */
 export type LlmFallbackReason = 'timeout' | 'rate_limited' | 'invalid_output' | 'api_error' | 'disabled';
 
@@ -226,6 +271,8 @@ export type TokenFetch<T> =
 /* -------------------------------------------------------------------------- */
 
 const TOKEN_ROUTE = '/api/llm/token';
+const OAUTH_START_ROUTE = '/api/llm/oauth/start';
+const OAUTH_FINISH_ROUTE = '/api/llm/oauth/finish';
 
 /**
  * Answers that mean "a server is there and said no", as opposed to "there is no
@@ -241,12 +288,78 @@ const TOKEN_TIMEOUT_MS = 15_000;
 /** A live test spawns a Claude Code session, which is slower than a mutation. */
 const TEST_TIMEOUT_MS = 60_000;
 
+/** The token exchange is a single upstream round-trip; give it a little room without matching the test's minute. */
+const OAUTH_FINISH_TIMEOUT_MS = 30_000;
+
+/* -------------------------------------------------------------------------- */
+/*  The setup secret                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The header a caller presents to unlock in-app setup on a public deployment
+ * whose gate is `secret`. Read only server-side, compared in constant time, and
+ * never returned in any response.
+ */
+export const SETUP_SECRET_HEADER = 'x-setup-secret';
+
+/** Where the browser keeps the entered secret: `sessionStorage`, so it is gone when the tab closes and never touches disk. */
+const SETUP_SECRET_STORAGE_KEY = 'frontier.llmSetupSecret';
+
+/** The secret this tab has been unlocked with, or null. Every storage access is guarded — a private window may throw. */
+export function getSetupSecret(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const value = window.sessionStorage.getItem(SETUP_SECRET_STORAGE_KEY);
+    return value !== null && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the entered secret for this tab. A no-op when storage is unavailable — the value is still sent on this session's calls by the caller. */
+export function setSetupSecret(secret: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(SETUP_SECRET_STORAGE_KEY, secret);
+  } catch {
+    /* private mode, or storage disabled: nothing to do. */
+  }
+}
+
+/** Forget the entered secret. */
+export function clearSetupSecret(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(SETUP_SECRET_STORAGE_KEY);
+  } catch {
+    /* nothing to do. */
+  }
+}
+
+/**
+ * The secret header for a request, when this tab holds one.
+ *
+ * It is attached to *every* token call — reads included — because the `secret`
+ * gate discloses the descriptor only to a caller who could write it, so an
+ * unlocked status read must carry the secret to come back full rather than
+ * public.
+ */
+function secretHeaders(): Record<string, string> {
+  const secret = getSetupSecret();
+  return secret === null ? {} : { [SETUP_SECRET_HEADER]: secret };
+}
+
 async function call<T>(path: string, init: RequestInit, timeoutMs: number): Promise<TokenFetch<T>> {
   if (typeof window === 'undefined') return { kind: 'unreachable' };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(path, { ...init, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(path, {
+      ...init,
+      headers: { ...secretHeaders(), ...(init.headers ?? {}) },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
     if (REFUSAL_STATUSES.has(response.status)) {
       const body = (await response.json().catch(() => ({}))) as { reason?: string };
       return { kind: 'refused', status: response.status, reason: body.reason ?? 'refused' };
@@ -303,5 +416,41 @@ export function testToken(): Promise<TokenFetch<TokenTestResult>> {
     `${TOKEN_ROUTE}/test`,
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
     TEST_TIMEOUT_MS,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  In-app subscription connect                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Begin an in-app subscription connect: ask the server for a one-time link.
+ *
+ * The server generates the PKCE verifier and the state, holds them against the
+ * returned `flowId`, and answers with the link to open. The verifier never
+ * reaches the browser, so a person who copies the link cannot complete the flow
+ * without going through this same process.
+ */
+export function startOAuthConnect(): Promise<TokenFetch<OAuthStartResult>> {
+  return call<OAuthStartResult>(
+    OAUTH_START_ROUTE,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    TOKEN_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Finish an in-app subscription connect with the code the person pasted back.
+ *
+ * The code may arrive as `code#state` — the CLI's manual-redirect page prints
+ * it that way — and is sent verbatim; the server splits it, checks the state,
+ * exchanges the code, and on success stores the token as the runtime
+ * credential. Nothing about the token comes back but its mask.
+ */
+export function finishOAuthConnect(flowId: string, code: string): Promise<TokenFetch<OAuthFinishResult>> {
+  return call<OAuthFinishResult>(
+    OAUTH_FINISH_ROUTE,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ flowId, code }) },
+    OAUTH_FINISH_TIMEOUT_MS,
   );
 }

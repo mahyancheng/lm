@@ -25,26 +25,34 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  OAUTH_FLOW_TTL_MS,
   RUNTIME_STORE_KEY,
   TOKEN_WRITE_RATE_LIMIT,
   type TokenIntent,
   authorizeTokenWrite,
   buildTokenStatus,
+  checkSetupSecret,
   checkWriteRequest,
   clearRuntimeCredential,
   createGenerationCache,
   credentialStatus,
   isLocalConnection,
+  isServerless,
   processSingleton,
   publicTokenStatus,
+  resetOAuthFlows,
   resetRuntimeCredential,
   resolveLlmEnv,
   runtimeCredentialDescriptor,
   runtimeGeneration,
   setRuntimeCredential,
+  setupSecretConfigured,
+  startOAuthFlow,
+  takeOAuthFlow,
   tokenAuthGate,
   tokenWriteBudgetKey,
   tokenWriteOriginKey,
+  transportCannotRunHere,
 } from './_runtime';
 import { TOKEN_MASK_TAIL, classifyCredential, maskCredential, tokenDraftIssue } from '../../../lib/llm/token';
 import { type Principal, createRateLimiter } from './_identity';
@@ -60,6 +68,7 @@ const at = (): string => '2027-01-01T00:00:00.000Z';
 
 beforeEach(() => {
   resetRuntimeCredential();
+  resetOAuthFlows();
 });
 
 /* -------------------------------------------------------------------------- */
@@ -197,6 +206,8 @@ describe('the GET body', () => {
     available: true,
     supabaseConfigured: false,
     localConnection: true,
+    secretConfigured: false,
+    serverless: false,
   };
 
   it('never carries the credential, from any source', () => {
@@ -221,9 +232,18 @@ describe('the GET body', () => {
     // Not local and no accounts: nobody may write it, and the body says so
     // rather than offering a form the server will refuse.
     expect(buildTokenStatus({ ...facts, localConnection: false }).authGate).toBe('disabled');
+    // ...unless a setup secret is configured, which is the public-deployment gate.
+    expect(buildTokenStatus({ ...facts, localConnection: false, secretConfigured: true }).authGate).toBe('secret');
+    // Local wins over the secret: an at-the-machine caller needs no secret.
+    expect(buildTokenStatus({ ...facts, localConnection: true, secretConfigured: true }).authGate).toBe('open-local');
     // Supabase decides its own posture; where the request came from is not a
     // way to escape the admin check, in either direction.
     expect(buildTokenStatus({ ...facts, supabaseConfigured: true, localConnection: false }).authGate).toBe('admin');
+  });
+
+  it('carries the serverless fact through, unchanged', () => {
+    expect(buildTokenStatus(facts).serverless).toBe(false);
+    expect(buildTokenStatus({ ...facts, serverless: true }).serverless).toBe(true);
   });
 
   it('tells an unauthorised reader four public facts and nothing about the secret', () => {
@@ -236,8 +256,9 @@ describe('the GET body', () => {
       available: true,
       transportKind: 'claude-session',
       authGate: 'open-local',
+      serverless: false,
     });
-    // The four that survive are the ones the caller can observe anyway; the
+    // The ones that survive are the ones the caller can observe anyway; the
     // five that do not are the ones that describe a credential they may not
     // change — including the environment's.
     for (const withheld of ['source', 'model', 'masked', 'kind', 'setAt']) {
@@ -395,10 +416,134 @@ describe('authority', () => {
     });
   });
 
-  it('names the same three postures the GET body reports', () => {
+  it('names the same postures the GET body reports', () => {
     expect(tokenAuthGate(true, false)).toBe('admin');
     expect(tokenAuthGate(false, true)).toBe('open-local');
     expect(tokenAuthGate(false, false)).toBe('disabled');
+    // The secret gate: no accounts, not local, but a secret is configured.
+    expect(tokenAuthGate(false, false, true)).toBe('secret');
+    // Local still wins over the secret.
+    expect(tokenAuthGate(false, true, true)).toBe('open-local');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('the setup-secret unlock', () => {
+  const browser: Principal = { id: '11111111-1111-4111-8111-111111111111', kind: 'anonymous' };
+
+  /** A networked (non-local) anonymous caller on a deployment that has set a secret. */
+  const write = (overrides: Partial<Parameters<typeof authorizeTokenWrite>[0]> = {}): ReturnType<typeof authorizeTokenWrite> =>
+    authorizeTokenWrite({
+      supabaseConfigured: false,
+      principal: browser,
+      isAdmin: false,
+      mintedPrincipal: false,
+      localConnection: false,
+      intent: 'write',
+      secretConfigured: true,
+      secretPresented: true,
+      ...overrides,
+    });
+
+  it('lets a networked caller write when the secret is configured and presented', () => {
+    expect(write()).toEqual({ ok: true, gate: 'secret' });
+  });
+
+  it('refuses when the secret is configured but not presented', () => {
+    expect(write({ secretPresented: false })).toEqual({ ok: false, status: 403, reason: 'setup_secret_required' });
+  });
+
+  it('is still disabled when no secret is configured at all', () => {
+    // The secret gate never softens the default: without LLM_SETUP_SECRET the
+    // networked answer is exactly today's `setup_disabled`.
+    expect(write({ secretConfigured: false, secretPresented: false })).toEqual({ ok: false, status: 403, reason: 'setup_disabled' });
+    // And presenting a "secret" the deployment does not have is not a bypass.
+    expect(write({ secretConfigured: false, secretPresented: true })).toEqual({ ok: false, status: 403, reason: 'setup_disabled' });
+  });
+
+  it('still requires an established cookie for a write, exactly like the local path', () => {
+    expect(write({ mintedPrincipal: true })).toEqual({ ok: false, status: 401, reason: 'cookie_required' });
+    // ...but a read from a just-minted browser is fine, so the panel is not blank on first open.
+    expect(write({ mintedPrincipal: true, intent: 'read' })).toEqual({ ok: true, gate: 'secret' });
+  });
+
+  it('never lets the secret stand in for the admin check on a Supabase deployment', () => {
+    expect(write({ supabaseConfigured: true, principal: { id: 'p', kind: 'supabase' }, secretPresented: true }).ok).toBe(false);
+  });
+
+  it('compares the secret in constant time and refuses empties', () => {
+    expect(checkSetupSecret('hunter2', 'hunter2')).toBe(true);
+    expect(checkSetupSecret('hunter2', 'hunter3')).toBe(false);
+    expect(checkSetupSecret('  hunter2  ', 'hunter2')).toBe(true);
+    // Nothing to match against never unlocks — an unset or empty secret is not a bypass.
+    expect(checkSetupSecret('anything', undefined)).toBe(false);
+    expect(checkSetupSecret('anything', '')).toBe(false);
+    expect(checkSetupSecret(null, 'hunter2')).toBe(false);
+    expect(checkSetupSecret('', 'hunter2')).toBe(false);
+  });
+
+  it('reports whether a secret is configured from the environment', () => {
+    expect(setupSecretConfigured({})).toBe(false);
+    expect(setupSecretConfigured({ LLM_SETUP_SECRET: '   ' })).toBe(false);
+    expect(setupSecretConfigured({ LLM_SETUP_SECRET: 'a-long-random-string' })).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('serverless honesty', () => {
+  it('detects a serverless host only on the exact signal', () => {
+    expect(isServerless({ VERCEL: '1' })).toBe(true);
+    expect(isServerless({ VERCEL: '0' })).toBe(false);
+    expect(isServerless({})).toBe(false);
+  });
+
+  it('knows claude-session cannot spawn on a serverless host, and that nothing else is affected', () => {
+    expect(transportCannotRunHere('claude-session', { VERCEL: '1' })).toBe(true);
+    // The API transport is a plain HTTP call and runs fine on a function.
+    expect(transportCannotRunHere('api', { VERCEL: '1' })).toBe(false);
+    // A normal Node process (self-hosted) can spawn the subprocess.
+    expect(transportCannotRunHere('claude-session', {})).toBe(false);
+    expect(transportCannotRunHere('none', { VERCEL: '1' })).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+describe('the in-flight OAuth flows', () => {
+  const t0 = 1_900_000_000_000;
+
+  it('holds the verifier against a returned flow id, and never in the id itself', () => {
+    const { flowId } = startOAuthFlow({ verifier: 'THE_VERIFIER', state: 'THE_STATE', now: t0, flowId: 'flow-1' });
+    expect(flowId).toBe('flow-1');
+    // The id a browser holds discloses nothing about the secret verifier.
+    expect(flowId).not.toContain('THE_VERIFIER');
+
+    const found = takeOAuthFlow('flow-1', t0 + 1000);
+    expect(found).toEqual({ ok: true, verifier: 'THE_VERIFIER', state: 'THE_STATE' });
+  });
+
+  it('is single use: a second take of the same id finds nothing', () => {
+    startOAuthFlow({ verifier: 'v', state: 's', now: t0, flowId: 'flow-2' });
+    expect(takeOAuthFlow('flow-2', t0).ok).toBe(true);
+    expect(takeOAuthFlow('flow-2', t0)).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('expires a flow left unfinished past the TTL, and removes it in the same breath', () => {
+    startOAuthFlow({ verifier: 'v', state: 's', now: t0, flowId: 'flow-3' });
+    expect(takeOAuthFlow('flow-3', t0 + OAUTH_FLOW_TTL_MS)).toEqual({ ok: false, reason: 'expired' });
+    // Removed, not merely reported expired — a retry cannot resurrect it.
+    startOAuthFlow({ verifier: 'v', state: 's', now: t0, flowId: 'flow-4' });
+    takeOAuthFlow('flow-4', t0 + OAUTH_FLOW_TTL_MS);
+    expect(takeOAuthFlow('flow-4', t0 + OAUTH_FLOW_TTL_MS)).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('mints a distinct id when none is supplied', () => {
+    const a = startOAuthFlow({ verifier: 'v', state: 's' });
+    const b = startOAuthFlow({ verifier: 'v', state: 's' });
+    expect(a.flowId).not.toBe(b.flowId);
+    expect(a.flowId.length).toBeGreaterThan(8);
   });
 });
 

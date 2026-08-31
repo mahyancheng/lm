@@ -6,17 +6,18 @@
  * decision is what is worth testing. Nothing here fetches, and nothing here
  * touches the DOM.
  *
- * Six answers, and the ones after the third are the ones that are easy to get
+ * Seven answers, and the ones after the third are the ones that are easy to get
  * wrong:
  *
  * | Phase | When | What the player sees |
  * |---|---|---|
  * | `loading` | the status call is in flight | nothing but the section heading |
  * | `configured` | a credential is in force | the masked row, Test, Replace and Disconnect |
- * | `unconfigured` | a server answered, no credential | the three-step guide and the paste field |
+ * | `unconfigured` | a server answered, no credential | the guide, Connect-with-Claude, and the paste field |
  * | `no-server` | nothing answered at all | one quiet line, and no form |
  * | `restricted` | a server answered and this caller may not write | one line saying who may |
  * | `disabled` | this deployment takes no pasted credential at all | one line saying what to do instead |
+ * | `locked` | the deployment offers the secret gate and this caller has not unlocked it | the "unlock setup" field |
  *
  * `no-server` exists because this app is also shipped as a static artifact with
  * no backend behind it. There, `/api/llm/token` is not a failing endpoint — it
@@ -30,6 +31,12 @@
  * subscription — so the server refuses and this says so plainly, with the two
  * things that do work.
  *
+ * `locked` is the public-deployment answer to `disabled`: the operator set
+ * `LLM_SETUP_SECRET`, so setup *is* possible over the network — for whoever can
+ * present that secret. The panel leads with a one-time unlock field; once the
+ * secret is accepted the server discloses the descriptor and the phase becomes
+ * `configured` or `unconfigured` like any other.
+ *
  * The status the server sends comes in two shapes: the full descriptor for a
  * caller who could write the credential, and four public facts for everyone
  * else. `descriptor` is the narrowed half, and it is null exactly when this
@@ -40,6 +47,7 @@
 // the path alias is a tsconfig/bundler concern the test runner does not share.
 import {
   type CredentialSource,
+  type OAuthFinishFailure,
   type TokenFetch,
   type TokenStatus,
   type TokenStatusFull,
@@ -48,7 +56,7 @@ import {
   isFullStatus,
 } from '../../lib/llm/token';
 
-export type TokenPanelPhase = 'loading' | 'configured' | 'unconfigured' | 'no-server' | 'restricted' | 'disabled';
+export type TokenPanelPhase = 'loading' | 'configured' | 'unconfigured' | 'no-server' | 'restricted' | 'disabled' | 'locked';
 
 export interface TokenPanelState {
   readonly phase: TokenPanelPhase;
@@ -69,6 +77,9 @@ const RESTRICTED_LINE = 'Only an administrator of this deployment can change the
 /** The two things that do work when the in-app path is closed. Both are actionable as written. */
 export const DISABLED_LINE =
   'Token setup is disabled on network deployments — set CLAUDE_CODE_OAUTH_TOKEN in the environment, or run with LLM_TOKEN_SETUP=local.';
+
+/** The lead line above the unlock field: this deployment takes a setup secret. */
+export const LOCKED_LINE = 'This deployment is protected by a setup secret. Enter it to set up AI for this game.';
 
 const BUSY_LINE = 'Too many checks in the last minute. Try again shortly.';
 
@@ -108,6 +119,15 @@ export function tokenPanelState(fetched: TokenFetch<TokenStatus> | null): TokenP
     return { phase: 'disabled', message: DISABLED_LINE, canWrite: false, status, descriptor };
   }
 
+  // The secret gate before the generic withheld-descriptor refusal: on this
+  // deployment a withheld descriptor is not "you may never write" — it is "you
+  // have not unlocked yet". Lead with the unlock field rather than a dead end.
+  // Once the secret is accepted the descriptor is disclosed and this falls
+  // through to the live check below.
+  if (status.authGate === 'secret' && descriptor === null) {
+    return { phase: 'locked', message: LOCKED_LINE, canWrite: false, status, descriptor: null };
+  }
+
   // The server tells a caller what the credential is on exactly the authority
   // that would let them change it, so a withheld descriptor *is* the refusal.
   if (descriptor === null) {
@@ -145,9 +165,14 @@ export function pasteMode(state: TokenPanelState, replacing: boolean): PasteMode
   return 'none';
 }
 
-/** The field's own label, which is the only thing that differs between the two modes. */
+/**
+ * The field's own label. It names both credentials the field accepts, so the
+ * two paths are legible without reading the help text: an `sk-ant-api…` key is
+ * live AI that works on this hosted game, and a subscription token is the one
+ * that runs when the game is self-hosted.
+ */
 export function pasteFieldLabel(mode: PasteMode): string {
-  return mode === 'replace' ? 'Paste the replacement token' : 'Paste the token';
+  return mode === 'replace' ? 'Paste a replacement token or API key' : 'Paste a token or API key';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -186,6 +211,36 @@ export function credentialLine(status: TokenStatusFull): string {
 }
 
 /**
+ * A `claude-session` credential is set, but this host is serverless and cannot
+ * spawn the subprocess it needs.
+ *
+ * This is the case the panel must never gloss as "Live": the credential is real
+ * and would work when self-hosted, but on this host it does not, so `available`
+ * is false and the honest headline is "Subscription connected", not "Offline"
+ * (which would imply nothing is set) and never a green "Live".
+ */
+export function isServerlessClaudeSession(status: TokenStatus): boolean {
+  return status.transportKind === 'claude-session' && status.serverless && status.configured;
+}
+
+/**
+ * A credential pasted or connected in-app lives in one process. On a serverless
+ * host every function instance is a separate process, so an in-app credential
+ * reaches only the instance that received it — other instances still fall back.
+ * The panel says so, and points at the durable fix (an environment variable),
+ * rather than showing a flat "Live" that holds only some of the time.
+ *
+ * Only relevant to a runtime-sourced credential on a serverless host; an
+ * environment credential is on every instance already, and a self-hosted single
+ * process has no such split.
+ */
+export function runtimeServerlessCaveat(status: TokenStatus): string | null {
+  if (!status.serverless) return null;
+  if (!isFullStatus(status) || status.source !== 'runtime') return null;
+  return 'Set in-app, this reaches only one server instance — other requests fall back. For steady live AI on a hosted deployment, set the key as an environment variable instead.';
+}
+
+/**
  * The live/offline headline, with the model when there is one.
  *
  * The model name is part of the descriptor, so a caller who was not shown the
@@ -194,9 +249,32 @@ export function credentialLine(status: TokenStatusFull): string {
  * not necessarily.
  */
 export function statusHeadline(status: TokenStatus | null): string {
-  if (status === null || !status.available) return 'Offline';
+  if (status === null) return 'Offline';
+  if (!status.available) return isServerlessClaudeSession(status) ? 'Subscription connected' : 'Offline';
   const model = isFullStatus(status) ? status.model : null;
   return model === null ? 'Live' : `Live · ${model}`;
+}
+
+/** The dot beside the headline: a live model, a caveat to read, or plain idle. */
+export type StatusTone = 'live' | 'caution' | 'idle';
+
+export function statusDotTone(status: TokenStatus | null): StatusTone {
+  if (status?.available === true) return 'live';
+  if (status !== null && isServerlessClaudeSession(status)) return 'caution';
+  return 'idle';
+}
+
+/**
+ * The one honest sentence a serverless deployment owes a subscription
+ * credential, or null when there is nothing to caveat.
+ *
+ * It names both truths at once: the token is connected and will run when the
+ * game is self-hosted, and live AI *on this hosted game* wants an API key, which
+ * is the transport a serverless function can actually use.
+ */
+export function serverlessNotice(status: TokenStatus | null): string | null {
+  if (status === null || !isServerlessClaudeSession(status)) return null;
+  return 'Subscription connected — runs when self-hosted. For live AI on this hosted game, use an API key (sk-ant-api…).';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -234,6 +312,8 @@ export function refusalLine(status: number, reason: string): string {
   switch (reason) {
     case 'setup_disabled':
       return DISABLED_LINE;
+    case 'setup_secret_required':
+      return 'That setup secret was not accepted. Enter the secret this deployment was configured with.';
     case 'cookie_required':
       return 'This browser has no session cookie for this deployment yet. Re-check, then try again.';
     case 'cross_site':
@@ -247,4 +327,28 @@ export function refusalLine(status: number, reason: string): string {
   if (status === 403) return RESTRICTED_LINE;
   if (status === 429) return BUSY_LINE;
   return reason;
+}
+
+/**
+ * One sentence for a failed in-app subscription connect, in the player's terms.
+ *
+ * Each failure calls for a different next step: approve faster, start over with
+ * the newest link, or fall back to pasting a token. The `detail` the server
+ * built is already actionable for the flow-level failures, so those pass it
+ * through rather than paper over it.
+ */
+export function oauthFailureLine(failure: OAuthFinishFailure, detail: string): string {
+  switch (failure) {
+    case 'expired_code':
+      return 'That code was not accepted — it may have expired. Start again and approve within a few minutes.';
+    case 'bad_state':
+    case 'expired_flow':
+    case 'invalid_request':
+      return detail;
+    case 'network':
+      return `Could not reach Claude to finish connecting: ${detail}`;
+    case 'exchange_failed':
+    default:
+      return `The connection could not be completed: ${detail}. You can paste a token from \`claude setup-token\` instead.`;
+  }
 }

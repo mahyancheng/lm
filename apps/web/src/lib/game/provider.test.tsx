@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { NewGameSetup } from '@frontier/contracts';
+import { NewGameSetupSchema } from '@frontier/contracts';
 import { buildSubmittedAction, createSession } from './engine';
 import { SAVE_KEY, SAVE_VERSION, SLOT_KEYS, buildSaveFile, writeSaveFile } from './persistence';
 import { GameProvider, useGame, useGameActions, type GameStoreActions, type GameStoreState } from './provider';
@@ -185,7 +186,7 @@ describe('newGame founds a company that survives a refresh', () => {
     expect(storedRaw(SAVE_KEY)).toBeNull();
     expect(state().gameStarted).toBe(false);
 
-    const setup: NewGameSetup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' };
+    const setup = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
     let rawAfterCall: string | null = null;
     await act(async () => {
       actions().newGame({ seed: SEED, setup });
@@ -265,8 +266,8 @@ describe('the open queue rides the autosave', () => {
 describe('manual slots through the store', () => {
   it('saves to a slot, loads it back over the autosave, and deletes it', async () => {
     const { state, actions } = await mountGame();
-    const northwind: NewGameSetup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' };
-    const vantage: NewGameSetup = { companyName: 'Vantage Labs', founderName: 'Ida Brandt', backgroundId: 'enterprise_ai' };
+    const northwind = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
+    const vantage = NewGameSetupSchema.parse({ companyName: 'Vantage Labs', founderName: 'Ida Brandt', backgroundId: 'enterprise_ai' });
 
     await act(async () => {
       actions().newGame({ seed: SEED, setup: northwind });

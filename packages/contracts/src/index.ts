@@ -43,6 +43,7 @@
  * | Module        | Contains                                                    |
  * |---------------|-------------------------------------------------------------|
  * | `ids`         | Id aliases, scalar builders, quarter arithmetic             |
+ * | `sectors`     | The six economic sectors, six regions, and the supply graph |
  * | `world`       | Twelve world domains, sectors, the modifier target registry |
  * | `modifiers`   | World modifiers, decay, the impact budget                   |
  * | `events`      | World events, families, hazards, the GM proposal envelope   |
@@ -63,6 +64,7 @@
  */
 
 export * from './ids';
+export * from './sectors';
 export * from './world';
 export * from './modifiers';
 export * from './events';
@@ -86,4 +88,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.0.0';
+export const CONTRACTS_VERSION = '1.1.0';

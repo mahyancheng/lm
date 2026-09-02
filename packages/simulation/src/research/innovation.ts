@@ -28,7 +28,7 @@ import type {
   TechEdge,
   TechNode,
 } from '@frontier/contracts';
-import { makeId, quarterToYear, slugify } from '@frontier/contracts';
+import { DEFAULT_SECTOR, makeId, quarterToYear, slugify } from '@frontier/contracts';
 import {
   CLAIMED_PLAUSIBILITY_WEIGHT,
   INNOVATION_AFFORDABILITY_MULTIPLE,
@@ -257,6 +257,9 @@ export function integrateInnovationProposal(
     id: nodeId,
     title: proposal.title,
     summary: proposal.summary,
+    // An invented node joins its proposer's track; with no proposing company it
+    // lands on the default one.
+    sector: company?.sector ?? DEFAULT_SECTOR,
     status: 'company_thesis',
     publicConfidence,
     confidenceByCompany,

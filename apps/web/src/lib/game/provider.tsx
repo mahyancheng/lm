@@ -43,6 +43,7 @@ import type {
   GmProposalBatch,
   Leaderboard,
   NewGameSetup,
+  NewGameSetupInput,
   NpcActionBundle,
   PlayerView,
   Quote,
@@ -51,6 +52,7 @@ import type {
   SubmittedAction,
   WorldState,
 } from '@frontier/contracts';
+import { NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import { projectResolutionOutcomeForPlayer } from '@frontier/simulation';
 import { llmHealth, requestNpcBundle, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
@@ -174,7 +176,7 @@ export interface GameStoreState {
 }
 
 export interface GameStoreActions {
-  newGame(options?: { seed?: number; difficulty?: SessionDifficulty; autoExecuteRoutine?: boolean; setup?: NewGameSetup }): void;
+  newGame(options?: { seed?: number; difficulty?: SessionDifficulty; autoExecuteRoutine?: boolean; setup?: NewGameSetupInput }): void;
   /** Validate an intent without queuing it. Use for live previews and disabled states. */
   validateIntent(intent: ActionIntent): ActionValidationResult;
   /** Validate and queue. Returns the entry so a caller can render the outcome immediately. */
@@ -854,8 +856,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
   const newGame = useCallback<GameStoreActions['newGame']>((options) => {
     const current = stateRef.current;
     // The setup is per-game: a new game takes what it was given, and defaults to
-    // the classic world when none is supplied.
-    const setup = options?.setup ?? null;
+    // the classic world when none is supplied. Parsed once here, so everything
+    // downstream holds a setup with its sector, region and world version filled.
+    const setup = options?.setup === undefined ? null : NewGameSetupSchema.parse(options.setup);
     const settings: GameSettings = {
       ...current.settings,
       seed: options?.seed ?? current.settings.seed,

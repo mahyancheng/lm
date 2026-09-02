@@ -14,7 +14,7 @@ import type {
   ActionIntent,
   ActionType,
   GmProposalBatch,
-  NewGameSetup,
+  NewGameSetupInput,
   NpcActionBundle,
   ResolverContext,
   SessionDifficulty,
@@ -61,8 +61,8 @@ export interface NewGameOptions {
   readonly seed?: number;
   readonly difficulty?: SessionDifficulty;
   readonly autoExecuteRoutine?: boolean;
-  /** Company name, founder name and starting background. Omit for the default world. */
-  readonly setup?: NewGameSetup;
+  /** Company name, founder name, background, sector and region. Omit for the default world. */
+  readonly setup?: NewGameSetupInput;
 }
 
 /**

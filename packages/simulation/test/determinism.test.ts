@@ -24,7 +24,7 @@ import {
   DEMO_SEED,
   NEW_GAME_BACKGROUND_IDS,
   createDemoSession,
-  type NewGameSetup,
+  type NewGameSetupInput,
 } from '../src/scenario';
 
 /* -------------------------------------------------------------------------- */
@@ -422,7 +422,7 @@ describe('starting backgrounds', () => {
   });
 
   it('renames only the player company and the founder, and keeps their ids stable', () => {
-    const setup: NewGameSetup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' };
+    const setup: NewGameSetupInput = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' };
     const state = createDemoSession(DEMO_SEED, setup);
 
     expect(playerCompany(state).id).toBe(DEMO_COMPANIES.player);
@@ -460,7 +460,7 @@ describe('starting backgrounds', () => {
   });
 
   it('is deterministic for a given seed and setup', () => {
-    const setup: NewGameSetup = { companyName: 'Deterministic Inc', founderName: 'Sam Okafor', backgroundId: 'infrastructure' };
+    const setup: NewGameSetupInput = { companyName: 'Deterministic Inc', founderName: 'Sam Okafor', backgroundId: 'infrastructure' };
     expect(hashState(createDemoSession(DEMO_SEED, setup))).toBe(hashState(createDemoSession(DEMO_SEED, setup)));
     expect(stableStringify(createDemoSession(7, setup))).toBe(stableStringify(createDemoSession(7, setup)));
     // A different background is a different world.
@@ -493,7 +493,7 @@ describe.skipIf(engineModule === null)('starting backgrounds resolve quarter 1',
     'resolves a given (seed, setup) to an identical state hash twice',
     () => {
       if (engineModule === null) return;
-      const setup: NewGameSetup = { companyName: 'Twin AI', founderName: 'Jo Meyer', backgroundId: 'frontier_lab' };
+      const setup: NewGameSetupInput = { companyName: 'Twin AI', founderName: 'Jo Meyer', backgroundId: 'frontier_lab' };
       const resolveOnce = (): string => {
         const engine = engineModule.createDefaultEngine();
         const outcome = engine.resolver.resolveQuarter(createDemoSession(DEMO_SEED, setup), [], null, []);

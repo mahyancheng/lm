@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { NewGameSetupSchema } from '@frontier/contracts';
 import type { SlotSummary } from './persistence';
 import {
   DEFAULT_COMPANY_NAME,
@@ -62,7 +63,7 @@ describe('classic-world fallbacks', () => {
 describe('continueLabel', () => {
   it('names the company and the quarter it stands at', () => {
     expect(
-      continueLabel({ setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'enterprise_ai' }, savedQuarter: 5 }),
+      continueLabel({ setup: NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'enterprise_ai' }), savedQuarter: 5 }),
     ).toBe('Continue Northwind AI — 2028 Q2');
   });
 

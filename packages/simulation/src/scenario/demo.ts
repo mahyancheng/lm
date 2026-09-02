@@ -38,6 +38,7 @@ import type {
   MarketInstrument,
   NewGameBackgroundId,
   NewGameSetup,
+  NewGameSetupInput,
   ProcurementOpportunity,
   Quote,
   ResearchProject,
@@ -46,9 +47,18 @@ import type {
   SocialAccount,
   TechNode,
 } from '@frontier/contracts';
-import { DEFAULT_QUORUM_RULE, NEW_GAME_BACKGROUND_IDS, SessionStateSchema, makeId } from '@frontier/contracts';
+import {
+  DEFAULT_COMPANY_FUNDAMENTALS,
+  DEFAULT_QUORUM_RULE,
+  DEFAULT_REGION,
+  DEFAULT_SECTOR,
+  NEW_GAME_BACKGROUND_IDS,
+  NewGameSetupSchema,
+  SessionStateSchema,
+  makeId,
+} from '@frontier/contracts';
 
-export type { NewGameSetup, NewGameBackgroundId } from '@frontier/contracts';
+export type { NewGameSetup, NewGameSetupInput, NewGameBackgroundId } from '@frontier/contracts';
 export { NEW_GAME_BACKGROUNDS, NEW_GAME_BACKGROUND_IDS } from '@frontier/contracts';
 
 /* -------------------------------------------------------------------------- */
@@ -676,8 +686,17 @@ const PLAYER_BACKGROUNDS: Readonly<Record<NewGameBackgroundId, PlayerBackgroundS
  * Apply a background to the base player seed. Only the shape changes; the name
  * comes from the setup and every identity field is carried through unchanged.
  */
+/**
+ * World 1 knows only the five AI backgrounds. A world-2 background id reaching
+ * here means the caller asked the frozen scenario for a world it does not have,
+ * so it falls back to the default shape rather than crashing.
+ */
+function backgroundShape(id: NewGameSetup['backgroundId']): PlayerBackgroundShape {
+  return PLAYER_BACKGROUNDS[id as NewGameBackgroundId] ?? PLAYER_BACKGROUNDS.enterprise_ai;
+}
+
 function playerSeedFor(setup: NewGameSetup): CompanySeed {
-  const shape = PLAYER_BACKGROUNDS[setup.backgroundId];
+  const shape = backgroundShape(setup.backgroundId);
   return {
     ...BASE_PLAYER_SEED,
     name: setup.companyName,
@@ -714,6 +733,8 @@ function buildCompany(seed: CompanySeed): Company {
     isPublic: seed.isPublic,
     controllerPlayerId: seed.controllerPlayerId,
     sectorId: seed.sectorId,
+    sector: DEFAULT_SECTOR,
+    region: DEFAULT_REGION,
     foundedQuarter: 0,
     headquartersCity: seed.city,
     isActive: true,
@@ -780,6 +801,9 @@ function buildCompany(seed: CompanySeed): Company {
       backlogUsd: f.backlog,
     },
     balanceSheet: { assets, liabilities, equity },
+    // World 1 anchors on the seeded valuation, not on rolled-up fundamentals;
+    // the metrics phase fills these in from the first resolved quarter.
+    fundamentals: DEFAULT_COMPANY_FUNDAMENTALS,
     posture: seed.posture,
     riskTolerance: seed.riskTolerance,
     techCapabilities: { ...seed.capabilities },
@@ -1617,6 +1641,7 @@ function buildNode(seed: NodeSeed): TechNode {
     id: seed.id,
     title: seed.title,
     summary: seed.summary,
+    sector: DEFAULT_SECTOR,
     status: seed.status,
     publicConfidence: seed.confidence,
     confidenceByCompany: { ...(seed.companyConfidence ?? {}) },
@@ -1876,12 +1901,13 @@ function buildMetrics(seed: CompanySeed, marketCap: number, enterpriseValue: num
  * shape) and the founder character's display name. When it is omitted, the
  * result is byte-identical to today's Player Ventures / Avery Sinclair world.
  */
-export function createDemoSession(seed: number = DEMO_SEED, setup?: NewGameSetup): SessionState {
+export function createDemoSession(seed: number = DEMO_SEED, setup?: NewGameSetupInput): SessionState {
   return SessionStateSchema.parse(demoSessionInput(seed, setup));
 }
 
 /** The unparsed input, for fixtures that want to vary one field before parsing. */
-export function demoSessionInput(seed: number = DEMO_SEED, setup?: NewGameSetup): SessionStateInput {
+export function demoSessionInput(seed: number = DEMO_SEED, setupInput?: NewGameSetupInput): SessionStateInput {
+  const setup = setupInput === undefined ? undefined : NewGameSetupSchema.parse(setupInput);
   const sessionId = makeId('sess', 'demo', String(seed));
 
   // The player company and founder change with the setup; everything else in the
@@ -1894,7 +1920,7 @@ export function demoSessionInput(seed: number = DEMO_SEED, setup?: NewGameSetup)
     setup === undefined
       ? CHARACTER_SEEDS
       : CHARACTER_SEEDS.map((seed) => (seed.id === DEMO_CHARACTERS.player ? { ...seed, name: founderName, title: founderTitle } : seed));
-  const playerAnchorValue = setup === undefined ? 18 * M : PLAYER_BACKGROUNDS[setup.backgroundId].anchorValueUsd;
+  const playerAnchorValue = setup === undefined ? 18 * M : backgroundShape(setup.backgroundId).anchorValueUsd;
 
   const anchors: Readonly<Record<string, { value: number; method: 'revenue_multiple' | 'forward_revenue_quality' | 'earnings_fcf' | 'asset_cashflow_utilisation' | 'technology_option_value' }>> = {
     [DEMO_COMPANIES.nexus]: { value: 44.1 * BN, method: 'technology_option_value' },

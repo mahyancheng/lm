@@ -14,6 +14,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, percent100, rateFraction, score100, signedUsd, unitInterval, usd } from './ids';
+import { DEFAULT_REGION, DEFAULT_SECTOR, RegionSchema, SectorSchema } from './sectors';
 
 /* -------------------------------------------------------------------------- */
 /*  Enumerations                                                               */
@@ -244,6 +245,57 @@ export const BalanceSheetCheckSchema = z
 export type BalanceSheetCheck = z.infer<typeof BalanceSheetCheckSchema>;
 
 /* -------------------------------------------------------------------------- */
+/*  Fundamentals (the pricing anchor's inputs)                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The handful of figures the pricing model anchors a share price to.
+ *
+ * Almost all of this is derivable from `financials` and the cap table, but the
+ * derivation needs *history* — four quarters of revenue, last year's revenue —
+ * which live state does not keep. So the metrics phase writes the rolled-up
+ * answer here once a quarter and the market phase reads it, which is what makes
+ * a price traceable to fundamentals rather than to a fresh guess each quarter.
+ *
+ * `sharesOutstanding` is the one figure that exists nowhere else on a company:
+ * `MarketInstrument.sharesOutstanding` only exists once a company is listed,
+ * and the cap table's `issuedShares` is per share class. This is the single
+ * total the price and the market capitalisation are derived from, and it is the
+ * number `SHARE_PRICE_BAND_USD` is enforced through.
+ */
+export const CompanyFundamentalsSchema = z
+  .object({
+    revenueTtmUsd: usd('Trailing four-quarter revenue. Zero for a company younger than a quarter or pre-revenue.'),
+    revenueGrowthQoQ: rateFraction('Revenue growth against the previous quarter, where 0.08 is +8%.', -1, 5),
+    revenueGrowthYoY: rateFraction('Revenue growth against the same quarter a year earlier. Falls back to the quarterly figure before four quarters of history exist.', -1, 10),
+    grossMarginPct: unitInterval('Blended gross margin across active products, as a fraction of revenue.'),
+    netIncomeTtmUsd: signedUsd('Trailing four-quarter net income. Deeply negative for a frontier laboratory and that is fine; the earnings method is simply not chosen for it.'),
+    sharesOutstanding: intCount(
+      'Total ordinary shares in issue. INVARIANT: price multiplied by this must equal the market capitalisation, and the price it implies must sit inside SHARE_PRICE_BAND_USD at listing. Never zero for a company with a priced security.',
+    ),
+  })
+  .describe('The fundamental figures the valuation anchor and the share price are built from. Refreshed by the metrics phase every quarter; never written by a model.');
+export type CompanyFundamentals = z.infer<typeof CompanyFundamentalsSchema>;
+
+/**
+ * What a company gets when its save predates the fundamentals block. Every
+ * figure is deliberately inert — no revenue, no growth, baseline margin — so a
+ * world-version-1 company that has not yet been through a metrics phase cannot
+ * accidentally price itself off stale defaults. The share count is the baseline
+ * float, which puts a company worth `$50m` to `$5bn` inside the price band.
+ */
+export const DEFAULT_SHARES_OUTSTANDING = 10_000_000;
+
+export const DEFAULT_COMPANY_FUNDAMENTALS: CompanyFundamentals = {
+  revenueTtmUsd: 0,
+  revenueGrowthQoQ: 0,
+  revenueGrowthYoY: 0,
+  grossMarginPct: 0.5,
+  netIncomeTtmUsd: 0,
+  sharesOutstanding: DEFAULT_SHARES_OUTSTANDING,
+};
+
+/* -------------------------------------------------------------------------- */
 /*  Reputation and capability                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -297,6 +349,12 @@ export const CompanySchema = z
     isPublic: z.boolean().describe('True once the company has listed. Public companies disclose, are priced every quarter and attract activists.'),
     controllerPlayerId: z.string().nullable().describe('Player whose submitted actions direct this company, or null for an NPC-run company. Being the controller is not the same as owning the company: a board can dismiss a CEO who still holds 24% of the stock.'),
     sectorId: z.string().min(1).describe('Primary sector, used for sector beta and sentiment. See SECTOR_IDS in world.ts.'),
+    sector: SectorSchema.default(DEFAULT_SECTOR).describe(
+      'Which part of the real economy this company operates in, driving supply-chain coupling, capital intensity and its margin and multiple bands. Defaults to "ai" so a world-version-1 save parses unchanged.',
+    ),
+    region: RegionSchema.default(DEFAULT_REGION).describe(
+      'Where the company is based, driving talent and energy cost, procurement appetite and capital depth. Defaults to "north_america" so a world-version-1 save parses unchanged.',
+    ),
     foundedQuarter: QuarterIndexSchema.describe('Quarter the company was founded, which may be before quarter 0 for incumbents (use 0).'),
     headquartersCity: z.string().max(80).describe('Headquarters city.'),
     isActive: z.boolean().describe('False once acquired, wound up or delisted into another entity.'),
@@ -310,6 +368,9 @@ export const CompanySchema = z
     // --- financial position ---
     financials: FinancialsSchema,
     balanceSheet: BalanceSheetSchema,
+    fundamentals: CompanyFundamentalsSchema.default(DEFAULT_COMPANY_FUNDAMENTALS).describe(
+      'Rolled-up figures the share price is anchored to. Written by the metrics phase, read by the market phase. Defaults to DEFAULT_COMPANY_FUNDAMENTALS so a world-version-1 save parses unchanged.',
+    ),
 
     // --- strategy (drives NPC behaviour and describes player companies) ---
     posture: CompanyPostureSchema,
@@ -331,6 +392,13 @@ export const CompanySchema = z
   })
   .describe('An operating company in the session economy.');
 export type Company = z.infer<typeof CompanySchema>;
+
+/**
+ * The *input* type: `sector`, `region` and `fundamentals` may be omitted and are
+ * filled from the defaults. This is the shape a world-version-1 save has on
+ * disk, and the shape a fixture should be written in.
+ */
+export type CompanyInput = z.input<typeof CompanySchema>;
 
 /* -------------------------------------------------------------------------- */
 /*  Derived per-quarter metrics                                                */

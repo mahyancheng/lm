@@ -20,4 +20,4 @@ export {
   NEW_GAME_BACKGROUNDS,
   NEW_GAME_BACKGROUND_IDS,
 } from './demo';
-export type { NewGameSetup, NewGameBackgroundId } from './demo';
+export type { NewGameSetup, NewGameSetupInput, NewGameBackgroundId } from './demo';

@@ -26,6 +26,7 @@
 
 import { z } from 'zod';
 import { CalendarYearSchema, QuarterIndexSchema, intCount, unitInterval, usd } from './ids';
+import { DEFAULT_SECTOR, SectorSchema } from './sectors';
 
 /* -------------------------------------------------------------------------- */
 /*  Epistemic state                                                            */
@@ -66,6 +67,9 @@ export const TechNodeSchema = z
     id: z.string().min(1).describe('Node id, e.g. "tech_autonomous_research_v2".'),
     title: z.string().min(3).max(120).describe('Node name as it appears on the Frontier Map, e.g. "Autonomous Research Systems".'),
     summary: z.string().min(10).max(1000).describe('What this technology would be and why it would matter.'),
+    sector: SectorSchema.default(DEFAULT_SECTOR).describe(
+      'Which sector this node belongs to. The map draws one track per sector, and a node only counts toward a company\'s capability when the sectors agree. Defaults to "ai" so a world-version-1 graph parses unchanged.',
+    ),
     status: TechEpistemicStateSchema,
     publicConfidence: unitInterval('How likely the world at large thinks this is to arrive. This is the number the map renders and the number events move.'),
     confidenceByCompany: z
@@ -115,16 +119,35 @@ export const TechEdgeSchema = z
   .describe('One directed relationship between nodes.');
 export type TechEdge = z.infer<typeof TechEdgeSchema>;
 
+export const TechTrackSchema = z
+  .object({
+    sector: SectorSchema,
+    title: z.string().min(3).max(80).describe('Track name as it appears above its lane on the map, e.g. "Embodied Autonomy".'),
+    summary: z.string().max(400).describe('One or two sentences on what this sector is currently trying to reach.'),
+    nodeIds: z.array(z.string()).describe('Nodes in this track, in the order the map lays them out. A node may appear in one track only.'),
+  })
+  .describe('One sector lane on the Frontier Map. Tracks are presentation and grouping only: the graph is still the nodes and edges, and a dependency may cross tracks.');
+export type TechTrack = z.infer<typeof TechTrackSchema>;
+
 export const TechGraphSchema = z
   .object({
     version: z.number().int().min(1).describe('Monotonic graph version. Every accepted innovation proposal or belief shift increments it, so clients can detect a stale map.'),
     sessionId: z.string().min(1),
     nodes: z.array(TechNodeSchema),
     edges: z.array(TechEdgeSchema),
+    tracks: z
+      .array(TechTrackSchema)
+      .default([])
+      .describe('Per-sector lanes, in presentation order. Empty for a world-version-1 graph, which is a single implicit AI track.'),
     updatedQuarter: QuarterIndexSchema,
   })
   .describe('The session Frontier Map. Versioned because it changes: nodes are added, confidences move, windows shift and paths die.');
 export type TechGraph = z.infer<typeof TechGraphSchema>;
+
+/** Nodes belonging to one sector, in graph order. Pure; safe in the engine. */
+export function nodesInSector(graph: TechGraph, sector: TechNode['sector']): readonly TechNode[] {
+  return graph.nodes.filter((node) => node.sector === sector);
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Research projects                                                          */

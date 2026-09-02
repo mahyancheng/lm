@@ -18,6 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GmProposalBatch, NpcActionBundle, SessionState, SubmittedAction } from '@frontier/contracts';
+import { NewGameSetupSchema } from '@frontier/contracts';
 import { buildSubmittedAction, createSession, getEngine } from './engine';
 import {
   CHECKPOINT_INTERVAL,
@@ -336,7 +337,7 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
   });
 
   it('records the new-game setup and rebuilds the renamed company on replay', () => {
-    const setup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+    const setup = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
     const start = createSession({ seed: SEED, setup });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 200_000 }, 0);
     const file = buildSaveFile({
@@ -478,7 +479,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
 
 describe('a founding save with no resolved quarters', () => {
   it('replays an empty log to quarter 0 with the setup applied, as a complete load', () => {
-    const setup = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+    const setup = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
     const session = createSession({ seed: SEED, setup });
     const file = buildSaveFile({
       seed: SEED,
@@ -559,7 +560,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
       seed: SEED,
       difficulty: 'standard',
       autoExecuteRoutine: true,
-      setup: { companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' },
+      setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' }),
       log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')] }],
       checkpoint: { quarter: 0, state: start },
       savedQuarter: 1,
@@ -616,7 +617,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
 });
 
 describe('manual slots beside the autosave', () => {
-  const SETUP = { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' as const };
+  const SETUP = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
 
   function slotFile(): SaveFile {
     const session = createSession({ seed: SEED, setup: SETUP });

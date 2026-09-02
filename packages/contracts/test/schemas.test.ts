@@ -16,48 +16,87 @@ import {
 
 import {
   ACTION_TYPES,
+  ALL_BACKGROUNDS,
+  ALL_BACKGROUND_IDS,
   ActionIntentSchema,
   BALANCE_SHEET_TOLERANCE_USD,
   CONFIRMATION_REQUIRED_ACTIONS,
   requiresExplicitConfirmation,
   CONNECTION_GAP_RULE,
   CONTRACTS_VERSION,
+  CURRENT_WORLD_VERSION,
   CapTableSchema,
   CompanySchema,
   ConditionalCommitmentSchema,
+  DEFAULT_COMPANY_FUNDAMENTALS,
   DEFAULT_EVALUATION_WEIGHTS,
   DEFAULT_IMPACT_BUDGET,
+  DEFAULT_SHARES_OUTSTANDING,
   DealObligationSchema,
   EvaluationWeightsSchema,
   FOUNDER_INDEX_WEIGHTS,
   GmEventProposalSchema,
   InnovationProposalSchema,
+  LEGACY_WORLD_VERSION,
   NEW_GAME_BACKGROUNDS,
   NEW_GAME_BACKGROUND_IDS,
   NewGameSetupSchema,
   NpcActionBundleSchema,
   OWNERSHIP_THRESHOLDS,
   PATTERN_TARGET_PATHS,
+  REGIONS,
   RESOLUTION_PHASES,
+  RegionSchema,
+  SECTORS,
+  SECTOR_BACKGROUND_IDS,
+  SETUP_SLOTS,
+  SHARE_COUNT_LOT,
+  SHARE_PRICE_BAND_USD,
+  SectorSchema,
   SessionStateSchema,
+  SetupProposalSchema,
   TECH_EPISTEMIC_STATES,
+  TechGraphSchema,
   WORLD_TARGET_PATHS,
   WORLD_DOMAIN_KEYS,
   WorldStateSchema,
+  WorldVersionSchema,
+  backgroundById,
+  backgroundsForSector,
   balanceSheetReconciles,
   canInitiateContact,
   commitmentConditionsHold,
+  defaultBackgroundFor,
+  defaultRegionFor,
   founderIndex,
   getTargetPathSpec,
   isLegalTargetPath,
+  isRegion,
+  isSector,
   makeId,
+  marketCapFromPrice,
+  missingSetupSlots,
+  newGameSetupFromProposal,
+  nodesInSector,
   ownershipThresholdFor,
+  priceFromMarketCap,
+  priceWithinBand,
   quarterLabel,
+  quoteMarketCapReconciles,
+  regionMeta,
+  regionsBySectorAffinity,
   returnDecompositionSums,
+  sectorInputs,
+  sectorForBackground,
+  sectorMeta,
+  sectorOutputs,
+  sectorSupplyGraphIsConsistent,
+  setupProposalIsComplete,
+  sharesForMarketCap,
   targetPathEntityId,
   type ActionIntent,
   type BalanceSheet,
-  type Company,
+  type CompanyInput,
   type SessionStateInput,
   type WorldState,
 } from '../src/index';
@@ -157,7 +196,10 @@ const balanceSheet: BalanceSheet = {
   equity: 7_300_000_000,
 };
 
-const company: Company = {
+// A world-version-1 company fixture: no sector, no region, no fundamentals.
+// Typed as the schema *input* on purpose, so it keeps proving that a save
+// written before world version 2 still parses and picks up the defaults.
+const company: CompanyInput = {
   id: 'cmp_orbit',
   name: 'Orbit Intelligence',
   ticker: 'ORBT',
@@ -414,6 +456,11 @@ describe('valid fixtures parse', () => {
     const parsed = NewGameSetupSchema.parse({ companyName: '  Acme AI  ', founderName: '  Dana Vale ', backgroundId: 'frontier_lab' });
     expect(parsed.companyName).toBe('Acme AI');
     expect(parsed.founderName).toBe('Dana Vale');
+    // A world-version-1 setup carries none of the world-2 fields and must still
+    // land in the frozen world.
+    expect(parsed.sector).toBe('ai');
+    expect(parsed.region).toBe('north_america');
+    expect(parsed.worldVersion).toBe(1);
     expect(NewGameSetupSchema.safeParse({ companyName: '   ', founderName: 'x', backgroundId: 'enterprise_ai' }).success).toBe(false);
     expect(NewGameSetupSchema.safeParse({ companyName: 'x'.repeat(41), founderName: 'x', backgroundId: 'enterprise_ai' }).success).toBe(false);
     expect(NewGameSetupSchema.safeParse({ companyName: 'x', founderName: 'y', backgroundId: 'not_a_background' }).success).toBe(false);
@@ -655,7 +702,7 @@ describe('constants and invariants', () => {
   });
 
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.0.0');
+    expect(CONTRACTS_VERSION).toBe('1.1.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {
@@ -909,5 +956,290 @@ describe('pure helpers', () => {
 
     const held = capTable.holdings.reduce((sum, h) => sum + h.shares, 0);
     expect(held).toBe(capTable.totalIssuedByClass['shc_orbit_common']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  World version 2 — sectors, regions, backgrounds, readable prices           */
+/* -------------------------------------------------------------------------- */
+
+describe('sectors and regions', () => {
+  it('exposes six sectors and six regions with a complete meta row for each', () => {
+    expect(SECTORS).toEqual(['ai', 'robotics', 'manufacturing', 'energy', 'logistics', 'consumer']);
+    expect(REGIONS).toEqual(['north_america', 'europe', 'east_asia', 'south_asia', 'middle_east', 'latin_america']);
+
+    for (const sector of SECTORS) {
+      const meta = sectorMeta(sector);
+      expect(meta.id).toBe(sector);
+      expect(meta.label.length).toBeGreaterThan(0);
+      expect(meta.tagline.length).toBeGreaterThan(0);
+      expect(meta.icon.length).toBeGreaterThan(0);
+      const [marginLow, marginHigh] = meta.grossMarginBandPct;
+      const [multipleLow, multipleHigh] = meta.revenueMultipleBand;
+      expect(marginLow).toBeLessThanOrEqual(marginHigh);
+      expect(multipleLow).toBeLessThanOrEqual(multipleHigh);
+      expect(meta.demandCycleQuarters).toBeGreaterThan(0);
+      // Whole numbers only: these are printed bare.
+      for (const value of [meta.capexIntensity, marginLow, marginHigh, multipleLow, multipleHigh, meta.demandCycleQuarters]) {
+        expect(Number.isInteger(value)).toBe(true);
+      }
+    }
+
+    for (const region of REGIONS) {
+      const meta = regionMeta(region);
+      expect(meta.id).toBe(region);
+      expect(meta.label.length).toBeGreaterThan(0);
+      expect(Object.keys(meta.sectorAffinities).sort()).toEqual([...SECTORS].sort());
+      for (const value of [meta.talentCostIndex, meta.energyCostIndex, meta.procurementAppetite, meta.capitalDepth, ...Object.values(meta.sectorAffinities)]) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('declares a supply graph whose inputs and outputs are exact inverses', () => {
+    expect(sectorSupplyGraphIsConsistent()).toBe(true);
+    // The four couplings the economy is built on.
+    expect(sectorOutputs('energy')).toContain('manufacturing');
+    expect(sectorOutputs('energy')).toContain('logistics');
+    expect(sectorOutputs('manufacturing')).toEqual(['robotics', 'consumer']);
+    expect(sectorOutputs('logistics')).toEqual(['manufacturing', 'consumer']);
+    for (const sector of SECTORS) {
+      if (sector !== 'ai') expect(sectorInputs(sector)).toContain('ai');
+    }
+  });
+
+  it('rejects a sector or region that is not in the set, and guards narrow correctly', () => {
+    expect(SectorSchema.safeParse('biotech').success).toBe(false);
+    expect(RegionSchema.safeParse('antarctica').success).toBe(false);
+    expect(isSector('robotics')).toBe(true);
+    expect(isSector('robotic')).toBe(false);
+    expect(isRegion('east_asia')).toBe(true);
+    expect(isRegion('')).toBe(false);
+  });
+
+  it('ranks regions by sector fit deterministically', () => {
+    expect(defaultRegionFor('energy')).toBe('middle_east');
+    expect(defaultRegionFor('manufacturing')).toBe('east_asia');
+    expect(defaultRegionFor('ai')).toBe('north_america');
+    expect(regionsBySectorAffinity('robotics')[0]).toBe('east_asia');
+    expect(regionsBySectorAffinity('ai')).toEqual(regionsBySectorAffinity('ai'));
+  });
+});
+
+describe('world version 2 company and graph defaults', () => {
+  it('gives a world-version-1 company sector "ai", north america and inert fundamentals', () => {
+    const parsed = CompanySchema.parse(company);
+    expect(parsed.sector).toBe('ai');
+    expect(parsed.region).toBe('north_america');
+    expect(parsed.fundamentals).toEqual(DEFAULT_COMPANY_FUNDAMENTALS);
+    expect(parsed.fundamentals.sharesOutstanding).toBe(DEFAULT_SHARES_OUTSTANDING);
+  });
+
+  it('keeps an explicit sector and region rather than overwriting them', () => {
+    const parsed = CompanySchema.parse({ ...company, sector: 'energy', region: 'middle_east' });
+    expect(parsed.sector).toBe('energy');
+    expect(parsed.region).toBe('middle_east');
+    expect(CompanySchema.safeParse({ ...company, sector: 'shipping' }).success).toBe(false);
+  });
+
+  it('defaults a tech node to the ai track and a graph to no tracks', () => {
+    const graph = TechGraphSchema.parse({
+      version: 1,
+      sessionId: 'sess_demo',
+      updatedQuarter: 0,
+      edges: [],
+      nodes: [
+        {
+          id: 'tech_sparse_inference',
+          title: 'Sparse Inference at Scale',
+          summary: 'Serving frontier-quality answers at a fraction of the accelerator cost.',
+          status: 'emerging',
+          publicConfidence: 0.44,
+          confidenceByCompany: {},
+          estimatedWindow: [2030, 2032],
+          researchCostRange: [200_000_000, 900_000_000],
+          computeIntensity: 0.6,
+          talentRequirements: ['efficiency'],
+          dependencies: [],
+          possibleUnlocks: [],
+          originalProposerId: null,
+          visibility: 'public',
+          achievedByCompanyId: null,
+          achievedQuarter: null,
+          createdQuarter: 0,
+          novelty: 0.4,
+          plausibility: 0.7,
+        },
+      ],
+    });
+    expect(graph.tracks).toEqual([]);
+    expect(graph.nodes[0]?.sector).toBe('ai');
+    expect(nodesInSector(graph, 'ai')).toHaveLength(1);
+    expect(nodesInSector(graph, 'energy')).toHaveLength(0);
+  });
+
+  it('defaults a session config to world version 1 and accepts 2', () => {
+    expect(WorldVersionSchema.parse(undefined)).toBe(1);
+    expect(WorldVersionSchema.parse(2)).toBe(2);
+    expect(WorldVersionSchema.safeParse(3).success).toBe(false);
+    expect(LEGACY_WORLD_VERSION).toBe(1);
+    expect(CURRENT_WORLD_VERSION).toBe(2);
+    const parsed = SessionStateSchema.parse(minimalSessionState);
+    expect(parsed.config.worldVersion).toBe(1);
+  });
+});
+
+describe('share prices stay readable', () => {
+  it('picks a whole share count that lands a fresh listing inside the band', () => {
+    for (const capUsd of [6_000_000, 50_000_000, 480_000_000, 12_000_000_000, 900_000_000_000]) {
+      const shares = sharesForMarketCap(capUsd);
+      expect(Number.isInteger(shares)).toBe(true);
+      expect(shares % SHARE_COUNT_LOT).toBe(0);
+      expect(priceWithinBand(priceFromMarketCap(capUsd, shares))).toBe(true);
+    }
+  });
+
+  it('bounds the band at five and five hundred dollars', () => {
+    expect(SHARE_PRICE_BAND_USD).toEqual([5, 500]);
+    expect(priceWithinBand(5)).toBe(true);
+    expect(priceWithinBand(500)).toBe(true);
+    expect(priceWithinBand(4.99)).toBe(false);
+    expect(priceWithinBand(501)).toBe(false);
+    expect(priceWithinBand(Number.NaN)).toBe(false);
+  });
+
+  it('reconciles price times shares against the quoted market capitalisation', () => {
+    const shares = sharesForMarketCap(2_000_000_000);
+    const price = priceFromMarketCap(2_000_000_000, shares);
+    const quote = {
+      instrumentId: 'ins_orbit_eq',
+      quarter: 7,
+      price,
+      return: 0.047,
+      volume: 1_200_000,
+      marketCapUsd: marketCapFromPrice(price, shares),
+    };
+    expect(quoteMarketCapReconciles(quote, shares)).toBe(true);
+    expect(quoteMarketCapReconciles({ ...quote, marketCapUsd: quote.marketCapUsd + 1_000_000 }, shares)).toBe(false);
+  });
+
+  it('treats a company with no shares as unpriced rather than dividing by zero', () => {
+    expect(priceFromMarketCap(1_000_000, 0)).toBe(0);
+    expect(sharesForMarketCap(0)).toBe(SHARE_COUNT_LOT);
+  });
+});
+
+describe('sector-specific backgrounds', () => {
+  it('leaves the five world-version-1 backgrounds exactly as they were, tagged ai', () => {
+    expect(NEW_GAME_BACKGROUND_IDS).toEqual(['frontier_lab', 'enterprise_ai', 'consumer_ai', 'infrastructure', 'bootstrapper']);
+    expect(NEW_GAME_BACKGROUNDS.map((background) => background.id)).toEqual([...NEW_GAME_BACKGROUND_IDS]);
+    for (const background of NEW_GAME_BACKGROUNDS) expect(background.sector).toBe('ai');
+  });
+
+  it('adds two backgrounds for every non-ai sector, with unique ids and complete copy', () => {
+    expect(ALL_BACKGROUND_IDS).toHaveLength(NEW_GAME_BACKGROUND_IDS.length + SECTOR_BACKGROUND_IDS.length);
+    expect(new Set(ALL_BACKGROUND_IDS).size).toBe(ALL_BACKGROUND_IDS.length);
+    expect(ALL_BACKGROUNDS.map((background) => background.id)).toEqual([...ALL_BACKGROUND_IDS]);
+    for (const sector of SECTORS) {
+      const forSector = backgroundsForSector(sector);
+      expect(forSector.length).toBeGreaterThanOrEqual(2);
+      for (const background of forSector) {
+        expect(background.sector).toBe(sector);
+        expect(background.label.length).toBeGreaterThan(0);
+        expect(background.tagline.length).toBeGreaterThan(0);
+        expect(background.blurb.length).toBeGreaterThan(0);
+        expect(background.highlights.length).toBeGreaterThanOrEqual(3);
+      }
+    }
+    expect(backgroundsForSector('ai').map((b) => b.id)).toEqual([...NEW_GAME_BACKGROUND_IDS]);
+  });
+
+  it('resolves a default background per sector and looks one up by id', () => {
+    expect(defaultBackgroundFor('ai')).toBe('frontier_lab');
+    expect(defaultBackgroundFor('energy')).toBe('grid_developer');
+    for (const sector of SECTORS) expect(sectorForBackground(defaultBackgroundFor(sector))).toBe(sector);
+    expect(backgroundById('humanoid_lab')?.sector).toBe('robotics');
+    expect(backgroundById('not_a_background')).toBeUndefined();
+    expect(sectorForBackground('not_a_background')).toBe('ai');
+  });
+
+  it('accepts a world-2 setup carrying sector, region and version', () => {
+    const parsed = NewGameSetupSchema.parse({
+      companyName: 'Meridian Grid',
+      founderName: 'Ada Sirko',
+      backgroundId: 'grid_developer',
+      sector: 'energy',
+      region: 'middle_east',
+      worldVersion: 2,
+    });
+    expect(parsed.sector).toBe('energy');
+    expect(parsed.region).toBe('middle_east');
+    expect(parsed.worldVersion).toBe(2);
+    expect(NewGameSetupSchema.safeParse({ companyName: 'x', founderName: 'y', backgroundId: 'grid_developer', sector: 'atomic' }).success).toBe(false);
+  });
+});
+
+describe('chat-driven setup proposals', () => {
+  const emptyProposal = SetupProposalSchema.parse({ confidence: 0.2, missing: [...SETUP_SLOTS] });
+
+  it('parses a proposal with every slot still empty', () => {
+    expect(emptyProposal.companyName).toBeNull();
+    expect(emptyProposal.sector).toBeNull();
+    expect(missingSetupSlots(emptyProposal)).toEqual([...SETUP_SLOTS]);
+    expect(setupProposalIsComplete(emptyProposal)).toBe(false);
+    expect(newGameSetupFromProposal(emptyProposal)).toBeNull();
+  });
+
+  it('derives the missing slots from the fields rather than trusting the model', () => {
+    // The model claims nothing is missing while leaving the region null.
+    const proposal = SetupProposalSchema.parse({
+      companyName: 'Northwind Freight',
+      founderName: 'Iris Mbeki',
+      sector: 'logistics',
+      region: null,
+      backgroundId: 'freight_network',
+      confidence: 0.9,
+      missing: [],
+    });
+    expect(missingSetupSlots(proposal)).toEqual(['region']);
+    expect(setupProposalIsComplete(proposal)).toBe(false);
+    // Building anyway falls the region back to the sector's best fit.
+    const setup = newGameSetupFromProposal(proposal);
+    expect(setup?.region).toBe(defaultRegionFor('logistics'));
+    expect(setup?.backgroundId).toBe('freight_network');
+    expect(setup?.worldVersion).toBe(2);
+  });
+
+  it('repairs a background that belongs to the wrong sector', () => {
+    const proposal = SetupProposalSchema.parse({
+      companyName: 'Halcyon Power',
+      founderName: 'Ren Okafor',
+      sector: 'energy',
+      region: 'europe',
+      backgroundId: 'humanoid_lab',
+      confidence: 0.7,
+      missing: [],
+    });
+    const setup = newGameSetupFromProposal(proposal);
+    expect(setup?.backgroundId).toBe(defaultBackgroundFor('energy'));
+    expect(setup?.region).toBe('europe');
+  });
+
+  it('rejects a proposal whose names would not survive the setup schema', () => {
+    const proposal = SetupProposalSchema.parse({
+      companyName: 'A',
+      founderName: 'B',
+      sector: 'consumer',
+      region: 'south_asia',
+      backgroundId: 'direct_brand',
+      confidence: 0.8,
+      missing: [],
+    });
+    expect(newGameSetupFromProposal(proposal, 2)?.companyName).toBe('A');
+    expect(SetupProposalSchema.safeParse({ companyName: 'x'.repeat(41), confidence: 0.5, missing: [] }).success).toBe(false);
+    expect(SetupProposalSchema.safeParse({ sector: 'mining', confidence: 0.5, missing: [] }).success).toBe(false);
+    expect(SetupProposalSchema.safeParse({ confidence: 1.4, missing: [] }).success).toBe(false);
+    expect(SetupProposalSchema.safeParse({ confidence: 0.5, missing: ['budget'] }).success).toBe(false);
   });
 });

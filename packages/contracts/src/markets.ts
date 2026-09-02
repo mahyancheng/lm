@@ -85,6 +85,72 @@ export const QuoteSchema = z
 export type Quote = z.infer<typeof QuoteSchema>;
 
 /* -------------------------------------------------------------------------- */
+/*  The readable-price invariant                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A share price is a number a player reads at a glance, so it has to look like
+ * one. A company worth eleven billion dollars whose stock trades at $0.0004 is
+ * arithmetically fine and completely unreadable.
+ *
+ * The rule: **market capitalisation is the real quantity, and the share count
+ * is chosen to put the price inside `$5..$500`.** A company lists with a whole
+ * share count picked by `sharesForMarketCap`, which lands the opening price near
+ * `SHARE_PRICE_TARGET_USD`; from then on the count is fixed and the price is
+ * free to move with the business, so a ten-bagger really does read as one.
+ *
+ * `priceWithinBand` is the invariant the engine enforces at listing and at any
+ * share-count change (split, consolidation, issuance). It is deliberately *not*
+ * enforced every quarter: a company that has fallen below $5 has told the player
+ * something true, and a company that has run past $500 has earned a split.
+ */
+export const SHARE_PRICE_BAND_USD: readonly [number, number] = [5, 500];
+
+/** Where a fresh listing aims. Mid-band on a log scale, rounded to a whole. */
+export const SHARE_PRICE_TARGET_USD = 50;
+
+/** Share counts are chosen in whole lots of this size, so they read cleanly. */
+export const SHARE_COUNT_LOT = 100_000;
+
+/** Is this price inside the readable band? Pure; safe in the engine. */
+export function priceWithinBand(priceUsd: number, band: readonly [number, number] = SHARE_PRICE_BAND_USD): boolean {
+  return Number.isFinite(priceUsd) && priceUsd >= band[0] && priceUsd <= band[1];
+}
+
+/**
+ * The whole share count that puts a company of this size at roughly the target
+ * price. Deterministic: rounds up to the next whole lot, never returns zero.
+ */
+export function sharesForMarketCap(marketCapUsd: number, targetPriceUsd: number = SHARE_PRICE_TARGET_USD): number {
+  const cap = Math.max(0, marketCapUsd);
+  const target = targetPriceUsd > 0 ? targetPriceUsd : SHARE_PRICE_TARGET_USD;
+  const lots = Math.ceil(cap / target / SHARE_COUNT_LOT);
+  return Math.max(1, lots) * SHARE_COUNT_LOT;
+}
+
+/** Price implied by a capitalisation and a share count. Zero shares means zero. */
+export function priceFromMarketCap(marketCapUsd: number, sharesOutstanding: number): number {
+  if (!(sharesOutstanding > 0)) return 0;
+  return Math.max(0, marketCapUsd) / sharesOutstanding;
+}
+
+/** Capitalisation implied by a price and a share count. */
+export function marketCapFromPrice(priceUsd: number, sharesOutstanding: number): number {
+  return Math.max(0, priceUsd) * Math.max(0, sharesOutstanding);
+}
+
+/** Tolerance in dollars for the `price x shares = market cap` reconciliation. */
+export const MARKET_CAP_TOLERANCE_USD = 1;
+
+/**
+ * Does this quote's market capitalisation match its price and share count?
+ * Checked alongside the balance sheet before a quarter commits.
+ */
+export function quoteMarketCapReconciles(quote: Quote, sharesOutstanding: number, toleranceUsd: number = MARKET_CAP_TOLERANCE_USD): boolean {
+  return Math.abs(quote.marketCapUsd - marketCapFromPrice(quote.price, sharesOutstanding)) <= toleranceUsd;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Valuation anchors                                                          */
 /* -------------------------------------------------------------------------- */
 

@@ -19,6 +19,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, unitInterval } from './ids';
+import { DEFAULT_REGION, DEFAULT_SECTOR, RegionSchema, SectorSchema, defaultRegionFor, type Sector } from './sectors';
 import { SectorStateMapSchema, WorldStateSchema } from './world';
 import { ActiveModifierSchema } from './modifiers';
 import { EventHazardMapSchema, WorldEventSchema } from './events';
@@ -33,6 +34,38 @@ import { MediaStorySchema, SocialAccountSchema, SocialPostSchema } from './socia
 import { DealProposalSchema } from './deals';
 import { SubmittedActionSchema } from './actions';
 import { LeaderboardSchema, QuarterSnapshotSchema, SessionObjectiveSchema } from './sim';
+
+/* -------------------------------------------------------------------------- */
+/*  World versioning                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which world a session was built from.
+ *
+ * **1** is the original single-sector AI scenario. It is frozen: its scenario
+ * module, its opening numbers and its seed graph never change again, so a save
+ * made against it replays to the same state forever.
+ *
+ * **2** is the multi-sector economy — six sectors, six regions, hundreds of
+ * companies, fundamentals-anchored prices.
+ *
+ * The version is recorded rather than inferred, and it defaults to **1** so a
+ * save written before this field existed parses as what it actually is. New
+ * games are created at `CURRENT_WORLD_VERSION`.
+ */
+export const WORLD_VERSIONS = [1, 2] as const;
+
+export const WorldVersionSchema = z
+  .union([z.literal(1), z.literal(2)])
+  .default(1)
+  .describe('Which world scenario this session was built from. 1 is the frozen single-sector AI world; 2 is the multi-sector economy. Absent means 1: the field postdates world 1 saves.');
+export type WorldVersion = (typeof WORLD_VERSIONS)[number];
+
+/** What a save without a recorded version is. Never change this. */
+export const LEGACY_WORLD_VERSION: WorldVersion = 1;
+
+/** What a new game is created at. */
+export const CURRENT_WORLD_VERSION: WorldVersion = 2;
 
 /* -------------------------------------------------------------------------- */
 /*  Configuration                                                              */
@@ -53,6 +86,7 @@ export const SessionConfigSchema = z
     significantCompanyCount: z.number().int().min(0).max(60).describe('Companies on the "significant" tier running rule-based strategy with occasional LLM deliberation.'),
     backgroundCompanyCount: z.number().int().min(0).max(500).describe('Deterministic archetype companies. They are promoted to a higher tier only when they become strategically relevant.'),
     scenarioId: z.string().min(1).describe('Seed scenario, e.g. "compute_crunch_2031". Determines starting world values, seed companies and the initial Frontier Map.'),
+    worldVersion: WorldVersionSchema.describe('Which world scenario built this session. Defaults to 1 so a save written before the field existed keeps replaying against the frozen world.'),
     startYear: z.number().int().min(2020).max(2100).describe('Calendar year quarter 0 falls in.'),
     quarterLimit: z.number().int().min(1).max(400).nullable().describe('Quarter at which the session ends, or null for an open-ended sandbox. There is no fixed victory screen either way.'),
     enableReferenceMarket: z.boolean().describe('Whether to display the live real-world reference tape alongside the in-world exchange. Reference instruments are read-only regardless.'),
@@ -79,14 +113,57 @@ export const NewGameBackgroundIdSchema = z
   .describe('Which starting background the founder picked. Selects the player company\'s opening shape; everything else in the world is unchanged.');
 export type NewGameBackgroundId = z.infer<typeof NewGameBackgroundIdSchema>;
 
+/**
+ * The starting backgrounds the other five sectors add in world version 2, two
+ * per sector. Kept in a separate list from `NEW_GAME_BACKGROUND_IDS` on purpose:
+ * that list is the world-version-1 set and must stay exactly five, so a v1 save
+ * and the v1 picker both still see the world they were built for.
+ */
+export const SECTOR_BACKGROUND_IDS = [
+  // robotics
+  'warehouse_robotics',
+  'humanoid_lab',
+  // manufacturing
+  'contract_manufacturer',
+  'precision_components',
+  // energy
+  'grid_developer',
+  'renewables_operator',
+  // logistics
+  'freight_network',
+  'last_mile',
+  // consumer
+  'direct_brand',
+  'retail_platform',
+] as const;
+
+export const SectorBackgroundIdSchema = z.enum(SECTOR_BACKGROUND_IDS).describe('A starting background belonging to one of the five non-AI sectors. World version 2 only.');
+export type SectorBackgroundId = z.infer<typeof SectorBackgroundIdSchema>;
+
+/** Every background id in the game: the five AI ones first, then the rest. */
+export const ALL_BACKGROUND_IDS = [...NEW_GAME_BACKGROUND_IDS, ...SECTOR_BACKGROUND_IDS] as const;
+
+export const BackgroundIdSchema = z
+  .enum(ALL_BACKGROUND_IDS)
+  .describe('Which starting background the founder picked, across every sector. Selects the player company\'s opening shape; everything else in the world is unchanged.');
+export type BackgroundId = z.infer<typeof BackgroundIdSchema>;
+
 export const NewGameSetupSchema = z
   .object({
     companyName: z.string().trim().min(1).max(40).describe('The player company\'s display name. Trimmed; one to forty characters.'),
     founderName: z.string().trim().min(1).max(40).describe('The founder character\'s display name. Trimmed; one to forty characters.'),
-    backgroundId: NewGameBackgroundIdSchema,
+    backgroundId: BackgroundIdSchema,
+    sector: SectorSchema.default(DEFAULT_SECTOR).describe('Which part of the economy the founder starts in. Defaults to "ai", which is the only sector world version 1 has.'),
+    region: RegionSchema.default(DEFAULT_REGION).describe('Where the founder starts. Defaults to "north_america", which is where every world-version-1 company is.'),
+    worldVersion: WorldVersionSchema.describe('Which world to build. Defaults to 1 so a setup recorded before this field existed still builds the frozen world.'),
   })
-  .describe('The three choices a player makes at New Game: company name, founder name and a starting background. Plain state, never handed to a model.');
+  .describe(
+    'What a player chooses at New Game: company name, founder name, a starting background, and — from world version 2 — a sector and a region. Sector, region and world version all default, so a world-version-1 setup parses unchanged. Plain state, never handed to a model.',
+  );
 export type NewGameSetup = z.infer<typeof NewGameSetupSchema>;
+
+/** The input type: sector, region and world version may be omitted. */
+export type NewGameSetupInput = z.input<typeof NewGameSetupSchema>;
 
 /** One player-facing headline stat on a background card, e.g. `{ label: "Cash", value: "$15M" }`. */
 export interface NewGameBackgroundHighlight {
@@ -96,7 +173,9 @@ export interface NewGameBackgroundHighlight {
 
 /** Everything the New Game picker needs to render one background card. */
 export interface NewGameBackground {
-  readonly id: NewGameBackgroundId;
+  readonly id: BackgroundId;
+  /** Which sector this background starts you in. */
+  readonly sector: Sector;
   /** A short icon key (matches the app icon set), e.g. "flask". */
   readonly icon: string;
   readonly label: string;
@@ -114,6 +193,7 @@ export interface NewGameBackground {
 export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   {
     id: 'frontier_lab',
+    sector: 'ai',
     icon: 'flask',
     label: 'Frontier Lab',
     tagline: 'Train ahead of revenue',
@@ -128,6 +208,7 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   },
   {
     id: 'enterprise_ai',
+    sector: 'ai',
     icon: 'briefcase',
     label: 'Enterprise AI',
     tagline: 'Sell seats to businesses',
@@ -142,6 +223,7 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   },
   {
     id: 'consumer_ai',
+    sector: 'ai',
     icon: 'people',
     label: 'Consumer App',
     tagline: 'Millions of small accounts',
@@ -156,6 +238,7 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   },
   {
     id: 'infrastructure',
+    sector: 'ai',
     icon: 'network',
     label: 'AI Infrastructure',
     tagline: 'Own the capacity',
@@ -170,6 +253,7 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   },
   {
     id: 'bootstrapper',
+    sector: 'ai',
     icon: 'compass',
     label: 'Lean Bootstrapper',
     tagline: 'Scrappy and short on cash',
@@ -183,6 +267,275 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
     ],
   },
 ];
+
+/**
+ * The world-version-2 backgrounds, two for each of the five non-AI sectors, in
+ * `SECTORS` order. Same contract as the AI five: the copy lives here, the
+ * numeric opening shape lives in the scenario, and the scenario is the source of
+ * truth for what actually reaches the engine.
+ */
+export const SECTOR_BACKGROUNDS: readonly NewGameBackground[] = [
+  {
+    id: 'warehouse_robotics',
+    sector: 'robotics',
+    icon: 'box',
+    label: 'Warehouse Robotics',
+    tagline: 'Pick, place, repeat',
+    blurb:
+      'Fleets already working inside other people\'s buildings. Real revenue, real service obligations, and a margin that lives or dies on how often a unit needs a human.',
+    highlights: [
+      { label: 'Cash', value: '$7M' },
+      { label: 'Fleet', value: '1,200 units' },
+      { label: 'Revenue', value: '$2M/qtr' },
+      { label: 'Posture', value: 'Balanced' },
+    ],
+  },
+  {
+    id: 'humanoid_lab',
+    sector: 'robotics',
+    icon: 'flask',
+    label: 'Humanoid Lab',
+    tagline: 'Bet the company on legs',
+    blurb:
+      'Pre-revenue, capital-hungry and years from a useful product. If general-purpose machines arrive you own the category; if they do not you own a very expensive video.',
+    highlights: [
+      { label: 'Cash', value: '$22M' },
+      { label: 'Revenue', value: 'Pre-revenue' },
+      { label: 'Team', value: 'Research-led' },
+      { label: 'Posture', value: 'Research first' },
+    ],
+  },
+  {
+    id: 'contract_manufacturer',
+    sector: 'manufacturing',
+    icon: 'building',
+    label: 'Contract Manufacturer',
+    tagline: 'Somebody else\'s name on the box',
+    blurb:
+      'Lines running at volume for customers who can leave. Thin margins, real cash flow and a balance sheet with a mortgage on it. Utilisation is the whole game.',
+    highlights: [
+      { label: 'Cash', value: '$9M' },
+      { label: 'Revenue', value: '$14M/qtr' },
+      { label: 'Debt', value: '$18M' },
+      { label: 'Posture', value: 'Efficiency' },
+    ],
+  },
+  {
+    id: 'precision_components',
+    sector: 'manufacturing',
+    icon: 'settings',
+    label: 'Precision Components',
+    tagline: 'The part nobody else can make',
+    blurb:
+      'Small, specialised and quietly essential. High margins for as long as the tolerance stays hard to hit, and a customer list short enough to fit on one page.',
+    highlights: [
+      { label: 'Cash', value: '$5M' },
+      { label: 'Revenue', value: '$3M/qtr' },
+      { label: 'Margin', value: 'High' },
+      { label: 'Posture', value: 'Balanced' },
+    ],
+  },
+  {
+    id: 'grid_developer',
+    sector: 'energy',
+    icon: 'live',
+    label: 'Grid Developer',
+    tagline: 'Build the substation, sell the connection',
+    blurb:
+      'Interconnection queues, permits and a backlog worth more than the company. Every quarter you spend capital now for revenue that arrives years later — if it arrives.',
+    highlights: [
+      { label: 'Cash', value: '$12M' },
+      { label: 'Backlog', value: '$60M' },
+      { label: 'Debt', value: '$25M' },
+      { label: 'Posture', value: 'Aggressive growth' },
+    ],
+  },
+  {
+    id: 'renewables_operator',
+    sector: 'energy',
+    icon: 'globe',
+    label: 'Renewables Operator',
+    tagline: 'Cheap power, patient money',
+    blurb:
+      'Assets in the ground selling into a price you do not set. Steady contracted cash, heavy leverage, and a business that gets very interesting when everyone suddenly needs power.',
+    highlights: [
+      { label: 'Cash', value: '$8M' },
+      { label: 'Revenue', value: '$6M/qtr' },
+      { label: 'Debt', value: '$40M' },
+      { label: 'Posture', value: 'Balanced' },
+    ],
+  },
+  {
+    id: 'freight_network',
+    sector: 'logistics',
+    icon: 'network',
+    label: 'Freight Network',
+    tagline: 'Move it cheaper than the last carrier',
+    blurb:
+      'Volume, density and a margin measured in single points. You feel every fuel price and every manufacturing slowdown before the companies causing them do.',
+    highlights: [
+      { label: 'Cash', value: '$6M' },
+      { label: 'Revenue', value: '$11M/qtr' },
+      { label: 'Margin', value: 'Thin' },
+      { label: 'Posture', value: 'Efficiency' },
+    ],
+  },
+  {
+    id: 'last_mile',
+    sector: 'logistics',
+    icon: 'box',
+    label: 'Last Mile',
+    tagline: 'The final ten miles cost the most',
+    blurb:
+      'Fast-growing, cash-hungry delivery into consumer demand. Customers who churn on one late drop, and a cost curve that only works at density you do not have yet.',
+    highlights: [
+      { label: 'Cash', value: '$4M' },
+      { label: 'Growth', value: 'Fast' },
+      { label: 'Margin', value: 'Negative' },
+      { label: 'Posture', value: 'Land grab' },
+    ],
+  },
+  {
+    id: 'direct_brand',
+    sector: 'consumer',
+    icon: 'people',
+    label: 'Direct Brand',
+    tagline: 'Sell straight to the public',
+    blurb:
+      'Good margins, no distributor and a marketing bill that never stops. You own the customer relationship right up until the day you stop paying for attention.',
+    highlights: [
+      { label: 'Cash', value: '$5M' },
+      { label: 'Revenue', value: '$4M/qtr' },
+      { label: 'Marketing', value: 'Heavy' },
+      { label: 'Posture', value: 'Aggressive growth' },
+    ],
+  },
+  {
+    id: 'retail_platform',
+    sector: 'consumer',
+    icon: 'coins',
+    label: 'Retail Platform',
+    tagline: 'Take a cut of everyone else\'s sales',
+    blurb:
+      'A marketplace with sellers on one side and shoppers on the other. Capital-light and lovely when it works; two-sided and unforgiving while you are still building it.',
+    highlights: [
+      { label: 'Cash', value: '$10M' },
+      { label: 'Take rate', value: '12%' },
+      { label: 'Sellers', value: '3,400' },
+      { label: 'Posture', value: 'Land grab' },
+    ],
+  },
+];
+
+/** Every background card in the game, AI five first. */
+export const ALL_BACKGROUNDS: readonly NewGameBackground[] = [...NEW_GAME_BACKGROUNDS, ...SECTOR_BACKGROUNDS];
+
+const BACKGROUND_BY_ID: ReadonlyMap<string, NewGameBackground> = new Map(ALL_BACKGROUNDS.map((background) => [background.id, background]));
+
+/** One background card by id, or `undefined` for an id that is not in the set. */
+export function backgroundById(id: string): NewGameBackground | undefined {
+  return BACKGROUND_BY_ID.get(id);
+}
+
+/**
+ * The backgrounds available in one sector, in presentation order. `"ai"` gives
+ * the five world-version-1 backgrounds unchanged, which is what the frozen
+ * world's picker still shows.
+ */
+export function backgroundsForSector(sector: Sector): readonly NewGameBackground[] {
+  return ALL_BACKGROUNDS.filter((background) => background.sector === sector);
+}
+
+/**
+ * The background a sector starts on when the player has not chosen one: the
+ * first card in that sector. Total — every sector has at least two backgrounds
+ * — and the final fallback exists only so the return type stays narrow.
+ */
+export function defaultBackgroundFor(sector: Sector): BackgroundId {
+  return backgroundsForSector(sector)[0]?.id ?? 'enterprise_ai';
+}
+
+/** Which sector a background belongs to. Defaults to "ai" for an unknown id. */
+export function sectorForBackground(id: string): Sector {
+  return BACKGROUND_BY_ID.get(id)?.sector ?? DEFAULT_SECTOR;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Chat-driven setup (LLM-facing)                                             */
+/* -------------------------------------------------------------------------- */
+
+/** The five things a new game needs before it can be built. */
+export const SETUP_SLOTS = ['companyName', 'founderName', 'sector', 'region', 'backgroundId'] as const;
+export const SetupSlotSchema = z.enum(SETUP_SLOTS).describe('One thing the new-game conversation still has to establish.');
+export type SetupSlot = z.infer<typeof SetupSlotSchema>;
+
+/**
+ * What the new-game chat extracts from what the player just said.
+ *
+ * LLM-facing, so it follows the house rules for model output: every field
+ * present, `.nullable()` rather than `.optional()` for "not established yet",
+ * explicit enums, bounds in prose. It is a *proposal*: nothing here builds a
+ * session until `newGameSetupFromProposal` has put it through
+ * `NewGameSetupSchema` and the engine has accepted the result.
+ *
+ * The same schema also parses a purely deterministic extraction, which is the
+ * fallback when the model is unavailable — the chat still works, it just asks
+ * more direct questions.
+ */
+export const SetupProposalSchema = z
+  .object({
+    companyName: z.string().trim().max(40).nullable().default(null).describe('The company name the player gave, or null if they have not given one yet. One to forty characters.'),
+    founderName: z.string().trim().max(40).nullable().default(null).describe('The founder name the player gave, or null if they have not given one yet. One to forty characters.'),
+    sector: SectorSchema.nullable().default(null).describe('The sector the player wants, or null if it is still unclear. Do not guess from a vague preference; leave it null and list it in "missing".'),
+    region: RegionSchema.nullable().default(null).describe('The region the player wants, or null if it is still unclear.'),
+    backgroundId: BackgroundIdSchema.nullable().default(null).describe('The starting background the player chose, or null. Must belong to the chosen sector; a mismatch is rejected by the engine.'),
+    confidence: unitInterval('How confident this reading of the conversation is. Below 0.4 the interface asks the player to confirm before building the world.'),
+    missing: z.array(SetupSlotSchema).describe('Which slots are still unestablished, so the next question can ask for one of them. Must list exactly the fields left null.'),
+  })
+  .describe('A reading of the new-game conversation so far. A proposal, never a state write: the engine validates it and the player confirms before a world is built.');
+export type SetupProposal = z.infer<typeof SetupProposalSchema>;
+
+/** The slots a proposal has not established, derived rather than trusted. */
+export function missingSetupSlots(proposal: SetupProposal): readonly SetupSlot[] {
+  const missing: SetupSlot[] = [];
+  if (!proposal.companyName) missing.push('companyName');
+  if (!proposal.founderName) missing.push('founderName');
+  if (proposal.sector === null) missing.push('sector');
+  if (proposal.region === null) missing.push('region');
+  if (proposal.backgroundId === null) missing.push('backgroundId');
+  return missing;
+}
+
+/** Has the conversation established everything a world needs? */
+export function setupProposalIsComplete(proposal: SetupProposal): boolean {
+  return missingSetupSlots(proposal).length === 0;
+}
+
+/**
+ * Turn a proposal into a real setup, or return null when it is not ready.
+ *
+ * Two things are repaired rather than trusted, because a model will get them
+ * wrong: a background from the wrong sector is replaced with that sector's
+ * default, and a missing region falls back to the sector's best fit. Everything
+ * else must have been established, and the result is parsed by
+ * `NewGameSetupSchema` before it is returned — so an over-long name or an
+ * unknown id fails here rather than inside the scenario builder.
+ */
+export function newGameSetupFromProposal(proposal: SetupProposal, worldVersion: WorldVersion = CURRENT_WORLD_VERSION): NewGameSetup | null {
+  if (!proposal.companyName || !proposal.founderName || proposal.sector === null) return null;
+  const sector = proposal.sector;
+  const chosen = proposal.backgroundId === null ? null : backgroundById(proposal.backgroundId);
+  const backgroundId = chosen && chosen.sector === sector ? chosen.id : defaultBackgroundFor(sector);
+  const parsed = NewGameSetupSchema.safeParse({
+    companyName: proposal.companyName,
+    founderName: proposal.founderName,
+    backgroundId,
+    sector,
+    region: proposal.region ?? defaultRegionFor(sector),
+    worldVersion,
+  });
+  return parsed.success ? parsed.data : null;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Players                                                                    */

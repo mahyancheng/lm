@@ -7,7 +7,7 @@ import {
   NEW_GAME_BACKGROUNDS,
   SESSION_DIFFICULTIES,
   quarterLabel,
-  type NewGameBackgroundId,
+  type BackgroundId,
   type SessionDifficulty,
 } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
@@ -245,7 +245,7 @@ export default function LandingPage(): React.JSX.Element {
   const [difficulty, setDifficulty] = useState<SessionDifficulty>('standard');
   const [companyName, setCompanyName] = useState('');
   const [founderName, setFounderName] = useState('');
-  const [backgroundId, setBackgroundId] = useState<NewGameBackgroundId>('enterprise_ai');
+  const [backgroundId, setBackgroundId] = useState<BackgroundId>('enterprise_ai');
   const [saveState, setSaveState] = useState<SaveInspection | null>(null);
   const [slots, setSlots] = useState<readonly SlotSummary[]>([]);
   const [showMultiplayer, setShowMultiplayer] = useState(false);

@@ -59,9 +59,15 @@ LLM_TRANSPORT=claude-session
 LLM_MODEL=sonnet
 LLM_SETUP_SECRET=${SETUP_SECRET}
 LLM_KEY_SECRET=${KEY_SECRET}
+LLM_STATE_DIR=/var/lib/frontier-capital
 EOF
   chmod 600 "${ENV_FILE}"
 fi
+# The in-app Claude connection is sealed (AES-256-GCM under LLM_KEY_SECRET)
+# into this directory so it survives restarts and updates. Older env files
+# get the line appended so an update turns persistence on too.
+grep -q '^LLM_STATE_DIR=' "${ENV_FILE}" || echo 'LLM_STATE_DIR=/var/lib/frontier-capital' >> "${ENV_FILE}"
+install -d -o www-data -g www-data -m 0700 /var/lib/frontier-capital
 
 echo "==> Installing workspace and building (a few minutes on a small VPS)"
 cd "${APP_DIR}"

@@ -70,6 +70,7 @@ import {
   maskCredential,
 } from '../../../lib/llm/token';
 import type { Principal } from './_identity';
+import { clearCredentialFile, loadCredentialFile, persistLocation, saveCredentialFile } from './_persist';
 
 /* -------------------------------------------------------------------------- */
 /*  Process-wide singletons                                                    */
@@ -130,13 +131,57 @@ export interface RuntimeCredentialDescriptor {
 interface RuntimeStore {
   credential: RuntimeCredential | null;
   generation: number;
+  /** True once the on-disk credential has been consulted for this process, found or not. */
+  restored: boolean;
 }
 
 /** The name is part of the contract: two module instances must agree on it. */
 export const RUNTIME_STORE_KEY = 'llm.runtimeCredentialStore';
 
 function store(): RuntimeStore {
-  return processSingleton<RuntimeStore>(RUNTIME_STORE_KEY, () => ({ credential: null, generation: 0 }));
+  return processSingleton<RuntimeStore>(RUNTIME_STORE_KEY, () => ({ credential: null, generation: 0, restored: false }));
+}
+
+/**
+ * Bring back the credential a previous run of this process persisted.
+ *
+ * Runs once per process, on the first read or write of the store, and only
+ * fills an empty store: a credential set in this run always outranks a file
+ * from the last one. Persistence is off — and this a no-op — without
+ * `LLM_KEY_SECRET` or on a serverless host (see `_persist.ts`).
+ */
+export function restoreRuntimeCredential(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const held = store();
+  if (held.restored) return false;
+  held.restored = true;
+  if (held.credential !== null) return false;
+  const location = persistLocation(env);
+  const secret = env['LLM_KEY_SECRET'];
+  if (location === null || secret === undefined) return false;
+  const record = loadCredentialFile(location, secret);
+  if (record === null) return false;
+  const value = record.value.trim();
+  if (value.length < TOKEN_MIN_LENGTH || value.length > TOKEN_MAX_LENGTH) return false;
+  held.credential = {
+    kind: classifyCredential(value),
+    value,
+    descriptor: { kind: classifyCredential(value), masked: maskCredential(value), setAt: record.setAt },
+  };
+  held.generation += 1;
+  return true;
+}
+
+/** Write the held credential to disk where persistence is on; silent where it is off or refused. */
+function persistHeldCredential(env: Readonly<Record<string, string | undefined>>): void {
+  const location = persistLocation(env);
+  const secret = env['LLM_KEY_SECRET'];
+  const held = store().credential;
+  if (location === null || secret === undefined) return;
+  if (held === null) {
+    clearCredentialFile(location);
+    return;
+  }
+  saveCredentialFile(location, { value: held.value, setAt: held.descriptor.setAt }, secret);
 }
 
 /** The current generation. Monotonic, process-local, and not a clock. */
@@ -147,15 +192,20 @@ export function runtimeGeneration(): number {
 export interface SetCredentialOptions {
   /** Injected so a test never depends on the wall clock. */
   readonly now?: () => string;
+  /** The environment persistence reads its switch and secret from. Injected for tests. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
  * Accept a pasted credential.
  *
  * Returns the descriptor, which is what the route answers with. The value is
- * held here and nowhere else.
+ * held here — and, where persistence is on, sealed to disk so the next process
+ * starts connected.
  */
 export function setRuntimeCredential(token: string, options: SetCredentialOptions = {}): RuntimeCredentialDescriptor {
+  const env = options.env ?? process.env;
+  restoreRuntimeCredential(env);
   const value = token.trim();
   const descriptor: RuntimeCredentialDescriptor = {
     kind: classifyCredential(value),
@@ -165,20 +215,24 @@ export function setRuntimeCredential(token: string, options: SetCredentialOption
   const held = store();
   held.credential = { kind: descriptor.kind, value, descriptor };
   held.generation += 1;
+  persistHeldCredential(env);
   return descriptor;
 }
 
-/** Forget the runtime credential. Returns true when there was one to forget. */
-export function clearRuntimeCredential(): boolean {
+/** Forget the runtime credential, on disk too. Returns true when there was one to forget. */
+export function clearRuntimeCredential(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  restoreRuntimeCredential(env);
   const held = store();
   const had = held.credential !== null;
   held.credential = null;
   held.generation += 1;
+  persistHeldCredential(env);
   return had;
 }
 
 /** The descriptor for the held credential, or null. Never carries the value. */
 export function runtimeCredentialDescriptor(): RuntimeCredentialDescriptor | null {
+  restoreRuntimeCredential();
   return store().credential?.descriptor ?? null;
 }
 
@@ -192,6 +246,10 @@ export function resetRuntimeCredential(): void {
   const held = store();
   held.credential = null;
   held.generation += 1;
+  // Marked restored so a test that reset the store is not handed a developer's
+  // real on-disk credential by the next read. The disk itself is never touched
+  // here: a reset is a test affordance, not a player's "disconnect".
+  held.restored = true;
 }
 
 /**
@@ -231,6 +289,9 @@ function hasValue(value: string | undefined): boolean {
  * that is what the dotfile said.
  */
 export function resolveLlmEnv(base: LlmEnv): LlmEnv {
+  // The first gateway build after a restart is where a persisted connection
+  // has to reappear, before any route can conclude "no credential".
+  restoreRuntimeCredential();
   const held = store().credential;
   if (held === null) return base;
   return held.kind === 'api_key'
@@ -256,6 +317,7 @@ const UNCONFIGURED: CredentialStatus = { configured: false, source: 'none', kind
  * live credential while the process is running on `claude-session`.
  */
 export function credentialStatus(base: LlmEnv, transport: 'claude-session' | 'api' | 'none'): CredentialStatus {
+  restoreRuntimeCredential();
   const held = store().credential;
   if (held !== null) {
     return { configured: true, source: 'runtime', kind: held.kind, masked: held.descriptor.masked, setAt: held.descriptor.setAt };

@@ -171,16 +171,23 @@ people:
 - Redeploying, restarting, or deleting the container loses nothing. Clearing the
   browser's site data loses everything.
 
-**The volume holds Claude Code session transcripts, and only those.**
-`claude-home` is mounted at `/home/node/.claude` (`CLAUDE_CONFIG_DIR`), which is
-where the Agent SDK writes the sessions that a Chief-of-Staff thread or a
-character conversation is resumed from. Strategic calls — the World Director and
-every NPC strategist — deliberately open a *fresh* session each quarter, so they
-never touch it. Deleting the volume costs conversational memory and nothing
-else; threads simply start again.
+**The volume holds two things.** `claude-home` is mounted at
+`/home/node/.claude` (`CLAUDE_CONFIG_DIR`):
 
-**The AI credential is in process memory.** Not in the volume, not in `.env`,
-not in the image. Re-paste after every restart.
+- Claude Code session transcripts, which the Agent SDK writes and which a
+  Chief-of-Staff thread or a character conversation is resumed from. Strategic
+  calls — the World Director and every NPC strategist — deliberately open a
+  *fresh* session each quarter, so they never touch it.
+- The AI credential, at `frontier-capital/credential.enc.json` inside it
+  (`LLM_STATE_DIR`, set in the image). The token the in-app **Connect with
+  Claude** flow issues is a one-year token; it is sealed with AES-256-GCM under
+  `LLM_KEY_SECRET` and restored on the next boot, so a restart, a new image, or
+  a `docker compose down && up` comes back **already connected**. Disconnecting
+  in Settings deletes the file. Rotating `LLM_KEY_SECRET` makes the file
+  unreadable (by design) — connect once more afterwards.
+
+Deleting the volume costs conversational memory and the connection, nothing
+else; threads start again and the player connects again.
 
 ---
 

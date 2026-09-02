@@ -120,6 +120,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOME=/home/node \
     CLAUDE_CONFIG_DIR=/home/node/.claude \
+    LLM_STATE_DIR=/home/node/.claude/frontier-capital \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 

@@ -258,23 +258,25 @@ contains a test runner" is a fair thing to dislike on its own terms. Your call.
 
 ---
 
-## 6. Follow-ups, not implemented
+## 6. Follow-ups
 
-**Persist the AI credential across restarts.** Today it lives in one process's
-memory (`apps/web/src/app/api/llm/_runtime.ts`), so every `docker compose up -d`
-needs a fresh paste through Settings → AI. That is honest and safe, and it is
-also the single most annoying thing about this deployment.
+**Persist the AI credential across restarts — DONE, on the owner's request.**
+The posture change ("in memory, gone on restart" → "at rest on the volume") was
+taken on purpose: the owner asked for it once the game moved to an always-on
+host. Implementation in `apps/web/src/app/api/llm/_persist.ts`, wired through
+`_runtime.ts`: the one-year token from the in-app connect flow is sealed with
+AES-256-GCM under SHA-256(`LLM_KEY_SECRET`) to `$LLM_STATE_DIR/credential.enc.json`
+(the image sets `LLM_STATE_DIR=/home/node/.claude/frontier-capital`, inside the
+`claude-home` volume), directory 0700 and file 0600, written by temp-file
+rename, restored once per process on the first `resolveLlmEnv()` /
+status read, still an override over the environment, and deleted by the same
+disconnect route. Off without `LLM_KEY_SECRET` and on serverless (`VERCEL`).
+Wrong key, tampered bytes or an unreadable file fail closed to "not connected".
+Tests: `_persist.test.ts` (sealing, permissions, restore-across-a-restart).
 
-The shape: encrypt the token with a key derived from `LLM_KEY_SECRET` — already
-required, already 0600 in `.env`, already the HMAC key for conversation keys —
-and write the ciphertext to the `claude-home` volume, next to the Claude session
-transcripts it is already trusted to hold. Load it on first `resolveLlmEnv()`
-and treat it exactly as today's runtime credential, i.e. still an override over
-the environment, still cleared by the same route. `LLM_KEY_SECRET` should be
-run through a KDF rather than used as a raw key, and the file should be 0600 and
-never logged. Deliberately not implemented: it changes the security posture of a
-subscription credential from "in memory, gone on restart" to "at rest on a
-volume", and that is a decision to take on purpose rather than in passing.
+What to verify on the Pi: connect once through Settings → AI, `docker compose
+restart`, and `GET /api/llm/health` should report the credential without a
+re-paste; `ls -la` the volume path to confirm 0600.
 
 **Report the concurrency bound to the client.** `GET /api/llm/health` could
 include `maxConcurrency` (the gateway exposes it; `_gateway.ts` exports

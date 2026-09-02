@@ -258,6 +258,21 @@ export function topByReach(items: readonly PublicRecordItem[], count: number): P
 }
 
 /**
+ * Did an institution say this?
+ *
+ * A fund has no byline of its own: it speaks through its partner, who is an
+ * ordinary character, so a short report, an activist letter and a partner's post
+ * all arrive attributed to a person. Given the roster's partner ids — which the
+ * committed entity rows carry — the feed can draw the institution's mark instead
+ * of the generic filing stamp, without inventing a new item kind.
+ *
+ * Never true in a world with no institutional layer, because the set is empty.
+ */
+export function isFundVoice(item: PublicRecordItem, fundPartnerIds: ReadonlySet<string>): boolean {
+  return item.who.characterId !== null && fundPartnerIds.has(item.who.characterId);
+}
+
+/**
  * Is this the player's own voice?
  *
  * The one distinction the feed still draws, and it is a chip, not a partition:

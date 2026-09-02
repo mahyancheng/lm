@@ -45,7 +45,16 @@ import {
 } from './seeds';
 import type { V2CompanySeed } from './seeds';
 import { W2_PLAYER_CHARACTER_ID, playerSeedFor } from './player';
-import { W2_BOARDS, W2_CHARACTERS, W2_MEMORIES, W2_RELATIONSHIPS, buildV2AccessOverrides, buildV2Characters, buildV2SocialAccounts } from './people';
+import {
+  W2_BOARDS,
+  W2_CHARACTERS,
+  W2_MEMORIES,
+  W2_RELATIONSHIPS,
+  buildV2AccessOverrides,
+  buildV2CapitalEntities,
+  buildV2Characters,
+  buildV2SocialAccounts,
+} from './people';
 import { W2_EDGES, W2_NODES, W2_RESEARCH_PROJECTS, W2_TRACKS } from './frontier';
 import { W2_AGENCIES, buildV2Opportunities } from './government';
 
@@ -362,6 +371,15 @@ export function world2SessionInput(seed: number = W2_SEED, setupInput?: NewGameS
     mediaStories: [],
 
     deals: [],
+
+    // The eleven institutions that were always at the other end of the
+    // `holderKind: 'fund'` holdings above. Six of them already sit on these
+    // registers and in these boardrooms; the five new ones own nothing yet, so
+    // not one register changes by a share. World 1 grows none of these keys.
+    capitalEntities: buildV2CapitalEntities(),
+    shortPositions: [],
+    activistCampaigns: [],
+    capitalOrders: [],
 
     players: [
       {

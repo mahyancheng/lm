@@ -37,6 +37,7 @@ import { QuarterIndexSchema, signedUsd, usd } from './ids';
 import { RegionSchema, SectorSchema, type Region, type Sector } from './sectors';
 import { ProductSegmentSchema } from './company';
 import { HolderKindSchema } from './ownership';
+import { CapitalEntityKindSchema, CapitalStanceSchema, LpPressureBandSchema } from './capital';
 
 /* -------------------------------------------------------------------------- */
 /*  P0-1 — sector goods prices                                                 */
@@ -607,6 +608,67 @@ export const ControlStatusSchema = z
   .describe('One holder\'s position against the two thresholds that mean something. The V4 surface.');
 export type ControlStatus = z.infer<typeof ControlStatusSchema>;
 
+/* -------------------------------------------------------------------------- */
+/*  Capital entities — everything The Street renders, derived not stored        */
+/* -------------------------------------------------------------------------- */
+
+export const CapitalEntityRowSchema = z
+  .object({
+    entityId: z.string().min(1).describe('Which is also the cap-table holder id.'),
+    name: z.string().min(1).max(80),
+    kind: CapitalEntityKindSchema,
+    region: RegionSchema,
+    thesis: z.string().max(160).describe('The one line on the card.'),
+    aumUsd: usd('Committed capital. The card\'s one bare number.'),
+    dryPowderUsd: usd('Uncalled capital.'),
+    dryPowderPct: z.number().int().min(0).max(100).describe('Dry powder as a whole percentage of AUM. The card\'s one bar, and the single most useful number on the screen: it is how much they can still do to you.'),
+    deployedUsd: usd('Cost basis across live holdings. Derived from the registers, never stored, because a stored copy drifts the first time a basis is rebased.'),
+    navUsd: usd('Marked value of the portfolio plus dry powder.'),
+    realisedProceedsUsd: usd('Cumulative cash back from exits.'),
+    dpiPct: z.number().int().min(0).max(200).describe('Distributions to paid-in, whole percentage. What LPs actually count.'),
+    lpPressure: z.number().int().min(0).max(100).describe('0 at the vintage, 50 at the end of the investment period with nothing returned, 100 at term. A date creates it, never a draw, which is why a player can see a forced seller coming four quarters out.'),
+    lpBand: LpPressureBandSchema,
+    trackRecord: z.number().int().min(0).max(100),
+    stance: CapitalStanceSchema.describe('How this entity stands toward the reader of the card.'),
+    partnerCharacterId: z.string().nullable().describe('Lead partner, linking into Network. Null only if the roster is malformed.'),
+    positionCount: z.number().int().min(0).describe('Live holdings.'),
+    shortCount: z.number().int().min(0).describe('Open short positions, disclosed and not: this row is the entity\'s own view, and the projection redacts it for other readers.'),
+    lastMove: z.string().max(80).nullable().describe('One line: "Bought 1.2% of Kestrel", "Cut Basalt to 6%", "Opened a short in HELN". Null in a quarter they did nothing.'),
+    causeEventId: z.string().nullable().describe('The capital_entity_marked row this card was rendered from, so every number on it is a tap target into the ledger.'),
+  })
+  .describe('One entity card on The Street. Derived every quarter and never accumulated, exactly like companyMetrics.');
+export type CapitalEntityRow = z.infer<typeof CapitalEntityRowSchema>;
+
+export const CapitalPositionRowSchema = z
+  .object({
+    entityId: z.string().min(1),
+    companyId: z.string().min(1),
+    securityId: z.string().min(1),
+    shares: z.number().int().min(0).describe('Never negative. A short is not a position on this list and never appears here.'),
+    stakePct: z.number().int().min(0).max(100).describe('Whole percentage of the issued class.'),
+    sinceQuarter: QuarterIndexSchema,
+    costBasisUsd: usd('What the position cost.'),
+    valueUsd: usd('What it is marked at now.'),
+    unrealisedMultiplePct: z.number().int().min(0).max(10000).describe('Value over cost as a whole percentage: 300 is a three-bagger. One scale, no five-star ratings.'),
+    isDisclosed: z.boolean().describe('False below the disclosure threshold. An undisclosed position is ABSENT from another reader\'s projection — not blurred, not summarised.'),
+  })
+  .describe('One line of an entity\'s portfolio drawer.');
+export type CapitalPositionRow = z.infer<typeof CapitalPositionRowSchema>;
+
+export const ShortInterestRowSchema = z
+  .object({
+    instrumentId: z.string().min(1),
+    companyId: z.string().min(1),
+    shortInterestPct: z.number().int().min(0).max(100).describe('Shares short over float, whole percentage, shown as a bar against the cap.'),
+    borrowFeePctPerQuarter: z.number().int().min(0).max(100).describe('What it costs to stay short, whole percent of notional per quarter. Rises with utilisation, which is why nobody sits short forever waiting to be right.'),
+    disclosedEntityIds: z.array(z.string()).max(12).describe('Only entities whose position crossed the disclosure threshold. Everyone else is absent.'),
+    squeezeFired: z.boolean().describe('True in a quarter the squeeze condition held, which puts a warning-tone badge on the Markets card.'),
+    forcedCoverShares: z.number().int().min(0).describe('Shares force-covered this quarter, which feed next quarter\'s liquidity effect and are already clamped by it.'),
+    causeEventId: z.string().nullable(),
+  })
+  .describe('The short-interest row on a Markets instrument card.');
+export type ShortInterestRow = z.infer<typeof ShortInterestRowSchema>;
+
 export const EconomyReportSchema = z
   .object({
     quarter: QuarterIndexSchema,
@@ -619,6 +681,9 @@ export const EconomyReportSchema = z
     rivalPressure: z.array(RivalPressureRowSchema).default([]),
     dividends: z.array(DividendPreviewSchema).default([]),
     control: z.array(ControlStatusSchema).default([]),
+    capitalEntities: z.array(CapitalEntityRowSchema).max(12).default([]),
+    capitalPositions: z.array(CapitalPositionRowSchema).default([]),
+    shortInterest: z.array(ShortInterestRowSchema).default([]),
   })
   .describe(
     'One quarter of itemised economic attribution: the rows every V1-V8 surface renders. Derived state, like companyMetrics — rebuilt every quarter and never accumulated, so a long session stays survivable on a phone. Absent entirely in world version 1.',
@@ -638,6 +703,9 @@ export function emptyEconomyReport(quarter: number): EconomyReport {
     rivalPressure: [],
     dividends: [],
     control: [],
+    capitalEntities: [],
+    capitalPositions: [],
+    shortInterest: [],
   };
 }
 

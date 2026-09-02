@@ -51,6 +51,8 @@ import {
   priceWithinBand,
   sharesForMarketCap,
 } from '@frontier/contracts';
+import { moveDryPowder } from '../capital/context';
+import { pickLeadInvestor } from '../capital/leads';
 import { companyCapitalDepthFactor } from '../economy/regions';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { maxTollForCompany } from '../economy/prices';
@@ -418,6 +420,11 @@ function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
 
     const perShare = dividend / issued;
     const corporateRecipients: { holderId: string; amountUsd: number }[] = [];
+    // A fund holder is paid too, and the payment is cash back to its investors.
+    // It is named on the row for the same reason corporate recipients are: so
+    // the gate can reconstruct every book the payout moved.
+    const fundRecipients: { holderId: string; amountUsd: number; dryPowderDeltaUsd: number }[] = [];
+    const entitiesById = new Map((draft.capitalEntities ?? []).map((entity) => [entity.id, entity] as const));
     let distributed = 0;
     const holders = table.holdings
       .filter((holding) => holding.securityId === security.id && holding.shares > 0)
@@ -436,6 +443,19 @@ function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
         // Dividend income is income: assets up, equity up, identity intact.
         holder.balanceSheet.equity = round(holder.balanceSheet.equity + amount, 2);
         corporateRecipients.push({ holderId: holder.id, amountUsd: amount });
+        continue;
+      }
+      if (holding.holderKind === 'fund') {
+        const entity = entitiesById.get(holding.holderId);
+        if (entity === undefined) continue;
+        // The whole payment counts toward DPI — it is cash returned to the
+        // fund's own investors — but only the part inside the committed size
+        // becomes spendable dry powder again; the rest has left for the LPs.
+        // Going through the shared mover is what keeps that ceiling in one
+        // place and keeps the row's stated delta equal to the movement.
+        const credited = moveDryPowder(entity, Math.round(amount));
+        entity.realisedProceedsUsd = Math.round(entity.realisedProceedsUsd + Math.round(amount));
+        fundRecipients.push({ holderId: entity.id, amountUsd: amount, dryPowderDeltaUsd: credited });
         continue;
       }
       if (holding.holderKind === 'player' || holding.holderKind === 'character') {
@@ -463,6 +483,7 @@ function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
         // Named so the invariant gate can reconstruct every balance sheet the
         // payout moved, not just the one it left.
         corporateRecipients: corporateRecipients.slice(0, 24),
+        fundRecipients: fundRecipients.slice(0, 12),
       },
       visibility: 'public',
     });
@@ -585,7 +606,24 @@ function resolveFundingRounds(draft: SessionState, ctx: ResolverContext, rng: Se
 
     const pricePerShare = table.fullyDilutedShares > 0 ? preMoney / table.fullyDilutedShares : 1;
     const newShares = Math.max(1, Math.round(intent.targetAmountUsd / Math.max(pricePerShare, 1e-6)));
-    const holderId = makeId('fund', 'venture', company.id);
+
+    // Who actually led it. Before capital entities existed this was a holder
+    // invented for the round — `fund:venture:<company>` — with no lead investor
+    // at all, so every round in the game was led by nobody on behalf of an
+    // institution that existed for one company and never acted again. Where a
+    // roster exists, a real fund writes the cheque out of real dry powder and
+    // its partner's name goes on the round. World 1 has no roster, so it keeps
+    // the synthetic holder and replays byte for byte.
+    const lead = pickLeadInvestor(draft, company, intent.stage, intent.targetAmountUsd);
+    const holderId = lead === null ? makeId('fund', 'venture', company.id) : lead.entity.id;
+    // The lead's cash falls by exactly what it wrote, and the movement is stated
+    // on the round row below rather than inferred from the balance.
+    let leadDryPowderDeltaUsd = 0;
+    if (lead !== null) {
+      const before = lead.entity.dryPowderUsd;
+      lead.entity.dryPowderUsd = Math.max(0, Math.round(before - intent.targetAmountUsd));
+      leadDryPowderDeltaUsd = lead.entity.dryPowderUsd - before;
+    }
     const before = holderPct(table, security.id, shareClass.id, holderId);
 
     addShares(table, {
@@ -597,6 +635,11 @@ function resolveFundingRounds(draft: SessionState, ctx: ResolverContext, rng: Se
       quarter: draft.quarter,
       lockupUntilQuarter: null,
     });
+    // A priced round amends the charter as part of closing it. Without this a
+    // company that raised enough times would hit its own authorisation and the
+    // quarter would fail `authoritative_backend` for doing exactly what a round
+    // is supposed to do.
+    shareClass.authorisedShares = Math.max(shareClass.authorisedShares, shareClass.issuedShares + newShares);
     setIssued(table, shareClass, shareClass.issuedShares + newShares, draft.quarter);
 
     company.financials.cash += intent.targetAmountUsd;
@@ -613,7 +656,7 @@ function resolveFundingRounds(draft: SessionState, ctx: ResolverContext, rng: Se
       dilution,
       pricePerShareUsd: pricePerShare,
       shareClassId: shareClass.id,
-      leadInvestorCharacterId: null,
+      leadInvestorCharacterId: lead?.partnerCharacterId ?? null,
       participantHolderIds: [holderId],
       boardSeatsGranted: dilution >= 0.15 ? 1 : 0,
       closedQuarter: draft.quarter,
@@ -635,6 +678,11 @@ function resolveFundingRounds(draft: SessionState, ctx: ResolverContext, rng: Se
         dilution: round(dilution, 4),
         pricePerShareUsd: round(pricePerShare, 6),
         newShares,
+        entityId: lead === null ? null : lead.entity.id,
+        leadInvestorCharacterId: lead?.partnerCharacterId ?? null,
+        // Declared for `capital_integrity`: the fund's cash moved by exactly the
+        // cheque it wrote, and no other row explains it.
+        dryPowderDeltaUsd: leadDryPowderDeltaUsd,
       },
       visibility: 'public',
     });

@@ -780,8 +780,14 @@ describe('constants and invariants', () => {
   // 1.2.0 adds the public record and threads: `PublicRecordItemSchema`,
   // `SocialTextOverrideSchema` and `SocialPost.replyToPostId`. Every addition
   // carries a default, so a save written against 1.1.0 still parses.
+  //
+  // 1.3.0 adds capital entities: `CapitalEntitySchema`, `ShortPositionSchema`,
+  // `ActivistCampaignSchema`, `CapitalOrderSchema`, two deal-obligation
+  // variants, ten ledger types and four optional `SessionState` fields. Every
+  // addition is an append or an optional, so a save written against 1.2.0 still
+  // parses and still hashes to what it hashed to.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.2.0');
+    expect(CONTRACTS_VERSION).toBe('1.3.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {

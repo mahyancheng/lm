@@ -58,6 +58,7 @@
  * | `social`      | Networks, accounts, posts, engagement, media stories        |
  * | `publicRecord`| The one universal feed: events, stories, disclosures, posts |
  * | `deals`       | Structured agreements, binding and non-binding              |
+ * | `capital`     | Capital entities, shorts, activism, orders, the constants   |
  * | `actions`     | Every quarterly action, validation, NPC bundles             |
  * | `sim`         | The ledger, resolution phases, reports, leaderboards        |
  * | `session`     | The canonical root aggregate and player projections         |
@@ -81,6 +82,7 @@ export * from './people';
 export * from './social';
 export * from './publicRecord';
 export * from './deals';
+export * from './capital';
 export * from './actions';
 export * from './sim';
 export * from './session';
@@ -92,4 +94,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.2.0';
+export const CONTRACTS_VERSION = '1.3.0';

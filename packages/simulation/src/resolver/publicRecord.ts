@@ -380,6 +380,20 @@ function storyConsequence(story: MediaStory, audience: PlayerAudience): string |
 /** A disclosure about you moves what the market believes, which moves the price. */
 function disclosureConsequence(disclosure: PublicDisclosure, audience: PlayerAudience): string | null {
   if (disclosure.companyId === null || !audience.companyIds.has(disclosure.companyId)) return null;
+
+  // A capital entity's disclosure is an act, not a report, so it gets a line
+  // that names the act rather than the format. Read off the metrics the engine
+  // put on the row — never recomputed here, and never rounded differently from
+  // the card the same numbers render on.
+  const overvaluation = disclosure.metrics['overvaluationPct'];
+  if (typeof overvaluation === 'number') {
+    return clip(`a fund is short you and says so: it argues you are ${Math.round(overvaluation)}% overvalued, at ${formatPct(disclosure.credibility)} credibility`, 160);
+  }
+  const stakePct = disclosure.metrics['stakePct'];
+  if (typeof stakePct === 'number') {
+    return clip(`an activist holding ${Math.round(stakePct)}% of you has gone public with its demands`, 160);
+  }
+
   const kind = disclosure.kind.replace(/_/g, ' ');
   return clip(`about you: ${kind} the market gives ${formatPct(disclosure.credibility)} credibility`, 160);
 }

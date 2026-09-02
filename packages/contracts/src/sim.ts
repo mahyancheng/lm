@@ -117,6 +117,21 @@ export const SIM_EVENT_TYPES = [
   'antitrust_exposure_changed',
   'predatory_pricing_flagged',
   'dividend_paid',
+  // Capital entities (appended, never inserted). Each earns its place by
+  // carrying something no existing type can. Everything else a fund does reuses
+  // an existing type with an added payload field, which is what keeps every
+  // movement of a company's equity inside the closed set the financial-integrity
+  // reconstruction reads. See CAPITAL_INTEGRITY_INVARIANT in capital.ts.
+  'short_position_opened',
+  'short_position_covered',
+  'short_interest_published',
+  'short_squeeze_triggered',
+  'borrow_cost_charged',
+  'activist_campaign_opened',
+  'activist_campaign_escalated',
+  'activist_campaign_closed',
+  'takeover_defence_raised',
+  'capital_entity_marked',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');
@@ -280,17 +295,22 @@ export const LEADERBOARD_BOARDS = [
   'government',
   'reputation',
   'founder_index',
+  // Appended: LEADERBOARD_BOARDS is a zod enum and grows only at the end.
+  // Funds on the leaderboard is what makes them peers rather than scenery.
+  'capital_returns',
+  'assets_under_management',
 ] as const;
 
 export const LeaderboardBoardSchema = z
   .enum(LEADERBOARD_BOARDS)
   .describe(
-    'Which ranking this is. company_value ranks controlled enterprise value; founder_wealth personal net worth; revenue trailing revenue; profit operating and cash performance; innovation frontier achievement; market_influence ownership and control across the industry; network connection level; government procurement credibility and access; reputation multi-audience trust; founder_index the composite. Ten boards exist so that a technically brilliant company can lose financially, a rich founder can lose control, and a small company can become indispensable to governments.',
+    'Which ranking this is. company_value ranks controlled enterprise value; founder_wealth personal net worth; revenue trailing revenue; profit operating and cash performance; innovation frontier achievement; market_influence ownership and control across the industry; network connection level; government procurement credibility and access; reputation multi-audience trust; founder_index the composite. Ten boards exist so that a technically brilliant company can lose financially, a rich founder can lose control, and a small company can become indispensable to governments. Two more rank institutions rather than people: capital_returns is realised plus unrealised multiple and is the only ranking in the game a player cannot enter, and assets_under_management is raw size.',
   );
 export type LeaderboardBoard = z.infer<typeof LeaderboardBoardSchema>;
 
-export const LEADERBOARD_SUBJECT_KINDS = ['player', 'company', 'character'] as const;
-export const LeaderboardSubjectKindSchema = z.enum(LEADERBOARD_SUBJECT_KINDS).describe('What is being ranked.');
+// Appended: 'fund' is a CapitalEntity, ranked on the two institution boards.
+export const LEADERBOARD_SUBJECT_KINDS = ['player', 'company', 'character', 'fund'] as const;
+export const LeaderboardSubjectKindSchema = z.enum(LEADERBOARD_SUBJECT_KINDS).describe('What is being ranked. "fund" is a CapitalEntity, and its subjectId is the cap-table holder id.');
 export type LeaderboardSubjectKind = z.infer<typeof LeaderboardSubjectKindSchema>;
 
 export const LeaderboardEntrySchema = z
@@ -430,12 +450,15 @@ export const SIMULATION_INVARIANTS = [
   'tech_graph_safety',
   'agent_reproducibility',
   'failure_mode',
+  // Appended: what financial_integrity does for companies, capital_integrity
+  // does for capital entities. See CAPITAL_INTEGRITY_INVARIANT in capital.ts.
+  'capital_integrity',
 ] as const;
 
 export const SimulationInvariantSchema = z
   .enum(SIMULATION_INVARIANTS)
   .describe(
-    'The quality invariants the engine enforces. deterministic_replay: same state, decisions and seed produce the same outcome. financial_integrity: balance sheets reconcile. ownership_integrity: issued shares and holdings reconcile. market_integrity: no negative or NaN prices. llm_containment: invalid model output cannot mutate state. idempotency: a quarter cannot resolve twice. information_boundary: private facts do not automatically become public. authoritative_backend: the client cannot manufacture money, shares or score. social_security: unauthorised users cannot join restricted conversations. auditability: material changes trace to an event. tech_graph_safety: generated technology cannot execute client code. agent_reproducibility: model output and version are logged. failure_mode: an LLM outage has deterministic fallback behaviour.',
+    'The quality invariants the engine enforces. deterministic_replay: same state, decisions and seed produce the same outcome. financial_integrity: balance sheets reconcile. ownership_integrity: issued shares and holdings reconcile. market_integrity: no negative or NaN prices. llm_containment: invalid model output cannot mutate state. idempotency: a quarter cannot resolve twice. information_boundary: private facts do not automatically become public. authoritative_backend: the client cannot manufacture money, shares or score. social_security: unauthorised users cannot join restricted conversations. auditability: material changes trace to an event. tech_graph_safety: generated technology cannot execute client code. agent_reproducibility: model output and version are logged. failure_mode: an LLM outage has deterministic fallback behaviour. capital_integrity: every movement of a capital entity\'s dry powder is explained by the quarter\'s rows, dry powder never goes negative, and a fund moves a company\'s equity only through an event type the equity reconstruction already reads.',
   );
 export type SimulationInvariant = z.infer<typeof SimulationInvariantSchema>;
 

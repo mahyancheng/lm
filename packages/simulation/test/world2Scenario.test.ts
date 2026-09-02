@@ -20,12 +20,17 @@ import { describe, expect, it } from 'vitest';
 import type { SessionState } from '@frontier/contracts';
 import {
   ALL_BACKGROUNDS,
+  DRY_POWDER_FLOOR_PCT,
+  LP_PRESSURE_FORCED_FLOOR,
+  LP_PRESSURE_HARVEST_FLOOR,
   MARKET_CAP_TOLERANCE_USD,
   REGIONS,
   SECTORS,
   SECTOR_META,
   SHARE_PRICE_BAND_USD,
   NewGameSetupSchema,
+  lpPressureBand,
+  lpPressureFor,
   marketCapFromPrice,
   priceWithinBand,
   sectorForBackground,
@@ -40,6 +45,7 @@ import {
   W2_AGENCIES,
   W2_AI_NODES,
   W2_COMPANIES,
+  W2_FUND_PRINCIPALS,
   W2_OPPORTUNITY_SECTORS,
   W2_PLAYER_BACKGROUNDS,
   W2_TRACKS,
@@ -445,5 +451,183 @@ describe('world-2 seed data', () => {
       expect(track.summary.length).toBeGreaterThan(0);
       expect(track.nodeIds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  The capital-entity roster                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Eleven institutions: the six that already sat on these registers, promoted,
+ * and five that arrive with nothing but dry powder.
+ *
+ * The load-bearing fact is the identity rule — a `CapitalEntity.id` **is** the
+ * cap-table holder id — so these tests check the roster against the registers
+ * and the cast rather than against itself.
+ */
+describe('the world-2 capital entities', () => {
+  const state: SessionState = createWorld2Session();
+  const entities = state.capitalEntities ?? [];
+
+  it('promotes the six existing blocs and adds five, with no new opening holdings', () => {
+    expect(entities).toHaveLength(11);
+    expect(entities.map((entity) => entity.id)).toEqual([
+      'fund_seawall',
+      'fund_indus',
+      'fund_altiplano',
+      'fund_ironwood',
+      'fund_tessera',
+      'fund_grantwood',
+      'fund_straits',
+      'fund_kaido',
+      'fund_coldbrook',
+      'fund_perihelion',
+      'fund_qadr',
+    ]);
+
+    // Every fund holder id on every register resolves to an entity, and only
+    // the six incumbents hold anything at all: world 2's registers do not
+    // change by one share.
+    const holders = new Set<string>();
+    for (const table of state.capTables) {
+      for (const holding of table.holdings) {
+        if (holding.holderKind === 'fund') holders.add(holding.holderId);
+      }
+    }
+    const ids = new Set(entities.map((entity) => entity.id));
+    for (const holder of holders) expect(ids.has(holder)).toBe(true);
+    expect([...holders].sort()).toEqual(['fund_altiplano', 'fund_indus', 'fund_kaido', 'fund_qadr', 'fund_seawall', 'fund_tessera']);
+    for (const newcomer of ['fund_ironwood', 'fund_grantwood', 'fund_straits', 'fund_coldbrook', 'fund_perihelion']) {
+      expect(holders.has(newcomer)).toBe(false);
+    }
+  });
+
+  it('covers the four kinds and the six regions the design asked for', () => {
+    const byKind = (kind: string) => entities.filter((entity) => entity.kind === kind).length;
+    expect(byKind('vc')).toBe(4);
+    expect(byKind('pe')).toBe(3);
+    expect(byKind('hedge_fund')).toBe(3);
+    expect(byKind('sovereign')).toBe(1);
+    expect(new Set(entities.map((entity) => entity.region)).size).toBeGreaterThanOrEqual(5);
+    // The sovereign is the only one of its kind, and it is Qadr, which was
+    // already seeded with a CIO and holdings on eight registers.
+    const sovereign = entities.find((entity) => entity.kind === 'sovereign');
+    expect(sovereign?.id).toBe('fund_qadr');
+  });
+
+  it('gives every entity a partner who exists, and every partner an entity', () => {
+    const characters = new Map(state.characters.map((character) => [character.id, character] as const));
+    for (const entity of entities) {
+      expect(entity.partnerCharacterIds.length).toBeGreaterThanOrEqual(1);
+      for (const partnerId of entity.partnerCharacterIds) {
+        const partner = characters.get(partnerId);
+        expect(partner, `${entity.id} names a partner nobody has met: ${partnerId}`).toBeDefined();
+        expect(partner?.role).toBe('investor');
+        expect(partner?.isActive).toBe(true);
+      }
+      // The board-representation map and the roster agree about who speaks.
+      expect(W2_FUND_PRINCIPALS[entity.id]).toBe(entity.partnerCharacterIds[0]);
+    }
+    expect(Object.keys(W2_FUND_PRINCIPALS)).toHaveLength(entities.length);
+
+    // Every director seated on behalf of a fund represents a real entity.
+    for (const board of state.boards) {
+      for (const seat of board.directors) {
+        if (seat.representedHolderId === null) continue;
+        if (!seat.representedHolderId.startsWith('fund_')) continue;
+        expect(entities.some((entity) => entity.id === seat.representedHolderId)).toBe(true);
+      }
+    }
+  });
+
+  it('keeps AUM and dry powder whole, positive and inside the fund', () => {
+    for (const entity of entities) {
+      expect(Number.isInteger(entity.committedCapitalUsd)).toBe(true);
+      expect(Number.isInteger(entity.dryPowderUsd)).toBe(true);
+      expect(Number.isInteger(entity.realisedProceedsUsd)).toBe(true);
+      expect(entity.committedCapitalUsd).toBeGreaterThanOrEqual(500 * 1_000_000);
+      expect(entity.committedCapitalUsd).toBeLessThanOrEqual(50 * 1_000_000_000);
+      expect(entity.dryPowderUsd).toBeGreaterThan(0);
+      expect(entity.dryPowderUsd).toBeLessThan(entity.committedCapitalUsd);
+      // Nobody is seeded already floored out, and nobody is seeded with a fund
+      // that has never done anything.
+      const pct = Math.round((100 * entity.dryPowderUsd) / entity.committedCapitalUsd);
+      expect(pct).toBeGreaterThanOrEqual(DRY_POWDER_FLOOR_PCT);
+      expect(pct).toBeLessThanOrEqual(80);
+      expect(entity.realisedProceedsUsd).toBeLessThanOrEqual(entity.committedCapitalUsd);
+    }
+  });
+
+  it('gives every entity an appetite for every sector and a thesis to print', () => {
+    for (const entity of entities) {
+      expect(Object.keys(entity.sectorAffinity).sort()).toEqual([...SECTORS].sort());
+      for (const sector of SECTORS) {
+        const appetite = entity.sectorAffinity[sector] ?? -1;
+        expect(Number.isInteger(appetite)).toBe(true);
+        expect(appetite).toBeGreaterThanOrEqual(0);
+        expect(appetite).toBeLessThanOrEqual(100);
+      }
+      expect(entity.thesis.length).toBeGreaterThan(20);
+      expect(entity.thesis.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it('starts eleven clocks at eleven different places, none of them forced yet', () => {
+    const pressures = entities.map((entity) => lpPressureFor(entity, state.quarter));
+    for (const pressure of pressures) {
+      expect(Number.isInteger(pressure)).toBe(true);
+      expect(pressure).toBeGreaterThanOrEqual(0);
+      // Nobody opens as a forced seller: the best buying window in the game is
+      // something the player watches arrive, not something they are handed.
+      expect(pressure).toBeLessThan(LP_PRESSURE_FORCED_FLOOR);
+    }
+    // But somebody is already harvesting, so the mechanic is live from quarter
+    // zero rather than dormant for eight years.
+    expect(pressures.some((pressure) => pressure >= LP_PRESSURE_HARVEST_FLOOR)).toBe(true);
+    expect(new Set(pressures).size).toBeGreaterThanOrEqual(5);
+
+    // The player's own backer stays patient, because Seawall led their seed.
+    const seawall = entities.find((entity) => entity.id === 'fund_seawall');
+    expect(seawall).toBeDefined();
+    expect(lpPressureBand(lpPressureFor(seawall!, state.quarter))).toBe('calm');
+  });
+
+  it('seeds the newcomers reachable, so the Network screen still has a door', () => {
+    const connectionOf = (id: string) => state.characters.find((character) => character.id === id)?.connectionLevel ?? -1;
+    const incumbents = ['fund_seawall', 'fund_tessera', 'fund_kaido', 'fund_indus', 'fund_qadr', 'fund_altiplano'];
+    const newcomers = ['fund_ironwood', 'fund_grantwood', 'fund_straits', 'fund_coldbrook', 'fund_perihelion'];
+    const partnerOf = (fundId: string) => connectionOf(W2_FUND_PRINCIPALS[fundId] ?? '');
+
+    const highestIncumbent = Math.max(...incumbents.map(partnerOf));
+    for (const fundId of newcomers) expect(partnerOf(fundId)).toBeLessThan(highestIncumbent);
+    // At least one of them is reachable by a founder who starts at 24.
+    expect(Math.min(...newcomers.map(partnerOf))).toBeLessThanOrEqual(58);
+  });
+
+  it('opens with no shorts, no campaigns and no orders', () => {
+    expect(state.shortPositions).toEqual([]);
+    expect(state.activistCampaigns).toEqual([]);
+    expect(state.capitalOrders).toEqual([]);
+  });
+
+  it('leaves the frozen world without a single one of these keys', () => {
+    const world1 = createDemoSession();
+    expect(world1.capitalEntities).toBeUndefined();
+    expect(world1.shortPositions).toBeUndefined();
+    expect(world1.activistCampaigns).toBeUndefined();
+    expect(world1.capitalOrders).toBeUndefined();
+    expect(Object.hasOwn(world1, 'capitalEntities')).toBe(false);
+    expect(isMultiSectorWorld(world1)).toBe(false);
+  });
+
+  it('resolves a quarter with the roster on board and passes capital_integrity', () => {
+    const engine = createDefaultEngine();
+    const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+    expect(outcome.committed).toBe(true);
+    const capital = outcome.invariants.find((result) => result.invariant === 'capital_integrity');
+    expect(capital?.passed).toBe(true);
+    // The roster survives a quarter untouched: nothing in the engine reads it yet.
+    expect(outcome.nextState.capitalEntities).toHaveLength(11);
   });
 });

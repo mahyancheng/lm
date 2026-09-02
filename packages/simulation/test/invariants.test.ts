@@ -66,7 +66,7 @@ const agentRow = (state: SessionState): SimEvent =>
   });
 
 describe('runInvariantGate', () => {
-  it('checks all thirteen invariants', () => {
+  it('checks every declared invariant', () => {
     const state = createDemoSession();
     const results = gate(state, [agentRow(state)]);
     expect(results).toHaveLength(SIMULATION_INVARIANTS.length);

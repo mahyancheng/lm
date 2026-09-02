@@ -19,6 +19,7 @@ import { createGovernmentSubsystem } from './government';
 import { createBoardsSubsystem } from './boards';
 import { createRelationshipsSubsystem } from './relationships';
 import { createSocialSubsystem } from './social';
+import { createCapitalDesksSubsystem } from './capital';
 import { createActionValidator } from './validator';
 import { createQuarterResolver, type FrontierQuarterResolver, type ResolverOptions } from './resolver';
 
@@ -49,6 +50,10 @@ export function createDefaultEngine(options: ResolverOptions = {}): FrontierEngi
     boards: createBoardsSubsystem(),
     relationships: createRelationshipsSubsystem(),
     social: createSocialSubsystem(),
+    // Optional on the interface, always present here: world 1 is gated off inside
+    // the subsystem itself rather than by leaving it out of the composition, so
+    // one engine serves both worlds.
+    capitalDesks: createCapitalDesksSubsystem(),
     actionValidator: validator,
   };
 

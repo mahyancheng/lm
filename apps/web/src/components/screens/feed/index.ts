@@ -28,6 +28,7 @@ export {
   filterFeed,
   groupByQuarter,
   groupOfKind,
+  isFundVoice,
   isOwnItem,
   kindsOfGroup,
   matchesFeedFilter,

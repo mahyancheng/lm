@@ -236,6 +236,10 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             // acts where its strategist did not, and so its own actions face
             // exactly the rules everyone else's do.
             subsystems.companies.applyNpcDefaults(draft, ctx);
+            // The capital desks run last in this phase, so they see what the
+            // world already decided this quarter, and on a stream forked inside
+            // the subsystem, so they cannot move the hiring jitter above.
+            subsystems.capitalDesks?.runCapitalDesks(draft, ctx);
             break;
           }
 
@@ -247,6 +251,9 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
           case 'capital_resolution':
             resolveCapital(draft, ctx);
+            // After the deal router, so an accepted term sheet is already
+            // recorded as accepted before the round closes against it.
+            subsystems.capitalDesks?.resolveSponsorCapital(draft, ctx);
             break;
 
           case 'government_resolution':
@@ -284,12 +291,17 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
           case 'disclosure_resolution':
             resolveDisclosures(draft, ctx);
+            subsystems.capitalDesks?.publishSponsorDisclosures(draft, ctx);
             break;
 
           case 'market_resolution':
             subsystems.markets.updateBeliefs(draft, ctx);
             subsystems.markets.priceMarket(draft, ctx);
             subsystems.markets.settleTrades(draft, ctx);
+            // Shorts settle after the market prices, so a short opened this
+            // quarter is struck at this quarter's quote and its profit and loss
+            // lands next quarter. Plannable, and stated.
+            subsystems.capitalDesks?.settleShorts(draft, ctx);
             break;
 
           case 'social_resolution':
@@ -307,6 +319,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
           case 'leaderboard_update':
             subsystems.companies.recomputeMetrics(draft, ctx);
+            subsystems.capitalDesks?.recomputeCapitalEntities(draft, ctx);
             rebuildLeaderboards(draft, ctx);
             break;
 
@@ -395,6 +408,11 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
       /* --- commit ------------------------------------------------------------ */
       pruneHistory(draft);
       draft.pendingActions = [];
+      // Capital orders are this quarter's working set, exactly like pending
+      // actions: written in phase four, settled in phase thirteen, gone at
+      // commit. The key is only touched where it already exists, so world 1
+      // still grows no `capitalOrders`.
+      if (draft.capitalOrders !== undefined) draft.capitalOrders = [];
       draft.lastResolvedQuarter = quarter;
       draft.quarter = quarter + 1;
       draft.status = draft.config.quarterLimit !== null && draft.quarter >= draft.config.quarterLimit ? 'completed' : 'active';

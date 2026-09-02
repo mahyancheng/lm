@@ -221,6 +221,50 @@ export interface BoardsSubsystem {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Capital entities                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The venture, buyout, hedge and sovereign desks. Five entry points, all inside
+ * the existing eighteen phases: adding a phase would shift every phase's RNG
+ * stream after it, and nothing here needs one.
+ *
+ * Every method is deterministic and takes no draw of its own. Where a tie-break
+ * of last resort needs a stream it must be a **fork** (`ctx.rng.fork('capital_desks')`)
+ * so the desks cannot move any other consumer's draw sequence.
+ *
+ * Gated on world version: in world 1 every method is a no-op and the session
+ * grows no `capitalEntities`, `shortPositions`, `activistCampaigns` or
+ * `capitalOrders` key at all.
+ */
+export interface CapitalDesksSubsystem {
+  /**
+   * Phase `action_collection`, **after** NPC defaults so the desks see what the
+   * world already decided this quarter. Scores every eligible company, applies
+   * one threshold and hard per-entity caps, and writes deal proposals (term
+   * sheets, buyout approaches, white-knight invitations), capital orders and
+   * sponsor actions — never more than `CAPITAL_DESK_ORDER_BUDGET` rows in total.
+   *
+   * A term sheet offered here is answerable only by an action submitted in the
+   * NEXT quarter. A fund's offer is never resolved in the quarter it is made.
+   */
+  runCapitalDesks(draft: SessionState, ctx: ResolverContext): void;
+  /**
+   * Phase `capital_resolution`, after deals are routed. Accepted term sheets
+   * close as ordinary funding rounds with a real lead investor; buyouts place
+   * debt on the target and settle through the ordinary acquisition path; fees
+   * and capital calls move `dryPowderUsd`.
+   */
+  resolveSponsorCapital(draft: SessionState, ctx: ResolverContext): void;
+  /** Phase `disclosure_resolution`. Short reports, public activist letters and every position over the disclosure threshold become ordinary public disclosures with an engine-computed credibility. */
+  publishSponsorDisclosures(draft: SessionState, ctx: ResolverContext): void;
+  /** Phase `market_resolution`, after the market prices, so a short opened this quarter is struck at this quarter's quote and its P&L lands next quarter. Opens, marks, accrues borrow cost, and force-covers on squeeze or margin. */
+  settleShorts(draft: SessionState, ctx: ResolverContext): void;
+  /** Phase `leaderboard_update`, before the boards are rebuilt. Recomputes NAV, DPI, LP pressure and track record into the economy report. */
+  recomputeCapitalEntities(draft: SessionState, ctx: ResolverContext): void;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Relationships                                                              */
 /* -------------------------------------------------------------------------- */
 
@@ -311,6 +355,12 @@ export interface Subsystems {
   readonly relationships: RelationshipsSubsystem;
   readonly social: SocialSubsystem;
   readonly actionValidator: ActionValidator;
+  /**
+   * Optional, and optional on purpose: an engine composed without it resolves
+   * exactly as it did before capital entities existed, which is what world 1
+   * and every existing fixture rely on.
+   */
+  readonly capitalDesks?: CapitalDesksSubsystem;
 }
 
 /**

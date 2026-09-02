@@ -34,7 +34,7 @@ import {
 } from '@/components/ui';
 import { countLabel, networkLabel } from '@/components/screens/social/audiences';
 import { humanise } from '@/components/screens/reporting/util';
-import { feedSectorsOf, isOwnItem } from './filters';
+import { feedSectorsOf, isFundVoice, isOwnItem } from './filters';
 
 /* -------------------------------------------------------------------------- */
 /*  Kinds                                                                      */
@@ -72,6 +72,9 @@ export function toneOfSentiment(value: number): Tone {
   return 'neutral';
 }
 
+/** No roster: the set every card falls back to, allocated once. */
+const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
+
 /** Past this many characters the body is worth collapsing rather than printing. */
 const COLLAPSE_ABOVE = 190;
 
@@ -105,6 +108,17 @@ export interface FeedContext {
   readonly headlines: ReadonlyMap<string, string>;
   /** Events that have a pin on the map. Only these offer "show on map". */
   readonly mappedEventIds: ReadonlySet<string>;
+  /**
+   * Partner characters of the capital entities on the roster.
+   *
+   * A fund speaks through its partner, so this is how a card knows a short
+   * report or an activist letter came from an institution rather than from a
+   * person — and draws the institution's mark instead of the filing stamp.
+   * Empty in a world with no institutional layer, which is the whole gate.
+   */
+  readonly fundPartnerIds?: ReadonlySet<string>;
+  /** Institution names, keyed by their partner's character id. */
+  readonly fundNameByPartnerId?: ReadonlyMap<string, string>;
   readonly onShowOnMap?: (eventId: string) => void;
   /** Open the committed ledger rows behind an item. */
   readonly onOpenLedger?: (item: PublicRecordItem) => void;
@@ -125,6 +139,9 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
   const [expanded, setExpanded] = useState(false);
 
   const character = item.who.characterId === null ? null : (context.characters.get(item.who.characterId) ?? null);
+  const fromFund = isFundVoice(item, context.fundPartnerIds ?? EMPTY_IDS);
+  const fundName =
+    item.who.characterId === null ? null : (context.fundNameByPartnerId?.get(item.who.characterId) ?? null);
   const own = isOwnItem(item, context.playerCharacterId, context.playerCompanyId);
   const companyName = item.who.companyId === null ? null : (context.companyNames.get(item.who.companyId) ?? null);
   const kindTone = KIND_TONE[item.kind];
@@ -154,7 +171,7 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
         <div className="min-w-0 flex-1">
           {character === null ? (
             <div className="flex min-w-0 items-center gap-2">
-              <IconChip name={KIND_ICON[item.kind]} tone={kindTone} />
+              <IconChip name={fromFund ? 'briefcase' : KIND_ICON[item.kind]} tone={fromFund ? 'brand' : kindTone} />
               <div className="min-w-0">
                 <p className="truncate text-[12.5px] font-semibold text-ink">{item.who.name}</p>
                 <p className="truncate text-[10px] text-ink-faint">{companyName ?? KIND_LABEL[item.kind]}</p>
@@ -178,9 +195,15 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Tag tone={kindTone}>
-          <Icon name={KIND_ICON[item.kind]} size={12} accent="current" />
+          <Icon name={fromFund ? 'briefcase' : KIND_ICON[item.kind]} size={12} accent="current" />
           {KIND_LABEL[item.kind]}
         </Tag>
+        {!fromFund ? null : (
+          <Tag tone="brand">
+            <Icon name="briefcase" size={11} accent="current" />
+            {fundName ?? 'An institution'}
+          </Tag>
+        )}
         {item.network === null ? null : <Tag tone="neutral">{networkLabel(item.network)}</Tag>}
         {item.intent === null ? null : <Tag tone="neutral">{humanise(item.intent)}</Tag>}
         {item.tone === 0 ? null : (

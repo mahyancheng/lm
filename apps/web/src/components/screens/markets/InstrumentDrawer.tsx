@@ -13,7 +13,7 @@
  */
 
 import type { PlayerView, SessionState } from '@frontier/contracts';
-import { controlRowsFor, quarterLabel } from '@frontier/contracts';
+import { CONTROL_DECISIVE_PCT, controlRowsFor, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import {
   AiLabel,
@@ -34,6 +34,7 @@ import {
   toneOfDelta,
   type BarDatum,
 } from '@/components/ui';
+import { HoldersPanel, ShortInterestCard, disclosedHolders, shortInterestFor } from '@/components/screens/street';
 import { anchorInputRows, anchorOf, disclosuresFor, formatCount, humanise, issuedSharesOf } from '../reporting/util';
 import type { InstrumentRow } from '../reporting/util';
 import type { DecompositionView } from './decomposition';
@@ -85,6 +86,15 @@ export function InstrumentDrawer({
       : capTable.holdings
           .filter((holding) => holding.securityId === security.id && holding.holderKind === 'public_float')
           .reduce((total, holding) => total + holding.shares, 0);
+
+  // The institutional side of the register: who is disclosed in this name, and
+  // what the short book against it looks like. Both come off the committed
+  // economy report, and both are absent — not blurred — below the disclosure
+  // threshold the projection already applied.
+  const shortRows = companyId === null ? [] : shortInterestFor(view.economyReport, companyId);
+  const holders = companyId === null ? [] : disclosedHolders(view.economyReport, companyId);
+  const entityNameOf = (entityId: string): string =>
+    view.economyReport?.capitalEntities.find((entry) => entry.entityId === entityId)?.name ?? entityId;
 
   const bars: BarDatum[] =
     decomposition === null
@@ -184,6 +194,34 @@ export function InstrumentDrawer({
                 },
               ]}
             />
+          </div>
+        )}
+
+        {/* --- the institutional register ------------------------------------
+            Short interest with its squeeze badge, then the 13F-style holder
+            list. Present only where an institution has actually crossed the
+            line that makes a position public: below it there is no row, which
+            is what makes a quiet accumulation worth building. */}
+        {shortRows.length === 0 && holders.length === 0 ? null : (
+          <div>
+            <SectionHeading rule>Who owns it, and who is short</SectionHeading>
+            {shortRows.map((short) => (
+              <ShortInterestCard
+                key={short.instrumentId}
+                row={short}
+                companyName={row.companyName}
+                entityNameOf={entityNameOf}
+                compact
+              />
+            ))}
+            <div className="mt-3">
+              <HoldersPanel
+                holders={holders}
+                entityNameOf={entityNameOf}
+                ownStakePct={issued === 0 ? null : Math.round((heldShares / issued) * 100)}
+                controlPct={Math.round(CONTROL_DECISIVE_PCT * 100)}
+              />
+            </div>
           </div>
         )}
 

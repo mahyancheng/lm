@@ -24,7 +24,7 @@
  */
 
 import type { Company, InvariantCheckResult, ResolutionLine, SessionState, SimEvent, SimulationInvariant } from '@frontier/contracts';
-import { BALANCE_SHEET_TOLERANCE_USD, MARKET_CAP_TOLERANCE_USD, balanceSheetReconciles, getTargetPathSpec, marketCapFromPrice } from '@frontier/contracts';
+import { BALANCE_SHEET_TOLERANCE_USD, MARKET_CAP_TOLERANCE_USD, SHORT_INTEREST_CAP_PCT, balanceSheetReconciles, getTargetPathSpec, marketCapFromPrice } from '@frontier/contracts';
 import { MAX_ABS_LOG_RETURN, V2_MAX_ABS_LOG_RETURN, V2_SHOCK_MAX_ABS_LOG_RETURN } from '../markets/pricing';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { chainRowHash } from './ledger';
@@ -104,6 +104,7 @@ export function runInvariantGate(input: InvariantGateInput): InvariantCheckResul
     checkAuditability(input),
     checkAgentReproducibility(input),
     checkFailureMode(input),
+    checkCapitalIntegrity(input.draft, input.opening ?? input.draft, input.events),
   ];
 }
 
@@ -458,9 +459,6 @@ function checkMarketIntegrity(draft: SessionState, events: readonly SimEvent[]):
     if (event.type === 'sentiment_shifted' && event.payload.kind === 'price_shock' && event.targetId !== null) shocked.add(event.targetId);
   }
   const bound = isMultiSectorWorld(draft) ? V2_MAX_ABS_LOG_RETURN : MAX_ABS_LOG_RETURN;
-  // Prices are rounded to six places before the applied return is recomputed, so
-  // the bound is compared with a tolerance rather than exactly.
-  const epsilon = 1e-6;
   let moves = 0;
   for (const event of events) {
     if (event.type !== 'market_priced' || event.quarter !== draft.quarter) continue;
@@ -469,6 +467,14 @@ function checkMarketIntegrity(draft: SessionState, events: readonly SimEvent[]):
     if (typeof before !== 'number' || typeof after !== 'number' || !(before > 0) || !(after > 0)) continue;
     if (event.payload.floored === true) continue;
     moves += 1;
+    // Prices are rounded to six decimal places before the applied return is
+    // recomputed, so the log ratio carries a rounding error of up to half a unit
+    // in the last place on each side. A fixed epsilon is therefore wrong at both
+    // ends: far too loose for a four-figure price and too tight for a penny one,
+    // where it fails a move that was clamped correctly. Deriving the tolerance
+    // from the rounding is the same check, stated in terms of the thing that
+    // actually causes the discrepancy.
+    const epsilon = 1e-6 * (1 / before + 1 / after);
     const permitted = (event.targetId !== null && shocked.has(event.targetId) ? V2_SHOCK_MAX_ABS_LOG_RETURN : bound) + epsilon;
     const move = Math.abs(Math.log(after / before));
     if (move > permitted) {
@@ -685,6 +691,143 @@ function checkFailureMode(input: InvariantGateInput): InvariantCheckResult {
   return fallback
     ? pass('failure_mode', 'No World Director output: the deterministic fallback ran and was recorded.')
     : fail('failure_mode', 'No World Director output and no fallback was recorded.', null);
+}
+
+/**
+ * What `financial_integrity` does for companies, `capital_integrity` does for
+ * capital entities.
+ *
+ * Checked here, from state alone, because these are the properties a fixture or
+ * a bad order can break in one quarter:
+ *
+ * - dry powder is a whole number and never negative;
+ * - a short is always a positive share count belonging to a real entity, and
+ *   never a holding — `Holding.shares` stays non-negative, which
+ *   `ownership_integrity` already sums;
+ * - short interest per instrument never exceeds `SHORT_INTEREST_CAP_PCT` of the
+ *   float, so the ledger of exposures cannot outgrow the shares that exist.
+ *
+ * And the half that bites, which is the exact analogue of the equity
+ * reconstruction: **every movement of `dryPowderUsd` in the quarter must be
+ * explained by that quarter's rows.** Every row a desk writes that moves an
+ * entity's cash carries a numeric `dryPowderDeltaUsd`, so the check is a sum
+ * rather than a heuristic, and a movement no row declares is an unexplained gap
+ * that stops the quarter committing.
+ *
+ * A world with no capital entities passes trivially, which is world 1 by
+ * construction.
+ */
+function checkCapitalIntegrity(draft: SessionState, opening: SessionState, events: readonly SimEvent[]): InvariantCheckResult {
+  const entities = draft.capitalEntities ?? [];
+  const shorts = draft.shortPositions ?? [];
+  if (entities.length === 0 && shorts.length === 0) {
+    return pass('capital_integrity', 'No capital entities in this world; nothing to reconcile.');
+  }
+
+  const offenders: string[] = [];
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  for (const entity of entities) {
+    if (entity.dryPowderUsd < 0) offenders.push(`${entity.id} holds negative dry powder`);
+    if (!Number.isInteger(entity.dryPowderUsd)) offenders.push(`${entity.id} holds fractional dry powder`);
+    if (entity.dryPowderUsd > entity.committedCapitalUsd) offenders.push(`${entity.id} holds more dry powder than it ever raised`);
+  }
+
+  // Float per instrument, from the register: a short is measured against the
+  // shares that actually trade, never against the whole issued class.
+  const securityToInstrument = new Map(draft.securities.map((security) => [security.id, security.instrumentId] as const));
+  const floatByInstrument = new Map<string, number>();
+  for (const table of draft.capTables) {
+    for (const holding of table.holdings) {
+      if (holding.holderKind !== 'public_float') continue;
+      const instrumentId = securityToInstrument.get(holding.securityId) ?? null;
+      if (instrumentId === null) continue;
+      floatByInstrument.set(instrumentId, (floatByInstrument.get(instrumentId) ?? 0) + holding.shares);
+    }
+  }
+
+  const shortByInstrument = new Map<string, number>();
+  for (const position of shorts) {
+    if (position.shares <= 0) offenders.push(`${position.id} is an open short of no shares`);
+    if (!entityIds.has(position.entityId)) offenders.push(`${position.id} belongs to unknown entity ${position.entityId}`);
+    shortByInstrument.set(position.instrumentId, (shortByInstrument.get(position.instrumentId) ?? 0) + position.shares);
+  }
+  for (const [instrumentId, sharesShort] of shortByInstrument) {
+    const floatShares = floatByInstrument.get(instrumentId) ?? 0;
+    const cap = Math.floor((floatShares * SHORT_INTEREST_CAP_PCT) / 100);
+    if (sharesShort > cap) offenders.push(`${instrumentId} is short ${sharesShort} shares against a cap of ${cap}`);
+  }
+
+  // The reconstruction. `dryPowderDeltaUsd` on the row that caused the movement
+  // is the only thing read: nothing is inferred, and a row that omits it simply
+  // does not contribute, which is what turns a silent drift into a failure here
+  // rather than into an accepted quarter.
+  const declared = dryPowderMovementsFromLedger(events);
+  const openingById = new Map((opening.capitalEntities ?? []).map((entity) => [entity.id, entity] as const));
+  let reconciled = 0;
+  for (const entity of entities) {
+    const before = openingById.get(entity.id);
+    if (before === undefined) continue;
+    const moved = entity.dryPowderUsd - before.dryPowderUsd;
+    const explained = declared.get(entity.id) ?? 0;
+    reconciled += 1;
+    if (Math.abs(moved - explained) > 1) {
+      offenders.push(`${entity.id} dry powder moved ${moved} but the ledger explains ${explained}`);
+    }
+  }
+
+  return offenders.length === 0
+    ? pass(
+        'capital_integrity',
+        `${entities.length} capital entities and ${shorts.length} short positions reconcile; ${reconciled} dry-powder balances move only by what the ledger explains, and no short sits outside its cap.`,
+      )
+    : fail('capital_integrity', `Capital state does not reconcile: ${offenders.slice(0, 3).join('; ')}`, firstId(offenders));
+}
+
+/**
+ * Reduce the quarter's rows to a per-entity statement of dry-powder movement.
+ *
+ * The closed set, and it is deliberately small: `funding_round_closed` (a cheque
+ * written), `shares_traded` (a position bought or sold), `short_position_opened`
+ * (margin posted), `short_position_covered` (margin and profit returned),
+ * `borrow_cost_charged`, `capital_entity_marked` (the management fee) and
+ * `dividend_paid` (a distribution reaching a fund holder). Anything else a desk
+ * ever does to its own cash has to join this list or fail the gate, which is the
+ * point of having it.
+ */
+function dryPowderMovementsFromLedger(events: readonly SimEvent[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const add = (entityId: unknown, delta: unknown): void => {
+    if (typeof entityId !== 'string' || entityId.length === 0) return;
+    if (typeof delta !== 'number' || !Number.isFinite(delta)) return;
+    out.set(entityId, (out.get(entityId) ?? 0) + delta);
+  };
+
+  for (const event of events) {
+    switch (event.type) {
+      case 'funding_round_closed':
+      case 'shares_traded':
+      case 'short_position_opened':
+      case 'short_position_covered':
+      case 'borrow_cost_charged':
+      case 'capital_entity_marked':
+      case 'acquisition_completed':
+        add(event.payload.entityId, event.payload.dryPowderDeltaUsd);
+        break;
+      case 'dividend_paid': {
+        const recipients = event.payload.fundRecipients;
+        if (!Array.isArray(recipients)) break;
+        for (const recipient of recipients) {
+          if (typeof recipient !== 'object' || recipient === null) continue;
+          const row = recipient as { holderId?: unknown; dryPowderDeltaUsd?: unknown };
+          add(row.holderId, row.dryPowderDeltaUsd);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
 }
 
 /* -------------------------------------------------------------------------- */

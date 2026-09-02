@@ -374,7 +374,19 @@ export function buildV2Company(seed: V2CompanySeed): Company {
   };
 }
 
-/** The institutional blocs that appear on the registers, one per region. */
+/**
+ * The institutional blocs. The first six appear on the opening registers, one
+ * per region, and were seeded before capital entities existed.
+ *
+ * The last five are new institutions with no opening holdings whatsoever: they
+ * arrive as cash looking for a home, which is both the right story — the
+ * incumbents own the past, the newcomers have the dry powder — and the reason
+ * every existing world-2 register is unchanged by one share.
+ *
+ * These ids are load-bearing: a `CapitalEntity.id` **is** the cap-table holder
+ * id, so renaming one here would orphan every holding and every director's
+ * `representedHolderId` that points at it.
+ */
 export const V2_FUNDS = {
   seawall: 'fund_seawall',
   tessera: 'fund_tessera',
@@ -382,6 +394,12 @@ export const V2_FUNDS = {
   indus: 'fund_indus',
   qadr: 'fund_qadr',
   altiplano: 'fund_altiplano',
+  // New in the capital-entity roster. No opening holdings.
+  ironwood: 'fund_ironwood',
+  grantwood: 'fund_grantwood',
+  straits: 'fund_straits',
+  coldbrook: 'fund_coldbrook',
+  perihelion: 'fund_perihelion',
 } as const;
 
 /** Which bloc backs a company, by where it is. Deterministic; no draw. */

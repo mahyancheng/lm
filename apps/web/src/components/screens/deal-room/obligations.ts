@@ -24,7 +24,22 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
   consortium_membership: 'Consortium membership',
   investment: 'Investment',
   price_accord: 'Price accord',
+  // Written by a capital desk, never by the player: these two appear in the
+  // offers a fund sends and are read here, not drafted here.
+  term_sheet: 'Term sheet',
+  buyout_offer: 'Buyout offer',
 };
+
+/**
+ * The kinds the builder offers.
+ *
+ * A term sheet and a buyout offer are made *to* the player by an institution
+ * that computed every number on them; there is nothing for a drafting form to
+ * do with either, so neither appears in the picker.
+ */
+export const BUILDABLE_OBLIGATION_KINDS: readonly ObligationKind[] = DEAL_OBLIGATION_KINDS.filter(
+  (kind) => kind !== 'term_sheet' && kind !== 'buyout_offer',
+);
 
 export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
   compute_supply: 'The supplier must actually hold the capacity every quarter, or be in breach.',
@@ -35,6 +50,8 @@ export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
   public_endorsement: 'Spends the endorser’s credibility with their own audiences.',
   consortium_membership: 'How a specialist reaches a programme it could not deliver alone.',
   investment: 'Capital for equity. Creates or transfers shares depending on the security.',
+  term_sheet: 'A priced offer of primary capital. Every number on it was computed by the fund, and it is answerable next quarter.',
+  buyout_offer: 'An approach to buy control. The premium is struck over the higher of your last close and your fundamental anchor.',
   price_accord: 'Every member earns a bonus on the part of its revenue the sector chain reprices — and carries the antitrust exposure of a cartel.',
 };
 
@@ -64,6 +81,8 @@ export function blankObligation(kind: ObligationKind, quarter: number): DealObli
       return { kind, amount: 0, securityId: '' };
     case 'price_accord':
       return { kind, sector: 'ai' as Sector, memberCompanyIds: [], quarters: 4 };
+    // Not buildable: a desk computes these. Falling through to a cash payment
+    // is deliberate — the picker never offers them, so this is unreachable.
     default:
       return { kind: 'cash_payment', amount: 0 };
   }
@@ -90,6 +109,10 @@ export function describeObligation(obligation: DealObligation): string {
       return `${formatMoney(obligation.amount)} invested for ${obligation.securityId || 'an unnamed security'}`;
     case 'price_accord':
       return `A ${obligation.sector} price accord between ${obligation.memberCompanyIds.length || 'no'} companies for ${obligation.quarters} quarters`;
+    case 'term_sheet':
+      return `${formatMoney(obligation.amountUsd)} at ${formatMoney(obligation.preMoneyUsd)} pre-money for ${obligation.dilutionPct}%, ${obligation.boardSeats} board seat(s)`;
+    case 'buyout_offer':
+      return `${formatMoney(obligation.offerValueUsd)} for control, ${obligation.premiumPct}% over the mark`;
     default:
       return 'An obligation';
   }

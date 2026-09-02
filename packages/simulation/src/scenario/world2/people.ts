@@ -12,8 +12,8 @@
  * who works somewhere else.
  */
 
-import type { Board, Character, SocialAccount } from '@frontier/contracts';
-import { DEFAULT_QUORUM_RULE, makeId } from '@frontier/contracts';
+import type { Board, CapitalEntity, CapitalEntityKind, Character, FundingStage, MemoryKind, Region, SocialAccount } from '@frontier/contracts';
+import { CapitalEntitySchema, DEFAULT_QUORUM_RULE, dryPowderFromPct, fullSectorAffinity, makeId } from '@frontier/contracts';
 import { V2_COMPANY_SEEDS, V2_FUNDS, W2_COMPANIES, W2_FOUNDERS } from './seeds';
 import { W2_PLAYER_BOARD_ID, W2_PLAYER_CHARACTER_ID } from './player';
 
@@ -32,6 +32,16 @@ export const W2_CHARACTERS = {
   asha: 'chr_asha_rege',
   tariq: 'chr_tariq_almuhairi',
   ricardo: 'chr_ricardo_salas',
+  // The five partners who arrive with the capital-entity roster. Every one is
+  // seeded at a connection level BELOW the incumbents, so a first-quarter
+  // founder can actually reach one of them under the connection gap rule.
+  // A roster sitting entirely at 90+ would make the offers inbox the only way
+  // to meet anybody, which defeats the Network screen.
+  britt: 'chr_britt_halvorsen',
+  ellis: 'chr_ellis_maddox',
+  ken: 'chr_ken_sarawan',
+  dov: 'chr_dov_ferreira',
+  nadia: 'chr_nadia_brandt',
   ingrid: 'chr_ingrid_solheim',
   paul: 'chr_paul_okoye',
   nan: 'chr_nan_zhao',
@@ -42,7 +52,11 @@ export const W2_CHARACTERS = {
   player: W2_PLAYER_CHARACTER_ID,
 } as const;
 
-/** Which fund each investor character speaks for, for board representation. */
+/**
+ * Which investor character speaks for each fund, for board representation and
+ * for every word a partner says. One entry per entity on the roster: a fund
+ * without a partner has nobody to negotiate with, which the roster test pins.
+ */
 export const W2_FUND_PRINCIPALS: Readonly<Record<string, string>> = {
   [V2_FUNDS.seawall]: W2_CHARACTERS.helena,
   [V2_FUNDS.tessera]: W2_CHARACTERS.stefan,
@@ -50,6 +64,11 @@ export const W2_FUND_PRINCIPALS: Readonly<Record<string, string>> = {
   [V2_FUNDS.indus]: W2_CHARACTERS.asha,
   [V2_FUNDS.qadr]: W2_CHARACTERS.tariq,
   [V2_FUNDS.altiplano]: W2_CHARACTERS.ricardo,
+  [V2_FUNDS.ironwood]: W2_CHARACTERS.britt,
+  [V2_FUNDS.grantwood]: W2_CHARACTERS.ellis,
+  [V2_FUNDS.straits]: W2_CHARACTERS.ken,
+  [V2_FUNDS.coldbrook]: W2_CHARACTERS.dov,
+  [V2_FUNDS.perihelion]: W2_CHARACTERS.nadia,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -492,6 +511,90 @@ const CAST_SEEDS: readonly CastSeed[] = [
       { topic: 'government_demand', level: 'low' },
     ],
   },
+  // --- the five partners who arrive with the capital-entity roster ---------
+  //
+  // Connection levels descend deliberately: Ellis Maddox at 82 is a name a
+  // successful founder eventually reaches, and Britt Halvorsen at 58 is the
+  // door a first-quarter founder can actually walk through. Nobody here is
+  // seeded above the incumbents.
+  {
+    id: W2_CHARACTERS.ellis,
+    name: 'Ellis Maddox',
+    role: 'investor',
+    title: 'Managing Partner — Grantwood Partners',
+    traits: [52, 46, 84, 81, 66],
+    connection: 82,
+    wealth: 620 * M,
+    boards: 6,
+    following: 9_400,
+    beliefs: [
+      { topic: 'consolidation_inevitable', level: 'high' },
+      { topic: 'market_bubble', level: 'high' },
+    ],
+  },
+  {
+    id: W2_CHARACTERS.ken,
+    name: 'Ken Sarawan',
+    role: 'investor',
+    title: 'Partner — Straits Industrial Partners',
+    traits: [48, 58, 76, 62, 44],
+    connection: 70,
+    wealth: 210 * M,
+    boards: 4,
+    following: 5_100,
+    beliefs: [
+      { topic: 'consolidation_inevitable', level: 'high' },
+      { topic: 'geopolitical_risk', level: 'medium' },
+    ],
+  },
+  {
+    id: W2_CHARACTERS.dov,
+    name: 'Dov Ferreira',
+    role: 'investor',
+    title: 'Chief Investment Officer — Coldbrook Capital',
+    traits: [71, 74, 61, 88, 58],
+    connection: 68,
+    // A large following for a small fund: a desk that publishes its arguments
+    // is read far more widely than one that does not, and the credibility of
+    // what it publishes is what its track record is spent on.
+    wealth: 180 * M,
+    boards: 1,
+    following: 240_000,
+    beliefs: [
+      { topic: 'market_bubble', level: 'high' },
+      { topic: 'frontier_progress', level: 'low' },
+    ],
+  },
+  {
+    id: W2_CHARACTERS.nadia,
+    name: 'Nadia Brandt',
+    role: 'investor',
+    title: 'Partner — Perihelion Capital',
+    traits: [66, 69, 58, 72, 47],
+    connection: 64,
+    wealth: 88 * M,
+    boards: 1,
+    following: 34_000,
+    beliefs: [
+      { topic: 'consolidation_inevitable', level: 'high' },
+      { topic: 'ai_regulation_risk', level: 'medium' },
+    ],
+  },
+  {
+    id: W2_CHARACTERS.britt,
+    name: 'Britt Halvorsen',
+    role: 'investor',
+    title: 'Founding Partner — Ironwood Ventures',
+    traits: [78, 84, 42, 51, 34],
+    connection: 58,
+    wealth: 38 * M,
+    boards: 2,
+    following: 6_500,
+    beliefs: [
+      { topic: 'frontier_progress', level: 'high' },
+      { topic: 'talent_war', level: 'medium' },
+    ],
+  },
   {
     id: W2_CHARACTERS.ingrid,
     name: 'Ingrid Solheim',
@@ -823,7 +926,7 @@ interface MemoryRow {
   readonly ownerCharacterId: string;
   readonly aboutId: string;
   readonly quarter: number;
-  readonly kind: 'betrayal' | 'favour' | 'poach' | 'negotiation' | 'board_vote' | 'media_moment';
+  readonly kind: MemoryKind;
   readonly summary: string;
   readonly sentiment: number;
   readonly decayRate: number;
@@ -886,6 +989,63 @@ export const W2_MEMORIES: readonly MemoryRow[] = [
     decayRate: 0.06,
     strength: 0.88,
   },
+  // The new partners arrive with history, because a desk with no memory is a
+  // function you call rather than somebody you deal with.
+  {
+    id: 'mem_ellis_wrenford_refusal',
+    ownerCharacterId: W2_CHARACTERS.ellis,
+    aboutId: W2_FOUNDERS.wrenford,
+    quarter: 0,
+    kind: 'negotiation',
+    summary: 'Clara turned down our approach at a forty per cent premium and told the room she would rather run it badly herself.',
+    sentiment: -0.42,
+    decayRate: 0.02,
+    strength: 0.81,
+  },
+  {
+    id: 'mem_dov_lumen_report',
+    ownerCharacterId: W2_CHARACTERS.dov,
+    aboutId: W2_FOUNDERS.lumen,
+    quarter: 0,
+    kind: 'public_attack',
+    summary: 'We published on their recall exposure two quarters before it broke, and the stock is still above where we wrote it.',
+    sentiment: -0.51,
+    decayRate: 0.03,
+    strength: 0.77,
+  },
+  {
+    id: 'mem_britt_ironvale_pass',
+    ownerCharacterId: W2_CHARACTERS.britt,
+    aboutId: W2_FOUNDERS.ironvale,
+    quarter: 0,
+    kind: 'investment',
+    summary: 'I passed on their seed round because the manipulation stack was a demo. It was the most expensive judgement of my career.',
+    sentiment: -0.34,
+    decayRate: 0.01,
+    strength: 0.88,
+  },
+  {
+    id: 'mem_ken_harbourline_lanes',
+    ownerCharacterId: W2_CHARACTERS.ken,
+    aboutId: W2_FOUNDERS.harbourline,
+    quarter: 0,
+    kind: 'deal_kept',
+    summary: 'They held the freight rate they promised us through two quarters of fuel spikes without asking for a renegotiation.',
+    sentiment: 0.62,
+    decayRate: 0.05,
+    strength: 0.71,
+  },
+  {
+    id: 'mem_nadia_qanat_award',
+    ownerCharacterId: W2_CHARACTERS.nadia,
+    aboutId: W2_FOUNDERS.qanat,
+    quarter: 0,
+    kind: 'contract_win',
+    summary: 'Their backlog announcement moved the whole energy tape and we were positioned for it three days early. The record was public.',
+    sentiment: 0.48,
+    decayRate: 0.06,
+    strength: 0.64,
+  },
   {
     id: 'mem_lumen_media_moment',
     ownerCharacterId: W2_FOUNDERS.lumen,
@@ -898,6 +1058,277 @@ export const W2_MEMORIES: readonly MemoryRow[] = [
     strength: 0.79,
   },
 ];
+
+/* -------------------------------------------------------------------------- */
+/*  Capital entities                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The eleven institutions, in declared order. Order is load-bearing: every tie
+ * in the capital desks breaks by this order and then by company id, which is
+ * how eleven desks scoring twenty-five companies stays deterministic without
+ * touching the RNG at all.
+ *
+ * Two rules the roster obeys and the tests pin:
+ *
+ * - **The six incumbents keep their ids and their names.** An entity id IS the
+ *   cap-table holder id, so renaming one would rewrite every world-2 register
+ *   and every director's `representedHolderId` for the sake of tidiness.
+ * - **The five newcomers take no opening holdings.** World 2's registers do not
+ *   change by one share, and they arrive as dry powder looking for a home.
+ *
+ * Vintages are negative because these funds existed before the session did.
+ * They are spread across the clock on purpose: Ironwood is two quarters old and
+ * hungry, Tessera and Altiplano are already harvesting, and Altiplano reaches
+ * the forced band inside the first four years if it distributes nothing — which
+ * is a buying window a player can see coming rather than one that is drawn.
+ */
+interface CapitalEntitySeed {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: CapitalEntityKind;
+  readonly region: Region;
+  readonly stageBand: readonly [FundingStage, FundingStage];
+  readonly thesis: string;
+  /** Committed capital in whole dollars. */
+  readonly aum: number;
+  /** Dry powder as a whole percentage of committed capital. */
+  readonly dryPowderPct: number;
+  /** Cumulative cash already returned to LPs, as a whole percentage of committed capital. */
+  readonly realisedPct: number;
+  /** Quarters before quarter zero that the fund was struck. */
+  readonly ageQuarters: number;
+  readonly exitHorizonQuarters: number;
+  readonly riskAppetite: number;
+  readonly trackRecord: number;
+  /** Appetite per sector, 0..100, in SECTORS order: ai, robotics, manufacturing, energy, logistics, consumer. */
+  readonly affinity: readonly [number, number, number, number, number, number];
+  readonly partnerCharacterId: string;
+}
+
+const GROWTH_ONLY: readonly [FundingStage, FundingStage] = ['growth', 'growth'];
+
+export const V2_CAPITAL_ENTITY_SEEDS: readonly CapitalEntitySeed[] = [
+  {
+    id: V2_FUNDS.seawall,
+    name: 'Seawall Capital',
+    kind: 'vc',
+    region: 'north_america',
+    stageBand: ['series_a', 'growth'],
+    thesis: 'The biggest cheque in the game, from series A to growth. We back the company everyone will want in four years, and we take the board seat.',
+    aum: 18 * BN,
+    dryPowderPct: 55,
+    realisedPct: 40,
+    ageQuarters: 26,
+    exitHorizonQuarters: 20,
+    riskAppetite: 72,
+    trackRecord: 82,
+    affinity: [88, 72, 44, 38, 41, 63],
+    partnerCharacterId: W2_CHARACTERS.helena,
+  },
+  {
+    id: V2_FUNDS.indus,
+    name: 'Indus Growth',
+    kind: 'vc',
+    region: 'south_asia',
+    stageBand: ['series_c', 'growth'],
+    thesis: 'Growth capital for businesses that already sell something. We price on revenue quality, and we have never once paid for a story.',
+    aum: 2_400 * M,
+    dryPowderPct: 60,
+    realisedPct: 15,
+    ageQuarters: 14,
+    exitHorizonQuarters: 16,
+    riskAppetite: 58,
+    trackRecord: 61,
+    affinity: [74, 46, 52, 44, 61, 70],
+    partnerCharacterId: W2_CHARACTERS.asha,
+  },
+  {
+    id: V2_FUNDS.altiplano,
+    name: 'Altiplano Capital',
+    kind: 'vc',
+    region: 'latin_america',
+    stageBand: ['seed', 'series_a'],
+    thesis: 'Small cheques written early, in companies the crossover funds cannot find yet. Our LPs have been patient for eight years.',
+    aum: 900 * M,
+    dryPowderPct: 65,
+    realisedPct: 30,
+    ageQuarters: 34,
+    exitHorizonQuarters: 20,
+    riskAppetite: 76,
+    trackRecord: 54,
+    affinity: [66, 41, 48, 57, 62, 74],
+    partnerCharacterId: W2_CHARACTERS.ricardo,
+  },
+  {
+    id: V2_FUNDS.ironwood,
+    name: 'Ironwood Ventures',
+    kind: 'vc',
+    region: 'europe',
+    stageBand: ['seed', 'series_b'],
+    thesis: 'Deep tech in Europe: robotics, and the factories that build them. We are new, we are patient, and the whole fund is still in the bank.',
+    aum: 600 * M,
+    dryPowderPct: 70,
+    realisedPct: 0,
+    ageQuarters: 2,
+    exitHorizonQuarters: 24,
+    riskAppetite: 81,
+    trackRecord: 44,
+    affinity: [58, 91, 84, 46, 39, 22],
+    partnerCharacterId: W2_CHARACTERS.britt,
+  },
+  {
+    id: V2_FUNDS.tessera,
+    name: 'Tessera Industrial',
+    kind: 'pe',
+    region: 'europe',
+    stageBand: GROWTH_ONLY,
+    thesis: 'We buy control of industrial businesses, put them together, and run them properly. Growth is somebody else\'s word for hope.',
+    aum: 9 * BN,
+    dryPowderPct: 40,
+    realisedPct: 25,
+    ageQuarters: 30,
+    exitHorizonQuarters: 20,
+    riskAppetite: 44,
+    trackRecord: 71,
+    affinity: [31, 58, 92, 54, 86, 37],
+    partnerCharacterId: W2_CHARACTERS.stefan,
+  },
+  {
+    id: V2_FUNDS.grantwood,
+    name: 'Grantwood Partners',
+    kind: 'pe',
+    region: 'north_america',
+    stageBand: GROWTH_ONLY,
+    thesis: 'Large-cap take-privates. If your shares trade below what your cash flows are worth, that is our opportunity, not your misfortune.',
+    aum: 14 * BN,
+    dryPowderPct: 45,
+    realisedPct: 5,
+    ageQuarters: 6,
+    exitHorizonQuarters: 18,
+    riskAppetite: 52,
+    trackRecord: 78,
+    affinity: [62, 51, 78, 66, 74, 69],
+    partnerCharacterId: W2_CHARACTERS.ellis,
+  },
+  {
+    id: V2_FUNDS.straits,
+    name: 'Straits Industrial Partners',
+    kind: 'pe',
+    region: 'east_asia',
+    stageBand: GROWTH_ONLY,
+    thesis: 'Mid-market roll-ups across energy and freight. Five good companies in one sector beat one great company in five.',
+    aum: 5 * BN,
+    dryPowderPct: 50,
+    realisedPct: 30,
+    ageQuarters: 18,
+    exitHorizonQuarters: 20,
+    riskAppetite: 49,
+    trackRecord: 58,
+    affinity: [34, 55, 71, 88, 90, 41],
+    partnerCharacterId: W2_CHARACTERS.ken,
+  },
+  {
+    id: V2_FUNDS.kaido,
+    name: 'Kaido Partners',
+    kind: 'hedge_fund',
+    region: 'east_asia',
+    stageBand: GROWTH_ONLY,
+    thesis: 'We take large minority stakes and then we take the seat. Boards improve when somebody in the room owns ten per cent of it.',
+    aum: 6 * BN,
+    dryPowderPct: 55,
+    realisedPct: 40,
+    ageQuarters: 24,
+    exitHorizonQuarters: 8,
+    riskAppetite: 68,
+    trackRecord: 74,
+    affinity: [76, 68, 63, 49, 57, 66],
+    partnerCharacterId: W2_CHARACTERS.meilan,
+  },
+  {
+    id: V2_FUNDS.coldbrook,
+    name: 'Coldbrook Capital',
+    kind: 'hedge_fund',
+    region: 'north_america',
+    stageBand: GROWTH_ONLY,
+    thesis: 'Long the businesses that earn it, short the ones that do not, and we publish our reasons for both. Being wrong in public is the cost.',
+    aum: 3_200 * M,
+    dryPowderPct: 70,
+    realisedPct: 20,
+    ageQuarters: 10,
+    exitHorizonQuarters: 6,
+    riskAppetite: 74,
+    trackRecord: 66,
+    affinity: [84, 62, 47, 41, 44, 71],
+    partnerCharacterId: W2_CHARACTERS.dov,
+  },
+  {
+    id: V2_FUNDS.perihelion,
+    name: 'Perihelion Capital',
+    kind: 'hedge_fund',
+    region: 'europe',
+    stageBand: GROWTH_ONLY,
+    thesis: 'We trade the public record. Every merger, award and remedy is a price somebody else has not finished adjusting to.',
+    aum: 2 * BN,
+    dryPowderPct: 75,
+    realisedPct: 5,
+    ageQuarters: 4,
+    exitHorizonQuarters: 4,
+    riskAppetite: 63,
+    trackRecord: 57,
+    affinity: [69, 58, 66, 63, 68, 58],
+    partnerCharacterId: W2_CHARACTERS.nadia,
+  },
+  {
+    id: V2_FUNDS.qadr,
+    name: 'Qadr Sovereign Fund',
+    kind: 'sovereign',
+    region: 'middle_east',
+    stageBand: GROWTH_ONLY,
+    thesis: 'Forty years, no leverage, never above a quarter of anything. When everybody else is a forced seller, we are the bid.',
+    aum: 40 * BN,
+    dryPowderPct: 30,
+    realisedPct: 30,
+    ageQuarters: 34,
+    exitHorizonQuarters: 60,
+    riskAppetite: 24,
+    trackRecord: 69,
+    affinity: [44, 39, 68, 96, 81, 28],
+    partnerCharacterId: W2_CHARACTERS.tariq,
+  },
+];
+
+/**
+ * The roster as parsed `CapitalEntity` rows. Every figure is a whole number
+ * derived from a constant by a pure function; nothing here reads a clock or a
+ * random stream, so the same setup builds a byte-identical roster every time.
+ */
+export function buildV2CapitalEntities(): CapitalEntity[] {
+  return V2_CAPITAL_ENTITY_SEEDS.map((seed) => {
+    const aum = Math.round(seed.aum);
+    const [ai, robotics, manufacturing, energy, logistics, consumer] = seed.affinity;
+    return CapitalEntitySchema.parse({
+      id: seed.id,
+      name: seed.name,
+      kind: seed.kind,
+      region: seed.region,
+      sectorAffinity: fullSectorAffinity({ ai, robotics, manufacturing, energy, logistics, consumer }),
+      stageBand: [seed.stageBand[0], seed.stageBand[1]],
+      thesis: seed.thesis,
+      committedCapitalUsd: aum,
+      dryPowderUsd: dryPowderFromPct(aum, seed.dryPowderPct),
+      realisedProceedsUsd: dryPowderFromPct(aum, seed.realisedPct),
+      // Negative: the fund was struck before the session opened. This is what
+      // gives eleven institutions eleven different positions on the LP clock at
+      // quarter zero instead of eleven identical ones.
+      vintageQuarter: -seed.ageQuarters,
+      exitHorizonQuarters: seed.exitHorizonQuarters,
+      riskAppetite: seed.riskAppetite,
+      trackRecord: seed.trackRecord,
+      partnerCharacterIds: [seed.partnerCharacterId],
+    });
+  });
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Social                                                                     */

@@ -43,6 +43,7 @@
 
 import type { Company, ResolverContext, SessionState } from '@frontier/contracts';
 import {
+  CONTROL_DECISIVE_PCT,
   REGIONS,
   SECTORS,
   SECTOR_META,
@@ -135,12 +136,50 @@ export function ultimateControllerId(state: SessionState, company: Company): str
   let current = company;
   for (let step = 0; step < MAX_GROUP_DEPTH; step += 1) {
     const parentId = current.parentCompanyId;
-    if (parentId === null || parentId === current.id) return current.id;
+    if (parentId === null || parentId === current.id) return sponsorRootOf(state, current);
     const parent = state.companies.find((candidate) => candidate.id === parentId);
-    if (parent === undefined) return current.id;
+    if (parent === undefined) return sponsorRootOf(state, current);
     current = parent;
   }
-  return current.id;
+  return sponsorRootOf(state, current);
+}
+
+/**
+ * A capital entity that is decisive on the group root resolves as the group
+ * root itself.
+ *
+ * This is the one change in the capital subsystem that alters existing
+ * behaviour, and it is what makes a sponsor's roll-up a real group: five
+ * logistics businesses under one buyout fund charge a toll the sponsor's own
+ * portfolio does not pay, exactly as five under one holding company would. It is
+ * gated on the multi-sector world and on the roster actually existing, so a
+ * world-1 session and any world-2 session with no funds resolve as they always
+ * did — the loop above then returns `current.id` unchanged.
+ *
+ * A staggered board buys the incumbent time here too: a holder that has crossed
+ * control is not the group root until `STAGGERED_DELAY_QUARTERS` have run, which
+ * is precisely what the defence is for.
+ */
+function sponsorRootOf(state: SessionState, company: Company): string {
+  const roster = state.capitalEntities;
+  if (roster === undefined || roster.length === 0) return company.id;
+  const table = state.capTables.find((candidate) => candidate.companyId === company.id);
+  if (table === undefined) return company.id;
+  let issued = 0;
+  for (const klass of table.shareClasses) issued += klass.issuedShares;
+  if (issued <= 0) return company.id;
+
+  // Roster order, then holder id: the same tie-break every other ordering in the
+  // engine uses, so two funds at exactly 50% + 1 resolve the same way everywhere.
+  for (const entity of roster) {
+    if (!entity.isActive || entity.kind === 'sovereign') continue;
+    let held = 0;
+    for (const holding of table.holdings) {
+      if (holding.holderId === entity.id) held += holding.shares;
+    }
+    if (held / issued > CONTROL_DECISIVE_PCT) return entity.id;
+  }
+  return company.id;
 }
 
 /** Who dominates one region's freight, and by how much. */

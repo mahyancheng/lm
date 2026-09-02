@@ -532,10 +532,13 @@ export function requiresExplicitConfirmation(type: ActionType): boolean {
 /*  Submitted actions                                                          */
 /* -------------------------------------------------------------------------- */
 
-export const ACTION_ORIGINS = ['player_ui', 'chief_of_staff', 'npc_strategist', 'npc_default', 'board_execution', 'deal_execution'] as const;
+// Appended: 'sponsor' is a capital entity writing ordinary actions to a company
+// it controls — an operational squeeze, a recap, a payout policy. It faces the
+// same validator as everybody else; a fund has no private mechanics.
+export const ACTION_ORIGINS = ['player_ui', 'chief_of_staff', 'npc_strategist', 'npc_default', 'board_execution', 'deal_execution', 'sponsor'] as const;
 export const ActionOriginSchema = z
   .enum(ACTION_ORIGINS)
-  .describe('Where the action came from. Recorded so a replay can distinguish a decision the player clicked from one the Chief of Staff interpreted on their behalf.');
+  .describe('Where the action came from. Recorded so a replay can distinguish a decision the player clicked from one the Chief of Staff interpreted on their behalf, or one a controlling sponsor wrote into a portfolio company.');
 export type ActionOrigin = z.infer<typeof ActionOriginSchema>;
 
 export const SubmittedActionSchema = z

@@ -20,6 +20,7 @@ import {
   DataTable,
   EmptyState,
   Icon,
+  IconChip,
   PageHeader,
   Panel,
   PersonChip,
@@ -53,6 +54,10 @@ const BOARD_LABEL: Readonly<Record<LeaderboardBoard, string>> = {
   government: 'Government',
   reputation: 'Reputation',
   founder_index: 'Founder Index',
+  // The two institution boards. A player cannot enter either of them, which is
+  // the point: funds on the leaderboard is what makes them peers, not scenery.
+  capital_returns: 'Capital returns',
+  assets_under_management: 'Assets under management',
 };
 
 /**
@@ -74,6 +79,8 @@ const BOARD_ICON: Readonly<Record<LeaderboardBoard, IconName>> = {
   government: 'capitol',
   reputation: 'newspaper',
   founder_index: 'trophy',
+  capital_returns: 'chart',
+  assets_under_management: 'vault',
 };
 
 const BOARD_UNITS: Readonly<Record<LeaderboardBoard, Units>> = {
@@ -87,6 +94,8 @@ const BOARD_UNITS: Readonly<Record<LeaderboardBoard, Units>> = {
   government: 'score',
   reputation: 'score',
   founder_index: 'index',
+  capital_returns: 'score',
+  assets_under_management: 'money',
 };
 
 const BOARD_BLURB: Readonly<Record<LeaderboardBoard, string>> = {
@@ -100,6 +109,8 @@ const BOARD_BLURB: Readonly<Record<LeaderboardBoard, string>> = {
   government: 'Formal past performance plus what is actually on contract.',
   reputation: 'The plain mean of the five audience reputations.',
   founder_index: 'The composite. Eight percentiles, weighted; never raw dollars.',
+  capital_returns: 'Realised plus unrealised multiple, for the institutions. The one ranking you cannot enter.',
+  assets_under_management: 'Committed capital behind each institution. Raw size, and a fair warning.',
 };
 
 function formatValue(units: Units, value: number): string {
@@ -232,6 +243,18 @@ export default function LeaderboardPage(): React.JSX.Element {
             character={{ id: row.subjectId, name: row.label, isPlayer: row.subjectId === founder.id }}
             subtitle={row.subjectId === founder.id ? 'You' : undefined}
           />
+        ) : row.subjectKind === 'fund' ? (
+          // An institution is neither a person nor a company, and drawing it as
+          // a company chip would put a building on a thing with no building.
+          // The mark is the one The Street uses, so the two screens name the
+          // same actor the same way.
+          <span className="flex min-w-0 items-center gap-2">
+            <IconChip name="briefcase" tone="brand" />
+            <span className="min-w-0">
+              <span className="block truncate text-[12.5px] text-ink">{row.label}</span>
+              <span className="block truncate text-[10px] text-ink-faint">Institution</span>
+            </span>
+          </span>
         ) : (
           <CompanyChip
             size="sm"

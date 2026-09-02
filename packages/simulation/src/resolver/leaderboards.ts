@@ -16,6 +16,7 @@
  */
 
 import type {
+  CapitalEntity,
   Character,
   Company,
   Leaderboard,
@@ -30,7 +31,7 @@ import { percentileRanks } from '@frontier/shared';
 /** One subject's raw value on one board, before ranking. */
 interface Scored {
   readonly subjectId: string;
-  readonly subjectKind: 'player' | 'company' | 'character';
+  readonly subjectKind: 'player' | 'company' | 'character' | 'fund';
   readonly label: string;
   readonly value: number;
 }
@@ -48,6 +49,27 @@ const founders = (draft: SessionState): Character[] =>
     .sort((a, b) => compare(a.id, b.id));
 
 const metricsFor = (draft: SessionState, companyId: string) => draft.companyMetrics.find((m) => m.companyId === companyId) ?? null;
+
+/**
+ * The capital entities, in roster order.
+ *
+ * Absent in world 1, which is why the two institution boards below simply do not
+ * exist there rather than existing empty.
+ */
+const capitalEntities = (draft: SessionState): CapitalEntity[] => (draft.capitalEntities ?? []).filter((entity) => entity.isActive);
+
+/**
+ * Total value over money paid in, as a whole percentage: realised distributions
+ * plus what the quarter marked the fund at, against committed capital.
+ *
+ * Read off the economy report the mark already wrote, so this board never
+ * recomputes an economic number of its own — it ranks one.
+ */
+export function capitalReturnPct(draft: SessionState, entity: CapitalEntity): number {
+  const row = draft.economyReport?.capitalEntities.find((candidate) => candidate.entityId === entity.id) ?? null;
+  const nav = row?.navUsd ?? entity.dryPowderUsd;
+  return Math.round((100 * (entity.realisedProceedsUsd + nav)) / Math.max(1, entity.committedCapitalUsd));
+}
 
 /** Controlled enterprise value, from metrics where the phase before wrote them. */
 export function enterpriseValueOf(draft: SessionState, company: Company): number {
@@ -209,6 +231,18 @@ export function rebuildLeaderboards(draft: SessionState, ctx: ResolverContext): 
   scoresByBoard.set('founder_wealth', characterScores((character) => founderWealthOf(draft, character)));
   scoresByBoard.set('network', characterScores((character) => character.connectionLevel));
 
+  /* --- the two institution boards ----------------------------------------- */
+  // Funds on the leaderboard is what makes them peers rather than scenery. Both
+  // boards rank subjects the player cannot enter, which is the point: Capital
+  // Returns is the one ranking in the game that is somebody else's scoreboard.
+  const entities = capitalEntities(draft);
+  if (entities.length > 0) {
+    const entityScores = (value: (entity: CapitalEntity) => number): Scored[] =>
+      entities.map((entity) => ({ subjectId: entity.id, subjectKind: 'fund' as const, label: entity.name, value: value(entity) }));
+    scoresByBoard.set('capital_returns', entityScores((entity) => capitalReturnPct(draft, entity)));
+    scoresByBoard.set('assets_under_management', entityScores((entity) => entity.committedCapitalUsd));
+  }
+
   /* --- the composite ------------------------------------------------------ */
   const companyPercentile = (value: (company: Company) => number): Map<string, number> => {
     const values = companies.map(value);
@@ -247,7 +281,13 @@ export function rebuildLeaderboards(draft: SessionState, ctx: ResolverContext): 
   /* --- rank them ---------------------------------------------------------- */
   const boards: Leaderboard[] = [];
   for (const board of LEADERBOARD_BOARDS) {
-    const scores = scoresByBoard.get(board) ?? [];
+    // A board with no scorer is not built at all, rather than built empty. The
+    // two institution boards (capital_returns, assets_under_management) rank
+    // capital entities, which world 1 does not have and which no scorer has
+    // been registered for yet; an empty board on the screen would be worse than
+    // an absent one.
+    const scores = scoresByBoard.get(board);
+    if (scores === undefined) continue;
     boards.push({ board, quarter: draft.quarter, entries: rank(board, scores, previous) });
   }
   draft.leaderboards = boards;

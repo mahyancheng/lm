@@ -148,6 +148,25 @@ export default function NewsPage(): React.JSX.Element {
     [items, companyNames],
   );
 
+  // A fund speaks through its partner, so the feed needs the roster's partner
+  // ids to draw an institution's mark on what it publishes. Empty in a world
+  // with no institutional layer, which is exactly the gate that keeps the mark
+  // off every card in a world-version-1 session.
+  const fundPartnerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entity of view.economyReport?.capitalEntities ?? []) {
+      if (entity.partnerCharacterId !== null) ids.add(entity.partnerCharacterId);
+    }
+    return ids;
+  }, [view.economyReport]);
+  const fundNameByPartnerId = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const entity of view.economyReport?.capitalEntities ?? []) {
+      if (entity.partnerCharacterId !== null) names.set(entity.partnerCharacterId, entity.name);
+    }
+    return names;
+  }, [view.economyReport]);
+
   const context: FeedContext = useMemo(
     () => ({
       startYear: session.startYear,
@@ -158,13 +177,15 @@ export default function NewsPage(): React.JSX.Element {
       playerCharacterId: founder.id,
       playerCompanyId: company.id,
       headlines,
+      fundPartnerIds,
+      fundNameByPartnerId,
       mappedEventIds,
       onShowOnMap: (eventId: string) => {
         setFocusEventId(eventId);
         setTab('map');
       },
     }),
-    [session.startYear, characters, companyNames, companySectors, multiSector, founder.id, company.id, headlines, mappedEventIds],
+    [session.startYear, characters, companyNames, companySectors, multiSector, founder.id, company.id, headlines, mappedEventIds, fundPartnerIds, fundNameByPartnerId],
   );
 
   const media = view.world.media;

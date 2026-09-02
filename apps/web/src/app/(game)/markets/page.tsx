@@ -37,6 +37,7 @@ import {
 import { useGame, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { InstrumentDrawer } from '@/components/screens/markets/InstrumentDrawer';
 import { decompositionsFrom, type DecompositionView } from '@/components/screens/markets/decomposition';
+import { ShortInterestCard, shortInterestBadge } from '@/components/screens/street';
 import {
   registerRows,
   sectorCounts,
@@ -175,6 +176,15 @@ export default function MarketsPage(): React.JSX.Element {
     }
     return out.sort((a, b) => b.valueUsd - a.valueUsd);
   }, [session, view, company.id, founder.id]);
+
+  /* --- the institutional side --------------------------------------------- */
+
+  const shortRows = useMemo(() => view.economyReport?.shortInterest ?? [], [view.economyReport]);
+  const anySqueeze = shortRows.some((short) => shortInterestBadge(short).risk === 'fired');
+  const entityNameOf = useMemo(() => {
+    const names = new Map((view.economyReport?.capitalEntities ?? []).map((entry) => [entry.entityId, entry.name] as const));
+    return (entityId: string): string => names.get(entityId) ?? entityId;
+  }, [view.economyReport]);
 
   /* --- tables ------------------------------------------------------------- */
 
@@ -733,6 +743,33 @@ export default function MarketsPage(): React.JSX.Element {
           }
         />
       </Panel>
+
+      {/* --- the short book ---------------------------------------------------
+          One row per instrument with an open book: short interest as a whole
+          percentage against the cap, the borrow fee beside it, and a warning
+          badge where the squeeze condition is live. Absent entirely in a world
+          with no institutional layer — an empty panel would say something
+          untrue about a session that simply has no shorts in it. */}
+      {shortRows.length === 0 ? null : (
+        <Panel
+          iconName="chart"
+          iconTone="warn"
+          title="Short interest"
+          subtitle="What it costs to stay short rises with how crowded the trade is, which is why nobody sits short forever waiting to be right."
+          actions={<Tag tone={anySqueeze ? 'loss' : 'neutral'}>{shortRows.length} with an open book</Tag>}
+        >
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {shortRows.map((short) => (
+              <ShortInterestCard
+                key={short.instrumentId}
+                row={short}
+                companyName={companyNameOf(view, short.companyId)}
+                entityNameOf={entityNameOf}
+              />
+            ))}
+          </div>
+        </Panel>
+      )}
 
       {company.instrumentId === null ? (
         <Panel iconName="building" title="Your company is not listed" subtitle="Private companies are marked to their fundamental anchor.">

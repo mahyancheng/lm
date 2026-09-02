@@ -47,6 +47,7 @@ import { AlertFeed } from '@/components/screens/command-centre/AlertFeed';
 import { TapeStrip } from '@/components/screens/command-centre/TapeStrip';
 import { WorldStrip } from '@/components/screens/command-centre/WorldStrip';
 import { buildFeed } from '@/components/screens/command-centre/feed';
+import { answerableCount, buyoutOf, offerInbox, termSheetOf } from '@/components/screens/street';
 import { headcountOf, humanise } from '@/components/screens/reporting/util';
 
 /** Objective metrics measured in units rather than dollars. */
@@ -64,6 +65,7 @@ const QUICK_LINKS: readonly { href: string; label: string; blurb: string; icon: 
   { href: '/financials', label: 'Financials', blurb: 'P&L, balance sheet, cash flow', icon: 'ledger' },
   { href: '/markets', label: 'Markets', blurb: 'Tape, anchors, return decomposition', icon: 'chart' },
   { href: '/capital', label: 'Capital', blurb: 'Cap table, rounds, treasury', icon: 'coins' },
+  { href: '/street', label: 'The Street', blurb: 'Institutions, offers, short books', icon: 'briefcase' },
   { href: '/leaderboard', label: 'Leaderboard', blurb: 'Ten boards and the power graph', icon: 'trophy' },
   { href: '/news', label: 'News', blurb: 'The public record', icon: 'newspaper' },
   { href: '/end-quarter', label: 'End Quarter', blurb: 'Review and lock the submission', icon: 'stamp' },
@@ -91,6 +93,21 @@ export default function CommandCentrePage(): React.JSX.Element {
 
   const blocked = queued.filter((entry) => entry.blocked).length;
   const feed = useMemo(() => buildFeed(session, view, lastOutcome, blocked), [session, view, lastOutcome, blocked]);
+
+  // Capital offered to this company, and approaches made for it. Read from the
+  // same committed deals and campaigns The Street reads; the count is the one
+  // number a returning founder needs before they open the screen.
+  const offers = useMemo(
+    () =>
+      offerInbox({
+        deals: view.deals,
+        campaigns: session.activistCampaigns ?? [],
+        companyIds: new Set([company.id]),
+        quarter: session.quarter,
+      }),
+    [view.deals, session.activistCampaigns, session.quarter, company.id],
+  );
+  const offersToAnswer = answerableCount(offers);
 
   const listed = company.instrumentId !== null && ownQuotes.length > 0;
   const lastQuote = ownQuotes.length === 0 ? null : ownQuotes[ownQuotes.length - 1] ?? null;
@@ -226,6 +243,50 @@ export default function CommandCentrePage(): React.JSX.Element {
           >
             <AlertFeed items={feed} />
           </Panel>
+
+          {/* --- the offers inbox ------------------------------------------
+              A count and the top three, with the whole list one tap away. It
+              is absent in a session with no institutional layer, and absent in
+              a quarter with nothing on the table: an empty inbox panel would be
+              a heading with nothing under it. */}
+          {offers.length === 0 ? null : (
+            <Panel
+              title="Offers"
+              iconName="briefcase"
+              iconTone={offersToAnswer > 0 ? 'warn' : 'neutral'}
+              subtitle="Capital offered to you, and approaches made for you. An offer made this quarter is answerable next."
+              actions={
+                <Link href="/street" className="btn btn-ghost tap-target gap-1.5 px-2">
+                  <Icon name="briefcase" size={15} accent="current" />
+                  Open The Street
+                </Link>
+              }
+            >
+              <ul className="flex flex-col gap-2">
+                {offers.slice(0, 3).map((offer) => {
+                  const sheet = offer.deal === null ? null : termSheetOf(offer.deal);
+                  const buyout = offer.deal === null ? null : buyoutOf(offer.deal);
+                  return (
+                    <li key={offer.id} className="raised-surface flex flex-wrap items-baseline justify-between gap-2 px-2.5 py-2">
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">
+                        {sheet === null
+                          ? buyout === null
+                            ? 'An activist campaign is open against you'
+                            : `An approach at ${formatMoney(buyout.offerValueUsd)}, ${buyout.premiumPct}% over the mark`
+                          : `${formatMoney(sheet.amountUsd)} at ${formatMoney(sheet.preMoneyUsd)} pre-money for ${sheet.dilutionPct}%`}
+                      </span>
+                      <Tag tone={offer.isAnswerable ? 'warn' : 'neutral'} dot>
+                        {offer.isAnswerable ? 'answer now' : `from ${quarterLabel(session.startYear, offer.answerableFromQuarter)}`}
+                      </Tag>
+                    </li>
+                  );
+                })}
+              </ul>
+              {offers.length > 3 ? (
+                <p className="mt-2 text-[11px] text-ink-faint">{offers.length - 3} more on The Street.</p>
+              ) : null}
+            </Panel>
+          )}
 
           <Panel
             title="Tape"

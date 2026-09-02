@@ -224,6 +224,17 @@ export function projectEconomyReportForPlayer(session: SessionState, playerId: s
   const audience = audienceFor(session, playerId);
   const own = (companyId: string): boolean => audience.companyIds.has(companyId) || audience.informationRightCompanyIds.has(companyId);
 
+  // A capital entity's card is public — AUM, dry powder, thesis, LP pressure and
+  // track record are what The Street is for. Its *positions* are not: below the
+  // disclosure threshold a row is absent, never blurred and never summarised,
+  // which is the same redaction rule the public record already holds. The short
+  // count is rebuilt from the disclosed short-interest rows for the same reason:
+  // the entity's own count would otherwise leak an undisclosed short.
+  const disclosedShortCount = new Map<string, number>();
+  for (const row of report.shortInterest) {
+    for (const entityId of row.disclosedEntityIds) disclosedShortCount.set(entityId, (disclosedShortCount.get(entityId) ?? 0) + 1);
+  }
+
   return {
     quarter: report.quarter,
     sectorPrices: report.sectorPrices,
@@ -235,5 +246,8 @@ export function projectEconomyReportForPlayer(session: SessionState, playerId: s
     rivalPressure: report.rivalPressure.filter((row) => own(row.companyId)),
     dividends: report.dividends.filter((row) => own(row.companyId)),
     control: report.control.filter((row) => own(row.companyId) || audience.companyIds.has(row.holderId) || audience.characterIds.has(row.holderId)),
+    capitalEntities: report.capitalEntities.map((row) => ({ ...row, shortCount: disclosedShortCount.get(row.entityId) ?? 0 })),
+    capitalPositions: report.capitalPositions.filter((row) => row.isDisclosed || own(row.companyId)),
+    shortInterest: report.shortInterest.map((row) => ({ ...row, disclosedEntityIds: [...row.disclosedEntityIds] })),
   };
 }

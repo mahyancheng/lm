@@ -27,7 +27,7 @@ import type {
   Subsystems,
   WorldEventCandidate,
 } from '@frontier/contracts';
-import { RESOLUTION_PHASES, ResolutionReportSchema, SessionSnapshotSchema, SessionStateSchema, SimEventSchema, balanceSheetReconciles, makeId } from '@frontier/contracts';
+import { RESOLUTION_PHASES, ResolutionReportSchema, SIMULATION_INVARIANTS, SessionSnapshotSchema, SessionStateSchema, SimEventSchema, balanceSheetReconciles, makeId } from '@frontier/contracts';
 import { createStateHasher } from '@frontier/shared';
 import type { NpcBundleInput } from '../src/resolver';
 import { InvariantViolationError, chainRowHash, createQuarterResolver, projectResolutionOutcomeForPlayer } from '../src/resolver';
@@ -1086,7 +1086,10 @@ describe('the invariant gate', () => {
     const outcome = resolve(createDemoSession(), makeStubs(), null);
     const failed = outcome.invariants.filter((result) => !result.passed);
     expect(failed).toEqual([]);
-    expect(outcome.invariants).toHaveLength(13);
+    // Fourteen since capital_integrity was appended. World 1 has no capital
+    // entities, so that check passes trivially — which is the point of it
+    // being a state check rather than a phase.
+    expect(outcome.invariants).toHaveLength(SIMULATION_INVARIANTS.length);
   });
 
   it('refuses to commit a quarter whose balance sheets do not reconcile', () => {

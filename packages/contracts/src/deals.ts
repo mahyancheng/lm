@@ -30,6 +30,7 @@
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, usd } from './ids';
 import { SectorSchema } from './sectors';
+import { FundingStageSchema } from './ownership';
 import { BoardProposalKindSchema, VoteStanceSchema } from './governance';
 
 /* -------------------------------------------------------------------------- */
@@ -47,6 +48,12 @@ export const DEAL_OBLIGATION_KINDS = [
   'investment',
   // Appended: the discriminated union below grows safely at the end.
   'price_accord',
+  // Capital entities. A term sheet and a buyout approach are deals, not a
+  // parallel offer pipeline: the deal path already proposes, accepts, rejects,
+  // expires and audits, and inventing a second one would be the worst decision
+  // available here. Offered in quarter t, answerable only in t+1.
+  'term_sheet',
+  'buyout_offer',
 ] as const;
 
 /**
@@ -126,6 +133,38 @@ export const DealObligationSchema = z
       })
       .describe(
         'Hold the sector price together. While it is active every member earns a bonus on the part of its revenue the sector chain reprices, scaled by the members\' combined share of the sector with a floor of five per cent — and every member carries the antitrust exposure that goes with it. An enforcement action suspends the accord for six quarters.',
+      ),
+    z
+      .object({
+        kind: z.literal('term_sheet'),
+        entityId: z.string().min(1).describe('The CapitalEntity offering, which is also the cap-table holder id the new shares will be issued to.'),
+        companyId: z.string().min(1).describe('Company being offered the money.'),
+        stage: FundingStageSchema.describe('Stage the round is priced as.'),
+        amountUsd: usd('The cheque. Already capped at the fund\'s stage share of committed capital and at a quarter of its remaining dry powder.'),
+        preMoneyUsd: usd('Pre-money valuation offered. The engine computed it from the sourcing score; a model never sets it.'),
+        dilutionPct: z.number().int().min(0).max(100).describe('Whole percentage of the company sold, equal to amount over post-money. The single economic dial on the card.'),
+        boardSeats: intCount('Board seats created for the investor. One at fifteen per cent dilution or more, otherwise none. The single control dial on the card.'),
+        proRata: z.boolean().describe('Whether the investor keeps the right to take its share of the next round. Standard from series_a on.'),
+        protectiveProvisions: z.boolean().describe('Whether the investor gains a veto over a defined set of matters. Standard at twenty per cent dilution or more.'),
+        liquidationPreferenceMultiple: z.number().min(0).max(5).describe('Multiple returned before common. Always 1 here: holding the preference constant is what leaves exactly one price dial and one control dial on a phone-sized card.'),
+        participating: z.boolean().describe('Whether the preference also shares in the residual. Always false here, which is the ordinary series A outcome.'),
+      })
+      .describe(
+        'A priced offer of primary capital from a capital entity, answerable in the quarter after it is made. Accepting it closes an ordinary funding round with a real lead investor; countering it inside the engine-computed band is accepted deterministically; rejecting it costs nothing the first time.',
+      ),
+    z
+      .object({
+        kind: z.literal('buyout_offer'),
+        entityId: z.string().min(1).describe('The sponsor. Also the cap-table holder id that will accumulate the stake.'),
+        targetCompanyId: z.string().min(1),
+        offerValueUsd: usd('Total consideration offered for the company.'),
+        premiumPct: z.number().int().min(0).max(100).describe('Whole percentage over the higher of last close and fundamental anchor. Bounded by the sponsor\'s own premium ceiling; a bear hug bumps it, it never runs away.'),
+        stage: z.enum(['private_approach', 'bear_hug', 'tender']).describe('Where the sequence has got to. A private approach is confidential; a bear hug is the same offer made public; a tender accumulates toward control in the open, one quarter at a time.'),
+        lboDebtUsd: usd('Debt to be placed on the target itself, capped at its trailing revenue and again at its net assets.'),
+        equityChequeUsd: usd('The sponsor\'s own money, drawn from dry powder. Offer value less the debt.'),
+      })
+      .describe(
+        'An approach to buy control of a company. It uses the takeover machinery that already exists — a controlling holder is already decisive on the board tally, and a block is already reachable at a premium — so this adds an offer, not a new verb.',
       ),
   ])
   .describe('One obligation. The set of obligations on each side is what makes a deal mechanically enforceable rather than a conversation.');

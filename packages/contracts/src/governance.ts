@@ -98,6 +98,17 @@ export const BoardSchema = z
     chairCharacterId: z.string().nullable().describe('Chair, or null when the seat is vacant.'),
     nextMeetingQuarter: QuarterIndexSchema.describe('Quarter the next scheduled meeting resolves.'),
     seatsAuthorised: z.number().int().min(1).max(15).describe('Total seats the charter permits, filled or vacant.'),
+    // Optional rather than defaulted, deliberately: a defaulted boolean would
+    // materialise on every frozen world-1 board the moment it parsed, and that
+    // world would stop hashing to the value it has always hashed to. Absent is
+    // the neutral reading — an unstaggered board — exactly as it is for the
+    // world-2 price maps in session.ts.
+    staggered: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when the charter staggers director terms, set at IPO or by a restructuring proposal. A holder that crosses control becomes decisive only STAGGERED_DELAY_QUARTERS later, which buys the incumbent two quarters and costs them an entrenchment reputation hit. Absent reads as false.',
+      ),
   })
   .describe('A company board.');
 export type Board = z.infer<typeof BoardSchema>;

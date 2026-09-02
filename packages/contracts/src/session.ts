@@ -33,6 +33,7 @@ import { ResearchProjectSchema, TechGraphSchema } from './tech';
 import { AccessOverrideSchema, CharacterSchema, ConversationMetadataSchema, MemorySchema, RelationshipSchema } from './people';
 import { MediaStorySchema, SocialAccountSchema, SocialPostSchema } from './social';
 import { DealProposalSchema } from './deals';
+import { ActivistCampaignSchema, CapitalEntitySchema, CapitalOrderSchema, MAX_CAPITAL_ENTITIES, ShortPositionSchema } from './capital';
 import { SubmittedActionSchema } from './actions';
 import { LeaderboardSchema, QuarterSnapshotSchema, SessionObjectiveSchema } from './sim';
 
@@ -661,6 +662,36 @@ export const SessionStateSchema = z
 
     // --- deals ---
     deals: z.array(DealProposalSchema).default([]),
+
+    // --- capital entities (world version 2 and later) ---
+    //
+    // Optional rather than defaulted, and for exactly the reason the price maps
+    // above are: a defaulted array would materialise as `[]` on every frozen
+    // world-1 save the moment it parsed, and that world would stop hashing to
+    // the value it has always hashed to. A world-1 session grows none of these
+    // keys and replays byte-identically. Absent is the neutral reading: no
+    // institutions, no shorts, no campaigns, no orders.
+    capitalEntities: z
+      .array(CapitalEntitySchema)
+      .max(MAX_CAPITAL_ENTITIES)
+      .optional()
+      .describe(
+        'The institutions that allocate capital. Each id IS a cap-table holder id already on the registers, so an entity is not a new owner: it is the thing that was always at the other end of those `holderKind: "fund"` holdings. Durable.',
+      ),
+    shortPositions: z
+      .array(ShortPositionSchema)
+      .optional()
+      .describe(
+        'Open cash-settled short exposures. A separate ledger on purpose: a short is never a Holding, never votes and never counts toward an ownership percentage, so the cap-table invariant is untouched. Durable.',
+      ),
+    activistCampaigns: z
+      .array(ActivistCampaignSchema)
+      .optional()
+      .describe('Open and recently closed activist campaigns. Durable; a closed campaign is pruned ACTIVIST_CAMPAIGN_PRUNE_QUARTERS after it closes, so this stays a phone-sized save.'),
+    capitalOrders: z
+      .array(CapitalOrderSchema)
+      .optional()
+      .describe('Orders the capital desks wrote for the open quarter and that have not yet settled. Cleared at ledger_commit, exactly like pendingActions.'),
 
     // --- participants and pending work ---
     players: z.array(SessionPlayerSchema).default([]),

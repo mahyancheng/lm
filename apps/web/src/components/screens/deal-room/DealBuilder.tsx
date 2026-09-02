@@ -24,13 +24,14 @@ import type {
   DealPartyKind,
   VoteStance,
 } from '@frontier/contracts';
-import { BOARD_PROPOSAL_KINDS, DEAL_OBLIGATION_KINDS, VOTE_STANCES, quarterLabel } from '@frontier/contracts';
+import { BOARD_PROPOSAL_KINDS, VOTE_STANCES, quarterLabel } from '@frontier/contracts';
 import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
 import { ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { AccordFields, type AccordContext } from './AccordFields';
 import {
   OBLIGATION_HINTS,
+  BUILDABLE_OBLIGATION_KINDS,
   OBLIGATION_LABELS,
   blankObligation,
   cashInObligations,
@@ -428,7 +429,7 @@ function ObligationColumn({
           value={adding}
           onChange={(event) => setAdding(event.target.value as ObligationKind)}
         >
-          {DEAL_OBLIGATION_KINDS.map((kind) => (
+          {BUILDABLE_OBLIGATION_KINDS.map((kind) => (
             <option key={kind} value={kind}>
               {OBLIGATION_LABELS[kind]}
             </option>

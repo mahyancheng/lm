@@ -124,6 +124,10 @@ export type NpcTemplateKey =
   | 'attack_rival'
   | 'press_teaser'
   | 'programme_notice'
+  // Capital partners. Appended, never inserted: the template table is keyed by
+  // this union and a reordering would repoint every existing key.
+  | 'short_thesis'
+  | 'activist_letter'
   | 'reply_defend'
   | 'reply_counter';
 
@@ -307,6 +311,34 @@ const TEMPLATES: Record<NpcTemplateKey, Record<Voice, readonly string[]>> = {
     evangelical: [
       'The piece I have wanted to write for months is out: {subject}.',
       '{subject}. This one matters more than the week\'s numbers do.',
+    ],
+  },
+  short_thesis: {
+    blunt: [
+      'We are short {rival}. The note is public and the numbers in it are theirs, not ours.',
+      '{rival} at {figure}. We published the work; argue with the work.',
+    ],
+    measured: [
+      'Our note on {rival} is out. {figure}, and every input is from their own filings.',
+      'We have published on {rival}: {figure}. We are positioned, and we say so at the top of the page.',
+    ],
+    evangelical: [
+      'Somebody had to write this one. {rival}: {figure}.',
+      'Read our note on {rival} before the next set of numbers. {figure}.',
+    ],
+  },
+  activist_letter: {
+    blunt: [
+      'We own {figure} of {rival} and we have run out of patience with its board.',
+      '{figure} of {rival} is ours. The letter is public because the private ones went unanswered.',
+    ],
+    measured: [
+      'We hold {figure} of {rival} and have written to the board today. The letter is public.',
+      'Our letter to {rival} is published. We hold {figure} and we have asked for one specific change.',
+    ],
+    evangelical: [
+      '{figure} of {rival}, and a board that can still fix this. Our letter is out.',
+      'We are long {rival} at {figure} and we intend to be long it for years. That is why the letter exists.',
     ],
   },
   programme_notice: {
@@ -656,6 +688,41 @@ export function collectNpcPostCandidates(draft: SessionState, quarter: number): 
       targetCompanyId: null,
       salience: 0.24 + 0.4 * story.prominence,
       fields: { ...emptyFields(journalist.name), subject: story.headline },
+    });
+  }
+
+  /* --- capital partners --------------------------------------------------- */
+  // A fund's public acts already reach the feed as disclosures; this gives the
+  // partner behind them a voice inside the **existing** post budget rather than
+  // a budget of its own. The disclosure carries the numbers and this carries the
+  // sentence, which is the same division of labour every other template keeps.
+  const capitalNotes = draft.disclosures
+    .filter((disclosure) => disclosure.quarter === quarter && disclosure.kind === 'analyst_note' && disclosure.sourceCharacterId !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  for (const note of capitalNotes) {
+    const author = draft.characters.find((character) => character.id === note.sourceCharacterId) ?? null;
+    const subject = companies.find((company) => company.id === note.companyId) ?? null;
+    if (author === null || subject === null) continue;
+    const overvaluation = note.metrics['overvaluationPct'];
+    const stakePct = note.metrics['stakePct'];
+    const isReport = typeof overvaluation === 'number';
+    if (!isReport && typeof stakePct !== 'number') continue;
+    add({
+      key: isReport ? 'short_thesis' : 'activist_letter',
+      authorCharacterId: author.id,
+      companyId: null,
+      network: 'finance',
+      intent: isReport ? 'attack' : 'announce',
+      targetCompanyId: subject.id,
+      // Salience is the credibility the engine already computed for the note, so
+      // a fund nobody believes is also a fund nobody amplifies.
+      salience: 0.5 + 0.4 * clamp(note.credibility, 0, 1),
+      fields: {
+        ...emptyFields(author.name),
+        rival: subject.name,
+        subject: note.headline,
+        figure: isReport ? `${Math.round(Number(overvaluation))}% overvalued` : `${Math.round(Number(stakePct))}%`,
+      },
     });
   }
 

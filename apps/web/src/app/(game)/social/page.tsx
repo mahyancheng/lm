@@ -97,6 +97,25 @@ export default function SocialPage(): React.JSX.Element {
   const headlines = useMemo(() => new Map(record.map((item) => [item.id, item.headline])), [record]);
   const ledgerById = useMemo(() => new Map(ledger.map((row) => [row.eventId, row])), [ledger]);
 
+  // A fund speaks through its partner, so the feed needs the roster's partner
+  // ids to draw an institution's mark on what it publishes. Empty in a world
+  // with no institutional layer, which is exactly the gate that keeps the mark
+  // off every card in a world-version-1 session.
+  const fundPartnerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entity of view.economyReport?.capitalEntities ?? []) {
+      if (entity.partnerCharacterId !== null) ids.add(entity.partnerCharacterId);
+    }
+    return ids;
+  }, [view.economyReport]);
+  const fundNameByPartnerId = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const entity of view.economyReport?.capitalEntities ?? []) {
+      if (entity.partnerCharacterId !== null) names.set(entity.partnerCharacterId, entity.name);
+    }
+    return names;
+  }, [view.economyReport]);
+
   const context: FeedContext = useMemo(
     () => ({
       startYear: session.startYear,
@@ -107,10 +126,12 @@ export default function SocialPage(): React.JSX.Element {
       playerCharacterId: founder.id,
       playerCompanyId: company.id,
       headlines,
+      fundPartnerIds,
+      fundNameByPartnerId,
       // Posts carry no pin of their own; the map belongs to News.
       mappedEventIds: new Set<string>(),
     }),
-    [session.startYear, characters, companyNames, companySectors, multiSector, founder.id, company.id, headlines],
+    [session.startYear, characters, companyNames, companySectors, multiSector, founder.id, company.id, headlines, fundPartnerIds, fundNameByPartnerId],
   );
 
   const ownAccounts = useMemo(

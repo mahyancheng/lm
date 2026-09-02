@@ -47,6 +47,7 @@ import { ConnectionBreakdown } from '@/components/screens/network/ConnectionBrea
 import { PeopleWeb } from '@/components/screens/network/PeopleWeb';
 import { PersonDrawer } from '@/components/screens/network/PersonDrawer';
 import { buildDirectory, characterName, overridesFor, type DirectoryEntry } from '@/components/screens/network/directory';
+import { CAPITAL_KIND_LABEL, STANCE_LABEL, STANCE_TONE, streetCards, type StanceContext } from '@/components/screens/street';
 import { IconTabs } from '@/components/screens/world/IconTabs';
 import { useLeaderboards, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
@@ -89,6 +90,58 @@ export default function NetworkPage(): React.JSX.Element {
   const blocked = directory.filter((entry) => entry.state === 'blocked');
   const routed = blocked.filter((entry) => entry.brokerIds.length > 0);
   const selectedEntry = selected === null ? null : (directory.find((entry) => entry.character.id === selected) ?? null);
+
+  /**
+   * The institutions, matched to their partners.
+   *
+   * The stance is the same derivation The Street uses, on the same committed
+   * rows, so a partner never reads as a backer on one screen and an adversary
+   * on the other. Every field below is state: a relationship edge, a connection
+   * level, an access decision the validator would take.
+   */
+  const partners = useMemo(() => {
+    const report = view.economyReport;
+    if (report === null) return [];
+    const context: StanceContext = {
+      ownCompanyIds: new Set([view.ownCompany.id]),
+      trustByPartnerId: new Map(
+        session.relationships.filter((edge) => edge.toId === founder.id).map((edge) => [edge.fromId, edge.trust] as const),
+      ),
+      hostilityByPartnerId: new Map(
+        session.relationships.filter((edge) => edge.toId === founder.id).map((edge) => [edge.fromId, edge.hostility] as const),
+      ),
+      approachEntityIds: new Set<string>(),
+      campaignEntityIds: new Set(
+        (session.activistCampaigns ?? [])
+          .filter((campaign) => campaign.outcome === null && campaign.targetCompanyId === view.ownCompany.id)
+          .map((campaign) => campaign.entityId),
+      ),
+      proxyFightEntityIds: new Set<string>(),
+      shortEntityIds: new Set(
+        report.shortInterest
+          .filter((short) => short.companyId === view.ownCompany.id)
+          .flatMap((short) => short.disclosedEntityIds),
+      ),
+    };
+    const byCharacter = new Map(directory.map((entry) => [entry.character.id, entry] as const));
+    return streetCards(report, context).flatMap((card) => {
+      const partnerId = card.row.partnerCharacterId;
+      if (partnerId === null) return [];
+      const entry = byCharacter.get(partnerId);
+      if (entry === undefined) return [];
+      return [
+        {
+          entityId: card.row.entityId,
+          entityName: card.row.name,
+          kind: card.row.kind,
+          stance: card.stance,
+          character: entry.character,
+          reach: entry.state,
+          trust: entry.inbound?.trust ?? null,
+        },
+      ];
+    });
+  }, [view, session.relationships, session.activistCampaigns, founder.id, directory]);
 
   const filters = (
     <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto">
@@ -269,6 +322,49 @@ export default function NetworkPage(): React.JSX.Element {
             cardTitleKey="person"
             empty={<EmptyState icon="people" title="Nobody matches that filter" message="Widen the role filter or show everyone." compact />}
           />
+        </Panel>
+      )}
+
+      {/* --- the institutions ------------------------------------------------
+          The eleven partners are ordinary characters with ordinary
+          relationships, so they are already in the directory above. This panel
+          is the one thing the directory cannot say: which institution stands
+          behind each of them, and how far away that person is. Absent in a
+          session with no institutional layer. */}
+      {partners.length === 0 ? null : (
+        <Panel
+          iconName="briefcase"
+          iconTone="brand"
+          title="Capital partners"
+          subtitle="Every institution speaks through a person. This is who, and how close you are to them."
+        >
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {partners.map((partner) => (
+              <li key={partner.entityId} className="raised-surface px-2.5 py-2">
+                <PersonChip
+                  character={partner.character}
+                  size="sm"
+                  className="tap-target"
+                  onClick={() => setSelected(partner.character.id)}
+                  subtitle={`${partner.entityName} · ${CAPITAL_KIND_LABEL[partner.kind]}`}
+                  right={<span className="figure text-[11px] text-ink-dim">{formatScore(partner.character.connectionLevel)}</span>}
+                />
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <Tag tone={STANCE_TONE[partner.stance]} dot>
+                    {STANCE_LABEL[partner.stance]}
+                  </Tag>
+                  <Tag tone={partner.reach === 'blocked' ? 'warn' : 'neutral'}>
+                    {partner.reach === 'blocked' ? 'Needs an introduction' : 'Reachable'}
+                  </Tag>
+                  {partner.trust === null ? (
+                    <span className="text-[10.5px] text-ink-faint">You have never dealt with each other</span>
+                  ) : (
+                    <span className="figure text-[10.5px] text-ink-faint">trust {formatScore(partner.trust)}</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </Panel>
       )}
 

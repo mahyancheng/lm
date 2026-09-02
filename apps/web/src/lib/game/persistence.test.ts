@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GmProposalBatch, NpcActionBundle, SessionState, SubmittedAction } from '@frontier/contracts';
 import { NewGameSetupSchema } from '@frontier/contracts';
+import { applySocialTextOverrides, selectPostsForAuthoring } from '@frontier/simulation';
 import { buildSubmittedAction, createSession, getEngine } from './engine';
 import {
   CHECKPOINT_INTERVAL,
@@ -129,14 +130,65 @@ describe('a save records every input to F, not just the player half', () => {
     const live = engine.resolver.resolveQuarter(start, [action], QUIET_GM, bundles);
     expect(live.committed).toBe(true);
 
-    const withAgents = replay(fileOf([{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: bundles }]));
+    const withAgents = replay(fileOf([{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: bundles, socialTexts: [] }]));
     expect(withAgents.complete).toBe(true);
     expect(JSON.stringify(withAgents.session)).toBe(JSON.stringify(live.nextState));
 
     // And the old format — player actions only — really did produce a different
     // world, which is what made recording the agent inputs necessary.
-    const withoutAgents = replay(fileOf([{ quarter: 0, actions: [action], gmProposal: null, npcBundles: [] }]));
+    const withoutAgents = replay(fileOf([{ quarter: 0, actions: [action], gmProposal: null, npcBundles: [], socialTexts: [] }]));
     expect(JSON.stringify(withoutAgents.session)).not.toBe(JSON.stringify(live.nextState));
+  });
+});
+
+describe('a quarter the model wrote words for', () => {
+  /** The multi-sector world, which is the one whose characters post at all. */
+  const W2_SETUP = NewGameSetupSchema.parse({
+    companyName: 'Acme AI',
+    founderName: 'Dana Vale',
+    backgroundId: 'enterprise_ai',
+    sector: 'ai',
+    region: 'north_america',
+    worldVersion: 2,
+  });
+
+  function w2File(log: readonly QuarterRecord[]): SaveFile {
+    return { ...fileOf(log), setup: W2_SETUP, worldVersion: 2 };
+  }
+
+  it('replays to the same words, and without the record to the engine\'s own', () => {
+    const engine = getEngine();
+    const start = createSession({ seed: SEED, setup: W2_SETUP });
+    const outcome = engine.resolver.resolveQuarter(start, [], null, []);
+    expect(outcome.committed).toBe(true);
+
+    // The engine authored this quarter's posts; the model rewrote the loudest.
+    const post = selectPostsForAuthoring(outcome.nextState, start.quarter)[0];
+    expect(post).toBeDefined();
+    const socialTexts = [{ postId: post?.id ?? '', text: 'We shipped it, and we will publish the evaluations by Friday.' }];
+    const live = applySocialTextOverrides(outcome.nextState, socialTexts, start.quarter);
+    expect(live.socialPosts.find((entry) => entry.id === post?.id)?.text).not.toBe(post?.text);
+
+    const withWords = replay(w2File([{ quarter: 0, actions: [], gmProposal: null, npcBundles: [], socialTexts }]));
+    expect(withWords.complete).toBe(true);
+    expect(JSON.stringify(withWords.session)).toBe(JSON.stringify(live));
+
+    // A quarter played offline records none, and replays as the template line
+    // the player actually read.
+    const offline = replay(w2File([{ quarter: 0, actions: [], gmProposal: null, npcBundles: [], socialTexts: [] }]));
+    expect(offline.session.socialPosts.find((entry) => entry.id === post?.id)?.text).toBe(post?.text);
+  });
+
+  it('survives the round trip through storage', () => {
+    const engine = getEngine();
+    const start = createSession({ seed: SEED, setup: W2_SETUP });
+    const outcome = engine.resolver.resolveQuarter(start, [], null, []);
+    const post = selectPostsForAuthoring(outcome.nextState, start.quarter)[0];
+    const socialTexts = [{ postId: post?.id ?? '', text: 'In his own words, at last.' }];
+
+    writeSaveFile(w2File([{ quarter: 0, actions: [], gmProposal: null, npcBundles: [], socialTexts }]));
+    const read = readSaveFile();
+    expect(read?.log[0]?.socialTexts).toEqual(socialTexts);
   });
 });
 
@@ -158,7 +210,7 @@ describe('the replay ceiling never destroys a decision', () => {
         );
         const outcome = engine.resolver.resolveQuarter(session, [action], null, []);
         expect(outcome.committed).toBe(true);
-        log.push({ quarter: session.quarter, actions: [action], gmProposal: null, npcBundles: [] });
+        log.push({ quarter: session.quarter, actions: [action], gmProposal: null, npcBundles: [], socialTexts: [] });
         session = outcome.nextState;
         // Exactly what the store's persistence effect does after every resolve.
         file = buildSaveFile({
@@ -199,7 +251,7 @@ describe('the replay ceiling never destroys a decision', () => {
     // The window-drift case: an entry recorded for quarter 5 replayed into a
     // fresh session at quarter 0. The engine's collector would filter it out
     // with no ledger row at all; the loader refuses instead.
-    const loaded = replay(fileOf([{ quarter: 5, actions: [{ ...stray, quarter: 5 }], gmProposal: null, npcBundles: [] }]));
+    const loaded = replay(fileOf([{ quarter: 5, actions: [{ ...stray, quarter: 5 }], gmProposal: null, npcBundles: [], socialTexts: [] }]));
     expect(loaded.complete).toBe(false);
     expect(loaded.rejectedQuarters).toEqual([5]);
     expect(loaded.session.quarter).toBe(0);
@@ -212,9 +264,9 @@ describe('the replay ceiling never destroys a decision', () => {
     const good = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     const loaded = replay(
       fileOf([
-        { quarter: 0, actions: [good], gmProposal: null, npcBundles: [] },
+        { quarter: 0, actions: [good], gmProposal: null, npcBundles: [], socialTexts: [] },
         // Recorded for quarter 2, so it can never be replayed into quarter 1.
-        { quarter: 2, actions: [], gmProposal: null, npcBundles: [] },
+        { quarter: 2, actions: [], gmProposal: null, npcBundles: [], socialTexts: [] },
       ]),
     );
     expect(loaded.complete).toBe(false);
@@ -230,9 +282,9 @@ describe('a replay from the seed is bounded by the ceiling', () => {
     // A file with no usable checkpoint and far more records than the ceiling.
     // The second record is stamped for a quarter that will never come round, so
     // the replay stops immediately — but the *plan* was already bounded.
-    const log: QuarterRecord[] = [{ quarter: 0, actions: [first], gmProposal: null, npcBundles: [] }];
+    const log: QuarterRecord[] = [{ quarter: 0, actions: [first], gmProposal: null, npcBundles: [], socialTexts: [] }];
     for (let index = 1; index <= MAX_REPLAY_QUARTERS + 4; index += 1) {
-      log.push({ quarter: index === 1 ? 500 : 500 + index, actions: [], gmProposal: null, npcBundles: [] });
+      log.push({ quarter: index === 1 ? 500 : 500 + index, actions: [], gmProposal: null, npcBundles: [], socialTexts: [] });
     }
 
     const totals: number[] = [];
@@ -248,7 +300,7 @@ describe('a quota failure prunes only what the checkpoint already absorbed', () 
   it('retries without the absorbed entries, and refuses outright when there is no checkpoint', () => {
     const start = createSession({ seed: SEED });
     const checkpoint = { quarter: 2, state: { ...start, quarter: 2 } };
-    const log: QuarterRecord[] = [0, 1, 2, 3].map((quarter) => ({ quarter, actions: [], gmProposal: null, npcBundles: [] }));
+    const log: QuarterRecord[] = [0, 1, 2, 3].map((quarter) => ({ quarter, actions: [], gmProposal: null, npcBundles: [], socialTexts: [] }));
 
     // A store that refuses the first write and accepts the second.
     const inner = fakeStorage();
@@ -288,8 +340,8 @@ describe('replaying without freezing the tab', () => {
     let yields = 0;
     const loaded = await replayAsync(
       fileOf([
-        { quarter: 0, actions: [a], gmProposal: null, npcBundles: [] },
-        { quarter: 1, actions: [b], gmProposal: null, npcBundles: [] },
+        { quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] },
+        { quarter: 1, actions: [b], gmProposal: null, npcBundles: [], socialTexts: [] },
       ]),
       {
         onProgress: (progress) => seen.push(progress.quarter),
@@ -346,7 +398,7 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
       difficulty: 'standard',
       autoExecuteRoutine: false,
       setup,
-      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }],
       queue: [],
       session: getEngine().resolver.resolveQuarter(start, [a], null, []).nextState,
     });
@@ -366,7 +418,7 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     globals.window?.localStorage.setItem(
       SAVE_KEY,
-      JSON.stringify({ version: 2, seed: SEED, difficulty: 'standard', log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }], checkpoint: null, savedQuarter: 1 }),
+      JSON.stringify({ version: 2, seed: SEED, difficulty: 'standard', log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }], checkpoint: null, savedQuarter: 1 }),
     );
     const file = readSaveFile();
     expect(file?.setup).toBeNull();
@@ -378,7 +430,7 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
   it('round-trips an export through an import', () => {
     const start = createSession({ seed: SEED });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
-    writeSaveFile(fileOf([{ quarter: 0, actions: [a], gmProposal: QUIET_GM, npcBundles: [] }]));
+    writeSaveFile(fileOf([{ quarter: 0, actions: [a], gmProposal: QUIET_GM, npcBundles: [], socialTexts: [] }]));
 
     const text = exportSave();
     expect(text).not.toBeNull();
@@ -427,7 +479,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
       difficulty: 'standard',
       autoExecuteRoutine: false,
       setup: null,
-      log: [{ quarter: 0, actions: [resolved], gmProposal: null, npcBundles: [] }],
+      log: [{ quarter: 0, actions: [resolved], gmProposal: null, npcBundles: [], socialTexts: [] }],
       queue: [queued],
       session: outcome.nextState,
       now: () => STAMP,
@@ -519,7 +571,7 @@ describe('files from other builds of the save format', () => {
         difficulty: 'standard',
         autoExecuteRoutine: false,
         setup: null,
-        log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+        log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }],
         checkpoint: null,
         savedQuarter: 1,
       }),
@@ -660,7 +712,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
       autoExecuteRoutine: true,
       setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' }),
       worldVersion: 1,
-      log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')] }],
+      log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')], socialTexts: [] }],
       checkpoint: { quarter: 0, state: start },
       savedQuarter: 1,
       queue: [action],

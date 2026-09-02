@@ -164,6 +164,7 @@ describe('post propagation', () => {
       engagement: null,
       isAiGenerated: false,
       reportedCount: 0,
+      replyToPostId: null,
     };
     const shifts = computeSentimentShifts(post, account, 2_000_000);
     expect(shifts.length).toBeGreaterThan(0);

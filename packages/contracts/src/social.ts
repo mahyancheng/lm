@@ -124,8 +124,40 @@ export const SocialPostSchema = SocialPostDraftSchema.extend({
   engagement: EngagementResultSchema.nullable().describe('Null until the social phase of the quarter has resolved.'),
   isAiGenerated: z.boolean().describe('True for NPC characters. Their posts must be visibly labelled as AI-generated wherever they appear.'),
   reportedCount: z.number().int().min(0).describe('Moderation reports received. Player content is account-bound, reportable and blockable.'),
+  replyToPostId: z
+    .string()
+    .nullable()
+    .default(null)
+    .describe(
+      'The post this one answers, or null for a top-level post. A reply and its parent form a thread; the engine only ever creates a reply on the same network as its parent, in the same quarter. Defaults to null so a save written before threads existed parses unchanged.',
+    ),
 }).describe('A published post in the session state.');
 export type SocialPost = z.infer<typeof SocialPostSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*  Model-written prose over engine-authored posts                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One engine-authored post whose *words* a model wrote.
+ *
+ * The engine decides that a post happens, who makes it, on which network, with
+ * which typed intent and aimed at whom, and it writes a template line so the
+ * quarter reads the same with no model at all. When a model is configured, a
+ * capped handful of those lines are rewritten in the author's voice — and
+ * nothing else about the post may change, which is why this carries a post id
+ * and a string and not a draft.
+ *
+ * It is recorded alongside the quarter's other agent inputs so a replay
+ * reproduces the words as well as the numbers.
+ */
+export const SocialTextOverrideSchema = z
+  .object({
+    postId: z.string().min(1).describe('The engine-authored post whose text is being replaced. A post the engine did not author is never eligible.'),
+    text: z.string().min(1).max(560).describe('The prose the model supplied, at most 560 characters. Replaces the template line and nothing else.'),
+  })
+  .describe('Model-written words over one engine-authored post. Never a new post, never a changed intent, never a number.');
+export type SocialTextOverride = z.infer<typeof SocialTextOverrideSchema>;
 
 /* -------------------------------------------------------------------------- */
 /*  Media stories                                                              */

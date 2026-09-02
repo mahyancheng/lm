@@ -273,6 +273,8 @@ export function ensureSocialPosts(draft: SessionState, ctx: ResolverContext): So
       engagement: null,
       isAiGenerated: action.actorPlayerId === null,
       reportedCount: 0,
+      // Submitted posts are always top-level; the engine authors every reply.
+      replyToPostId: null,
     };
     draft.socialPosts.push(post);
     created.push(post);

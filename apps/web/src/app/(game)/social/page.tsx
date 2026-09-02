@@ -1,43 +1,40 @@
 'use client';
 
 /**
- * Social — six synthetic networks, one press cycle.
+ * Social — the same feed, narrowed to what people said.
  *
- * Marketing here is an information network, not a modifier. The strict division
- * of labour from `social.ts` is what the screen is built to show: a model may
- * write the words, and only the engine decides what they do. So every figure on
- * a published post comes from `EngagementResult`, the compose preview shows
- * *who is in the room* rather than a reach it cannot know, and every
- * NPC-authored post carries the AI label.
+ * There is no second feed in this app. This screen is the universal public
+ * record filtered to posts and replies, rendered by the same cards News uses,
+ * so a post reads identically wherever you meet it and a thread hangs together
+ * on both screens.
  *
- * Rivals appear only through the redacted projection, and the trending panel is
- * `world.media` — the same four readings every participant sees.
+ * The strict division of labour from `social.ts` is what the screen shows: a
+ * model may write the words, and only the engine decides what they do. Every
+ * figure on a card is engine output carried by the projection, the compose
+ * preview shows *who is in the room* rather than a reach it cannot know, and
+ * every NPC-authored post carries the AI label.
+ *
+ * What used to be four side panels — trending, your accounts, media stories,
+ * network composition — is now a two-line header and a strip: on a phone the
+ * feed starts above the fold, and the compose button is a floating action under
+ * the thumb rather than a bar somewhere up the page.
  */
 
 import { useMemo, useState } from 'react';
-import type { Audience, MediaStory, NetworkArchetype, Sector, SocialPost } from '@frontier/contracts';
+import type { NetworkArchetype, PublicRecordItem, Sector, SimEvent } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, quarterLabel } from '@frontier/contracts';
-import { formatDelta, formatMultiple, formatPct } from '@frontier/shared';
-import {
-  AiLabel,
-  EmptyState,
-  Icon,
-  Meter,
-  PageHeader,
-  Panel,
-  ProgressBar,
-  SectionHeading,
-  StatCard,
-  Tag,
-  sectorOf,
-  sectorsPresent,
-} from '@/components/ui';
+import { projectPublicRecord } from '@frontier/simulation';
+import { formatPct } from '@frontier/shared';
+import { AiLabel, Icon, PageHeader, Tag, cx, sectorOf, sectorsPresent } from '@/components/ui';
+import { PLAYER_ID, useGame, useLlm, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { allVisibleCompanies } from '@/components/screens/reporting/util';
 import { ComposeModal } from '@/components/screens/social/ComposeModal';
-import { PostCard } from '@/components/screens/social/PostCard';
-import { audienceLabel, countLabel, networkIcon, networkLabel, networkProfile } from '@/components/screens/social/audiences';
+import { countLabel, networkIcon, networkLabel } from '@/components/screens/social/audiences';
 import { IconTabs, type IconTabItem } from '@/components/screens/world/IconTabs';
-import { useLlm, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { Feed, countByNetwork, filterFeed, topByReach, type FeedContext } from '@/components/screens/feed';
+
+/** The two kinds this screen shows. A reply is a post that answers another one. */
+const POST_KINDS = ['post', 'reply'] as const;
 
 const NARRATIVE_COPY: Readonly<Record<string, string>> = {
   ai_optimism: 'The press is reading every launch as progress.',
@@ -58,24 +55,37 @@ export default function SocialPage(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const llm = useLlm();
+  const { lastOutcome } = useGame();
 
-  const [network, setNetwork] = useState<NetworkArchetype>('fast_feed');
+  const [network, setNetwork] = useState<NetworkArchetype | null>(null);
   const [composing, setComposing] = useState(false);
 
-  const characterById = useMemo(() => new Map(session.characters.map((character) => [character.id, character])), [session.characters]);
-  const accountById = useMemo(() => new Map(session.socialAccounts.map((account) => [account.id, account])), [session.socialAccounts]);
+  // Memoised so an empty ledger is the same empty array between renders.
+  const ledger = useMemo<readonly SimEvent[]>(() => lastOutcome?.events ?? [], [lastOutcome]);
+  const record = useMemo<PublicRecordItem[]>(() => projectPublicRecord(session, PLAYER_ID, { ledger }), [session, ledger]);
 
-  const companyName = useMemo(() => {
+  /** Posts and replies only. Everything else on the record lives on News. */
+  const posts = useMemo(
+    () => filterFeed(record, { kinds: POST_KINDS, sector: null, companyId: null, networks: null }),
+    [record],
+  );
+  const shown = useMemo(
+    () => (network === null ? posts : filterFeed(posts, { kinds: null, sector: null, companyId: null, networks: [network] })),
+    [posts, network],
+  );
+
+  const characters = useMemo(() => new Map(session.characters.map((entry) => [entry.id, entry])), [session.characters]);
+
+  const companyNames = useMemo(() => {
     const map = new Map<string, string>();
     map.set(company.id, company.name);
-    for (const rival of view.visibleCompanies) {
-      if (rival.id !== undefined && rival.name !== undefined) map.set(rival.id, rival.name);
+    for (const entry of allVisibleCompanies(view)) {
+      if (entry.id !== undefined && entry.name !== undefined) map.set(entry.id, entry.name);
     }
     return map;
-  }, [company.id, company.name, view.visibleCompanies]);
+  }, [company.id, company.name, view]);
 
-  /** What each named company does, so a post about a rival says which industry. */
-  const companySector = useMemo(() => {
+  const companySectors = useMemo(() => {
     const map = new Map<string, Sector>();
     for (const entry of allVisibleCompanies(view)) {
       if (entry.id !== undefined) map.set(entry.id, sectorOf(entry));
@@ -84,6 +94,25 @@ export default function SocialPage(): React.JSX.Element {
   }, [view]);
   const multiSector = useMemo(() => sectorsPresent(allVisibleCompanies(view)).length > 1, [view]);
 
+  const headlines = useMemo(() => new Map(record.map((item) => [item.id, item.headline])), [record]);
+  const ledgerById = useMemo(() => new Map(ledger.map((row) => [row.eventId, row])), [ledger]);
+
+  const context: FeedContext = useMemo(
+    () => ({
+      startYear: session.startYear,
+      characters,
+      companyNames,
+      companySectors,
+      multiSector,
+      playerCharacterId: founder.id,
+      playerCompanyId: company.id,
+      headlines,
+      // Posts carry no pin of their own; the map belongs to News.
+      mappedEventIds: new Set<string>(),
+    }),
+    [session.startYear, characters, companyNames, companySectors, multiSector, founder.id, company.id, headlines],
+  );
+
   const ownAccounts = useMemo(
     () =>
       session.socialAccounts.filter(
@@ -91,265 +120,124 @@ export default function SocialPage(): React.JSX.Element {
       ),
     [session.socialAccounts, founder.id, company.id],
   );
-
-  const byNetwork = useMemo(() => {
-    const map = new Map<NetworkArchetype, SocialPost[]>();
-    for (const archetype of NETWORK_ARCHETYPES) map.set(archetype, []);
-    for (const post of session.socialPosts) map.get(post.network)?.push(post);
-    for (const list of map.values()) list.sort((a, b) => b.quarter - a.quarter);
-    return map;
-  }, [session.socialPosts]);
-
-  const stories: MediaStory[] = useMemo(
-    () => [...session.mediaStories].sort((a, b) => b.prominence - a.prominence).slice(0, 8),
-    [session.mediaStories],
-  );
-
-  const feed = byNetwork.get(network) ?? [];
   const ownFollowing = ownAccounts.reduce((total, account) => total + account.followers, 0);
+
+  const perNetwork = useMemo(() => countByNetwork(posts), [posts]);
+  const trending = useMemo(() => topByReach(posts, 3), [posts]);
   const media = session.world.media;
 
-  const tabs: readonly IconTabItem[] = NETWORK_ARCHETYPES.map((archetype) => ({
-    id: archetype,
-    label: networkLabel(archetype),
-    icon: networkIcon(archetype),
-    badge: (byNetwork.get(archetype) ?? []).length || undefined,
-  }));
-
-  const compose = (
-    <>
-      <Icon name="plus" size={16} accent="inherit" />
-      Compose a post
-    </>
-  );
+  const tabs: readonly IconTabItem[] = [
+    { id: 'all', label: 'All', icon: 'chat', badge: posts.length },
+    ...NETWORK_ARCHETYPES.map((archetype) => ({
+      id: archetype,
+      label: networkLabel(archetype),
+      icon: networkIcon(archetype),
+      badge: perNetwork.get(archetype) ?? 0,
+    })),
+  ];
 
   return (
     <>
       <PageHeader
         title="Social"
         eyebrow={quarterLabel(session.startYear, session.quarter)}
-        subtitle="Six networks, seven audiences and a press cycle that decides which of them hears you."
-        actions={
-          // From `sm` the action belongs beside the title; on a phone it is the
-          // full-width bar below, where a thumb already is.
-          <button
-            type="button"
-            className="btn btn-primary tap-target icon-knockout-brand hidden sm:inline-flex"
-            onClick={() => setComposing(true)}
-          >
-            {compose}
+        subtitle="Six networks and a press cycle that decides which of them hears you."
+      />
+
+      {/* Your accounts, as one line. Followers are whole people. */}
+      <div className="scroll-x no-scrollbar -mx-1 px-1">
+        <div className="flex w-max items-center gap-1.5">
+          <span className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-pill border border-brand/25 bg-brand-wash px-2.5 text-[11px] font-semibold text-brand">
+            <Icon name="people" size={13} accent="inherit" />
+            {countLabel(ownFollowing)} following
+          </span>
+          {ownAccounts.map((account) => (
+            <span
+              key={account.id}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-pill border border-hair bg-panel px-2.5 text-[11px] text-ink-dim"
+            >
+              <Icon name={networkIcon(account.network)} size={13} />
+              <span className="font-semibold text-ink">{account.handle}</span>
+              <span className="figure text-[10px] text-ink-faint">{countLabel(account.followers)}</span>
+              {account.verified ? <Icon name="check" size={12} accent="brand" /> : null}
+            </span>
+          ))}
+          {ownAccounts.length === 0 ? (
+            <span className="inline-flex h-8 items-center rounded-pill border border-hair bg-panel px-2.5 text-[11px] text-ink-faint">
+              No active account yet
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Trending: the frame the press is using, and the three loudest posts. */}
+      <section className="panel-surface px-3 py-2.5" aria-label="Trending">
+        <div className="flex flex-wrap items-center gap-2">
+          <Tag tone="info" size="md">
+            {media.dominantNarrative.replace(/_/g, ' ')}
+          </Tag>
+          <span className="figure text-[10px] text-ink-faint">attention {formatPct(media.attentionLevel)}</span>
+          <span className="figure text-[10px] text-ink-faint">controversy {formatPct(media.controversyIntensity)}</span>
+        </div>
+        <p className="mt-1.5 text-[12.5px] leading-snug text-ink-dim">
+          {NARRATIVE_COPY[media.dominantNarrative] ?? 'The press has settled on a frame for the quarter.'}
+        </p>
+        {trending.length === 0 ? null : (
+          <ol className="mt-2 flex flex-col gap-1.5 border-t border-hair pt-2">
+            {trending.map((item, index) => (
+              <li key={item.id} className="flex items-baseline gap-2">
+                <span className="figure w-4 shrink-0 text-[11px] text-ink-faint">{index + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{item.headline}</span>
+                {item.who.isAi ? <AiLabel /> : null}
+                <span className="figure shrink-0 text-[10px] text-ink-faint">{countLabel(Math.round(item.reach ?? 0))}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+
+      <IconTabs
+        ariaLabel="Networks"
+        tabs={tabs}
+        value={network ?? 'all'}
+        onChange={(id) => setNetwork(id === 'all' ? null : (id as NetworkArchetype))}
+      />
+
+      <Feed
+        items={shown}
+        context={context}
+        ledgerById={ledgerById}
+        emptyIcon="chat"
+        emptyTitle={network === null ? 'Nobody has posted yet' : `Nothing on ${networkLabel(network).toLowerCase()} yet`}
+        emptyMessage="Posts are published in the social phase when a quarter resolves — yours and everybody else's. Compose one and it is queued for this quarter."
+        emptyAction={
+          <button type="button" className="btn tap-target" onClick={() => setComposing(true)}>
+            <Icon name="plus" size={15} />
+            Compose a post
           </button>
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          iconName="people"
-          label="Following"
-          value={countLabel(ownFollowing)}
-          unit="followers"
-          hint={`${ownAccounts.length} account${ownAccounts.length === 1 ? '' : 's'} · ${new Set(ownAccounts.map((a) => a.network)).size} network${
-            new Set(ownAccounts.map((a) => a.network)).size === 1 ? '' : 's'
-          }`}
-        />
-        <StatCard
-          iconName="chart"
-          label="Attention"
-          value={formatPct(media.attentionLevel)}
-          hint="Share of the news cycle"
-          tone={media.attentionLevel > 0.7 ? 'warn' : undefined}
-        />
-        <StatCard
-          iconName="warning"
-          label="Controversy"
-          value={formatPct(media.controversyIntensity)}
-          hint="Heat turns a leak into a story"
-          tone={media.controversyIntensity > 0.6 ? 'warn' : undefined}
-        />
-        <StatCard
-          iconName="capitol"
-          label="Trust"
-          value={formatPct(media.institutionalTrust)}
-          hint="Rumours outrun corrections"
-          tone={media.institutionalTrust < 0.45 ? 'loss' : undefined}
-        />
-      </div>
+      {/* Room for the floating action, so it never covers the last card. */}
+      <div aria-hidden="true" className="h-14" />
 
-      <IconTabs tabs={tabs} value={network} onChange={(id) => setNetwork(id as NetworkArchetype)} ariaLabel="Networks" />
-
-      {/* The action, directly above the room it posts into. */}
+      {/* The action, where a thumb already is: above the phone's bottom bar, out
+          of the way of the last card, and a plain button from `lg`. */}
       <button
         type="button"
-        className="btn btn-primary btn-lg icon-knockout-brand w-full sm:hidden"
+        aria-label="Compose a post"
         onClick={() => setComposing(true)}
+        // The offset clears the phone's bottom bar the way the action tray does;
+        // the notch inset is a margin, so the `lg` override still wins.
+        style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}
+        className={cx(
+          'btn btn-primary icon-knockout-brand fixed right-4 z-20 h-14 gap-2 rounded-pill px-5 shadow-float',
+          'bottom-[calc(var(--bottombar-height)+0.75rem)] lg:bottom-6',
+        )}
       >
-        {compose}
+        <Icon name="plus" size={18} accent="inherit" />
+        Compose
       </button>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel
-          className="lg:col-span-2"
-          iconName={networkIcon(network)}
-          iconTone="brand"
-          title={networkLabel(network)}
-          subtitle={`${formatMultiple(networkProfile(network).virality)} resharing · press affinity ${formatPct(
-            networkProfile(network).pressAffinity,
-          )}`}
-          flush
-        >
-          {feed.length === 0 ? (
-            <div className="p-3.5">
-              <EmptyState
-                icon={networkIcon(network)}
-                title={`Nothing has been posted on ${networkLabel(network).toLowerCase()} yet`}
-                message="Posts appear here once the social phase of a quarter has resolved. Compose one and it is queued for this quarter."
-                action={
-                  <button type="button" className="btn tap-target" onClick={() => setComposing(true)}>
-                    <Icon name="plus" size={15} />
-                    Compose a post
-                  </button>
-                }
-              />
-            </div>
-          ) : (
-            <div>
-              {feed.map((post) => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  author={characterById.get(post.authorCharacterId) ?? null}
-                  account={accountById.get(post.accountId) ?? null}
-                  targetName={post.targetCompanyId === null ? null : (companyName.get(post.targetCompanyId) ?? null)}
-                  targetSector={
-                    !multiSector || post.targetCompanyId === null ? null : (companySector.get(post.targetCompanyId) ?? null)
-                  }
-                  quarterLabelText={quarterLabel(session.startYear, post.quarter)}
-                />
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <div className="flex flex-col gap-4">
-          <Panel iconName="newspaper" title="Trending narrative" subtitle="The frame every new event is read through">
-            <div className="flex flex-col gap-3">
-              <div>
-                <Tag tone="info" size="md">
-                  {media.dominantNarrative.replace(/_/g, ' ')}
-                </Tag>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-dim">
-                  {NARRATIVE_COPY[media.dominantNarrative] ?? 'The press has settled on a frame for the quarter.'}
-                </p>
-              </div>
-              <ProgressBar label="Attention" value={media.attentionLevel} valueLabel={formatPct(media.attentionLevel)} tone="info" />
-              <ProgressBar
-                label="Controversy"
-                value={media.controversyIntensity}
-                valueLabel={formatPct(media.controversyIntensity)}
-                tone={media.controversyIntensity > 0.6 ? 'warn' : 'brand'}
-              />
-              <ProgressBar
-                label="Institutional trust"
-                value={media.institutionalTrust}
-                valueLabel={formatPct(media.institutionalTrust)}
-                tone={media.institutionalTrust < 0.45 ? 'loss' : 'gain'}
-              />
-            </div>
-          </Panel>
-
-          <Panel iconName="chat" title="Your accounts" subtitle="Credibility is built by being right in public">
-            {ownAccounts.length === 0 ? (
-              <EmptyState icon="chat" title="No accounts" message="Neither you nor the company holds an active account on any network." compact />
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {ownAccounts.map((account) => (
-                  <li key={account.id}>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-[13px] font-semibold text-ink">{account.handle}</span>
-                      <span className="figure text-[10px] text-ink-faint">{networkLabel(account.network)}</span>
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-ink-faint">
-                      <span className="figure">{countLabel(account.followers)} followers</span>
-                      {account.verified ? <Tag tone="info">verified</Tag> : <Tag tone="neutral">unverified</Tag>}
-                    </div>
-                    <div className="mt-1.5">
-                      <Meter value={account.credibility * 100} label="Credibility" />
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {Object.entries(account.audienceMix)
-                        .filter(([, share]) => typeof share === 'number' && share > 0)
-                        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
-                        .map(([audience, share]) => (
-                          <span key={audience} className="rounded-pill border border-hair bg-raised px-2 py-px text-[10px] text-ink-dim">
-                            {audienceLabel(audience as Audience)} {formatPct(share ?? 0)}
-                          </span>
-                        ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Panel>
-
-          <Panel iconName="newspaper" title="Media stories" subtitle="How a private matter becomes a price">
-            {stories.length === 0 ? (
-              <EmptyState
-                icon="newspaper"
-                title="The press has not run anything yet"
-                message="Stories are generated in the social phase from posts and world events. The first ones appear after a quarter resolves."
-                compact
-              />
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {stories.map((story) => {
-                  const author = story.authorCharacterId === null ? null : characterById.get(story.authorCharacterId);
-                  return (
-                    <li key={story.id}>
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-[13px] leading-snug font-medium text-ink">{story.headline}</p>
-                        <span className="figure shrink-0 text-[10px] text-ink-faint">{quarterLabel(session.startYear, story.quarter)}</span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        <Tag tone="neutral">{story.angle.replace(/_/g, ' ')}</Tag>
-                        <Tag tone={story.sentiment >= 0.2 ? 'gain' : story.sentiment <= -0.2 ? 'loss' : 'neutral'}>
-                          sentiment {formatDelta(story.sentiment, 'percent')}
-                        </Tag>
-                        {author === undefined || author === null ? (
-                          <span className="text-[10px] text-ink-faint">wire</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-ink-faint">
-                            {author.name}
-                            {author.isPlayer ? null : <AiLabel />}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1.5 grid grid-cols-2 gap-3">
-                        <Meter value={story.prominence * 100} label="Prominence" />
-                        <Meter value={story.credibility * 100} label="Credibility" />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Panel>
-
-          <Panel iconName="people" title="Who is on each network" subtitle="Published composition from the social subsystem">
-            <SectionHeading>{networkLabel(network)}</SectionHeading>
-            <ul className="mt-2 flex flex-col gap-1">
-              {Object.entries(networkProfile(network).audienceMix)
-                .filter(([, share]) => share > 0)
-                .sort((a, b) => b[1] - a[1])
-                .map(([audience, share]) => (
-                  <li key={audience} className="flex items-center justify-between gap-3 text-[12.5px]">
-                    <span className="text-ink-dim">{audienceLabel(audience as Audience)}</span>
-                    <span className="figure text-ink">{formatPct(share)}</span>
-                  </li>
-                ))}
-            </ul>
-          </Panel>
-        </div>
-      </div>
 
       {composing ? (
         <ComposeModal
@@ -362,7 +250,7 @@ export default function SocialPage(): React.JSX.Element {
           sessionId={session.sessionId}
           quarter={session.quarter}
           llmAvailable={llm.available}
-          initialNetwork={network}
+          initialNetwork={network ?? 'fast_feed'}
         />
       ) : null}
     </>

@@ -15,6 +15,8 @@ import type {
   ChiefOfStaffInput,
   NpcStrategistInput,
   SessionState,
+  SocialAuthorInput,
+  SocialPost,
   WorldDirectorInput,
   WorldState,
 } from '@frontier/contracts';
@@ -255,6 +257,65 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
  */
 export function strategistCompanies(session: SessionState): string[] {
   return [...strategistCompanyIds(session)];
+}
+
+/**
+ * Build the social author's input for one post the engine has already made.
+ *
+ * The engine decided the author, the network, the typed intent and the target
+ * before this function ran, and it wrote a template line the quarter is complete
+ * without. All the model is asked for is the prose, so everything here is
+ * context: who is speaking, who is listening, what just happened, and what may
+ * not be said. Nothing private about another company crosses this boundary — the
+ * situation is built from the post's own public facts.
+ */
+export function buildSocialAuthorInput(session: SessionState, post: SocialPost): SocialAuthorInput | null {
+  const author = session.characters.find((character) => character.id === post.authorCharacterId) ?? null;
+  if (author === null) return null;
+  const account = session.socialAccounts.find((entry) => entry.id === post.accountId) ?? null;
+  const company = author.companyId === null ? null : (session.companies.find((entry) => entry.id === author.companyId) ?? null);
+  const target = post.targetCompanyId === null ? null : (session.companies.find((entry) => entry.id === post.targetCompanyId) ?? null);
+  const parent = post.replyToPostId === null ? null : (session.socialPosts.find((entry) => entry.id === post.replyToPostId) ?? null);
+
+  const traits = author.stableTraits;
+  const authorBriefing = [
+    `${author.name} — ${author.title || author.role.replace(/_/g, ' ')}${company === null ? '' : ` at ${company.name}`}.`,
+    `Connection level ${Math.round(author.connectionLevel)}; ${Math.round(author.publicFollowing).toLocaleString('en-GB')} following across networks.`,
+    `Traits: risk ${Math.round(traits.riskTolerance)}, technical ${Math.round(traits.technicalOrientation)}, financial caution ${Math.round(traits.financialConservatism)}, aggression ${Math.round(traits.aggressiveness)}, status sensitivity ${Math.round(traits.statusSensitivity)}.`,
+    company === null
+      ? 'They speak for themselves rather than for a company.'
+      : `${company.name} — ${company.sectorId.replace(/_/g, ' ')}, public reputation ${company.reputation.public}, developer ${company.reputation.developer}, enterprise ${company.reputation.enterprise}.`,
+  ].join('\n');
+
+  const situation = [
+    // The engine's own line, which is what this call is replacing. Supplying it
+    // is what keeps the model on the subject rather than inventing one.
+    `The line they are about to publish, written by the simulation: "${post.text}"`,
+    parent === null ? null : `It answers a post on the same network: "${parent.text}"`,
+    target === null ? null : `It is aimed at ${target.name}.`,
+    `Quarter ${quarterLabel(session.startYear, post.quarter)}. Press attention ${formatPct(session.world.media.attentionLevel)}, dominant narrative ${session.world.media.dominantNarrative.replace(/_/g, ' ')}.`,
+  ]
+    .filter((entry): entry is string => entry !== null)
+    .join('\n');
+
+  const audienceMix = Object.entries(account?.audienceMix ?? {})
+    .map(([audience, share]) => ({ audience, share: typeof share === 'number' ? share : 0 }))
+    .sort((a, b) => b.share - a.share || a.audience.localeCompare(b.audience));
+
+  return {
+    authorCharacterId: author.id,
+    authorBriefing,
+    network: post.network,
+    intent: post.intent,
+    situation,
+    audienceMix,
+    constraints: [
+      'Say only what the line above already says. Do not announce anything that has not happened.',
+      'No undisclosed financials, no unannounced products, no contract terms under confidentiality.',
+      'State positions, never outcomes: nothing about share prices, sentiment, reach or what the post will achieve.',
+      'At most 560 characters, in this person\'s voice, on this network.',
+    ],
+  };
 }
 
 /** Build the Chief of Staff's input for one player instruction. */

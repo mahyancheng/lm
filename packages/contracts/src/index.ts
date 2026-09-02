@@ -55,6 +55,7 @@
  * | `tech`        | The Frontier Map: nodes, edges, projects, innovation        |
  * | `people`      | Characters, relationships, memory, connection hierarchy     |
  * | `social`      | Networks, accounts, posts, engagement, media stories        |
+ * | `publicRecord`| The one universal feed: events, stories, disclosures, posts |
  * | `deals`       | Structured agreements, binding and non-binding              |
  * | `actions`     | Every quarterly action, validation, NPC bundles             |
  * | `sim`         | The ledger, resolution phases, reports, leaderboards        |
@@ -76,6 +77,7 @@ export * from './government';
 export * from './tech';
 export * from './people';
 export * from './social';
+export * from './publicRecord';
 export * from './deals';
 export * from './actions';
 export * from './sim';
@@ -88,4 +90,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.1.0';
+export const CONTRACTS_VERSION = '1.2.0';

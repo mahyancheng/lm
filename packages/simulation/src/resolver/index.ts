@@ -90,6 +90,8 @@ export * from './disclosure';
 export * from './leaderboards';
 export { audienceFor, isEventVisibleTo, projectResolutionOutcomeForPlayer } from './projection';
 export type { PlayerAudience, ProjectableOutcome, ProjectedOutcome } from './projection';
+export { projectPublicRecord, worldEventVisibleTo, PUBLIC_RECORD_DEFAULT_LIMIT } from './publicRecord';
+export type { PublicRecordOptions } from './publicRecord';
 export { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 export type { InvariantGateInput } from './invariants';
 

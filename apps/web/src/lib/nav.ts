@@ -90,7 +90,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     icon: 'globe',
     short: 'World',
     items: [
-      { href: '/news', label: 'World', icon: 'globe', glyph: 'WO', blurb: 'The living map, world events, public information.' },
+      // One feed, not a dashboard: the screen is the public record, and the map
+      // is a tab on it. Named the way the Command Centre already links to it.
+      { href: '/news', label: 'News', icon: 'newspaper', glyph: 'WO', blurb: 'The universal public record, and the living map.' },
       { href: '/social', label: 'Social', icon: 'chat', glyph: 'SO', blurb: 'Synthetic social networks, PR, marketing.' },
       { href: '/network', label: 'Network', icon: 'network', glyph: 'NE', blurb: 'Investors, founders, officials, directors, journalists.' },
       { href: '/leaderboard', label: 'Leaderboard', icon: 'trophy', glyph: 'LB', blurb: 'Session rankings and the power network.' },

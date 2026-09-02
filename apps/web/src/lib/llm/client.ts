@@ -3,7 +3,7 @@
  *
  * `@frontier/llm` and the Claude Agent SDK are **server-only** and must never
  * enter a client bundle. This module is the whole of the client's knowledge of
- * the model: five POSTs and a health check, each of which resolves to `null`
+ * the model: six POSTs and a health check, each of which resolves to `null`
  * when no transport is configured or when anything at all goes wrong.
  *
  * Every caller must have a deterministic path for `null`. That is not a
@@ -21,6 +21,8 @@ import type {
   NpcStrategistInput,
   ResolutionReport,
   SetupProposal,
+  SocialAuthorInput,
+  SocialPostDraft,
   WorldDirectorInput,
 } from '@frontier/contracts';
 
@@ -255,6 +257,19 @@ export function requestNpcBundle(
   evidence?: unknown,
 ): Promise<NpcActionBundle | null> {
   return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, QUARTER_ROLE_TIMEOUT_MS);
+}
+
+/**
+ * Ask for the words of one post the engine has already decided to make.
+ *
+ * Called by the store during `endQuarter`, never by a screen, and capped at
+ * `MAX_SOCIAL_TEXT_OVERRIDES` posts a quarter. Only `text` is ever read from the
+ * result: the author, the network, the typed intent and the target came from the
+ * engine and are not the model's to change. Null leaves the engine's own
+ * template line in place, which is a complete post.
+ */
+export function requestSocialPost(input: SocialAuthorInput): Promise<SocialPostDraft | null> {
+  return postRole<SocialPostDraft>('/api/llm/social-author', { input }, QUARTER_ROLE_TIMEOUT_MS);
 }
 
 /** One turn of dialogue with a character, on that seat's own thread. */

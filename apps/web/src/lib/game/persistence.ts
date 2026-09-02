@@ -8,7 +8,7 @@
  *   "setup": { "companyName": "Acme AI", "founderName": "Dana Vale", "backgroundId": "consumer_ai",
  *              "sector": "ai", "region": "north_america", "worldVersion": 2 },
  *   "worldVersion": 2,
- *   "log": [{ "quarter": 0, "actions": [...], "gmProposal": null, "npcBundles": [] }],
+ *   "log": [{ "quarter": 0, "actions": [...], "gmProposal": null, "npcBundles": [], "socialTexts": [] }],
  *   "checkpoint": { "quarter": 8, "state": { ... } },
  *   "queue": [...], "savedAtIso": "2027-01-01T00:00:00.000Z" }
  * ```
@@ -20,6 +20,14 @@
  * `[]` when the quarter resolved offline). Those proposals are already
  * zod-validated and re-validated by the engine on replay, so persisting them
  * costs nothing in trust and buys exact reproduction.
+ *
+ * `socialTexts` is the one entry that is not an input to `F`: words a model
+ * wrote over engine-authored posts after the quarter had already committed. The
+ * numbers of that quarter were fixed without them, so they are applied on replay
+ * exactly where they were applied live — after the commit, through the engine's
+ * own bounded `applySocialTextOverrides`. A file without them (every file
+ * written before the feed existed, and every quarter played offline) replays as
+ * the engine's template lines, which is what was played.
  *
  * Two ceilings meet here and neither may destroy a decision:
  *
@@ -41,6 +49,7 @@ import type {
   NpcActionBundle,
   SessionDifficulty,
   SessionState,
+  SocialTextOverride,
   SubmittedAction,
   WorldVersion,
 } from '@frontier/contracts';
@@ -51,9 +60,11 @@ import {
   NpcActionBundleSchema,
   SESSION_DIFFICULTIES,
   SessionStateSchema,
+  SocialTextOverrideSchema,
   SubmittedActionSchema,
   WORLD_VERSIONS,
 } from '@frontier/contracts';
+import { applySocialTextOverrides } from '@frontier/simulation';
 import { getEngine, createSession, DEMO_SEED } from './engine';
 
 export const SAVE_KEY = 'frontier-demo-v1';
@@ -64,7 +75,9 @@ export const SAVE_VERSION = 5;
  * else is preserved untouched, never overwritten. v1 recorded only the player's
  * actions; v2 added agent proposals and checkpoints; v3 added the new-game
  * setup; v4 added the unresolved action queue and an advisory timestamp; v5
- * records which world the session was built from.
+ * records which world the session was built from. A v5 file may also carry
+ * `socialTexts` per quarter; a v5 file without them is not older, it is a
+ * session that was played with no model attached.
  */
 export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
 
@@ -107,6 +120,18 @@ export interface QuarterRecord {
   readonly gmProposal: GmProposalBatch | null;
   /** What the rival strategists proposed. Empty when the quarter resolved offline. */
   readonly npcBundles: readonly NpcActionBundle[];
+  /**
+   * Words a model wrote over engine-authored posts *after* the quarter
+   * committed, capped at `MAX_SOCIAL_TEXT_OVERRIDES`.
+   *
+   * Unlike the two above, these are not inputs to `F`: the quarter resolved
+   * without them and every number in it was already fixed. They are recorded
+   * because they are still a state change, and a replay that skipped them would
+   * produce the right numbers under the wrong sentences. Absent in a file
+   * written before the feed existed, which replays as the template lines it was
+   * played with.
+   */
+  readonly socialTexts: readonly SocialTextOverride[];
 }
 
 /** A serialised session, so a long save does not cost a long replay. */
@@ -217,7 +242,14 @@ function parseRecords(raw: unknown): QuarterRecord[] {
         if (parsed.success) npcBundles.push(parsed.data);
       }
     }
-    records.push({ quarter, actions, gmProposal: gm.success ? gm.data : null, npcBundles });
+    const socialTexts: SocialTextOverride[] = [];
+    if (Array.isArray(value.socialTexts)) {
+      for (const override of value.socialTexts) {
+        const parsed = SocialTextOverrideSchema.safeParse(override);
+        if (parsed.success) socialTexts.push(parsed.data);
+      }
+    }
+    records.push({ quarter, actions, gmProposal: gm.success ? gm.data : null, npcBundles, socialTexts });
   }
   return records;
 }
@@ -233,7 +265,7 @@ function migrateV1(raw: unknown): QuarterRecord[] {
         if (parsed.success) list.push(parsed.data);
       }
     }
-    return { quarter: index, actions: list, gmProposal: null, npcBundles: [] };
+    return { quarter: index, actions: list, gmProposal: null, npcBundles: [], socialTexts: [] };
   });
 }
 
@@ -821,7 +853,10 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
       complete = false;
       break;
     }
-    session = outcome.nextState;
+    // The words a model wrote over that quarter's engine-authored posts, applied
+    // exactly where they were applied live: after the commit, touching nothing
+    // but the text of posts the engine itself authored.
+    session = applySocialTextOverrides(outcome.nextState, record.socialTexts, record.quarter);
     replayedCount += 1;
   }
 

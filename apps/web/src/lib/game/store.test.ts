@@ -74,7 +74,7 @@ describe('demo store surfaces', () => {
       autoExecuteRoutine: false,
       setup: null,
       worldVersion: 1,
-      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
+      log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }],
       checkpoint: null,
       savedQuarter: 1,
       queue: [],

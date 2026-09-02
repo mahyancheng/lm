@@ -49,14 +49,15 @@ import type {
   Quote,
   SessionDifficulty,
   SessionState,
+  SocialTextOverride,
   SubmittedAction,
   WorldState,
   WorldVersion,
 } from '@frontier/contracts';
 import { LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
-import { projectResolutionOutcomeForPlayer } from '@frontier/simulation';
-import { llmHealth, requestNpcBundle, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
+import { applySocialTextOverrides, projectResolutionOutcomeForPlayer, selectPostsForAuthoring } from '@frontier/simulation';
+import { llmHealth, requestNpcBundle, requestSocialPost, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
 import {
   DEMO_SEED,
   PLAYER_ID,
@@ -70,7 +71,7 @@ import {
   resolveQuarterSafely,
   seedOf,
 } from './engine';
-import { buildNpcStrategistInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
+import { buildNpcStrategistInput, buildSocialAuthorInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
 import {
   MAX_REPLAY_QUARTERS,
   SUPPORTED_SAVE_VERSIONS,
@@ -804,10 +805,12 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     const submitted = [...current.queuedActions];
     let gmProposal: GmProposalBatch | null = null;
     let npcBundles: NpcActionBundle[] = [];
+    let modelAvailable = false;
 
     if (current.settings.useLiveModel) {
       try {
         const health = await llmHealth();
+        modelAvailable = health.available;
         if (health.available) {
           dispatch({ type: 'resolve_status', status: 'Consulting the World Director' });
           const directorInput = buildWorldDirectorInput(session, current.previousWorld);
@@ -826,6 +829,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       } catch {
         // An LLM outage is not an error condition. Fall through to the
         // deterministic path with nothing from the model.
+        modelAvailable = false;
         gmProposal = null;
         npcBundles = [];
       }
@@ -850,17 +854,49 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       return false;
     }
 
+    // The quarter is decided. What is left is prose: the engine has already
+    // authored this quarter's posts, computed their reach and applied every
+    // consequence, and a model may now write a capped handful of those lines in
+    // their author's voice. Nothing it returns can change a number, and a
+    // failure leaves the engine's own line standing.
+    let outcome = attempt.outcome;
+    const socialTexts: SocialTextOverride[] = [];
+    if (modelAvailable && outcome.committed) {
+      try {
+        const authored = selectPostsForAuthoring(outcome.nextState, session.quarter);
+        if (authored.length > 0) {
+          dispatch({ type: 'resolve_status', status: 'The networks are talking' });
+          // Sequential on purpose: the server bounds concurrent model calls to
+          // one by default, so firing these in parallel would only queue them.
+          for (const post of authored) {
+            const input = buildSocialAuthorInput(outcome.nextState, post);
+            if (input === null) continue;
+            const draft = await requestSocialPost(input);
+            if (draft === null) continue;
+            socialTexts.push({ postId: post.id, text: draft.text });
+          }
+        }
+      } catch {
+        // Words are the least important thing in the quarter. Keep the templates.
+        socialTexts.length = 0;
+      }
+      if (socialTexts.length > 0) {
+        outcome = { ...outcome, nextState: applySocialTextOverrides(outcome.nextState, socialTexts, session.quarter) };
+      }
+    }
+
     dispatch({
       type: 'resolve_done',
-      outcome: attempt.outcome,
+      outcome,
       record: {
         quarter: session.quarter,
         actions: submitted,
         gmProposal: attempt.gmProposal,
         npcBundles: [...attempt.npcBundles],
+        socialTexts,
       },
     });
-    if (attempt.outcome.committed) sequences.reset(0);
+    if (outcome.committed) sequences.reset(0);
     return true;
   }, [sequences]);
 

@@ -44,6 +44,7 @@ import {
   NpcActionBundleSchema,
   OWNERSHIP_THRESHOLDS,
   PATTERN_TARGET_PATHS,
+  PublicRecordItemSchema,
   REGIONS,
   RESOLUTION_PHASES,
   RegionSchema,
@@ -55,6 +56,8 @@ import {
   SectorSchema,
   SessionStateSchema,
   SetupProposalSchema,
+  SocialPostSchema,
+  SocialTextOverrideSchema,
   TECH_EPISTEMIC_STATES,
   TechGraphSchema,
   WORLD_TARGET_PATHS,
@@ -65,6 +68,7 @@ import {
   backgroundsForSector,
   balanceSheetReconciles,
   canInitiateContact,
+  comparePublicRecordItems,
   commitmentConditionsHold,
   defaultBackgroundFor,
   defaultRegionFor,
@@ -623,6 +627,78 @@ describe('invalid fixtures fail', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/*  Threads and the public record                                              */
+/* -------------------------------------------------------------------------- */
+
+describe('the public record', () => {
+  const storedPost = {
+    id: 'pst_1',
+    accountId: 'soc_1',
+    quarter: 3,
+    engagement: null,
+    isAiGenerated: true,
+    reportedCount: 0,
+    authorCharacterId: 'chr_founder',
+    network: 'fast_feed',
+    text: 'We shipped it.',
+    intent: 'announce',
+    targetCompanyId: null,
+  };
+
+  it('parses a post written before threads existed, as a top-level post', () => {
+    const parsed = SocialPostSchema.safeParse(storedPost);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.replyToPostId).toBeNull();
+  });
+
+  it('carries the parent of a reply', () => {
+    const parsed = SocialPostSchema.safeParse({ ...storedPost, id: 'pst_2', replyToPostId: 'pst_1' });
+    expect(parsed.success && parsed.data.replyToPostId).toBe('pst_1');
+  });
+
+  it('refuses model prose over the post length ceiling', () => {
+    expect(SocialTextOverrideSchema.safeParse({ postId: 'pst_1', text: 'In our own words.' }).success).toBe(true);
+    expect(SocialTextOverrideSchema.safeParse({ postId: 'pst_1', text: 'x'.repeat(561) }).success).toBe(false);
+    expect(SocialTextOverrideSchema.safeParse({ postId: 'pst_1', text: '' }).success).toBe(false);
+  });
+
+  const item = {
+    id: 'sty_1',
+    quarter: 4,
+    kind: 'story',
+    who: { characterId: 'chr_journalist', companyId: null, name: 'Esther Lim', isAi: true },
+    sectorIds: ['ai'],
+    companyIds: ['cmp_nexus'],
+    headline: 'Nexus defends itself as pressure builds',
+    body: 'The company answered in public within the day.',
+    tone: -0.2,
+    weight: 0.55,
+    links: { causalParentId: null, sourceEventId: null, sourcePostIds: ['pst_1'], replyToPostId: null },
+    ledgerEventIds: ['evt_9'],
+    whyItMatters: 'about you: hostile coverage, 62% believed',
+    network: null,
+    intent: null,
+    reach: 4_000_000,
+  };
+
+  it('accepts one feed item and rejects an out-of-range tone or weight', () => {
+    expect(PublicRecordItemSchema.safeParse(item).success).toBe(true);
+    expect(PublicRecordItemSchema.safeParse({ ...item, tone: -1.4 }).success).toBe(false);
+    expect(PublicRecordItemSchema.safeParse({ ...item, weight: 1.2 }).success).toBe(false);
+    expect(PublicRecordItemSchema.safeParse({ ...item, kind: 'gossip' }).success).toBe(false);
+  });
+
+  it('orders newest first, then heaviest, then by id', () => {
+    const older = PublicRecordItemSchema.parse({ ...item, id: 'sty_0', quarter: 3 });
+    const heavier = PublicRecordItemSchema.parse({ ...item, id: 'sty_2', weight: 0.9 });
+    const tied = PublicRecordItemSchema.parse({ ...item, id: 'sty_3' });
+    const first = PublicRecordItemSchema.parse(item);
+
+    expect([older, first, heavier, tied].sort(comparePublicRecordItems).map((entry) => entry.id)).toEqual(['sty_2', 'sty_1', 'sty_3', 'sty_0']);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /*  Constants and invariants                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -701,8 +777,11 @@ describe('constants and invariants', () => {
     expect(DEFAULT_IMPACT_BUDGET.maxSingleModifierMagnitude).toBeLessThan(1);
   });
 
+  // 1.2.0 adds the public record and threads: `PublicRecordItemSchema`,
+  // `SocialTextOverrideSchema` and `SocialPost.replyToPostId`. Every addition
+  // carries a default, so a save written against 1.1.0 still parses.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.1.0');
+    expect(CONTRACTS_VERSION).toBe('1.2.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {

@@ -10,6 +10,11 @@
  * that developer sentiment rose twelve points; it can only write something the
  * engine then propagates.
  *
+ * Most posts are not written by a model at all: `npcPosts.ts` authors this
+ * quarter's from committed state, and this file propagates them exactly as it
+ * propagates a player's. The division of labour is unchanged by that — the words
+ * came from somewhere else, and every number below is still engine output.
+ *
  * The second rule this file enforces is the information boundary. A post never
  * touches canonical truth and never touches `beliefs`. What it can do is create
  * a `PublicDisclosure` — a press release, a rumour, a leak — carrying a
@@ -33,69 +38,9 @@ import type {
 } from '@frontier/contracts';
 import { makeId } from '@frontier/contracts';
 import { rememberEvent, ceoOf } from '../relationships/relations';
+import { NETWORK_PROFILES, ensureAccount } from './accounts';
+import { generateNpcPosts, generateNpcReplies } from './npcPosts';
 import { characterById, clamp, companyById, emitEvent, line, ratio, reachLabel, round, score100, unit } from './util';
-
-/* -------------------------------------------------------------------------- */
-/*  Networks                                                                   */
-/* -------------------------------------------------------------------------- */
-
-export interface NetworkProfile {
-  /** People reachable on this network at neutral attention. */
-  readonly baseAudience: number;
-  /** Follower composition of a typical account here. Shares sum to about 1. */
-  readonly audienceMix: Readonly<Record<Audience, number>>;
-  /** How readily material is reshared here. */
-  readonly virality: number;
-  /** How closely the press watches this network. */
-  readonly pressAffinity: number;
-  /** Share of a person's total following that lives here. */
-  readonly followerShare: number;
-}
-
-export const NETWORK_PROFILES: Record<NetworkArchetype, NetworkProfile> = {
-  fast_feed: {
-    baseAudience: 40_000_000,
-    audienceMix: { developers: 0.15, enterprise: 0.06, consumers: 0.3, investors: 0.15, regulators: 0.04, media: 0.18, talent: 0.12 },
-    virality: 1.4,
-    pressAffinity: 0.35,
-    followerShare: 0.45,
-  },
-  professional: {
-    baseAudience: 18_000_000,
-    audienceMix: { developers: 0.12, enterprise: 0.3, consumers: 0.0, investors: 0.15, regulators: 0.08, media: 0.1, talent: 0.25 },
-    virality: 0.8,
-    pressAffinity: 0.2,
-    followerShare: 0.2,
-  },
-  technical_forum: {
-    baseAudience: 6_000_000,
-    audienceMix: { developers: 0.55, enterprise: 0.1, consumers: 0.0, investors: 0.05, regulators: 0.03, media: 0.07, talent: 0.2 },
-    virality: 0.9,
-    pressAffinity: 0.15,
-    followerShare: 0.12,
-  },
-  community: {
-    baseAudience: 12_000_000,
-    audienceMix: { developers: 0.2, enterprise: 0.07, consumers: 0.45, investors: 0.0, regulators: 0.04, media: 0.12, talent: 0.12 },
-    virality: 1.1,
-    pressAffinity: 0.18,
-    followerShare: 0.1,
-  },
-  video: {
-    baseAudience: 60_000_000,
-    audienceMix: { developers: 0.1, enterprise: 0.02, consumers: 0.6, investors: 0.04, regulators: 0.02, media: 0.12, talent: 0.1 },
-    virality: 1.6,
-    pressAffinity: 0.22,
-    followerShare: 0.08,
-  },
-  finance: {
-    baseAudience: 9_000_000,
-    audienceMix: { developers: 0.0, enterprise: 0.15, consumers: 0.07, investors: 0.5, regulators: 0.08, media: 0.2, talent: 0.0 },
-    virality: 1.0,
-    pressAffinity: 0.3,
-    followerShare: 0.05,
-  },
-};
 
 /* -------------------------------------------------------------------------- */
 /*  Intents                                                                    */
@@ -216,36 +161,8 @@ const AUDIENCE_REPUTATION: Record<Audience, readonly { field: keyof SessionState
 };
 
 /* -------------------------------------------------------------------------- */
-/*  Accounts and ingestion                                                     */
+/*  Ingestion                                                                  */
 /* -------------------------------------------------------------------------- */
-
-/** Find the character's account on a network, creating a plausible one if absent. */
-export function ensureAccount(draft: SessionState, characterId: string, network: NetworkArchetype): SocialAccount | null {
-  const existing = draft.socialAccounts.find((a) => a.ownerCharacterId === characterId && a.network === network);
-  if (existing !== undefined) return existing;
-  const character = characterById(draft, characterId);
-  if (character === null) return null;
-
-  const profile = NETWORK_PROFILES[network];
-  const company = character.companyId === null ? null : companyById(draft, character.companyId);
-  const credibility = unit(
-    0.25 + 0.35 * ((company?.reputation.public ?? 50) / 100) + 0.25 * (character.connectionLevel / 100) + 0.15 * ((company?.reputation.investor ?? 50) / 100),
-  );
-  const account: SocialAccount = {
-    id: makeId('soc', characterId, network),
-    network,
-    handle: `@${character.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30)}`,
-    ownerCharacterId: characterId,
-    ownerCompanyId: character.companyId,
-    followers: Math.max(0, Math.round(character.publicFollowing * profile.followerShare)),
-    credibility: round(credibility, 4),
-    verified: character.connectionLevel >= 60,
-    audienceMix: { ...profile.audienceMix },
-    isActive: true,
-  };
-  draft.socialAccounts.push(account);
-  return account;
-}
 
 /**
  * Turn this quarter's `social_post` actions into published posts. The engine
@@ -278,6 +195,9 @@ export function ingestPostActions(draft: SessionState, ctx: ResolverContext): So
       // NPC characters must be visibly labelled wherever their posts appear.
       isAiGenerated: !author.isPlayer,
       reportedCount: 0,
+      // An action carries a draft, and a draft is always top-level: replies are
+      // authored by the engine, never submitted.
+      replyToPostId: null,
     };
     draft.socialPosts.push(stored);
     created.push(stored);
@@ -497,13 +417,42 @@ export function publishDisclosure(
 
 /**
  * Compute reach, engagement and every sentiment consequence for the quarter's
- * posts. The text was written by a model; every number here is engine output.
+ * posts. The text was written by a model or by an engine template; every number
+ * here is engine output.
+ *
+ * Three steps, in this order, and the order is the contract:
+ *
+ * 1. The quarter's submitted posts and the engine's own NPC posts are published.
+ * 2. Everything unresolved is propagated.
+ * 3. A post aimed at a company draws that company's reply, which is propagated
+ *    in the same quarter behind the post it answers — so a thread resolves in
+ *    one phase and a reader never sees an accusation without the answer.
+ *
+ * Both passes share one random stream and one controversy budget, so adding
+ * replies cannot double the ceiling the quarter's posts may heat the cycle by.
  */
 export function propagatePosts(draft: SessionState, ctx: ResolverContext): EngagementResult[] {
   ingestPostActions(draft, ctx);
+  generateNpcPosts(draft, ctx);
+
   const rng = ctx.rng.fork(`social_posts_q${ctx.quarter}`);
+  const budget = { controversyAdded: 0 };
+  const results = propagatePending(draft, ctx, rng, budget);
+
+  if (generateNpcReplies(draft, ctx).length > 0) {
+    results.push(...propagatePending(draft, ctx, rng, budget));
+  }
+  return results;
+}
+
+/** One propagation pass over every post of this quarter that has no engagement yet. */
+function propagatePending(
+  draft: SessionState,
+  ctx: ResolverContext,
+  rng: SeededRng,
+  budget: { controversyAdded: number },
+): EngagementResult[] {
   const results: EngagementResult[] = [];
-  let controversyAdded = 0;
 
   const posts = draft.socialPosts
     .filter((p) => p.quarter === ctx.quarter && p.engagement === null)
@@ -617,10 +566,10 @@ export function propagatePosts(draft: SessionState, ctx: ResolverContext): Engag
     }
 
     // Controversial intents heat the cycle, within a per-quarter ceiling.
-    if (intent.controversy > 0 && controversyAdded < MAX_CONTROVERSY_CONTRIBUTION) {
-      const addition = Math.min(intent.controversy * reachFactor, MAX_CONTROVERSY_CONTRIBUTION - controversyAdded);
+    if (intent.controversy > 0 && budget.controversyAdded < MAX_CONTROVERSY_CONTRIBUTION) {
+      const addition = Math.min(intent.controversy * reachFactor, MAX_CONTROVERSY_CONTRIBUTION - budget.controversyAdded);
       if (addition > 0) {
-        controversyAdded += addition;
+        budget.controversyAdded += addition;
         draft.world.media.controversyIntensity = unit(draft.world.media.controversyIntensity + addition);
       }
     }

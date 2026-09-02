@@ -35,12 +35,53 @@ import type {
 } from '@frontier/contracts';
 import { TOPIC_META } from './beliefs';
 import { clamp, clamp01, round, standardNormal } from '../economy/util';
+import { isMultiSectorWorld } from '../economy/sectors';
 
 /** In-world prices are floored, never negative and never NaN. */
 export const MIN_PRICE_USD = 0.01;
 
 /** Largest permitted single-quarter log return, applied by scaling every component. */
-const MAX_ABS_LOG_RETURN = 0.6;
+export const MAX_ABS_LOG_RETURN = 0.6;
+
+/* -------------------------------------------------------------------------- */
+/*  World version 2: prices that behave like prices                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Largest ordinary single-quarter log return in world version 2. About 20%: a
+ * bad quarter, not a catastrophe. Anything larger has to be a *shock*, and a
+ * shock writes its own ledger row, so the Markets screen can always name the
+ * reason a stock moved more than a fifth in one quarter.
+ */
+export const V2_MAX_ABS_LOG_RETURN = 0.18;
+
+/** The bound a shocked instrument is held to instead. Roughly -36% to +57%. */
+export const V2_SHOCK_MAX_ABS_LOG_RETURN = 0.45;
+
+/** Speed at which a version-2 price is pulled toward its anchor. Harder than v1. */
+export const V2_ANCHOR_PULL = 0.34;
+
+/** Ceiling on the idiosyncratic volatility term, before beta scaling. */
+export const V2_NOISE_SIGMA_CAP = 0.045;
+
+/**
+ * Chance an instrument is dislocated in a quarter, drawn per instrument from its
+ * own stream. Once every twenty-five quarters per name is roughly one dislocation
+ * a quarter across a twenty-four company market — frequent enough to be part of
+ * the game, rare enough that a price is normally explained by its business.
+ */
+export const V2_SHOCK_PROBABILITY = 0.04;
+
+/** How hard a shock hits, as a log return before the shock bound clamps it. */
+export const V2_SHOCK_BAND = { min: 0.2, max: 0.44 } as const;
+
+/** A dislocation that let one instrument move past the ordinary bound. */
+export interface PriceShock {
+  /** Signed log return the shock contributed. */
+  readonly magnitude: number;
+  /** Why the market dislocated, for the ledger row and the report line. */
+  readonly reason: string;
+}
 
 /** Fallback opening price for an instrument with no quote history. */
 const DEFAULT_EQUITY_PRICE = 100;
@@ -100,6 +141,13 @@ export interface PricedInstrument {
   readonly quote: Quote;
   /** True when the price floor truncated the move and the company is distressed. */
   readonly floored: boolean;
+  /**
+   * The dislocation that permitted a move past the ordinary bound, or null. Only
+   * ever set in world version 2; the caller must write a ledger row for it, which
+   * is what makes "no price moves more than the bound without a recorded reason"
+   * a checkable invariant rather than a promise.
+   */
+  readonly shock: PriceShock | null;
 }
 
 interface Components {
@@ -206,6 +254,13 @@ export function runPricing(
   valuationSentiment: Readonly<Record<string, number>>,
 ): PricedInstrument[] {
   const rng = rngIn.fork(`pricing_q${quarter}`);
+  const multiSector = isMultiSectorWorld(state);
+  // Forked, never drawn from, in a version-1 session: forking does not advance a
+  // parent stream, so the whole version-1 draw sequence is untouched by its
+  // existence and a legacy save replays byte-identically.
+  const shockRng = rng.fork(`shocks_q${quarter}`);
+  const anchorPull = multiSector ? V2_ANCHOR_PULL : ANCHOR_PULL;
+  const ordinaryBound = multiSector ? V2_MAX_ABS_LOG_RETURN : MAX_ABS_LOG_RETURN;
   const inWorld = state.marketInstruments.filter((instrument) => !instrument.isReference);
   const equities = inWorld
     .filter((instrument) => instrument.kind === 'in_world_equity')
@@ -235,7 +290,7 @@ export function runPricing(
 
     if (anchor !== undefined && anchor.perShareValueUsd !== null && anchor.perShareValueUsd > 0) {
       const gap = clamp(Math.log(anchor.perShareValueUsd / before), -0.8, 0.8);
-      c.fundamentalAlpha = ANCHOR_PULL * gap * clamp01(anchor.confidence);
+      c.fundamentalAlpha = anchorPull * gap * clamp01(anchor.confidence);
     }
 
     c.publicInfoEffect = publicInformationEffect(state, instrument.companyId, quarter);
@@ -252,13 +307,38 @@ export function runPricing(
     c.liquidityEffect = clamp(1.2 * flow - illiquidity, -0.1, 0.1);
 
     const sectorState = instrument.sectorId === null ? undefined : state.sectors[instrument.sectorId];
-    const sigma =
+    const rawSigma =
       (0.02 + 0.1 * state.world.capitalMarkets.volatility + 0.06 * (sectorState?.volatility ?? 0.3)) *
       clamp(0.6 + 0.4 * Math.abs(instrument.beta), 0.5, 2);
+    // Version 2 damps idiosyncratic volatility to a few percent a quarter: a
+    // share price should be explained by the business and the market, and only
+    // rarely by nothing at all.
+    const sigma = multiSector ? Math.min(rawSigma, V2_NOISE_SIGMA_CAP) : rawSigma;
     c.noise = sigma * standardNormal(rng);
 
+    // A dislocation is the only thing that lets a version-2 price move further
+    // than the ordinary bound, and it is drawn per instrument from its own
+    // stream so adding or removing a company cannot shift anybody else's draws.
+    let shock: PriceShock | null = null;
+    if (multiSector) {
+      const own = shockRng.fork(instrument.id);
+      if (own.next() < V2_SHOCK_PROBABILITY) {
+        const size = own.range(V2_SHOCK_BAND.min, V2_SHOCK_BAND.max);
+        const downward = own.next() < 0.5;
+        const magnitude = downward ? -size : size;
+        shock = {
+          magnitude,
+          reason: downward
+            ? 'A holder liquidated into a thin book and the price gapped down.'
+            : 'A block bid cleared the offer and the price gapped up.',
+        };
+        c.sentimentEffect += magnitude;
+      }
+    }
+
+    const bound = shock === null ? ordinaryBound : V2_SHOCK_MAX_ABS_LOG_RETURN;
     let total = sumComponents(c);
-    if (Math.abs(total) > MAX_ABS_LOG_RETURN) total = total > 0 ? MAX_ABS_LOG_RETURN : -MAX_ABS_LOG_RETURN;
+    if (Math.abs(total) > bound) total = total > 0 ? bound : -bound;
 
     let after = before * Math.exp(total);
     let floored = false;
@@ -279,6 +359,7 @@ export function runPricing(
     priced.push({
       instrument,
       floored,
+      shock,
       decomposition: {
         instrumentId: instrument.id,
         companyId: instrument.companyId,
@@ -336,7 +417,14 @@ export function runPricing(
       c.noise /= weightSum;
     }
 
-    let total = clamp(sumComponents(c), -MAX_ABS_LOG_RETURN, MAX_ABS_LOG_RETURN);
+    // An index is the weighted average of instruments already bounded, so it can
+    // exceed the ordinary bound only when its constituents were shocked.
+    const indexShocked = constituents.some((entry) => entry.shock !== null);
+    let total = clamp(
+      sumComponents(c),
+      -(indexShocked ? V2_SHOCK_MAX_ABS_LOG_RETURN : ordinaryBound),
+      indexShocked ? V2_SHOCK_MAX_ABS_LOG_RETURN : ordinaryBound,
+    );
     let after = before * Math.exp(total);
     let floored = false;
     if (!Number.isFinite(after) || after < MIN_PRICE_USD) {
@@ -350,6 +438,7 @@ export function runPricing(
     priced.push({
       instrument,
       floored,
+      shock: indexShocked ? { magnitude: total, reason: 'A constituent was dislocated and carried the index with it.' } : null,
       decomposition: {
         instrumentId: instrument.id,
         companyId: null,

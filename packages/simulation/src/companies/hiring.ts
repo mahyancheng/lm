@@ -19,6 +19,7 @@
 
 import type { CompBand, Company, ResolverContext, SessionState, StaffRole } from '@frontier/contracts';
 import { effectivePolicy } from './archetypes';
+import { companyTalentCostFactor } from '../economy/regions';
 import {
   ATTRITION_BOUNDS,
   ATTRITION_REALISATION_BAND,
@@ -82,6 +83,22 @@ export function requiredCompUsd(draft: SessionState, role: StaffRole): number {
 /** The offer a compensation band represents for a role, in annual dollars. */
 export function offerCompUsd(draft: SessionState, role: StaffRole, band: CompBand): number {
   return requiredCompUsd(draft, role) * COMP_BAND_MULTIPLIER[band];
+}
+
+/**
+ * What a role costs *this company*, where it is.
+ *
+ * The world's salary pressure sets the trend; the region sets the level, from
+ * South Asia at 55 to North America at 130. Exactly `requiredCompUsd` in world
+ * version 1, which is why no legacy payroll moves.
+ */
+export function regionalCompUsd(draft: SessionState, company: Company, role: StaffRole): number {
+  return requiredCompUsd(draft, role) * companyTalentCostFactor(draft, company);
+}
+
+/** `offerCompUsd`, priced where the company actually hires. */
+export function regionalOfferCompUsd(draft: SessionState, company: Company, role: StaffRole, band: CompBand): number {
+  return regionalCompUsd(draft, company, role) * COMP_BAND_MULTIPLIER[band];
 }
 
 /** Supply of the kind of person a role needs, 0..1. */
@@ -148,9 +165,9 @@ export function poachProbability(
 /** Blended market compensation for the company's actual role mix. */
 function blendedMarketCompUsd(draft: SessionState, company: Company): number {
   const head = totalHeadcount(company);
-  if (head === 0) return requiredCompUsd(draft, 'engineers');
+  if (head === 0) return regionalCompUsd(draft, company, 'engineers');
   let sum = 0;
-  for (const role of ROLES) sum += roleHeadcount(company, role) * requiredCompUsd(draft, role);
+  for (const role of ROLES) sum += roleHeadcount(company, role) * regionalCompUsd(draft, company, role);
   return sum / head;
 }
 
@@ -207,7 +224,7 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       const remainder = expected - whole;
       const filled = Math.min(intent.count, whole + (rng.next() < remainder ? 1 : 0));
       const unfilled = intent.count - filled;
-      const offer = offerCompUsd(draft, intent.role, intent.compBand);
+      const offer = regionalOfferCompUsd(draft, company, intent.role, intent.compBand);
 
       if (filled > 0) {
         const head = totalHeadcount(company);
@@ -400,7 +417,7 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       const lapsed = standing <= 0 ? 0 : Math.min(standing, Math.max(1, Math.round(standing * OPEN_ROLE_EXPIRY_RATE)));
 
       if (filledFromBacklog > 0) {
-        const offer = offerCompUsd(draft, role, policy.compBand);
+        const offer = regionalOfferCompUsd(draft, company, role, policy.compBand);
         const head = totalHeadcount(company);
         company.employees.avgComp = money((head * company.employees.avgComp + filledFromBacklog * offer) / (head + filledFromBacklog));
         setRoleHeadcount(company, role, roleHeadcount(company, role) + filledFromBacklog);

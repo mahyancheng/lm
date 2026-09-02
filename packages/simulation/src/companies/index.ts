@@ -28,7 +28,9 @@ import { resolveFinancials } from './financials';
 import { applyNpcDefaults } from './npc';
 import { recomputeMetrics } from './metrics';
 
-export { resolveHiring, fillRate, poachProbability, offerCompUsd, requiredCompUsd } from './hiring';
+export { resolveHiring, fillRate, poachProbability, offerCompUsd, requiredCompUsd, regionalCompUsd, regionalOfferCompUsd } from './hiring';
+export { livedGrossMarginPct, previousTtmUsd, quarterNetIncomeUsd, rollFundamentals, sharesOutstandingFor } from './fundamentals';
+export { MAX_LIVE_STRATEGISTS, strategistCompanyIds } from './strategists';
 export {
   resolveProducts,
   segmentDemand,

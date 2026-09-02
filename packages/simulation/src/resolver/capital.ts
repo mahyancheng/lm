@@ -37,7 +37,9 @@ import type {
   SessionState,
   ShareClass,
 } from '@frontier/contracts';
-import { makeId, ownershipThresholdFor } from '@frontier/contracts';
+import { makeId, ownershipThresholdFor, priceWithinBand, sharesForMarketCap } from '@frontier/contracts';
+import { companyCapitalDepthFactor } from '../economy/regions';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { pendingOfType } from './actions';
 import { routeDeals } from './routing';
 
@@ -183,6 +185,76 @@ export function setIssued(table: CapTable, shareClass: ShareClass, issued: numbe
   table.lastUpdatedQuarter = quarter;
 }
 
+/**
+ * Re-denominate every share class in a cap table so the company's shares total
+ * `targetFullyDiluted`. A stock split, in other words, and the mechanism behind
+ * the readable-price rule in `@frontier/contracts/markets`: capitalisation is
+ * the real quantity, and the share count is what gets chosen so a price reads
+ * like a price.
+ *
+ * Ownership is preserved exactly, not approximately. Every holding is scaled and
+ * rounded, and the whole rounding residual for a class is settled against its
+ * largest holding, so `sum(holdings) === issuedShares === totalIssuedByClass`
+ * still holds to the share — which is what the ownership invariant checks.
+ *
+ * Returns the resulting fully diluted count, which is the incoming one when the
+ * split was refused (no shares, a degenerate ratio, or a residual that would
+ * drive a holding negative).
+ */
+export function normaliseShareCount(draft: SessionState, table: CapTable, targetFullyDiluted: number, quarter: number): number {
+  const current = table.fullyDilutedShares;
+  const target = Math.round(targetFullyDiluted);
+  if (!(current > 0) || !(target > 0)) return current;
+  const ratio = target / current;
+  // A split of less than a tenth of a percent is not worth the rounding it costs.
+  if (Math.abs(ratio - 1) < 0.001) return current;
+
+  const classOfSecurity = new Map<string, string>();
+  for (const security of draft.securities) {
+    if (security.companyId === table.companyId) classOfSecurity.set(security.id, security.shareClassId);
+  }
+
+  // Scale each class independently so the per-class invariant survives, then
+  // recompute the total rather than trusting the target to be exactly divisible.
+  const scaledByClass = new Map<string, Holding[]>();
+  for (const holding of table.holdings) {
+    const classId = classOfSecurity.get(holding.securityId);
+    if (classId === undefined) continue;
+    const bucket = scaledByClass.get(classId);
+    if (bucket === undefined) scaledByClass.set(classId, [holding]);
+    else bucket.push(holding);
+  }
+
+  for (const shareClass of table.shareClasses) {
+    const wanted = Math.max(0, Math.round(shareClass.issuedShares * ratio));
+    const holdings = (scaledByClass.get(shareClass.id) ?? []).slice().sort((a, b) => b.shares - a.shares || (a.id < b.id ? -1 : 1));
+    if (holdings.length === 0) {
+      shareClass.issuedShares = wanted;
+      table.totalIssuedByClass[shareClass.id] = wanted;
+      continue;
+    }
+    let sum = 0;
+    for (const holding of holdings) {
+      holding.shares = Math.max(0, Math.round(holding.shares * ratio));
+      sum += holding.shares;
+    }
+    const residual = wanted - sum;
+    const largest = holdings[0];
+    if (largest !== undefined && largest.shares + residual >= 0) {
+      largest.shares += residual;
+      sum = wanted;
+    }
+    shareClass.issuedShares = sum;
+    table.totalIssuedByClass[shareClass.id] = sum;
+    shareClass.authorisedShares = Math.max(shareClass.authorisedShares, Math.round(shareClass.authorisedShares * ratio), sum);
+  }
+
+  table.optionPoolShares = Math.max(0, Math.round(table.optionPoolShares * ratio));
+  table.fullyDilutedShares = table.shareClasses.reduce((sum, klass) => sum + klass.issuedShares, 0) + table.optionPoolShares;
+  table.lastUpdatedQuarter = quarter;
+  return table.fullyDilutedShares;
+}
+
 /** Emit `ownership_threshold_crossed` when a holder crosses a line upward. */
 function reportThreshold(
   draft: SessionState,
@@ -250,10 +322,15 @@ function resolveFundingRounds(draft: SessionState, ctx: ResolverContext, rng: Se
     const postMoney = preMoney + intent.targetAmountUsd;
     const dilution = postMoney <= 0 ? 1 : intent.targetAmountUsd / postMoney;
 
+    // Where the company is decides how deep the local book is: the same round in
+    // North America clears more readily than in Latin America. Exactly 1 in
+    // world version 1, so a legacy save is unaffected.
+    const capitalDepth = companyCapitalDepthFactor(draft, company);
     const appetite =
-      0.5 * draft.world.capitalMarkets.ventureLiquidity +
-      0.3 * draft.world.capitalMarkets.riskAppetite +
-      0.2 * (company.reputation.investor / 100);
+      (0.5 * draft.world.capitalMarkets.ventureLiquidity +
+        0.3 * draft.world.capitalMarkets.riskAppetite +
+        0.2 * (company.reputation.investor / 100)) *
+      capitalDepth;
     const strain = clamp01(intent.targetAmountUsd / Math.max(1, preMoney * 0.35));
     const clearChance = clamp01(appetite * 1.1 - 0.45 * strain);
     const draw = rng.next();
@@ -553,7 +630,18 @@ function resolveListings(draft: SessionState, ctx: ResolverContext): void {
     const anchor = draft.valuationAnchors.find((a) => a.companyId === company.id);
     const impliedPerShare =
       anchor?.perShareValueUsd ?? (table.fullyDilutedShares > 0 ? estimateValuationUsd(draft, company) / table.fullyDilutedShares : intent.minPricePerShareUsd);
-    const price = impliedPerShare * (0.75 + 0.5 * window);
+    let price = impliedPerShare * (0.75 + 0.5 * window);
+
+    // A listing is the one moment the share count is ours to choose, so world
+    // version 2 chooses it: split or consolidate the register until the offer
+    // prices inside SHARE_PRICE_BAND_USD. The capitalisation is unchanged — only
+    // the denomination is — which is why this happens before the price floor is
+    // tested against the player's own minimum.
+    if (isMultiSectorWorld(draft) && table.fullyDilutedShares > 0 && !priceWithinBand(price)) {
+      const impliedCapUsd = price * table.fullyDilutedShares;
+      const applied = normaliseShareCount(draft, table, sharesForMarketCap(impliedCapUsd), draft.quarter);
+      if (applied > 0) price = impliedCapUsd / applied;
+    }
 
     if (window < IPO_WINDOW_FLOOR || price < intent.minPricePerShareUsd) {
       const eventId = ctx.emit({

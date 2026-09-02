@@ -618,17 +618,93 @@ function snapshotOf(state: SessionState, phase: 'pre_resolution' | 'post_commit'
 }
 
 /**
- * Trim the rolling windows. History is not lost: quotes, disclosures and posts
- * older than the window live on in snapshots and in the ledger, which is where
- * the audit trail belongs.
+ * How long a *settled* procurement record stays in live state after it closes.
+ *
+ * Twelve quarters — three years — for one reason: it is the window a player can
+ * still act on. A contract that completed within three years is what a rival's
+ * bid team, an agency's memory and the Government screen's history are made of;
+ * one that completed five years ago has already been absorbed into
+ * `governmentPastPerformance` and `contractorReputations`, which are scores on
+ * the company and are never pruned.
+ *
+ * The consequence to know about: `refreshDeliveryStatistics` recomputes on-time
+ * delivery from the contracts still in state, so past that horizon it is a
+ * rolling three-year record rather than a lifetime one. That is how procurement
+ * past performance actually works, and it is why the horizon is stated here
+ * rather than buried at the call site.
+ */
+export const SETTLED_RECORD_HORIZON_QUARTERS = 12;
+
+/**
+ * Trim the rolling windows. History is not lost: quotes, disclosures, posts and
+ * settled procurement records older than the window live on in snapshots and in
+ * the ledger, which is where the audit trail belongs.
+ *
+ * Two windows, not one. Quotes, disclosures and social posts follow
+ * `quoteHistoryQuarters`, which a session configures. Procurement records follow
+ * `SETTLED_RECORD_HORIZON_QUARTERS` and are only ever dropped once they are
+ * *settled* — nothing still open, still evaluating, still active or still
+ * referenced by something open is ever removed, however old it is.
  */
 function pruneHistory(draft: SessionState): void {
+  pruneSettledProcurement(draft);
   const oldest = draft.quarter - draft.quoteHistoryQuarters;
   if (oldest <= 0) return;
   draft.quotes = draft.quotes.filter((quote) => quote.quarter >= oldest);
   draft.disclosures = draft.disclosures.filter((disclosure) => disclosure.quarter >= oldest);
   draft.socialPosts = draft.socialPosts.filter((post) => post.quarter >= oldest);
   draft.mediaStories = draft.mediaStories.filter((story) => story.quarter >= oldest);
+}
+
+/**
+ * Drop procurement records that are both settled and old.
+ *
+ * Left alone, `procurementOpportunities`, `governmentBids` and
+ * `governmentContracts` only ever grow: two competitions can open every quarter,
+ * every one of them accumulates a bid per interested company, and an awarded
+ * contract is never removed once it completes. Over a long session that is
+ * several kilobytes a quarter of state that nothing reads — which on a phone is
+ * a crash rather than an inefficiency.
+ *
+ * The order matters: contracts are pruned first, then bids (a bid is kept while
+ * the contract it won survives), then opportunities (kept while any bid or
+ * contract still points at them). Nothing live is ever dropped.
+ */
+function pruneSettledProcurement(draft: SessionState): void {
+  const horizon = draft.quarter - SETTLED_RECORD_HORIZON_QUARTERS;
+  if (horizon <= 0) return;
+
+  const contractSettled = (status: string): boolean => status === 'completed' || status === 'terminated';
+  draft.governmentContracts = draft.governmentContracts.filter((contract) => {
+    if (!contractSettled(contract.status)) return true;
+    const lastActivity = contract.milestones.reduce(
+      (latest, milestone) => Math.max(latest, milestone.completedQuarter ?? milestone.dueQuarter),
+      contract.awardedQuarter,
+    );
+    return lastActivity >= horizon;
+  });
+
+  const liveOpportunityIds = new Set<string>();
+  for (const opportunity of draft.procurementOpportunities) {
+    if (opportunity.status === 'open' || opportunity.status === 'evaluating') liveOpportunityIds.add(opportunity.id);
+  }
+  const survivingContractOpportunityIds = new Set(draft.governmentContracts.map((contract) => contract.opportunityId));
+
+  draft.governmentBids = draft.governmentBids.filter((bid) => {
+    if (liveOpportunityIds.has(bid.opportunityId)) return true;
+    if (survivingContractOpportunityIds.has(bid.opportunityId)) return true;
+    return bid.submittedQuarter >= horizon;
+  });
+
+  const referencedOpportunityIds = new Set<string>([
+    ...draft.governmentBids.map((bid) => bid.opportunityId),
+    ...survivingContractOpportunityIds,
+  ]);
+  draft.procurementOpportunities = draft.procurementOpportunities.filter((opportunity) => {
+    if (opportunity.status === 'open' || opportunity.status === 'evaluating') return true;
+    if (referencedOpportunityIds.has(opportunity.id)) return true;
+    return opportunity.closeQuarter >= horizon;
+  });
 }
 
 /** The refusal returned when a quarter has already committed. */

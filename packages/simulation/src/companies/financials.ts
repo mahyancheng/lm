@@ -76,6 +76,8 @@ import {
 } from './balance';
 import { resolveDistress } from './distress';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
+import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
+import { companyEnergyCostFactor } from '../economy/regions';
 import {
   activeCompanies,
   activeProducts,
@@ -122,7 +124,10 @@ export function computeCost(draft: SessionState, company: Company): ComputeCostB
   const cloud = compute.cloudSpendQuarterly * world.compute.spotPrice;
   const cloudUnits = ratio(compute.cloudSpendQuarterly, CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, world.compute.spotPrice));
   const units = compute.ownedAccelerators + compute.reservedAccelerators + cloudUnits;
-  const energy = units * ENERGY_USD_PER_ACCELERATOR_QUARTER * world.energy.electricityPrice;
+  // Electricity is the one input whose price is genuinely local: the world index
+  // sets the trend, the company's region sets what it actually pays. The regional
+  // factor is exactly 1 in world version 1.
+  const energy = units * ENERGY_USD_PER_ACCELERATOR_QUARTER * world.energy.electricityPrice * companyEnergyCostFactor(draft, company);
   return {
     ownedDepreciationUsd: ownedDepreciation,
     reservedUsd: reserved,
@@ -242,6 +247,9 @@ export function resolveFinancials(
   // are, so rescue cash is on the balance sheet when the bills are paid.
   resolveDistress(draft, ctx);
 
+  // Computed once, ahead of the loop: it walks every company. Neutral in v1.
+  const economy = sectorEconomy(draft);
+
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
     const sheet = company.balanceSheet;
@@ -273,8 +281,22 @@ export function resolveFinancials(
     const servingCompute = compute.totalUsd * compute.servingShare;
     const trainingCompute = compute.totalUsd - servingCompute;
     const compliance = complianceCostUsd(draft, company.id);
-    const cogs = servingCompute + supportCost + compliance;
     const depreciation = Math.min(sheet.assets.ppe, compute.ownedDepreciationUsd);
+
+    // The sector's own cost weather: energy pass-through upward, AI productivity
+    // downward, plus the sustaining capital a capital-intensive sector owes just
+    // to stand still. Both are zero in world version 1.
+    //
+    // The adjustment is applied to the *cash* part of cost only. Depreciation is
+    // a charge against an asset the balance sheet already carries; scaling it
+    // would invent property, so it is excluded and the cash-flow split below
+    // continues to subtract exactly the depreciation that was booked.
+    const sector = economy[sectorOf(company)];
+    const depreciationInCogs = depreciation * compute.servingShare;
+    const cashCogsBeforeSector = Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance;
+    const sectorCostAdjustment =
+      (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapitalUsd(sector, revenue);
+    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment;
 
     // Payroll and marketing were staged by the talent and product phases. The
     // fallbacks below only bite when this phase is run in isolation.
@@ -310,8 +332,8 @@ export function resolveFinancials(
 
     // Depreciation is the only non-cash charge, and it is split across the two
     // buckets the compute cost was split into. Both halves must be excluded from
-    // the cash that actually leaves.
-    const depreciationInCogs = depreciation * compute.servingShare;
+    // the cash that actually leaves. `depreciationInCogs` was computed with the
+    // sector adjustment above, which is deliberately cash-only for this reason.
     const depreciationInRd = depreciation - depreciationInCogs;
     const cogsCash = Math.max(0, cogs - depreciationInCogs);
     const rdCash = Math.max(0, rdSpend - depreciationInRd);

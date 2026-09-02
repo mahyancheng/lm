@@ -44,6 +44,7 @@ import {
 import { resolveOpportunityResponses } from './responses';
 import { scoreOpportunityBids } from './scoring';
 import { advanceMilestones, createContract, ensureReputation } from './contracts';
+import { sessionProcurementFactor } from '../economy/regions';
 import { clamp, companyById, emitEvent, line, money, round, unit, usdLabel } from './util';
 
 export * from './programmes';
@@ -173,6 +174,10 @@ export function createGovernmentSubsystem(): GovernmentSubsystemImpl {
     let pipeline = openCount;
     let opened = 0;
 
+    // How much public work is on the table where this world's companies actually
+    // are. Exactly 1 in world version 1, so no legacy competition schedule moves.
+    const appetite = sessionProcurementFactor(draft);
+
     for (const agency of draft.agencies) {
       if (opened >= MAX_OPENINGS_PER_QUARTER) break;
       for (const template of templatesForAgency(agency)) {
@@ -182,7 +187,7 @@ export function createGovernmentSubsystem(): GovernmentSubsystemImpl {
 
         const demand = programmeDemand(template, draft.world);
         const crowding = clamp(1 - pipeline / MAX_OPEN_OPPORTUNITIES, 0, 1);
-        const hazard = unit(template.openRate * demand * (0.4 + 0.6 * crowding));
+        const hazard = unit(template.openRate * demand * (0.4 + 0.6 * crowding) * appetite);
         if (rng.next() >= hazard) continue;
 
         const opportunity = buildOpportunity(draft, agency, template, ctx.quarter, rng);

@@ -24,6 +24,16 @@
 
 import type { Company, CompanyQuarterMetrics, SessionState, ValuationAnchor, ValuationMethod } from '@frontier/contracts';
 import { clamp, clamp01, round } from '../economy/util';
+import { isMultiSectorWorld } from '../economy/sectors';
+import { fundamentalValueUsd } from './fundamentalValue';
+
+/**
+ * How much of a world-version-2 anchor is the fundamentals model and how much is
+ * the maturity method beside it. The method still carries the things revenue
+ * cannot see — option value on the frontier, an infrastructure company's asset
+ * base — so it keeps a quarter of the weight rather than being discarded.
+ */
+export const FUNDAMENTAL_ANCHOR_WEIGHT = 0.75;
 
 /** Baseline revenue multiple by sector, before market and sector indices. */
 const SECTOR_BASE_MULTIPLE: Record<string, number> = {
@@ -145,6 +155,9 @@ function sharesOutstandingFor(state: SessionState, company: Company): number | n
   if (instrument?.sharesOutstanding != null && instrument.sharesOutstanding > 0) return instrument.sharesOutstanding;
   const capTable = state.capTables.find((table) => table.companyId === company.id);
   if (capTable !== undefined && capTable.fullyDilutedShares > 0) return capTable.fullyDilutedShares;
+  // World version 2 keeps the authoritative total on the company itself, so an
+  // unlisted company without a cap table still has a per-share figure.
+  if (isMultiSectorWorld(state) && company.fundamentals.sharesOutstanding > 0) return company.fundamentals.sharesOutstanding;
   return null;
 }
 
@@ -254,6 +267,22 @@ export function computeValuationAnchor(state: SessionState, companyId: string): 
 
   // Listed companies disclose quarterly, so the market has more to work with.
   if (company.isPublic) confidence = clamp01(confidence + 0.1);
+
+  // World version 2: the anchor is mostly the fundamentals model — trailing
+  // revenue times a sector multiple earned by growth and margin — with the
+  // maturity method keeping a quarter of the weight for what revenue cannot see.
+  // A company with no trailing revenue keeps its method anchor untouched.
+  if (isMultiSectorWorld(state)) {
+    const fundamental = fundamentalValueUsd(state, company);
+    if (fundamental !== null) {
+      anchor = FUNDAMENTAL_ANCHOR_WEIGHT * fundamental.valueUsd + (1 - FUNDAMENTAL_ANCHOR_WEIGHT) * Math.max(0, anchor);
+      confidence = clamp01(Math.max(confidence, fundamental.confidence));
+      inputs['fundamentalValueUsd'] = fundamental.valueUsd;
+      inputs['sectorRevenueMultiple'] = round(fundamental.multiple, 3);
+      inputs['fundamentalQuality'] = round(fundamental.quality, 4);
+      inputs['trailingRevenueUsd'] = round(fundamental.trailingRevenueUsd, 2);
+    }
+  }
 
   const safeAnchor = Number.isFinite(anchor) ? Math.max(0, anchor) : 0;
   const shares = sharesOutstandingFor(state, company);

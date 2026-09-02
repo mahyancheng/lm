@@ -63,6 +63,8 @@ import {
 } from './balance';
 import { resolveComputeOrders } from './compute';
 import { marketingPlan } from './policy';
+import { sectorEconomy, sectorOf } from '../economy/sectors';
+import { companyRegionFitFactor } from '../economy/regions';
 import {
   activeCompanies,
   activeProducts,
@@ -237,6 +239,11 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
   // quarter's demand.
   resolveComputeOrders(draft, ctx);
 
+  // Sector conditions are read by every company, so they are computed once:
+  // building them per company would walk the whole company list per company.
+  // Every multiplier is exactly 1 in world version 1.
+  const economy = sectorEconomy(draft);
+
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
 
@@ -361,6 +368,11 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
       segmentProductCount[product.segment] = (segmentProductCount[product.segment] ?? 0) + 1;
     }
 
+    // What the company's sector cycle, its upstream supply and its region's fit
+    // for that sector do to new demand. One multiplier, applied once, to gross
+    // additions only: churn is about the product, not about the weather.
+    const sectorDemandFactor = economy[sectorOf(company)].demandMultiplier * companyRegionFitFactor(draft, company);
+
     const drafts: DemandDraft[] = [];
     for (const product of products) {
       const segment = product.segment;
@@ -384,7 +396,7 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
       const noise = rng.range(DEMAND_NOISE_BAND.min, DEMAND_NOISE_BAND.max);
 
       const base = (product.activeCustomers + SEGMENT_SEED_POOL[segment]) * SEGMENT_BASE_ADD_RATE[segment];
-      const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise);
+      const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise * sectorDemandFactor);
 
       const churn = productChurn(segment, qualityEdge, priceEdge, reputation, 0, shockByProduct.get(product.id) ?? 0);
       const retained = product.activeCustomers * (1 - churn);

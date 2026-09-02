@@ -24,7 +24,9 @@
  */
 
 import type { Company, InvariantCheckResult, ResolutionLine, SessionState, SimEvent, SimulationInvariant } from '@frontier/contracts';
-import { BALANCE_SHEET_TOLERANCE_USD, balanceSheetReconciles, getTargetPathSpec } from '@frontier/contracts';
+import { BALANCE_SHEET_TOLERANCE_USD, MARKET_CAP_TOLERANCE_USD, balanceSheetReconciles, getTargetPathSpec, marketCapFromPrice } from '@frontier/contracts';
+import { MAX_ABS_LOG_RETURN, V2_MAX_ABS_LOG_RETURN, V2_SHOCK_MAX_ABS_LOG_RETURN } from '../markets/pricing';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { chainRowHash } from './ledger';
 
 /** Invariants whose failure means the engine is wrong rather than the world. */
@@ -91,7 +93,7 @@ export function runInvariantGate(input: InvariantGateInput): InvariantCheckResul
   return [
     checkFinancialIntegrity(input.draft, input.opening ?? input.draft, input.events),
     checkOwnershipIntegrity(input.draft),
-    checkMarketIntegrity(input.draft),
+    checkMarketIntegrity(input.draft, input.events),
     checkAuthoritativeBackend(input.draft),
     checkInformationBoundary(input.draft, input.events),
     checkLlmContainment(input.draft),
@@ -384,18 +386,75 @@ function checkOwnershipIntegrity(draft: SessionState): InvariantCheckResult {
     : fail('ownership_integrity', `Ownership does not reconcile: ${offenders.slice(0, 5).join('; ')}`, firstId(offenders));
 }
 
-/** No in-world price is negative, zero or NaN, and no return is unbounded. */
-function checkMarketIntegrity(draft: SessionState): InvariantCheckResult {
+/**
+ * Prices are real numbers that behave like prices.
+ *
+ * Four things, in ascending order of how much they cost to get wrong:
+ *
+ * 1. **Every in-world price is finite and positive**, and no return is below a
+ *    total loss. A NaN price is a corrupt world, not a cheap stock.
+ * 2. **This quarter's capitalisation reconciles**: `price x sharesOutstanding`
+ *    equals the `marketCapUsd` the quote carries, to the dollar. A price and a
+ *    market capitalisation that disagree are two different companies.
+ * 3. **No price moved further than the bound without a recorded reason.** The
+ *    pricing model clamps every move; this checks the clamp actually held, and
+ *    that anything past it carries a `price_shock` row or was floored by
+ *    distress. It is the half of "realistic prices" that a model cannot quietly
+ *    stop honouring.
+ * 4. Only quotes struck *this* quarter are checked for 2 and 3: an older quote
+ *    was checked when it was written, and a scenario's seeded opening quotes are
+ *    data rather than the output of a priced quarter.
+ */
+function checkMarketIntegrity(draft: SessionState, events: readonly SimEvent[]): InvariantCheckResult {
   const reference = new Set(draft.marketInstruments.filter((instrument) => instrument.isReference).map((instrument) => instrument.id));
+  const shares = new Map<string, number>();
+  for (const instrument of draft.marketInstruments) {
+    if (instrument.sharesOutstanding != null && instrument.sharesOutstanding > 0) shares.set(instrument.id, instrument.sharesOutstanding);
+  }
   const offenders: string[] = [];
+
   for (const quote of draft.quotes) {
     if (reference.has(quote.instrumentId)) continue;
     if (!Number.isFinite(quote.price) || quote.price <= 0) offenders.push(`${quote.instrumentId}@q${quote.quarter} price ${quote.price}`);
     const returnValue = quote.return;
     if (!Number.isFinite(returnValue) || returnValue < -1) offenders.push(`${quote.instrumentId}@q${quote.quarter} return ${returnValue}`);
+
+    if (quote.quarter !== draft.quarter) continue;
+    const count = shares.get(quote.instrumentId);
+    if (count === undefined) continue;
+    const implied = marketCapFromPrice(quote.price, count);
+    if (Math.abs(quote.marketCapUsd - implied) > MARKET_CAP_TOLERANCE_USD) {
+      offenders.push(`${quote.instrumentId}@q${quote.quarter} capitalisation ${quote.marketCapUsd.toFixed(2)} against ${implied.toFixed(2)} implied`);
+    }
   }
+
+  // A move past the bound needs a reason on the record: a dislocation row, or the
+  // price floor a distressed company hit.
+  const shocked = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'sentiment_shifted' && event.payload.kind === 'price_shock' && event.targetId !== null) shocked.add(event.targetId);
+  }
+  const bound = isMultiSectorWorld(draft) ? V2_MAX_ABS_LOG_RETURN : MAX_ABS_LOG_RETURN;
+  // Prices are rounded to six places before the applied return is recomputed, so
+  // the bound is compared with a tolerance rather than exactly.
+  const epsilon = 1e-6;
+  let moves = 0;
+  for (const event of events) {
+    if (event.type !== 'market_priced' || event.quarter !== draft.quarter) continue;
+    const before = event.payload.priceBefore;
+    const after = event.payload.priceAfter;
+    if (typeof before !== 'number' || typeof after !== 'number' || !(before > 0) || !(after > 0)) continue;
+    if (event.payload.floored === true) continue;
+    moves += 1;
+    const permitted = (event.targetId !== null && shocked.has(event.targetId) ? V2_SHOCK_MAX_ABS_LOG_RETURN : bound) + epsilon;
+    const move = Math.abs(Math.log(after / before));
+    if (move > permitted) {
+      offenders.push(`${String(event.targetId)}@q${event.quarter} moved ${(move * 100).toFixed(1)}% against a bound of ${(permitted * 100).toFixed(1)}%`);
+    }
+  }
+
   return offenders.length === 0
-    ? pass('market_integrity', `${draft.quotes.length} quotes carry finite, positive prices.`)
+    ? pass('market_integrity', `${draft.quotes.length} quotes carry finite, positive prices; ${moves} priced move(s) stayed inside their bound and reconcile to their capitalisation.`)
     : fail('market_integrity', `Illegal quotes: ${offenders.slice(0, 5).join('; ')}`, firstId(offenders));
 }
 

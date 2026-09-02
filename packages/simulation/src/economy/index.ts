@@ -83,6 +83,42 @@ export {
   TRANSIENT_COMPANY_METRICS,
 } from './scope';
 export type { MutableTargetPathScope, TransientCompanyMetric } from './scope';
+export {
+  AI_PRODUCTIVITY_MAX_UPLIFT,
+  ENERGY_COST_PASS_THROUGH,
+  MULTI_SECTOR_WORLD_VERSION,
+  SECTOR_CYCLE_AMPLITUDE,
+  SECTOR_DEMAND_BOUNDS,
+  SECTOR_INPUT_COST_BOUNDS,
+  SUPPLY_COUPLING,
+  SUPPLY_GATE_FLOOR,
+  SUSTAINING_CAPITAL_MAX_REVENUE_SHARE,
+  isMultiSectorWorld,
+  neutralSectorEconomy,
+  sectorCyclePhase,
+  sectorDemandCycle,
+  sectorEconomy,
+  sectorMarginBand,
+  sectorOf,
+  sectorRevenueMultipleBand,
+  sustainingCapitalUsd,
+} from './sectors';
+export type { SectorEconomy } from './sectors';
+export {
+  AFFINITY_DEMAND_WEIGHT,
+  REGION_FACTOR_BOUNDS,
+  companyCapitalDepthFactor,
+  companyEnergyCostFactor,
+  companyRegionFitFactor,
+  companyTalentCostFactor,
+  regionCapitalDepthFactor,
+  regionEnergyCostFactor,
+  regionOf,
+  regionProcurementFactor,
+  regionSectorFitFactor,
+  regionTalentCostFactor,
+  sessionProcurementFactor,
+} from './regions';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */

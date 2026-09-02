@@ -21,7 +21,8 @@
  */
 
 import type { CompanyQuarterMetrics, ResolverContext, SessionState } from '@frontier/contracts';
-import { RUNWAY_CAP_QUARTERS } from './balance';
+import { RUNWAY_CAP_QUARTERS, TAX_RATE } from './balance';
+import { previousTtmUsd, rollFundamentals } from './fundamentals';
 import { activeCompanies, activeProducts, clamp, money, ratio, totalHeadcount, unit } from './util';
 
 /** Recompute the derived metrics for every active company. */
@@ -81,7 +82,7 @@ export function recomputeMetrics(draft: SessionState, ctx: ResolverContext): voi
       if (product.segment === 'government') governmentRevenue += product.activeCustomers * product.pricePerSeat;
     }
 
-    next.push({
+    const row: CompanyQuarterMetrics = {
       companyId: company.id,
       quarter: ctx.quarter,
       revenueTtm,
@@ -94,7 +95,13 @@ export function recomputeMetrics(draft: SessionState, ctx: ResolverContext): voi
       marketCapUsd: money(marketCap),
       computeCostShare,
       governmentRevenueShare: unit(revenue <= 0 ? 0 : governmentRevenue / revenue),
-    });
+    };
+    next.push(row);
+
+    // The pricing anchor's inputs, rolled forward from the row just built. The
+    // market phase of the *next* quarter reads this, which is what makes a price
+    // trace to reported fundamentals rather than to a fresh guess.
+    company.fundamentals = rollFundamentals(draft, company, row, previousTtmUsd(company, prior), TAX_RATE);
   }
 
   draft.companyMetrics = next;

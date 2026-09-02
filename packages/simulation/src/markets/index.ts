@@ -37,8 +37,34 @@ import { runSettlement } from './settlement';
 export { computeValuationAnchor, selectValuationMethod } from './valuation';
 export { runBeliefUpdate, TOPIC_META, assertedProbability } from './beliefs';
 export type { BeliefChange, TopicMeta } from './beliefs';
-export { runPricing, marketFactor, sectorFactor, MIN_PRICE_USD } from './pricing';
-export type { PricedInstrument } from './pricing';
+export {
+  runPricing,
+  marketFactor,
+  sectorFactor,
+  MIN_PRICE_USD,
+  MAX_ABS_LOG_RETURN,
+  V2_ANCHOR_PULL,
+  V2_MAX_ABS_LOG_RETURN,
+  V2_NOISE_SIGMA_CAP,
+  V2_SHOCK_BAND,
+  V2_SHOCK_MAX_ABS_LOG_RETURN,
+  V2_SHOCK_PROBABILITY,
+} from './pricing';
+export type { PricedInstrument, PriceShock } from './pricing';
+export {
+  FUNDAMENTAL_CONFIDENCE,
+  GROWTH_AT_BOTTOM_OF_BAND,
+  GROWTH_AT_TOP_OF_BAND,
+  GROWTH_QUALITY_WEIGHT,
+  MIN_TRAILING_REVENUE_USD,
+  MULTIPLE_INDEX_BOUNDS,
+  fundamentalValueUsd,
+  multipleIndex,
+  qualityScore,
+  sectorRevenueMultiple,
+} from './fundamentalValue';
+export type { FundamentalValue } from './fundamentalValue';
+export { FUNDAMENTAL_ANCHOR_WEIGHT } from './valuation';
 export { runSettlement, DISCLOSURE_THRESHOLD_PCT } from './settlement';
 export type { TradeSettlement } from './settlement';
 
@@ -174,9 +200,41 @@ export function createMarketsSubsystem(): MarketsSubsystem {
           },
           componentsReconcile: sums,
           floored: entry.floored,
+          shock: entry.shock === null ? null : { magnitude: round(entry.shock.magnitude, 6), reason: entry.shock.reason },
         },
         visibility: 'public',
       });
+
+      // A dislocation is the only thing permitted to move a world-version-2 price
+      // past the ordinary bound, so it gets its own row. The invariant gate reads
+      // these rows: a move past the bound with no row behind it fails the quarter.
+      if (entry.shock !== null) {
+        const shockId = ctx.emit({
+          sessionId: draft.sessionId,
+          quarter: ctx.quarter,
+          type: 'sentiment_shifted',
+          actorId: null,
+          targetId: entry.instrument.id,
+          payload: {
+            kind: 'price_shock',
+            instrumentId: entry.instrument.id,
+            companyId: entry.instrument.companyId,
+            magnitude: round(entry.shock.magnitude, 6),
+            reason: entry.shock.reason,
+            priceBefore: entry.decomposition.priceBefore,
+            priceAfter: entry.decomposition.priceAfter,
+          },
+          visibility: 'public',
+        });
+        ctx.log({
+          phase: 'market_resolution',
+          text: `${entry.instrument.symbol} was dislocated: ${entry.shock.reason}`.slice(0, 300),
+          deltaLabel: `${entry.shock.magnitude >= 0 ? '+' : ''}${round(entry.shock.magnitude * 100, 1)}%`,
+          refEventIds: [shockId],
+          tone: entry.shock.magnitude >= 0 ? 'warning' : 'negative',
+          subjectId: entry.instrument.companyId,
+        });
+      }
 
       decompositions.push(entry.decomposition);
 

@@ -28,6 +28,7 @@ import { BOARD_PROPOSAL_KINDS, DEAL_OBLIGATION_KINDS, VOTE_STANCES, quarterLabel
 import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
 import { ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
+import { AccordFields, type AccordContext } from './AccordFields';
 import {
   OBLIGATION_HINTS,
   OBLIGATION_LABELS,
@@ -56,6 +57,14 @@ export interface DealBuilderProps {
   readonly startYear: number;
   /** Uncommitted cash, so a cash obligation can be read against it. */
   readonly availableCashUsd: number;
+  /**
+   * What a price accord needs to know about the sector it would cover.
+   *
+   * Optional so a world that never priced its sectors renders the builder
+   * exactly as it did: without it the accord fields fall back to the sector
+   * already on the obligation and state no share at all.
+   */
+  readonly accord?: AccordContext;
 }
 
 type Side = 'gives' | 'gets';
@@ -67,6 +76,7 @@ export function DealBuilder({
   techNodes,
   products,
   quarter,
+  accord,
   startYear,
   availableCashUsd,
 }: DealBuilderProps): React.JSX.Element {
@@ -205,6 +215,7 @@ export function DealBuilder({
           techNodes={techNodes}
           products={products}
           quarter={quarter}
+          accord={accord}
         />
         <ObligationColumn
           side="gets"
@@ -219,6 +230,7 @@ export function DealBuilder({
           techNodes={techNodes}
           products={products}
           quarter={quarter}
+          accord={accord}
         />
       </div>
 
@@ -353,6 +365,7 @@ interface ColumnProps {
   readonly techNodes: readonly NamedOption[];
   readonly products: readonly NamedOption[];
   readonly quarter: number;
+  readonly accord: AccordContext | undefined;
 }
 
 function ObligationColumn({
@@ -365,6 +378,7 @@ function ObligationColumn({
   techNodes,
   products,
   quarter,
+  accord,
 }: ColumnProps): React.JSX.Element {
   const [adding, setAdding] = useState<ObligationKind>('cash_payment');
 
@@ -400,6 +414,7 @@ function ObligationColumn({
                 opportunities={opportunities}
                 techNodes={techNodes}
                 products={products}
+                accord={accord}
               />
               <p className="mt-1.5 text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">{OBLIGATION_HINTS[obligation.kind]}</p>
             </li>
@@ -445,9 +460,10 @@ interface FieldProps {
   readonly opportunities: readonly NamedOption[];
   readonly techNodes: readonly NamedOption[];
   readonly products: readonly NamedOption[];
+  readonly accord: AccordContext | undefined;
 }
 
-function ObligationFields({ obligation, onChange, securities, opportunities, techNodes, products }: FieldProps): React.JSX.Element {
+function ObligationFields({ obligation, onChange, securities, opportunities, techNodes, products, accord }: FieldProps): React.JSX.Element {
   switch (obligation.kind) {
     case 'compute_supply':
       return (
@@ -575,6 +591,16 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
           </label>
           <NumberField label="Quarters maintained" value={obligation.quarters} min={1} max={8} kind="quarters" onChange={(quarters) => onChange({ ...obligation, quarters })} />
         </div>
+      );
+
+    case 'price_accord':
+      return accord === undefined ? (
+        <p className="mt-1.5 text-[11px] text-ink-faint">
+          A price accord belongs to the multi-sector world. This session runs one sector and prices nothing, so there is
+          no chain uplift for an accord to hold up.
+        </p>
+      ) : (
+        <AccordFields obligation={obligation} onChange={onChange} context={accord} />
       );
 
     case 'consortium_membership':

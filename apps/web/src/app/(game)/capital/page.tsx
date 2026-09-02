@@ -11,7 +11,7 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import { quarterLabel } from '@frontier/contracts';
+import { dividendFor, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatMultiple, formatPct, formatQuarterCount } from '@frontier/shared';
 import {
   DataTable,
@@ -35,6 +35,7 @@ import {
 } from '@/lib/game';
 import { CapTableVisual } from '@/components/screens/capital/CapTableVisual';
 import { CapitalTickets } from '@/components/screens/capital/CapitalTickets';
+import { DividendTicket } from '@/components/screens/capital/DividendTicket';
 import { DilutionCalculator } from '@/components/screens/capital/DilutionCalculator';
 import {
   capTableRows,
@@ -303,6 +304,17 @@ export default function CapitalPage(): React.JSX.Element {
           <CapitalTickets fullyDilutedShares={table.fullyDilutedShares} cash={company.financials.cash} pricePerShare={price.value} />
         </Panel>
 
+        <Panel
+          iconName="coins"
+          iconTone="gain"
+          title="Payout policy"
+          subtitle="Growth or extraction, in steps of five. The preview is the engine's own arithmetic, not an estimate of it."
+        >
+          <DividendTicket company={company} paid={dividendFor(view.economyReport, company.id)} issuedShares={issued} />
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <Panel iconName="gauge" title="What a round would cost you" subtitle="Client-side arithmetic. Nothing is submitted.">
           <DilutionCalculator
             fullyDilutedShares={Math.max(1, table.fullyDilutedShares)}

@@ -13,7 +13,7 @@
  */
 
 import type { PlayerView, SessionState } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { controlRowsFor, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import {
   AiLabel,
@@ -214,6 +214,11 @@ export function InstrumentDrawer({
                 heldShares={heldShares}
                 issuedShares={issued}
                 floatShares={floatShares}
+                control={
+                  companyId === null
+                    ? null
+                    : (controlRowsFor(view.economyReport, companyId).find((entry) => entry.holderId === view.ownCompany.id) ?? null)
+                }
               />
             </div>
           </div>

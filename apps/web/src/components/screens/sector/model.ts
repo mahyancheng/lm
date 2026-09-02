@@ -28,11 +28,11 @@ import type {
   CompanyModifierStack,
   Company,
   ControlStatus,
+  DealProposal,
   EconomyReport,
   ModifierRow,
   ModifierRowTone,
   PredationRow,
-  Region,
   Sector,
   SectorPriceRow,
 } from '@frontier/contracts';
@@ -208,6 +208,26 @@ export function sectorLadderRows(
   }
 
   return rows;
+}
+
+/**
+ * The accord members a seat can actually see, for one sector.
+ *
+ * Derived from the player's **own** deals rather than from the engine's
+ * `activeAccords`, which walks every deal in the session: an accord the player
+ * is not party to is not theirs to group on a ladder. An accepted binding deal
+ * is one that is in force; a proposal is not.
+ */
+export function visibleAccordMembers(deals: readonly DealProposal[], sector: Sector): ReadonlySet<string> {
+  const members = new Set<string>();
+  for (const deal of deals) {
+    if (!deal.binding || deal.status !== 'accepted') continue;
+    for (const obligation of [...deal.gives, ...deal.gets]) {
+      if (obligation.kind !== 'price_accord' || obligation.sector !== sector) continue;
+      for (const id of obligation.memberCompanyIds) members.add(id);
+    }
+  }
+  return members;
 }
 
 /** Sectors with at least one company standing in them, in `SECTORS` order. */

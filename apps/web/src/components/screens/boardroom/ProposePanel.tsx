@@ -30,6 +30,8 @@ import {
   sectorOf,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
+import { ControlNote } from './ControlNote';
+import { ownControlRow } from '../sector/model';
 import { PROPOSAL_KIND_BLURB, PROPOSAL_KIND_LABEL } from './labels';
 import { hypotheticalProposal, whipCount } from './whip';
 
@@ -107,6 +109,10 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
   }
 
   const cast = count.support + count.against;
+
+  // V4: the founder is told whether the room decides this matter or they do,
+  // read off the committed control row rather than from the whip arithmetic.
+  const control = ownControlRow(view.economyReport, board.companyId, founder.id);
 
   return (
     <>
@@ -265,6 +271,8 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
               );
             })}
           </div>
+
+          <ControlNote className="mt-2.5" row={control} kind={kind} />
 
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
             A projection from state, not a promise. The vote is taken in the board-resolution phase against the numbers as they stand then.

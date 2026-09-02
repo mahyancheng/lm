@@ -1,7 +1,7 @@
 /**
  * Navigation configuration — data, not markup.
  *
- * The eighteen screens of the game, grouped the way a founder thinks about
+ * The nineteen screens of the game, grouped the way a founder thinks about
  * them: what you operate, where the frontier is, how capital moves, what the
  * world is saying, and the controls that end a quarter.
  *
@@ -58,6 +58,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: '/command-centre', label: 'Command Centre', icon: 'gauge', glyph: 'CC', blurb: 'Quarter summary, cash, runway, valuation, alerts.' },
       { href: '/company', label: 'Company', icon: 'building', glyph: 'CO', blurb: 'Operating structure, subsidiaries, offices, reputation.' },
       { href: '/products', label: 'Products', icon: 'box', glyph: 'PR', blurb: 'Products, pricing, customers, unit economics.' },
+      // The whole-economy overlay: the six-sector chain and its prices, the
+      // market-share ladder, the regional freight tolls. One tap from home,
+      // because every price on Financials is now a consequence of it.
+      { href: '/sector', label: 'Sector', icon: 'globe', glyph: 'SE', blurb: 'The six-sector chain, goods prices, market share and freight tolls.' },
       { href: '/people', label: 'People', icon: 'people', glyph: 'PE', blurb: 'Employees, executives, culture, compensation.' },
       { href: '/financials', label: 'Financials', icon: 'ledger', glyph: 'FI', blurb: 'P&L, balance sheet, cash flow, segment results.' },
     ],

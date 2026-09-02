@@ -34,6 +34,8 @@ import {
 } from '@/components/ui';
 import { AcquisitionDesk, type AcquisitionTarget } from '@/components/screens/deal-room/AcquisitionDesk';
 import { DealBuilder, type CounterpartyOption, type NamedOption } from '@/components/screens/deal-room/DealBuilder';
+import type { AccordContext } from '@/components/screens/deal-room/AccordFields';
+import { laddersPresent, sectorLadderRows, visibleAccordMembers } from '@/components/screens/sector/model';
 import { DealDrawer } from '@/components/screens/deal-room/DealDrawer';
 import { marketCapOf, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 
@@ -61,6 +63,26 @@ export default function DealRoomPage(): React.JSX.Element {
 
   const [selected, setSelected] = useState<string | null>(null);
   const [radarPick, setRadarPick] = useState<string | null>(null);
+
+  /* --- what a price accord needs to know ---------------------------------
+     Undefined in a single-sector world, which prices nothing and therefore has
+     no chain uplift for an accord to hold up: the builder then renders the
+     obligation with a plain sentence instead of a form that would lie. */
+  const accord = useMemo<AccordContext | undefined>(() => {
+    const report = view.economyReport;
+    if (report === null) return undefined;
+    const everyone = [company, ...view.visibleCompanies];
+    const sectors = laddersPresent(everyone);
+    if (sectors.length < 2) return undefined;
+    const supplyFor = (sector: (typeof sectors)[number]): number =>
+      report.sectorPrices.find((row) => row.sector === sector)?.supplyUsd ?? 0;
+    return {
+      sectors,
+      supplyFor,
+      ladderFor: (sector) =>
+        sectorLadderRows(everyone, sector, supplyFor(sector), company.id, visibleAccordMembers(view.deals, sector)),
+    };
+  }, [view.economyReport, view.visibleCompanies, view.deals, company]);
 
   const nameOf = useMemo(() => {
     const map = new Map<string, string>();
@@ -283,6 +305,7 @@ export default function DealRoomPage(): React.JSX.Element {
             quarter={session.quarter}
             startYear={session.startYear}
             availableCashUsd={company.financials.cash}
+            accord={accord}
           />
         </Panel>
 

@@ -41,10 +41,11 @@ import {
   productServingUnits,
   projectCustomers,
 } from '@/components/screens/products/labels';
-import { usePlayerCompany, useQueuedActions, useSession } from '@/lib/game';
+import { usePlayerCompany, usePlayerView, useQueuedActions, useSession } from '@/lib/game';
 
 export default function ProductsPage(): React.JSX.Element {
   const session = useSession();
+  const view = usePlayerView();
   const company = usePlayerCompany();
   const queuedEntries = useQueuedActions();
   const [openProductId, setOpenProductId] = useState<string | null>(null);
@@ -66,6 +67,16 @@ export default function ProductsPage(): React.JSX.Element {
   const headroom = servingCapacity - servingDemand;
 
   const openProduct = openProductId === null ? null : (company.products.find((product) => product.id === openProductId) ?? null);
+
+  // Names for the price ladder's dots. Every id on it came out of the projected
+  // report, so every name it needs is on the register the projection carries.
+  const companyNames = useMemo(() => {
+    const names = new Map<string, string>([[company.id, company.name]]);
+    for (const rival of view.visibleCompanies) {
+      if (rival.id !== undefined && rival.name !== undefined) names.set(rival.id, rival.name);
+    }
+    return names;
+  }, [company.id, company.name, view.visibleCompanies]);
 
   const columns: readonly Column<Product>[] = [
     {
@@ -319,7 +330,14 @@ export default function ProductsPage(): React.JSX.Element {
         </Panel>
       )}
 
-      <ProductDrawer session={session} product={openProduct} onClose={() => setOpenProductId(null)} />
+      <ProductDrawer
+        session={session}
+        product={openProduct}
+        onClose={() => setOpenProductId(null)}
+        report={view.economyReport}
+        companyId={company.id}
+        companyNames={companyNames}
+      />
       <LaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
     </>
   );

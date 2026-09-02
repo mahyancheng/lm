@@ -15,8 +15,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { ActionValidationResult, Product, SessionState } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import type { ActionValidationResult, EconomyReport, Product, SessionState } from '@frontier/contracts';
+import { antitrustExposure, isPredatoryPrice, quarterLabel, rivalPressureFor, undercutFraction } from '@frontier/contracts';
 import { SEGMENT_PRICE_ELASTICITY, SEGMENT_REFERENCE_PRICE_USD, priceFactor } from '@frontier/simulation';
 import { formatCount, formatMoney, formatMultiple, formatPct } from '@frontier/shared';
 import {
@@ -33,6 +33,9 @@ import {
   roundStep,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
+import { predatorsInSegment } from '../sector/model';
+import { achievableCeilingUsd, repriceCeilingUsd } from './ceiling';
+import { PriceLadder } from './PriceLadder';
 import {
   SEGMENT_BLURB,
   SEGMENT_LABEL,
@@ -47,11 +50,24 @@ export interface ProductDrawerProps {
   readonly session: SessionState;
   readonly product: Product | null;
   readonly onClose: () => void;
+  /** The quarter's committed attribution, already redacted to this seat. */
+  readonly report?: EconomyReport | null;
+  /** The company this product belongs to, so its own flags can be found. */
+  readonly companyId?: string;
+  /** Names for company ids, so a dumped price on the ladder has a name on it. */
+  readonly companyNames?: ReadonlyMap<string, string>;
 }
 
 const PROJECTION_QUARTERS = 4;
 
-export function ProductDrawer({ session, product, onClose }: ProductDrawerProps): React.JSX.Element {
+export function ProductDrawer({
+  session,
+  product,
+  onClose,
+  report = null,
+  companyId = '',
+  companyNames,
+}: ProductDrawerProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
   const [priceText, setPriceText] = useState('');
   const [windDown, setWindDown] = useState(2);
@@ -70,6 +86,23 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
   }, [product, hasPrice, proposedPrice]);
 
   const projection = useMemo(() => (product === null ? [] : projectCustomers(product, PROJECTION_QUARTERS)), [product]);
+
+  /* --- V3: the price ladder -----------------------------------------------
+     The ceiling is whichever binds first: the price at which the engine's own
+     elasticity stops responding, or the top of the validator's one-quarter
+     reprice band. Both are read from the engine; neither is invented here. */
+  const ladder = useMemo(() => {
+    if (product === null) return null;
+    const reference = SEGMENT_REFERENCE_PRICE_USD[product.segment];
+    const ceiling = Math.min(achievableCeilingUsd(product.segment, reference), repriceCeilingUsd(product.pricePerSeat));
+    return {
+      reference,
+      ceiling,
+      predators: predatorsInSegment(report, product.segment, companyId),
+      pressure: rivalPressureFor(report, companyId, product.segment),
+      own: report?.predation.find((row) => row.companyId === companyId && row.productId === product.id) ?? null,
+    };
+  }, [product, report, companyId]);
 
   // Four times the published reference or today's price, whichever is larger:
   // the whole range a defensible reprice lives in, with Exact beyond it.
@@ -99,6 +132,28 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
 
   const previewIntent =
     product !== null && hasPrice ? validateIntent({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: proposedPrice }) : null;
+
+  /* --- V8: the risk on the risky verb -------------------------------------
+     A cut deep enough to be predatory is worth antitrust points, and the
+     player is told before they queue it rather than after the quarter
+     resolves. Both tests are the engine's own functions; the margin used is
+     this quarter's committed one, which is what the flag would be struck
+     against if nothing else moved, and the copy says so. */
+  const predation = useMemo(() => {
+    if (product === null || !hasPrice || ladder === null) return null;
+    const undercut = undercutFraction(proposedPrice, ladder.reference);
+    if (!isPredatoryPrice(product.grossMarginPct, undercut)) return null;
+    const { contributions } = antitrustExposure({
+      exposure: 0,
+      sectorShare: 0,
+      inAccord: false,
+      recentAcquisitions: 0,
+      tollChargedPct: 0,
+      // One quarter's worth: what the first quarter of standing at this price costs.
+      predatoryQuarters: 1,
+    });
+    return { undercut, points: contributions.find((entry) => entry.key === 'predation')?.points ?? 0 };
+  }, [product, hasPrice, proposedPrice, ladder]);
 
   return (
     <Drawer
@@ -154,6 +209,28 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
             </div>
           </div>
 
+          {ladder === null ? null : (
+            <div>
+              <SectionHeading rule>Price against the market</SectionHeading>
+              <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
+                {formatMoney(product.pricePerSeat, 'full')} · segment average {formatMoney(ladder.reference, 'full')}.
+                Above the dashed ceiling the elasticity model stops responding and only the churn shock is left, so a
+                price walked past it buys nothing.
+              </p>
+              <div className="mt-2">
+                <PriceLadder
+                  yourPriceUsd={product.pricePerSeat}
+                  referenceUsd={ladder.reference}
+                  ceilingUsd={ladder.ceiling}
+                  predators={ladder.predators}
+                  companyNames={companyNames ?? new Map<string, string>()}
+                  pressure={ladder.pressure}
+                  ownPredation={ladder.own}
+                />
+              </div>
+            </div>
+          )}
+
           <div>
             <SectionHeading rule>Seat projection</SectionHeading>
             <p className="mt-1.5 text-[10px] text-ink-faint">
@@ -185,6 +262,14 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                 step={roundStep(repriceMax)}
                 format={formatMoney}
               />
+              {predation === null ? null : (
+                <p className="mt-2 flex flex-wrap items-center gap-1.5 rounded-card bg-loss-wash px-2 py-1.5 text-[11px] leading-snug font-semibold text-loss">
+                  <Icon name="warning" size={13} accent="current" />
+                  Below cost and {formatPct(predation.undercut)} under the segment average — the engine would flag this as
+                  predatory and every quarter it stands is worth
+                  <span className="figure">+{predation.points} exposure</span>.
+                </p>
+              )}
               <button
                 type="button"
                 className="btn btn-primary tap-target mt-2 w-full gap-1.5 sm:w-auto"
@@ -193,6 +278,9 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
               >
                 <Icon name="check" size={16} accent="current" />
                 Queue reprice
+                {predation === null ? null : (
+                  <span className="figure rounded-pill bg-loss-wash px-1.5 text-[10px] text-loss">+{predation.points} exposure</span>
+                )}
               </button>
             </div>
 

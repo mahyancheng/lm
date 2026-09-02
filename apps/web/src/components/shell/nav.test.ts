@@ -50,8 +50,10 @@ describe('the icon set', () => {
 describe('every navigation entry names a mark that exists', () => {
   const names = new Set(declaredNames());
 
-  it('covers all eighteen screens', () => {
-    expect(NAV_ITEMS).toHaveLength(18);
+  // Nineteen since Wave 3: the Sector screen is the whole-economy overlay the
+  // priced chain needed, and it sits beside the screens it explains.
+  it('covers all nineteen screens', () => {
+    expect(NAV_ITEMS).toHaveLength(19);
     for (const item of NAV_ITEMS) {
       expect(names.has(item.icon), `${item.href} asks for the "${item.icon}" mark`).toBe(true);
     }
@@ -94,6 +96,7 @@ describe('the sub-tab strip', () => {
       '/command-centre',
       '/company',
       '/products',
+      '/sector',
       '/people',
       '/financials',
     ]);

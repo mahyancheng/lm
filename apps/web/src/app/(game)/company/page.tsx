@@ -23,8 +23,16 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import type { StaffRole } from '@frontier/contracts';
-import { REGION_META, SECTOR_META, STAFF_ROLES, quarterLabel } from '@frontier/contracts';
+import type { SimEvent, StaffRole } from '@frontier/contracts';
+import {
+  REGION_META,
+  SECTOR_META,
+  STAFF_ROLES,
+  costStackFor,
+  exposureFor,
+  priceStackFor,
+  quarterLabel,
+} from '@frontier/contracts';
 import { requiredCompUsd } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import {
@@ -47,9 +55,13 @@ import {
   Tag,
   regionOf,
   sectorOf,
+  sectorsPresent,
   type Column,
 } from '@/components/ui';
 import { OfficeScene, type OfficeDrawerId } from '@/components/scenes/office';
+import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
+import { ExposureCard } from '@/components/screens/company/ExposureCard';
+import { ModifierStackCard } from '@/components/screens/company/ModifierStackCard';
 import { ComputeDrawer } from '@/components/screens/company/ComputeDrawer';
 import { ComputePosition } from '@/components/screens/company/ComputePosition';
 import { ExecutiveDrawer } from '@/components/screens/company/ExecutiveDrawer';
@@ -65,7 +77,7 @@ import {
   ROLE_LABEL,
   capabilityLabel,
 } from '@/components/screens/company/labels';
-import { useCompanyMetrics, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useCompanyMetrics, useGame, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 
 interface RoleRow {
   readonly role: StaffRole;
@@ -80,9 +92,30 @@ export default function CompanyPage(): React.JSX.Element {
   const company = usePlayerCompany();
   const metrics = useCompanyMetrics();
 
+  const { lastOutcome } = useGame();
+
   const [openRole, setOpenRole] = useState<StaffRole | null>(null);
   const [openDrawer, setOpenDrawer] = useState<OfficeDrawerId | null>(null);
   const [openExecutive, setOpenExecutive] = useState<string | null>(null);
+  const [cause, setCause] = useState<string | null>(null);
+
+  /* --- the priced economy (V1, V8) ---------------------------------------
+     Committed rows or nothing: a single-sector session writes no economy
+     report, so these render exactly as they did before the priced chain
+     existed — which is to say, not at all. */
+  const report = view.economyReport;
+  const multiSector = useMemo(
+    () => sectorsPresent([company, ...view.visibleCompanies]).length > 1,
+    [company, view.visibleCompanies],
+  );
+  const priceStack = priceStackFor(report, company.id);
+  const costStack = costStackFor(report, company.id);
+  const exposure = exposureFor(report, company.id);
+
+  const causeEvents = useMemo<readonly SimEvent[]>(() => {
+    if (lastOutcome === null || cause === null) return [];
+    return lastOutcome.events.filter((event) => event.eventId === cause);
+  }, [lastOutcome, cause]);
 
   const employees = company.employees;
   const headcount = STAFF_ROLES.reduce((total, role) => total + employees[role], 0);
@@ -280,6 +313,46 @@ export default function CompanyPage(): React.JSX.Element {
 
         <ComputePosition session={session} company={company} projects={view.ownResearchProjects} />
       </div>
+
+      {/* --- V1: the itemised stacks, V8: the brake --------------------------
+          "If the engine multiplied it, the screen names it and signs it, and
+          tapping the row shows the event that caused it." Every row below is a
+          committed `ModifierRow`; the card adds nothing up. */}
+      {multiSector ? (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Panel
+            iconName="coins"
+            iconTone="gain"
+            title="What you were paid"
+            subtitle="Gross revenue, and every modifier the chain put on it."
+          >
+            <ModifierStackCard
+              stack={priceStack}
+              baseLabel="Product and contract revenue"
+              totalLabel="Recognised"
+              onOpenCause={setCause}
+              emptyMessage="The price stack is written when a quarter resolves. Nothing has repriced your revenue yet."
+            />
+          </Panel>
+
+          <Panel
+            iconName="ledger"
+            iconTone="loss"
+            title="What it cost to serve"
+            subtitle="Cash cost of goods at a neutral energy basis, and every modifier on top of it."
+          >
+            <ModifierStackCard
+              stack={costStack}
+              baseLabel="Cost of serving"
+              totalLabel="Cash cost of goods"
+              onOpenCause={setCause}
+              emptyMessage="The cost stack is written when a quarter resolves. Nothing upstream has moved your input costs yet."
+            />
+          </Panel>
+
+          <ExposureCard exposure={exposure} />
+        </div>
+      ) : null}
 
       <SectorPanel company={company} />
 
@@ -504,6 +577,19 @@ export default function CompanyPage(): React.JSX.Element {
           />
         )}
       </Drawer>
+
+      <LedgerDrawer
+        open={cause !== null}
+        onClose={() => setCause(null)}
+        title="Why this modifier"
+        subtitle={
+          lastOutcome === null
+            ? 'No quarter has resolved in this tab yet.'
+            : `${quarterLabel(session.startYear, lastOutcome.report.quarter)} · ${causeEvents.length} committed row${causeEvents.length === 1 ? '' : 's'}`
+        }
+        events={causeEvents}
+        emptyMessage="The row that caused this modifier was committed in an earlier quarter than the one held in this tab."
+      />
     </>
   );
 }

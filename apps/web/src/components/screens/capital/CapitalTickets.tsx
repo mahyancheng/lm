@@ -15,7 +15,7 @@ import type { ActionIntent, ActionValidationResult, FundingStage } from '@fronti
 import { FUNDING_STAGES } from '@frontier/contracts';
 import { MAX_ROUND_DILUTION_PCT } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
-import { ConfirmDialog, SliderField, TabBar, ValidationBanner, roundStep } from '@/components/ui';
+import { ConfirmDialog, NowAfter, SliderField, TabBar, ValidationBanner, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { formatCount, titleise } from '../reporting/util';
 
@@ -163,6 +163,8 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
             format={formatMoney}
           />
           <div>
+            {/* V5: an issue is priced in ownership, not in dollars, so the
+                preview states the ownership rather than the proceeds. */}
             <SliderField
               label="Max dilution"
               value={Math.min(1, Math.max(0, numberOf(maxDilution) / 100))}
@@ -172,10 +174,32 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
               step={0.01}
               format={formatPct}
               exact={false}
+              preview={(shown) => {
+                const dilution = Math.min(0.99, Math.max(0, shown));
+                const issued = dilution > 0 ? (fullyDilutedShares * dilution) / (1 - dilution) : 0;
+                return (
+                  <NowAfter
+                    rows={[
+                      {
+                        key: 'holders',
+                        label: 'Every existing holder keeps',
+                        now: formatPct(1),
+                        after: formatPct(1 - dilution),
+                        tone: dilution > 0 ? 'loss' : undefined,
+                      },
+                      { key: 'shares', label: 'Shares in issue', now: formatCount(fullyDilutedShares), after: formatCount(fullyDilutedShares + issued) },
+                      {
+                        key: 'post',
+                        label: 'Implied post-money',
+                        now: formatMoney(fullyDilutedShares * Math.max(pricePerShare, 0)),
+                        after: formatMoney(dilution > 0 ? numberOf(raiseAmount) / dilution : 0),
+                      },
+                    ]}
+                    note="A ceiling, not a price: the round clears at whatever the market will take, and a failed raise is itself public information."
+                  />
+                );
+              }}
             />
-            <span className="mt-1 block text-[10px] text-ink-faint">
-              Post-money {formatMoney(impliedPostMoney)} · {formatCount(newShares)} new shares
-            </span>
           </div>
         </div>
       ) : null}

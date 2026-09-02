@@ -23,8 +23,16 @@
 import type { EconomyReport, Sector } from '@frontier/contracts';
 import { SECTOR_PRICE_BASELINE } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
-import { EmptyState, Icon, SECTOR_TINT, Tag, cx, sectorLabel } from '@/components/ui';
-import { flowTiles, indexLabel, priceIndexTone, shortageBadge, type FlowTile } from './model';
+import { EmptyState, Icon, SECTOR_TINT, TONE_FILL, Tag, cx, sectorLabel } from '@/components/ui';
+import {
+  PRICE_BASELINE_FRACTION,
+  flowTiles,
+  indexLabel,
+  priceIndexFraction,
+  priceIndexTone,
+  shortageBadge,
+  type FlowTile,
+} from './model';
 
 export interface SectorFlowProps {
   readonly report: EconomyReport | null;
@@ -107,6 +115,26 @@ function FlowRow({
           <span className={cx('figure text-[22px] leading-none font-bold', `tone-${tone}`)}>{indexLabel(index)}</span>
         </span>
       </header>
+
+      {/* The index on its own hard range: 25 at the left, 175 at the right, and
+          the anchor of 100 marked, so "dear" and "cheap" are a position rather
+          than a number to remember. */}
+      {row === null ? null : (
+        <div className="relative mt-2 h-2 w-full overflow-hidden rounded-pill bg-raised">
+          <span
+            className={cx('absolute inset-y-0 rounded-pill', TONE_FILL[tone])}
+            style={{
+              left: `${Math.min(PRICE_BASELINE_FRACTION, priceIndexFraction(index)) * 100}%`,
+              width: `${Math.abs(priceIndexFraction(index) - PRICE_BASELINE_FRACTION) * 100}%`,
+            }}
+          />
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 w-px bg-ink-faint"
+            style={{ left: `${PRICE_BASELINE_FRACTION * 100}%` }}
+          />
+        </div>
+      )}
 
       {/* Twin bars: demand over supply. The imbalance between them is the whole
           explanation of the number above, so cause sits above effect. */}

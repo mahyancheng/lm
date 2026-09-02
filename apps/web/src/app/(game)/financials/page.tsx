@@ -12,7 +12,7 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { SimEventType } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { costStackFor, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatMultiple, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import type { ReactNode } from 'react';
 import {
@@ -33,6 +33,8 @@ import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
 import { StatementTable, type StatementRow } from '@/components/screens/reporting/StatementTable';
 import { balanceSheetView, humanise, incomeStatementOf } from '@/components/screens/reporting/util';
 import { HistoryPanel } from '@/components/screens/financials/HistoryPanel';
+import { debtServiceView } from '@/components/screens/financials/headroom';
+import { ModifierStackCard } from '@/components/screens/company/ModifierStackCard';
 
 interface LedgerSelection {
   readonly title: string;
@@ -102,6 +104,12 @@ export default function FinancialsPage(): React.JSX.Element {
   }, [lastOutcome, selection, company.id]);
 
   const openingCash = company.financials.cash - company.financials.quarterlyBurn;
+  // V7: the two figures that decide whether the engine forces a bridge round.
+  const service = useMemo(
+    () => debtServiceView(company.financials.cash, company.financials.debt, company.financials.interestExpense),
+    [company.financials.cash, company.financials.debt, company.financials.interestExpense],
+  );
+  const costStack = costStackFor(view.economyReport, company.id);
   const impliedRate = company.financials.debt > 0 ? (company.financials.interestExpense * 4) / company.financials.debt : null;
   const coverage = company.financials.interestExpense > 0 ? pnl.operatingIncome / company.financials.interestExpense : null;
 
@@ -298,7 +306,7 @@ export default function FinancialsPage(): React.JSX.Element {
           iconName="vault"
           value={formatMoney(company.financials.quarterlyBurn)}
           tone={company.financials.quarterlyBurn >= 0 ? 'gain' : 'loss'}
-          hint={`Closing cash ${formatMoney(company.financials.cash)}`}
+          hint={`Closing cash ${formatMoney(company.financials.cash)} · next quarter you owe ${formatMoney(service.totalUsd)}`}
         />
         <StatCard
           label="Runway"
@@ -338,6 +346,36 @@ export default function FinancialsPage(): React.JSX.Element {
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Cash flow" iconName="vault" subtitle="Movement over the quarter, as reported.">
           <StatementTable rows={cashRows} valueHeader="Amount" />
+
+          {/* V7: the second bankruptcy trigger, drawn beside the number it
+              constrains. Cash below the quarter's debt service is what forces a
+              bridge round, so it is a bar rather than a sentence. */}
+          <div className="mt-3 border-t border-hair pt-3">
+            <ProgressBar
+              label="Next quarter you owe, against cash on hand"
+              value={Math.min(service.totalUsd, Math.max(0, company.financials.cash))}
+              max={Math.max(1, company.financials.cash, service.totalUsd)}
+              tone={service.headroomUsd < 0 ? 'loss' : service.coveredQuarters < 4 ? 'warn' : 'gain'}
+              valueLabel={`${formatMoney(service.totalUsd)} of ${formatMoney(company.financials.cash)}`}
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2.5">
+              <FactCard
+                label="Next quarter you owe"
+                value={formatMoney(service.totalUsd)}
+                hint={`${formatMoney(service.principalUsd)} principal · ${formatMoney(service.interestUsd)} interest`}
+              />
+              <FactCard
+                label="Headroom after it"
+                value={formatMoney(service.headroomUsd)}
+                tone={service.headroomUsd < 0 ? 'loss' : undefined}
+                hint={
+                  service.headroomUsd < 0
+                    ? 'Below the service, the engine forces a bridge round and the posture goes to survival.'
+                    : `${formatQuarterCount(service.coveredQuarters)} of service covered at this balance.`
+                }
+              />
+            </div>
+          </div>
         </Panel>
 
         <Panel
@@ -396,6 +434,25 @@ export default function FinancialsPage(): React.JSX.Element {
           )}
         </Panel>
       </div>
+
+      {/* P0-2's named surface: the toll is a signed line in an itemised cost
+          stack, or the exemption line when your own group is the one charging
+          it. Every row opens the ledger entry behind it on the Company screen. */}
+      {costStack === null ? null : (
+        <Panel
+          title="What the quarter cost to serve"
+          iconName="ledger"
+          iconTone="loss"
+          subtitle="Cash cost of goods at a neutral energy basis, and every modifier the chain and the freight put on top of it."
+        >
+          <ModifierStackCard
+            stack={costStack}
+            baseLabel="Cost of serving"
+            totalLabel="Cash cost of goods"
+            emptyMessage="Written when a quarter resolves."
+          />
+        </Panel>
+      )}
 
       <Panel
         title="Product lines"

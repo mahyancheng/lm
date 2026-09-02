@@ -12,6 +12,7 @@
 import type { CapTable, SessionState } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { DataTable, Tag, TONE_VAR, cx, type Column, type Tone } from '@/components/ui';
+import { CONTROL_TICKS } from '../sector/model';
 import { capTableRows, formatCount, humanise, issuedSharesOf, type OwnershipRow } from '../reporting/util';
 
 const BAND_TONES: readonly Tone[] = ['brand', 'info', 'gain', 'warn', 'loss', 'neutral'];
@@ -106,7 +107,11 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
           shorter. The legend below it is the readable half on a phone, so it
           stacks one band per line rather than wrapping mid-name. */}
       <div>
-        <div className="flex h-8 w-full overflow-hidden rounded-pill border border-hair sm:h-7">
+        {/* V4: the two thresholds that mean something are drawn on the axis, so
+            the reward is visible before it can be claimed. 25% is an
+            information right through the projection; 50%+1 is decisive in the
+            boardroom on everything but a dismissal. */}
+        <div className="relative flex h-8 w-full overflow-hidden rounded-pill border border-hair sm:h-7">
           {bands.map((band) => (
             <div
               key={band.key}
@@ -122,7 +127,26 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
               className="h-full bg-raised"
             />
           ) : null}
+          {CONTROL_TICKS.map((tick) => (
+            <span
+              key={tick.key}
+              aria-hidden="true"
+              title={`${tick.label} at ${tick.pct}%`}
+              className={cx(
+                'pointer-events-none absolute inset-y-0 w-px',
+                tick.key === 'control' ? 'bg-ink' : 'border-l border-dashed border-ink-faint',
+              )}
+              style={{ left: `${tick.pct}%` }}
+            />
+          ))}
         </div>
+        <ul className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-ink-faint">
+          {CONTROL_TICKS.map((tick) => (
+            <li key={tick.key}>
+              {tick.label} <span className="figure text-ink-dim">{tick.pct}%</span>
+            </li>
+          ))}
+        </ul>
         <ul className="mt-2 flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:gap-x-4 sm:gap-y-1">
           {bands.map((band) => (
             <li key={band.key} className="flex items-center gap-2 text-[12.5px] text-ink-dim sm:text-[11px]">

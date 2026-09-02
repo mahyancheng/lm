@@ -11,9 +11,22 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { ActionIntent, ActionValidationResult } from '@frontier/contracts';
+import type { ActionIntent, ActionValidationResult, ControlStatus } from '@frontier/contracts';
+import { BLOCK_PREMIUM, stakeExecutionPriceUsd, stakeImpactPct } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, SectionHeading, SliderField, TabBar, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
+import {
+  ConfirmDialog,
+  NowAfter,
+  ProgressBar,
+  SectionHeading,
+  SliderField,
+  TabBar,
+  Tag,
+  ValidationBanner,
+  openCeiling,
+  roundStep,
+} from '@/components/ui';
+import { controlCaption } from '../sector/model';
 import { useGameActions } from '@/lib/game';
 import { formatCount } from '../reporting/util';
 
@@ -29,6 +42,13 @@ export interface TradeTicketProps {
   readonly issuedShares: number;
   /** Shares held by the public float — the validator's own ceiling on a purchase. */
   readonly floatShares: number;
+  /**
+   * The acting seat's committed control row for this company, when it has one.
+   *
+   * Drives the V4 progress bar: one number, one target, and the caption that
+   * says how far short of decisive the position is.
+   */
+  readonly control?: ControlStatus | null;
 }
 
 type Side = 'buy' | 'sell';
@@ -41,6 +61,7 @@ export function TradeTicket({
   heldShares,
   issuedShares,
   floatShares,
+  control = null,
 }: TradeTicketProps): React.JSX.Element {
   const { validateIntent, queueAction } = useGameActions();
   const [side, setSide] = useState<Side>('buy');
@@ -94,6 +115,26 @@ export function TradeTicket({
         }}
       />
 
+      {/* V4: one number, one target. The whole Plutocracy loop is a player
+          reading one progress bar toward 50% + 1. */}
+      {control === null ? null : (
+        <div>
+          <ProgressBar
+            label="Your stake against control"
+            value={Math.min(control.stakePct, 100)}
+            max={100}
+            ghostValue={control.controlThresholdPct}
+            tone={control.hasControl ? 'brand' : control.hasInformationRight ? 'info' : 'neutral'}
+            valueLabel={`${control.stakePct}% · control at ${control.controlThresholdPct}%`}
+          />
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[10.5px] text-ink-faint">
+            {control.hasInformationRight ? <Tag tone="info" size="sm">information right</Tag> : null}
+            {control.hasControl ? <Tag tone="brand" size="sm">control</Tag> : null}
+            {controlCaption(control)}
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <SliderField
           label="Shares"
@@ -107,6 +148,34 @@ export function TradeTicket({
           step={roundStep(sharesMax)}
           format={formatCount}
           chips
+          preview={
+            side === 'buy'
+              ? (shown) => {
+                  // V5: slippage is a decision, not a surprise. Both figures come
+                  // from the engine's own convex-accumulation functions, which are
+                  // the ones `settleTrades` will apply.
+                  const impact = stakeImpactPct(Math.round(shown), floatShares);
+                  const execution = stakeExecutionPriceUsd(lastPrice, Math.round(shown), floatShares);
+                  return (
+                    <NowAfter
+                      nowLabel="Quote"
+                      afterLabel="Filled at"
+                      rows={[
+                        { key: 'price', label: 'Price per share', now: formatMoney(lastPrice, 'full'), after: formatMoney(execution, 'full'), tone: impact > 0 ? 'loss' : undefined },
+                        { key: 'impact', label: 'Your own price impact', now: '0%', after: `+${impact}%`, tone: impact > 0 ? 'loss' : undefined },
+                        {
+                          key: 'cost',
+                          label: 'All in, at the execution price',
+                          now: formatMoney(Math.round(shown) * lastPrice),
+                          after: formatMoney(Math.round(shown) * execution),
+                        },
+                      ]}
+                      note={`Buying the whole float costs twice the quote, and a named holder's block costs ${BLOCK_PREMIUM}x flat — the last tranche is the expensive one.`}
+                    />
+                  );
+                }
+              : undefined
+          }
         />
         <SliderField
           label={side === 'buy' ? 'Max price' : 'Min price'}

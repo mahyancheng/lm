@@ -20,7 +20,7 @@ import Link from 'next/link';
 import type { Company, ProcurementOpportunity } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
-import { Drawer, EmptyState, KeyValueGrid, Meter, RegionBadge, SectorBadge, Tag, cx, regionOf, sectorOf, type Tone } from '@/components/ui';
+import { Drawer, EmptyState, KeyValueGrid, Meter, SectorRegionBadges, Tag, cx, type Tone } from '@/components/ui';
 import { usePlayerView, useSession } from '@/lib/game';
 import { DISTRICT_BY_ID, type DistrictId } from './geography';
 import {
@@ -111,10 +111,7 @@ function CompanyBody({ companyId }: { readonly companyId: string }): React.JSX.E
       {/* What it does and where it is: both on the public register, so both on
           the map. The market bucket below is a different thing and is named as
           one. */}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <SectorBadge sector={sectorOf(company)} size="md" />
-        <RegionBadge region={regionOf(company)} size="md" />
-      </div>
+      <SectorRegionBadges className="mt-2" company={company} size="md" />
 
       <KeyValueGrid
         className="mt-3"

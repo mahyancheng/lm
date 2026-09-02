@@ -14,7 +14,7 @@
 
 import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Board, BoardProposalKind, Character, PlayerView, SessionState } from '@frontier/contracts';
-import { BOARD_PROPOSAL_KINDS } from '@frontier/contracts';
+import { BOARD_PROPOSAL_KINDS, SECTORS, SECTOR_META } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import {
   ConfirmDialog,
@@ -27,6 +27,7 @@ import {
   ValidationBanner,
   openCeiling,
   roundStep,
+  sectorOf,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { PROPOSAL_KIND_BLURB, PROPOSAL_KIND_LABEL } from './labels';
@@ -172,11 +173,22 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
             <span className="label-caps-faint mb-1 block">Target company</span>
             <select className="field tap-target sm:min-h-0" value={targetCompanyId} onChange={(event) => setTargetCompanyId(event.target.value)}>
               <option value="">None</option>
-              {view.visibleCompanies.map((rival) => (
-                <option key={rival.id} value={rival.id}>
-                  {rival.name ?? rival.id}
-                </option>
-              ))}
+              {/* Grouped by sector: two dozen names in one flat list is a list
+                  nobody can find a company in. One sector produces one group,
+                  which renders as the plain list it always was. */}
+              {SECTORS.map((sector) => {
+                const here = view.visibleCompanies.filter((rival) => sectorOf(rival) === sector);
+                if (here.length === 0) return null;
+                return (
+                  <optgroup key={sector} label={SECTOR_META[sector].label}>
+                    {here.map((rival) => (
+                      <option key={rival.id} value={rival.id}>
+                        {rival.name ?? rival.id}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </select>
           </label>
           <div>

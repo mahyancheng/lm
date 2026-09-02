@@ -12,9 +12,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import type { ActionIntent, ActionValidationResult } from '@frontier/contracts';
+import type { ActionIntent, ActionValidationResult, Sector } from '@frontier/contracts';
+import { SECTORS, SECTOR_META } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, KeyValueGrid, SliderField, Tag, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
+import { ConfirmDialog, KeyValueGrid, SectorBadge, SliderField, Tag, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 
 export interface AcquisitionTarget {
@@ -23,6 +24,8 @@ export interface AcquisitionTarget {
   /** Market capitalisation from state: last quote when listed, anchor when private. */
   readonly marketCapUsd: number;
   readonly isPublic: boolean;
+  /** What the target does. Groups the picker once the world has two dozen of them. */
+  readonly sector: Sector;
 }
 
 export interface AcquisitionDeskProps {
@@ -44,6 +47,15 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
   const [queued, setQueued] = useState(false);
 
   const target = useMemo(() => targets.find((entry) => entry.id === targetId) ?? null, [targets, targetId]);
+
+  /** Targets in sector order, each group keeping the order it arrived in. */
+  const grouped = useMemo(
+    () =>
+      SECTORS.map((sector) => ({ sector, entries: targets.filter((entry) => entry.sector === sector) })).filter(
+        (group) => group.entries.length > 0,
+      ),
+    [targets],
+  );
 
   // Following the radar's selection is the whole point of the hand-off; the
   // offer resets to the target's own market capitalisation so the first number
@@ -96,10 +108,18 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
                   setQueued(false);
                 }}
               >
-                {targets.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name}
-                  </option>
+                {/* Grouped by sector: a flat list of two dozen names is a list
+                    nobody can find anything in, and the group heading is the
+                    one fact that narrows it. A single-sector world produces
+                    one group, which a browser renders as a plain list. */}
+                {grouped.map((group) => (
+                  <optgroup key={group.sector} label={SECTOR_META[group.sector].label}>
+                    {group.entries.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>
@@ -135,6 +155,15 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             format={(value) => `${formatPct(value)} cash / ${formatPct(1 - value)} stock`}
             exact={false}
           />
+
+          {target === null ? null : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <SectorBadge sector={target.sector} />
+              <Tag tone={target.isPublic ? 'info' : 'neutral'} dot>
+                {target.isPublic ? 'listed' : 'privately held'}
+              </Tag>
+            </div>
+          )}
 
           {/* One column: this desk is the narrow half of the row on a desktop,
               and "Market capitalisation" beside a nine-character figure does

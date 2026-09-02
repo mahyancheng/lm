@@ -15,10 +15,10 @@
 
 import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Company, PlayerView, ProcurementOpportunity, SessionState } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { SECTORS, quarterLabel } from '@frontier/contracts';
 import { CLEARANCE_STAFF_REQUIREMENT, recordPastPerformance } from '@frontier/simulation';
 import { formatMoney, formatPct, formatScore } from '@frontier/shared';
-import { BarChart, Icon, ProgressBar, SectionHeading, SectorBadge, SliderField, Tag, ValidationBanner, cx } from '@/components/ui';
+import { BarChart, Icon, ProgressBar, SectionHeading, SectorBadge, SliderField, Tag, ValidationBanner, cx, sectorOf } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { EVALUATION_AXIS_LABEL } from './bidModel';
 import { opportunitySector } from './sectors';
@@ -294,21 +294,38 @@ export function OpportunityCard({
         <div className="mt-2.5 space-y-2.5 border-t border-hair pt-2.5">
           <div>
             <div className="label-caps-faint mb-1">Invite</div>
-            <div className="flex flex-wrap gap-1.5">
-              {partners.map((partner) => (
-                <button
-                  key={partner.id}
-                  type="button"
-                  className={`btn btn-sm tap-target sm:min-h-0 ${invitees.includes(partner.id ?? '') ? 'btn-primary' : ''}`}
-                  onClick={() =>
-                    setInvitees((current) =>
-                      current.includes(partner.id ?? '') ? current.filter((entry) => entry !== partner.id) : [...current, partner.id ?? ''].slice(0, 5),
-                    )
-                  }
-                >
-                  {partner.name ?? partner.id}
-                </button>
-              ))}
+            {/* Grouped by sector, and capped in height. Two dozen buttons in
+                one wrap is a wall; under a sector heading it is a shortlist,
+                and a consortium is usually assembled out of one or two
+                industries anyway. The block scrolls inside itself. */}
+            <div className="flex max-h-64 flex-col gap-2 overflow-y-auto">
+              {SECTORS.map((entry) => {
+                const here = partners.filter((partner) => sectorOf(partner) === entry);
+                if (here.length === 0) return null;
+                return (
+                  <div key={entry}>
+                    <SectorBadge sector={entry} />
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {here.map((partner) => (
+                        <button
+                          key={partner.id}
+                          type="button"
+                          className={cx('btn btn-sm tap-target sm:min-h-0', invitees.includes(partner.id ?? '') ? 'btn-primary' : '')}
+                          onClick={() =>
+                            setInvitees((current) =>
+                              current.includes(partner.id ?? '')
+                                ? current.filter((item) => item !== partner.id)
+                                : [...current, partner.id ?? ''].slice(0, 5),
+                            )
+                          }
+                        >
+                          {partner.name ?? partner.id}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="grid gap-2.5 sm:grid-cols-2">

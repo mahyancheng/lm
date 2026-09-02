@@ -29,6 +29,7 @@ import {
   Sparkline,
   StatCard,
   Tag,
+  regionOf,
   sectorOf,
   sectorsPresent,
   type Column,
@@ -128,7 +129,13 @@ export default function MarketsPage(): React.JSX.Element {
     [register, registerSector],
   );
 
-  /** How many instruments each sector has on the tape, for the tape's filter. */
+  /**
+   * How many instruments each sector has on the tape.
+   *
+   * The tape filter offers only the sectors that actually have a listed name,
+   * so it can never be narrowed to an empty table: a sector whose companies are
+   * all private is on the register below, not on the exchange.
+   */
   const tapeCounts = useMemo(() => {
     const out: Partial<Record<Sector, number>> = {};
     for (const row of rows) {
@@ -138,6 +145,7 @@ export default function MarketsPage(): React.JSX.Element {
     }
     return out;
   }, [rows]);
+  const tapeSectors = useMemo(() => presentSectors.filter((entry) => (tapeCounts[entry] ?? 0) > 0), [presentSectors, tapeCounts]);
 
   /* --- positions ---------------------------------------------------------- */
 
@@ -203,7 +211,7 @@ export default function MarketsPage(): React.JSX.Element {
           ) : (
             <span className="mt-0.5 flex flex-wrap items-center gap-1">
               <SectorBadge sector={sectorOf(row.company)} />
-              <RegionBadge region={row.company.region ?? 'north_america'} />
+              <RegionBadge region={regionOf(row.company)} />
             </span>
           )}
         </span>
@@ -639,13 +647,7 @@ export default function MarketsPage(): React.JSX.Element {
       >
         {!multiSector ? null : (
           <div className="border-b border-hair px-3 pt-3 pb-2">
-            <SectorFilter
-              sectors={presentSectors}
-              value={tapeSector}
-              onChange={setTapeSector}
-              counts={tapeCounts}
-              totalLabel="Everything"
-            />
+            <SectorFilter sectors={tapeSectors} value={tapeSector} onChange={setTapeSector} counts={tapeCounts} totalLabel="Everything" />
           </div>
         )}
         <DataTable

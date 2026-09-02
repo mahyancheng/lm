@@ -18,7 +18,8 @@
  * of the footprint, and the art occupies `baseY - height` to `baseY`.
  */
 
-import type { Tone } from '@/components/ui';
+import type { Sector } from '@frontier/contracts';
+import { SECTOR_TINT, type Tone } from '@/components/ui';
 import { pickIndex, type MapBuilding } from './model';
 import type { BuildingGlyph } from './geography';
 
@@ -42,6 +43,14 @@ interface Anchored {
   readonly height: number;
   readonly seed: string;
 }
+
+/**
+ * What every silhouette is handed. `sector` is what a head office's company
+ * does — a dot of colour on its flag, so a district of twenty-five towers can
+ * be read as an industry rather than as twenty-five identical rectangles. It is
+ * `null` for a landmark and for an agency, which are places, not businesses.
+ */
+type GlyphProps = Anchored & { readonly badge: string; readonly own: boolean; readonly sector: Sector | null };
 
 /** The soft contact ellipse every volume stands on. */
 function Contact({ x, baseY, width }: { readonly x: number; readonly baseY: number; readonly width: number }): React.JSX.Element {
@@ -114,16 +123,20 @@ function Flag({
   topY,
   badge,
   own,
+  sector,
   delayMs,
 }: {
   readonly x: number;
   readonly topY: number;
   readonly badge: string;
   readonly own: boolean;
+  /** Draws a dot of the sector's tint on the flag. Null draws no dot. */
+  readonly sector?: Sector | null;
   readonly delayMs: number;
 }): React.JSX.Element {
   const text = badge.slice(0, 4);
-  const cardW = Math.max(22, text.length * 7 + 8);
+  const dot = sector ?? null;
+  const cardW = Math.max(22, text.length * 7 + 8) + (dot === null ? 0 : 8);
   return (
     <g>
       <rect x={x - 0.9} y={topY - 17} width={1.8} height={18} rx={0.9} fill="var(--fc-map-roof)" />
@@ -138,9 +151,13 @@ function Flag({
           stroke={own ? 'var(--color-brand-strong)' : 'var(--color-hair-strong)'}
           strokeWidth={1}
         />
+        {/* The industry, as one dot on the flag. It is the only thing on a
+            tower that distinguishes an energy company from a logistics one at
+            map scale, and it costs three pixels. */}
+        {dot === null ? null : <circle cx={x + 6.5} cy={topY - 12.5} r={2.6} fill={SECTOR_TINT[dot]} />}
         <text
           className="fc-map-label"
-          x={x + 1 + cardW / 2}
+          x={x + 1 + (dot === null ? 0 : 5) + cardW / 2}
           y={topY - 9.4}
           textAnchor="middle"
           fontSize={8.5}
@@ -214,7 +231,7 @@ export function Tree({ x, y, seed }: { readonly x: number; readonly y: number; r
 /*  Company head office                                                        */
 /* -------------------------------------------------------------------------- */
 
-function Tower({ x, baseY, width, height, seed, badge, own }: Anchored & { readonly badge: string; readonly own: boolean }): React.JSX.Element {
+function Tower({ x, baseY, width, height, seed, badge, own, sector }: GlyphProps): React.JSX.Element {
   const body = own ? 'var(--color-brand)' : colourwayOf(seed);
   const left = x - width / 2;
   const top = baseY - height;
@@ -226,7 +243,7 @@ function Tower({ x, baseY, width, height, seed, badge, own }: Anchored & { reado
       <rect x={left} y={top} width={width} height={5.5} rx={2.5} fill="var(--fc-map-roof)" />
       <Windows x={x} baseY={baseY} width={width} height={height} inset={12} />
       <rect x={left + 3} y={baseY - 9} width={width - 6} height={9} rx={2} fill="var(--fc-map-glass)" />
-      <Flag x={x} topY={top} badge={badge} own={own} delayMs={pickIndex(seed, 'flag', 8) * 220} />
+      <Flag x={x} topY={top} badge={badge} own={own} sector={sector} delayMs={pickIndex(seed, 'flag', 8) * 220} />
     </g>
   );
 }
@@ -521,7 +538,7 @@ function Terminal({ x, baseY, width, height }: Anchored): React.JSX.Element {
 /*  Dispatcher                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const GLYPHS: Readonly<Record<BuildingGlyph, (props: Anchored & { readonly badge: string; readonly own: boolean }) => React.JSX.Element>> = {
+const GLYPHS: Readonly<Record<BuildingGlyph, (props: GlyphProps) => React.JSX.Element>> = {
   tower: Tower,
   civic: Civic,
   lab: Lab,
@@ -548,6 +565,7 @@ export function SiteArt({ building }: { readonly building: MapBuilding }): React
       seed={building.key}
       badge={building.badge}
       own={building.isPlayer}
+      sector={building.sector}
     />
   );
 }

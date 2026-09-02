@@ -29,6 +29,7 @@ import {
   SectionHeading,
   StatCard,
   Tag,
+  sectorOf,
   type Column,
 } from '@/components/ui';
 import { AcquisitionDesk, type AcquisitionTarget } from '@/components/screens/deal-room/AcquisitionDesk';
@@ -125,6 +126,7 @@ export default function DealRoomPage(): React.JSX.Element {
           name: rival.name ?? (rival.id ?? ''),
           marketCapUsd: marketCapOf(session, rival.id ?? ''),
           isPublic: rival.isPublic === true,
+          sector: sectorOf(rival),
         })),
     [view.visibleCompanies, session],
   );
@@ -312,6 +314,7 @@ export default function DealRoomPage(): React.JSX.Element {
                     <CompanyChip
                       company={row.company}
                       size="sm"
+                      badges="sector"
                       subtitle={`${formatMoney(row.marketCapUsd)}${
                         row.runwayQuarters === null ? '' : ` · ${formatQuarterCount(row.runwayQuarters)} of runway`
                       }`}

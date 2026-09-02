@@ -18,7 +18,7 @@
 
 import { useMemo, useState } from 'react';
 import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { SECTORS, quarterLabel } from '@frontier/contracts';
 import { heldComputeUnits, researchEnvelopeUsd } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
 import {
@@ -148,8 +148,10 @@ export default function ResearchPage(): React.JSX.Element {
       is what turns the sector controls on; a single-lane graph gets the map it
       has always had. */
   const tracks = useMemo(() => tracksOf(graph), [graph]);
-  const trackSectors = useMemo(() => tracks.map((track) => track.sector), [tracks]);
-  const multiTrack = new Set(trackSectors).size > 1;
+  // Distinct and in presentation order: two lanes may share a sector, and the
+  // filter offers a sector once however many lanes carry it.
+  const trackSectors = useMemo(() => SECTORS.filter((entry) => tracks.some((track) => track.sector === entry)), [tracks]);
+  const multiTrack = trackSectors.length > 1;
   const trackCounts = useMemo(() => {
     const out: Partial<Record<Sector, number>> = {};
     for (const track of tracks) out[track.sector] = (out[track.sector] ?? 0) + track.nodes.length;

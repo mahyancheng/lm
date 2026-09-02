@@ -13,6 +13,8 @@
  * desk. Nothing in this file reads the store.
  */
 
+import type { Sector } from '@frontier/contracts';
+import { SECTOR_TINT } from '@/components/ui';
 import {
   Crate,
   DESK_CELL,
@@ -234,11 +236,14 @@ export function LobbyRoom({
   band,
   width,
   height,
+  sector,
 }: {
   readonly companyId: string;
   readonly band: MoraleBand;
   readonly width: number;
   readonly height: number;
+  /** The industry this company is in. Paints the sign over reception. */
+  readonly sector: Sector;
 }): React.JSX.Element {
   const receptionist = seatLook(`${companyId}/lobby/0`);
   const visitor = seatLook(`${companyId}/lobby/1`);
@@ -259,6 +264,11 @@ export function LobbyRoom({
         />
       ))}
       <path d={`M8 33h${glass}`} stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.75" />
+
+      {/* The sign over reception, in the company's own industry colour. It is
+          the one place in the office that says what the company does — the
+          rooms say how big it is and how it feels, which is a different fact. */}
+      <rect x="8" y="54" width={Math.max(28, Math.min(74, width - 120))} height="9" rx="4.5" fill={SECTOR_TINT[sector]} opacity="0.85" />
 
       <g transform={`translate(${Math.max(10, width - 30)} ${height - 30})`}>
         <Plant />

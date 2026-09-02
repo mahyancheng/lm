@@ -303,7 +303,13 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
           >
             <Floor width={lobbyInner.width} height={lobbyInner.height} />
             <MoraleWash width={lobbyInner.width} height={lobbyInner.height} band={model.band} />
-            <LobbyRoom companyId={model.companyId} band={model.band} width={lobbyInner.width} height={lobbyInner.height} />
+            <LobbyRoom
+              companyId={model.companyId}
+              band={model.band}
+              width={lobbyInner.width}
+              height={lobbyInner.height}
+              sector={model.sector}
+            />
           </ZoneFrame>
 
           {/* --- executive row -------------------------------------------- */}

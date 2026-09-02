@@ -22,7 +22,7 @@
  *    rendered on the Company screen.
  */
 
-import type { Character, Company, CompanyTier, ResearchProject, SessionState, StaffRole } from '@frontier/contracts';
+import type { Character, Company, CompanyTier, ResearchProject, Sector, SessionState, StaffRole } from '@frontier/contracts';
 import { STAFF_ROLES } from '@frontier/contracts';
 import { heldComputeUnits } from '@frontier/simulation';
 import { allocate, crowd, seatId, type Crowd } from './seats';
@@ -141,6 +141,8 @@ export interface OfficeLobby {
 
 export interface OfficeModel {
   readonly companyId: string;
+  /** What this company does. Paints the sign over reception, and nothing else. */
+  readonly sector: Sector;
   readonly headcount: number;
   readonly morale: number;
   readonly band: MoraleBand;
@@ -332,6 +334,7 @@ export function buildOfficeModel({ session, company, projects, characters }: Bui
 
   return {
     companyId: company.id,
+    sector: company.sector,
     headcount,
     morale: employees.morale,
     band: moraleBand(employees.morale),

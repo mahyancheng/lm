@@ -168,14 +168,18 @@ export const DISTRICTS: readonly DistrictGeography[] = [
     blurb:
       'Rulemaking on one side of the square, buying on the other. Everything here is public by construction: the statutes, the budgets and the notices of what the state intends to purchase.',
     parcel: { x: 352, y: 186, w: 224, h: 150 },
+    // Five civic plots, because the multi-sector world has five buying
+    // agencies and every one of them is a building here. The head offices that
+    // stand in this quarter — defence contractors — take the front row.
     plots: [
-      plot(420, 272, 'landmark'),
-      plot(508, 272, 'landmark'),
-      plot(394, 314, 'landmark'),
-      plot(464, 314, 'company'),
-      plot(534, 314, 'company'),
-      plot(429, 336, 'company'),
-      plot(499, 336, 'company'),
+      plot(400, 272, 'landmark'),
+      plot(470, 272, 'landmark'),
+      plot(540, 272, 'landmark'),
+      plot(435, 314, 'landmark'),
+      plot(505, 314, 'landmark'),
+      plot(394, 336, 'company'),
+      plot(464, 336, 'company'),
+      plot(534, 336, 'company'),
     ],
     markerAnchor: { x: 542, y: 216 },
   },

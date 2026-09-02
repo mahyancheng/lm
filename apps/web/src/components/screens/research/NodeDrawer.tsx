@@ -24,6 +24,7 @@ import {
   Meter,
   ProgressBar,
   SectionHeading,
+  SectorBadge,
   SliderField,
   Tag,
   ValidationBanner,
@@ -31,6 +32,7 @@ import {
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
+import { tracksOf, trackForNode } from './tracks';
 
 export interface NodeDrawerProps {
   readonly session: SessionState;
@@ -61,6 +63,12 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
   const [publishResult, setPublishResult] = useState<ActionValidationResult | null>(null);
 
   const titles = useMemo(() => new Map(graph.nodes.map((entry) => [entry.id, entry.title])), [graph.nodes]);
+
+  // The lane this node sits in. Shown only when the graph has more than one,
+  // because a single-lane world would put the same badge on every card.
+  const tracks = useMemo(() => tracksOf(graph), [graph]);
+  const track = node === null ? null : trackForNode(tracks, node.id);
+  const showTrack = tracks.length > 1 && track !== null;
 
   const existing = node === null ? null : (projects.find((project) => project.targetNodeId === node.id) ?? null);
   const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
@@ -123,6 +131,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
       {node === null || style === null ? null : (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-1.5">
+            {showTrack && track !== null ? <SectorBadge sector={track.sector} /> : null}
             <Tag tone={style.tone} dot>
               {style.label}
             </Tag>

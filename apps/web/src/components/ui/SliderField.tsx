@@ -39,6 +39,13 @@ export interface SliderFieldProps {
  * "Exact" — a slider cannot state $1,234,567, and a typed figure may exceed
  * the slider's ceiling because the validator, not this control, is the
  * authority on what clears.
+ *
+ * A drag moves the thumb locally and hands the parent one value, on release.
+ * A range input fires on every pixel of travel, and the forms this control
+ * sits in re-run the validator — and, on a government bid, five engine
+ * analyses — for every value they are handed; a two-second drag committing at
+ * pointer rate is the phone-killing version of the same screen. Chips and the
+ * exact field are discrete and commit immediately.
  */
 export function SliderField({
   label,
@@ -59,15 +66,28 @@ export function SliderField({
   // The exact field's text while it is being edited; null means "mirror value",
   // so a chip or slider move is reflected immediately without fighting typing.
   const [draft, setDraft] = useState<string | null>(null);
+  // The thumb's own position while a drag is in flight; null means "mirror
+  // value". Only this component re-renders until the drag ends.
+  const [held, setHeld] = useState<number | null>(null);
 
-  const clamped = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
-  const fill = max > min ? ((clamped - min) / (max - min)) * 100 : 0;
+  const settled = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+  const shown = held ?? settled;
+  const fill = max > min ? ((shown - min) / (max - min)) * 100 : 0;
   const stops = chips ? chipStops(min, max, step) : [];
   const name = ariaLabel ?? (typeof label === 'string' ? label : undefined);
 
   function set(next: number): void {
     setDraft(null);
+    setHeld(null);
     onChange(next);
+  }
+
+  /** End of a drag: hand the parent the figure the thumb came to rest on. */
+  function commit(): void {
+    if (held === null) return;
+    const next = held;
+    setHeld(null);
+    if (next !== value) onChange(next);
   }
 
   return (
@@ -77,7 +97,7 @@ export function SliderField({
           {label}
         </label>
         <output htmlFor={id} className="figure shrink-0 text-[15px] font-bold text-ink" aria-live="off">
-          {format(value)}
+          {format(shown)}
         </output>
       </div>
 
@@ -88,12 +108,20 @@ export function SliderField({
         min={min}
         max={max}
         step={step}
-        value={clamped}
+        value={shown}
         disabled={disabled}
         aria-label={name}
-        aria-valuetext={format(value)}
+        aria-valuetext={format(shown)}
         style={{ '--fc-fill': `${fill}%` } as React.CSSProperties}
-        onChange={(event) => set(snapToStep(Number(event.target.value), min, max, step))}
+        onChange={(event) => setHeld(snapToStep(Number(event.target.value), min, max, step))}
+        // Every way a drag can end, including a pointer released off the track
+        // and a keyboard arrow. `commit` is idempotent, so overlapping events
+        // on a touch device settle the value once.
+        onPointerUp={commit}
+        onPointerCancel={commit}
+        onLostPointerCapture={commit}
+        onKeyUp={commit}
+        onBlur={commit}
       />
 
       {stops.length > 0 || exact ? (
@@ -106,7 +134,7 @@ export function SliderField({
               aria-label={name === undefined ? undefined : `${name}: ${stop.label}`}
               className={cx(
                 'btn btn-sm tap-target press-pop sm:min-h-0',
-                value === stop.value && 'border-brand/40 bg-brand-wash text-brand',
+                shown === stop.value && 'border-brand/40 bg-brand-wash text-brand',
               )}
               onClick={() => set(stop.value)}
             >
@@ -139,7 +167,7 @@ export function SliderField({
           min={min}
           step={step}
           disabled={disabled}
-          value={draft ?? String(value)}
+          value={draft ?? String(shown)}
           onChange={(event) => {
             setDraft(event.target.value);
             const parsed = Number.parseFloat(event.target.value);

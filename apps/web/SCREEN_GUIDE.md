@@ -478,6 +478,38 @@ Meter       { value /* 0..100 */, label?, tone?, benchmark?, benchmarkLabel?, sh
 that loss. Use it for morale, the five reputation audiences, connection level,
 director support, past performance.
 
+### `SliderField`
+```ts
+{ label, value, onChange, min, max, step, format,
+  chips?, exact?, disabled?, ariaLabel?, className? }
+```
+Every numeric quantity in an action form is set with this, not typed. The one
+exception in the app is the commitment threshold on `LobbyPanel`, which is a
+comparator against a figure with no bound and an empty state that means "no
+term offered".
+
+- `min`/`max` are the bounds the validator already enforces — the schema range
+  (`0..1`, `1..40`, `1..20`) or a real quantity from state (uncommitted cash,
+  the free float, headcount, the award ceiling). Where an action has no schema
+  maximum, `openCeiling(floor, ...candidates)` builds one that always contains
+  the figure already set.
+- `step` comes from `roundStep(bound)`: budgets move in $250K notches, never
+  $247,193. `snapToStep` keeps both bounds reachable even off-grid.
+- `format` is the shared formatter for the unit — `formatMoney`,
+  `formatPercent`, `formatCount`, `formatQuarterCount`. The live figure above
+  the track is the only place the value is stated.
+- `chips` adds 25/50/75/Max quick-sets. Only where `max` is a real budget or
+  cash bound; "Max" of an invented ceiling reads as an entitlement.
+- `exact` (default true) reveals the old numeric input for a figure the grid
+  cannot state. It imposes the floor only: a typed value above `max` is legal
+  input, and the validator decides what it means. Set `exact={false}` on a
+  field the schema fully bounds, where there is nothing left to type.
+
+A drag calls `onChange` once, on release — not on every pixel. The thumb and
+the live figure move locally in the meantime. Forms that re-run the validator
+or an engine analysis from `onChange` therefore run it once per drag; do not
+add a second, live-reading copy of the value alongside it.
+
 ### `PersonChip` / `CompanyChip` / `AccessBadge`
 ```ts
 PersonChip   { character: PersonLike, subtitle?, right?, onClick?, size? }

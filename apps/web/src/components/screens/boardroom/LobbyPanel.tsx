@@ -234,6 +234,11 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
                   </option>
                 ))}
               </select>
+              {/* The one number in the game that stays typed. A condition is a
+                  comparator against a figure the director will name — "below
+                  $5.5 billion" — so it carries no bound to size a track from,
+                  and an empty box means no term is offered at all, which a
+                  slider resting at a value could not say. */}
               <input
                 className="field tap-target sm:min-h-0"
                 type="number"

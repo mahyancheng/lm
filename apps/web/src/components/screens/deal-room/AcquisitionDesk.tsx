@@ -121,7 +121,7 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
           {/* One split, stated from the cash side; the stock side is what is
               left, exactly as the intent computes it. */}
           <SliderField
-            label={`Consideration · ${formatPct(cashPct)} cash / ${formatPct(stockPct)} stock`}
+            label="Consideration"
             ariaLabel="Cash share of the consideration"
             value={cashPct}
             onChange={(next) => {
@@ -132,7 +132,7 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             min={0}
             max={1}
             step={0.05}
-            format={(value) => `${formatPct(value)} cash`}
+            format={(value) => `${formatPct(value)} cash / ${formatPct(1 - value)} stock`}
             exact={false}
           />
 

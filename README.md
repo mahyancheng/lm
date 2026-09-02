@@ -17,7 +17,7 @@ and reinterpret the future; **only the simulation engine makes reality.**
 
 | Layer | Technology |
 |---|---|
-| Frontend + API | Next.js (App Router) on **Vercel** |
+| Frontend + API | Next.js (App Router), self-hosted as one always-on Node process (`deploy/pi`) |
 | Canonical state, auth, realtime | **Supabase** (Postgres, RLS, Broadcast) |
 | All LLM roles | **Claude Code sessions** — Claude Agent SDK, subscription OAuth, **Sonnet** |
 | Engine | Pure TypeScript deterministic simulation (`packages/simulation`) |
@@ -53,13 +53,12 @@ real call to prove it; **Disconnect** falls back to whatever the environment
 supplies. A pasted or connected token lives in that one server process and is
 never written to disk or stored in the browser.
 
-**On the public (Vercel) game, use an API key for live AI.** The subscription
-transport spawns the Claude Code CLI as a subprocess, which serverless functions
-cannot do — so a subscription token there is *connected but runs only when
-self-hosted*, and the panel says exactly that instead of a false "Live". Paste an
-`sk-ant-api…` key (or set `LLM_TRANSPORT=api` + `ANTHROPIC_API_KEY`) for live AI
-on the hosted game; keep the subscription path for `pnpm start` on your own
-machine, a container, or a VM.
+**The game is self-hosted on purpose.** The subscription transport spawns the
+Claude Code CLI as a subprocess, which serverless functions cannot do — so the
+one deployment is an always-on Node process (the owner's Raspberry Pi, via the
+`deploy/pi` Docker kit; `deploy/vps` is the generic systemd equivalent). There
+the subscription runs live with no API charges, and the connection made in
+Settings is sealed to disk under `LLM_KEY_SECRET` so it survives restarts.
 
 **Who may set it.** On your own machine the form is offered to the local
 connection only — a dev server listens on every interface, and nobody else on
@@ -82,14 +81,12 @@ Reached over the network with neither, it says so and names the alternatives
    session on **Sonnet** through the Claude Agent SDK.
 3. **Env**: copy `.env.example` to `apps/web/.env.local` and fill in the
    Supabase URL/keys and the OAuth token; set `NEXT_PUBLIC_DEMO_MODE=false`.
-4. **Vercel**: import the repo, set the root directory to `apps/web`, add the
-   same environment variables, deploy. Because Vercel functions are serverless,
-   the `claude-session` subprocess **cannot spawn there** — set
-   `LLM_TRANSPORT=api` and `ANTHROPIC_API_KEY` for live AI on the hosted game
-   (or let a player paste an `sk-ant-api…` key in-app). The subscription path is
-   for self-hosting on a normal Node process. To let players set the credential
-   in-app on the public deployment, also set `LLM_SETUP_SECRET` to a long random
-   string and share it with them (§ 5.1 of `docs/DEPLOYMENT.md`).
+4. **Host it**: `deploy/pi/` (Docker, linux/arm64, the Raspberry Pi this game
+   lives on — see its README and HANDOFF) or `deploy/vps/install.sh` (any
+   Ubuntu/Debian VPS, one `curl | sudo bash`). Both run the app as a single
+   always-on Node process where the `claude-session` transport can spawn its
+   subprocess; set `LLM_SETUP_SECRET` so the in-app connect panel unlocks
+   (§ 5.1 of `docs/DEPLOYMENT.md`). Serverless hosts are not a target.
 
 ## Commands
 

@@ -23,7 +23,7 @@ The rule everything else follows from:
 | [MARKETS.md](./MARKETS.md) | The in-world exchange, the optional read-only reference tape, belief-based pricing, disclosures and rumour credibility, ownership thresholds and proxy contests. |
 | [MULTIPLAYER.md](./MULTIPLAYER.md) | Shared session worlds, the asynchronous quarter cadence, connection level versus relationship, the access rule, structured deals, moderation, Realtime channels and leaderboards. |
 | [UI_SYSTEM.md](./UI_SYSTEM.md) | The aesthetic, all eighteen screens, the quarter-resolution moment, Frontier Map rendering rules and the Chief-of-Staff interaction contract. |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Vercel and Supabase setup, migrations and seeds, environment variables, demo mode versus the full stack, LLM cost controls and the operational runbook. |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Hosting (the always-on Pi via `deploy/pi`; the generic VPS kit), Supabase setup, migrations and seeds, environment variables, demo mode versus the full stack, LLM cost controls and the operational runbook. |
 
 ## Reading paths
 
@@ -50,14 +50,15 @@ invariants checklist and the runbook at the end.
 
 | Layer | Technology |
 |---|---|
-| Frontend + API routes | Next.js App Router on **Vercel** |
+| Frontend + API routes | Next.js App Router, self-hosted as one always-on Node process (`deploy/pi`) |
 | Canonical state, auth, realtime | **Supabase** — Postgres, RLS, Broadcast |
 | Every LLM role | **Claude**, via `packages/llm` |
 | Engine | Pure TypeScript, deterministic (`packages/simulation`) |
 | Contracts | zod schemas and engine interfaces (`packages/contracts`) |
 
-GitHub is the source of truth; Vercel deploys `apps/web`; Supabase is canonical
-state; the Claude gateway powers every LLM role with structured outputs. There
+GitHub is the source of truth; the owner's always-on Pi runs `apps/web` from a
+pinned image built by `deploy/pi`; Supabase is canonical state in full-stack
+mode; the Claude gateway powers every LLM role with structured outputs. There
 is no dependency on any other model provider anywhere in the project.
 
 ## Concepts worth knowing before you read anything else

@@ -4,8 +4,18 @@ How Frontier Capital is built, hosted, configured and operated.
 
 ## 1. Platform shape
 
-**GitHub is the source of truth. Vercel deploys `apps/web`. Supabase holds
-canonical state. Claude powers every LLM role from server-side code.**
+**GitHub is the source of truth. The game runs as one always-on Node process
+on the owner's Raspberry Pi, from a pinned linux/arm64 image built by
+`deploy/pi` (see `deploy/pi/README.md` for bring-up, health, logs and rollback;
+`deploy/vps/install.sh` is the generic systemd equivalent for any VPS).
+Supabase holds canonical state in full-stack mode. Claude powers every LLM
+role from server-side code — the subscription transport spawns a subprocess,
+which is why the host is a process and not a serverless function.**
+
+> Vercel and Render were used during development and are **retired**: the
+> sections below that describe serverless behaviour are kept as reference for
+> what the code still guards against (`VERCEL=1` disables things that need a
+> durable process), not as a deployment target.
 
 ```text
                     GITHUB REPOSITORY — SOURCE OF TRUTH

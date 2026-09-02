@@ -6,7 +6,8 @@ agency; an LLM World Director perturbs a deterministic economic simulation;
 players build companies, negotiate, invest, win government contracts, control
 boards and compete against humans and AI founders.
 
-**Stack:** pnpm monorepo · TypeScript · Next.js (Vercel) · Supabase (Postgres,
+**Stack:** pnpm monorepo · TypeScript · Next.js (self-hosted: the owner's
+always-on Raspberry Pi via `deploy/pi`, the only deployment target) · Supabase (Postgres,
 Auth, Realtime) · Claude via **Claude Code sessions** (Claude Agent SDK with
 subscription OAuth, **Sonnet** for every in-game role).
 There is no OpenAI/ChatGPT dependency anywhere in this project.
@@ -43,7 +44,9 @@ There is no OpenAI/ChatGPT dependency anywhere in this project.
 
 ## Repository layout
 
-- `apps/web` — Next.js App Router frontend + API routes (deployed on Vercel).
+- `apps/web` — Next.js App Router frontend + API routes (deployed as one
+  always-on Node process on the owner's Pi via the `deploy/pi` Docker kit;
+  Vercel and Render are retired — do not add deployment config for them).
 - `packages/contracts` — zod schemas + types: the single source of truth for
   world state, actions, GM proposals, tech graph, deals, sim events, and the
   subsystem interfaces the engine implements.

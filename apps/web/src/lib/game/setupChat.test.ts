@@ -18,7 +18,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CURRENT_WORLD_VERSION, NewGameSetupSchema, missingSetupSlots } from '@frontier/contracts';
+import { ALL_BACKGROUNDS, CURRENT_WORLD_VERSION, NewGameSetupSchema, REGIONS, defaultRegionFor, missingSetupSlots } from '@frontier/contracts';
+import { createSession, getEngine } from './engine';
 import {
   EMPTY_SETUP_PROPOSAL,
   SETUP_ASK_ORDER,
@@ -299,5 +300,75 @@ describe('the conversation asks for what is missing and stops when it is not', (
       'companyName',
       'founderName',
     ]);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  What the conversation hands the engine                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('every world the conversation can ask for is a world the engine builds', () => {
+  it('founds a session for each of the fifteen openings, in the region the chat would default to', () => {
+    for (const background of ALL_BACKGROUNDS) {
+      const proposal = applySetupChoice(
+        applySetupChoice(
+          applySetupChoice(
+            applySetupChoice(EMPTY_SETUP_PROPOSAL, 'sector', background.sector),
+            'backgroundId',
+            background.id,
+          ),
+          'companyName',
+          'Kestrel Dynamics',
+        ),
+        'founderName',
+        'Rae Fontaine',
+      );
+      // The region is the one slot the chat leaves to the sector's own default
+      // when a founder never names one.
+      const setup = setupFromProposal({ ...proposal, region: defaultRegionFor(background.sector) });
+      expect(setup).not.toBeNull();
+
+      const session = createSession({ seed: 424242, setup: setup ?? undefined });
+      expect(session.config.worldVersion).toBe(CURRENT_WORLD_VERSION);
+      const player = session.companies.find((company) => company.controllerPlayerId !== null);
+      expect(player?.name).toBe('Kestrel Dynamics');
+      expect(player?.sector).toBe(background.sector);
+      expect(player?.region).toBe(defaultRegionFor(background.sector));
+    }
+  });
+
+  it('resolves a quarter in a world the conversation founded, invariants and all', () => {
+    const setup = setupFromProposal({
+      companyName: 'Kestrel Dynamics',
+      founderName: 'Rae Fontaine',
+      sector: 'robotics',
+      region: 'east_asia',
+      backgroundId: 'humanoid_lab',
+      confidence: 1,
+      missing: [],
+    });
+    const session = createSession({ seed: 424242, setup: setup ?? undefined });
+    // Nothing queued: the point is that the world itself commits — balance
+    // sheets, share ownership and market integrity all pass on quarter 0.
+    const outcome = getEngine().resolver.resolveQuarter(session, [], null, []);
+    expect(outcome.committed).toBe(true);
+    expect(outcome.nextState.quarter).toBe(1);
+  });
+
+  it('founds a session in every region for one opening', () => {
+    for (const region of REGIONS) {
+      const setup = setupFromProposal({
+        companyName: 'Kestrel Dynamics',
+        founderName: 'Rae Fontaine',
+        sector: 'robotics',
+        region,
+        backgroundId: 'humanoid_lab',
+        confidence: 1,
+        missing: [],
+      });
+      expect(setup?.region).toBe(region);
+      const session = createSession({ seed: 424242, setup: setup ?? undefined });
+      expect(session.companies.find((company) => company.controllerPlayerId !== null)?.region).toBe(region);
+    }
   });
 });

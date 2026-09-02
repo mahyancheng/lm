@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { NewGameSetup, SetupProposal } from '@frontier/contracts';
-import { AiLabel, Icon, Tag, cx } from '@/components/ui';
+import { AiLabel, Icon, Tag } from '@/components/ui';
 import { isIconName } from '@/components/ui/icons';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { requestSetupProposal } from '@/lib/llm/client';

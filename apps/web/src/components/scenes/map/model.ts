@@ -31,12 +31,14 @@ import type {
   DominantNarrative,
   PlayerView,
   Quote,
+  Sector,
   WorldEvent,
   WorldEventType,
   WorldState,
 } from '@frontier/contracts';
+import { SECTOR_META } from '@frontier/contracts';
 import { fnv1a64, formatMultiple, formatPct } from '@frontier/shared';
-import type { Tone } from '@/components/ui';
+import { sectorOf, type Tone } from '@/components/ui';
 import {
   DISTRICTS,
   DISTRICT_BY_ID,
@@ -45,6 +47,7 @@ import {
   type BuildingGlyph,
   type DistrictId,
   type LandmarkSeed,
+  type Plot,
 } from './geography';
 
 /* -------------------------------------------------------------------------- */
@@ -71,6 +74,12 @@ export interface MapBuilding {
   /** Ticker, agency abbreviation or initials — what goes on the flag. */
   readonly badge: string;
   readonly caption: string;
+  /**
+   * What a head office's company does. Public in every jurisdiction the game
+   * models, so it is on the map. `null` for a landmark or an agency, which are
+   * places rather than businesses.
+   */
+  readonly sector: Sector | null;
   readonly districtId: DistrictId;
   /** Centre of the footprint. */
   readonly x: number;
@@ -498,6 +507,7 @@ interface PlacedCompany {
   readonly capUsd: number | null;
   readonly districtId: DistrictId;
   readonly city: string;
+  readonly sector: Sector;
   readonly isPlayer: boolean;
 }
 
@@ -515,7 +525,7 @@ function quotedCap(quotes: readonly Quote[], instrumentId: string | null): numbe
 
 function companyAria(entry: PlacedCompany, districtName: string): string {
   const listing = entry.isPublic ? `listed as ${entry.badge}` : 'privately held';
-  return `${entry.name}, ${listing}, ${districtName}. Opens the company profile.`;
+  return `${entry.name}, ${SECTOR_META[entry.sector].label}, ${listing}, ${districtName}. Opens the company profile.`;
 }
 
 export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMapInput): WorldMapModel {
@@ -540,6 +550,7 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
       capUsd: isPublic ? quotedCap(quotes, rival.instrumentId ?? null) : null,
       districtId: districtForCompany(rival),
       city: rival.headquartersCity ?? 'Undisclosed',
+      sector: sectorOf(rival),
       isPlayer: false,
     });
   }
@@ -553,6 +564,7 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
     capUsd: playerMarketCap > 0 ? playerMarketCap : null,
     districtId: districtForCompany(own),
     city: own.headquartersCity,
+    sector: sectorOf(own),
     isPlayer: true,
   };
 
@@ -565,6 +577,47 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
 
   const buildings: MapBuilding[] = [];
   const unplaced: string[] = [];
+
+  // Two passes, so a crowded district cannot silently drop a company off the
+  // map. Everyone takes a plot in their own district first, in the stable
+  // company order; whoever is left over takes the first free plot anywhere,
+  // scanning districts in map order. Both passes are order-driven and use no
+  // randomness, so the same quarter always builds the same city.
+  const freePlots = new Map<DistrictId, Plot[]>(
+    DISTRICTS.map((district) => [district.id, district.plots.filter((entry) => entry.use === 'company')] as const),
+  );
+  const taken = new Map<DistrictId, number>();
+  /** Plot → whoever stands on it. Keyed by the plot object, which is a constant. */
+  const plotOwner = new Map<Plot, PlacedCompany>();
+  const overflow: PlacedCompany[] = [];
+
+  function claim(districtId: DistrictId): Plot | null {
+    const plots = freePlots.get(districtId);
+    if (plots === undefined) return null;
+    const index = taken.get(districtId) ?? 0;
+    const at = plots[index];
+    if (at === undefined) return null;
+    taken.set(districtId, index + 1);
+    return at;
+  }
+
+  for (const entry of companies) {
+    const at = claim(entry.districtId);
+    if (at === null) overflow.push(entry);
+    else plotOwner.set(at, entry);
+  }
+
+  for (const entry of overflow) {
+    let placed = false;
+    for (const district of DISTRICTS) {
+      const at = claim(district.id);
+      if (at === null) continue;
+      plotOwner.set(at, entry);
+      placed = true;
+      break;
+    }
+    if (!placed) unplaced.push(entry.name);
+  }
 
   for (const district of DISTRICTS) {
     const landmarkPlots = district.plots.filter((entry) => entry.use === 'landmark');
@@ -596,6 +649,7 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
         label: seed.name,
         badge: isAgency ? seed.caption : '',
         caption: isAgency ? 'Government buyer' : seed.caption,
+        sector: null,
         districtId: district.id,
         x: at.x,
         baseY: at.y,
@@ -609,13 +663,11 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
       });
     });
 
-    const here = companies.filter((entry) => entry.districtId === district.id);
-    here.forEach((entry, slot) => {
-      const at = companyPlots[slot];
-      if (at === undefined) {
-        unplaced.push(entry.name);
-        return;
-      }
+    // Emitted in plot order — back row first — so the skyline layers correctly
+    // however the two placement passes filled the district.
+    for (const at of companyPlots) {
+      const entry = plotOwner.get(at);
+      if (entry === undefined) continue;
       const height = towerHeight(entry.capUsd, entry.tier);
       buildings.push({
         key: entry.id,
@@ -624,6 +676,7 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
         label: entry.name,
         badge: entry.badge,
         caption: entry.city,
+        sector: entry.sector,
         districtId: district.id,
         x: at.x,
         baseY: at.y,
@@ -633,7 +686,7 @@ export function buildWorldMapModel({ view, agencies, playerMarketCap }: WorldMap
         target: { kind: 'company', companyId: entry.id },
         ariaLabel: companyAria(entry, district.name),
       });
-    });
+    }
   }
 
   /* --- event markers ---------------------------------------------------- */

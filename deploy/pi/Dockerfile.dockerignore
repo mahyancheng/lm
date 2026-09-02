@@ -1,0 +1,41 @@
+# Build context filter for deploy/pi/Dockerfile.
+#
+# BuildKit reads `<dockerfile>.dockerignore` in preference to the context's own
+# `.dockerignore`, so this scopes the filter to the Pi image without adding a
+# root-level file that every other build in the repository would inherit.
+#
+# This file is an optimisation — it keeps ~1 GB of host artefacts out of the
+# context. It is *not* the safety mechanism: the Dockerfile deletes any
+# `node_modules` that reaches it before installing, because a macOS arm64 tree
+# copied into a linux/arm64 image is the exact failure this deployment cannot
+# afford, and it would not surface until the first role call.
+
+.git
+.gitignore
+node_modules
+**/node_modules
+.next
+**/.next
+.vercel
+coverage
+**/coverage
+dist
+**/dist
+out
+**/out
+build
+**/build
+*.tsbuildinfo
+*.log
+supabase/.temp
+supabase/.branches
+.DS_Store
+
+# No secret ever reaches a build layer. The exception comes last, because later
+# rules win: the `.env.example` files are documentation and safe to carry.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example

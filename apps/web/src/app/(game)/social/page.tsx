@@ -17,7 +17,7 @@
 import { useMemo, useState } from 'react';
 import type { Audience, MediaStory, NetworkArchetype, SocialPost } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, quarterLabel } from '@frontier/contracts';
-import { formatPct } from '@frontier/shared';
+import { formatDelta, formatMultiple, formatPct } from '@frontier/shared';
 import {
   AiLabel,
   EmptyState,
@@ -142,21 +142,21 @@ export default function SocialPage(): React.JSX.Element {
         <StatCard
           iconName="chart"
           label="Attention"
-          value={formatPct(media.attentionLevel, 0)}
+          value={formatPct(media.attentionLevel)}
           hint="Share of the news cycle"
           tone={media.attentionLevel > 0.7 ? 'warn' : undefined}
         />
         <StatCard
           iconName="warning"
           label="Controversy"
-          value={formatPct(media.controversyIntensity, 0)}
+          value={formatPct(media.controversyIntensity)}
           hint="Heat turns a leak into a story"
           tone={media.controversyIntensity > 0.6 ? 'warn' : undefined}
         />
         <StatCard
           iconName="capitol"
           label="Trust"
-          value={formatPct(media.institutionalTrust, 0)}
+          value={formatPct(media.institutionalTrust)}
           hint="Rumours outrun corrections"
           tone={media.institutionalTrust < 0.45 ? 'loss' : undefined}
         />
@@ -179,9 +179,8 @@ export default function SocialPage(): React.JSX.Element {
           iconName={networkIcon(network)}
           iconTone="brand"
           title={networkLabel(network)}
-          subtitle={`${networkProfile(network).virality.toFixed(2)}x resharing · press affinity ${formatPct(
+          subtitle={`${formatMultiple(networkProfile(network).virality)} resharing · press affinity ${formatPct(
             networkProfile(network).pressAffinity,
-            0,
           )}`}
           flush
         >
@@ -226,17 +225,17 @@ export default function SocialPage(): React.JSX.Element {
                   {NARRATIVE_COPY[media.dominantNarrative] ?? 'The press has settled on a frame for the quarter.'}
                 </p>
               </div>
-              <ProgressBar label="Attention" value={media.attentionLevel} valueLabel={formatPct(media.attentionLevel, 0)} tone="info" />
+              <ProgressBar label="Attention" value={media.attentionLevel} valueLabel={formatPct(media.attentionLevel)} tone="info" />
               <ProgressBar
                 label="Controversy"
                 value={media.controversyIntensity}
-                valueLabel={formatPct(media.controversyIntensity, 0)}
+                valueLabel={formatPct(media.controversyIntensity)}
                 tone={media.controversyIntensity > 0.6 ? 'warn' : 'brand'}
               />
               <ProgressBar
                 label="Institutional trust"
                 value={media.institutionalTrust}
-                valueLabel={formatPct(media.institutionalTrust, 0)}
+                valueLabel={formatPct(media.institutionalTrust)}
                 tone={media.institutionalTrust < 0.45 ? 'loss' : 'gain'}
               />
             </div>
@@ -266,7 +265,7 @@ export default function SocialPage(): React.JSX.Element {
                         .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
                         .map(([audience, share]) => (
                           <span key={audience} className="rounded-pill border border-hair bg-raised px-2 py-px text-[10px] text-ink-dim">
-                            {audienceLabel(audience as Audience)} {formatPct(share ?? 0, 0)}
+                            {audienceLabel(audience as Audience)} {formatPct(share ?? 0)}
                           </span>
                         ))}
                     </div>
@@ -297,7 +296,7 @@ export default function SocialPage(): React.JSX.Element {
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <Tag tone="neutral">{story.angle.replace(/_/g, ' ')}</Tag>
                         <Tag tone={story.sentiment >= 0.2 ? 'gain' : story.sentiment <= -0.2 ? 'loss' : 'neutral'}>
-                          sentiment {story.sentiment.toFixed(2)}
+                          sentiment {formatDelta(story.sentiment, 'percent')}
                         </Tag>
                         {author === undefined || author === null ? (
                           <span className="text-[10px] text-ink-faint">wire</span>
@@ -328,7 +327,7 @@ export default function SocialPage(): React.JSX.Element {
                 .map(([audience, share]) => (
                   <li key={audience} className="flex items-center justify-between gap-3 text-[12.5px]">
                     <span className="text-ink-dim">{audienceLabel(audience as Audience)}</span>
-                    <span className="figure text-ink">{formatPct(share, 0)}</span>
+                    <span className="figure text-ink">{formatPct(share)}</span>
                   </li>
                 ))}
             </ul>

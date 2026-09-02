@@ -17,8 +17,8 @@ import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Company, CompBand, SessionState, StaffRole } from '@frontier/contracts';
 import { COMP_BANDS, STAFF_ROLES } from '@frontier/contracts';
 import { HIRING_CASH_COVER_QUARTERS, fillRate, offerCompUsd, quarterlyHireCostUsd, requiredCompUsd } from '@frontier/simulation';
-import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, Icon, Panel, ProgressBar, Tag, ValidationBanner } from '@/components/ui';
+import { formatCount, formatMoney, formatPct } from '@frontier/shared';
+import { ConfirmDialog, Icon, Panel, ProgressBar, SliderField, Tag, ValidationBanner } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { BAND_BLURB, BAND_LABEL, ROLE_BLURB, ROLE_LABEL, headcountOf } from './labels';
 
@@ -48,6 +48,14 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
   function countFor(role: StaffRole): number {
     const parsed = Number.parseInt(counts[role] ?? '', 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  /** Slider ceiling: what the hire rule's cash cover could fund (capped at
+      100 so a notch stays one person) or the whole team on a reduction. */
+  function countBound(perQuarterUsd: number, role: StaffRole): number {
+    const perHire = perQuarterUsd * HIRING_CASH_COVER_QUARTERS;
+    const affordable = perHire <= 0 ? 100 : Math.floor(company.financials.cash / perHire);
+    return Math.max(Math.min(affordable, 100), company.employees[role], countFor(role), 10);
   }
 
   function hire(role: StaffRole): void {
@@ -145,7 +153,7 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                     label={`Expected fill rate at ${BAND_LABEL[band].toLowerCase()}`}
                     value={entry.fill}
                     tone={entry.fill >= 0.5 ? 'gain' : entry.fill >= 0.25 ? 'warn' : 'loss'}
-                    valueLabel={formatPct(entry.fill, 0)}
+                    valueLabel={formatPct(entry.fill)}
                   />
                 </div>
 
@@ -167,41 +175,41 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                 ) : null}
 
                 {/* The ticket sits at the foot of the card it acts on: the
-                    count, then the two things that can be done with it, all at
-                    thumb size and all in one row a phone can reach. */}
-                <div className="mt-auto flex items-end gap-2 pt-2.5">
-                  <label className="w-20 shrink-0 sm:w-auto sm:flex-1">
-                    <span className="label-caps-faint mb-1 block">People</span>
-                    <input
-                      className="field tap-target"
-                      type="number"
-                      min={0}
-                      step={1}
-                      inputMode="numeric"
-                      placeholder="0"
-                      aria-label={`People to hire or reduce in ${ROLE_LABEL[role]}`}
-                      value={counts[role] ?? ''}
-                      onChange={(event) => setCounts((current) => ({ ...current, [role]: event.target.value }))}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="btn btn-primary tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
-                    disabled={count <= 0}
-                    onClick={() => hire(role)}
-                  >
-                    <Icon name="plus" size={15} accent="current" />
-                    Hire
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
-                    disabled={count <= 0 || company.employees[role] <= 0}
-                    onClick={() => askLayoff(role)}
-                  >
-                    <Icon name="warning" size={15} accent="current" />
-                    Reduce
-                  </button>
+                    count set by thumb, then the two things that can be done
+                    with it. The range spans what uncommitted cash could fund
+                    at this band or the whole team on a reduction, whichever
+                    is larger, capped so one notch stays one person. */}
+                <div className="mt-auto pt-2.5">
+                  <SliderField
+                    label="People"
+                    ariaLabel={`People to hire or reduce in ${ROLE_LABEL[role]}`}
+                    value={count}
+                    onChange={(next) => setCounts((current) => ({ ...current, [role]: String(next) }))}
+                    min={0}
+                    max={countBound(entry.perQuarterUsd, role)}
+                    step={1}
+                    format={formatCount}
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
+                      disabled={count <= 0}
+                      onClick={() => hire(role)}
+                    >
+                      <Icon name="plus" size={15} accent="current" />
+                      Hire
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger tap-target min-w-0 flex-1 gap-1.5 px-2 sm:flex-none sm:px-4"
+                      disabled={count <= 0 || company.employees[role] <= 0}
+                      onClick={() => askLayoff(role)}
+                    >
+                      <Icon name="warning" size={15} accent="current" />
+                      Reduce
+                    </button>
+                  </div>
                 </div>
 
                 {result === null && hireIntent !== null ? (
@@ -253,7 +261,7 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
             ? undefined
             : [
                 { label: 'Roles cut', value: `${pending.count} ${ROLE_LABEL[pending.role].toLowerCase()}` },
-                { label: 'Share of the company', value: formatPct(pending.sharePct, 1), emphasis: pending.sharePct >= 0.15 },
+                { label: 'Share of the company', value: formatPct(pending.sharePct), emphasis: pending.sharePct >= 0.15 },
                 { label: 'Severance', value: `${pending.severanceQuartersOfPay} quarters of pay` },
                 { label: 'Cash cost', value: formatMoney(pending.cashUsd), emphasis: true },
                 {

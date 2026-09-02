@@ -153,7 +153,7 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
             {useStock ? (
               <>
                 <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0} max={1} step={0.05} value={stockPct} onChange={(event) => setStockPct(Number(event.target.value))} />
-                <span className="figure text-[11px] text-ink-dim">{formatPct(stockPct, 0)} in stock</span>
+                <span className="figure text-[11px] text-ink-dim">{formatPct(stockPct)} in stock</span>
               </>
             ) : (
               <p className="mt-1.5 text-[10px] text-ink-faint">Directors negotiate hard over this on an acquisition.</p>
@@ -174,7 +174,7 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
 
           <div className="mt-2">
             <ProgressBar
-              label={`Support against a ${formatPct(count.threshold, 0)} threshold`}
+              label={`Support against a ${formatPct(count.threshold)} threshold`}
               value={cast === 0 ? 0 : count.support / cast}
               tone={count.carries ? 'gain' : 'loss'}
               ghostValue={count.threshold}
@@ -243,7 +243,7 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
           { label: 'Kind', value: PROPOSAL_KIND_LABEL[kind] },
           { label: 'Agenda line', value: title.trim() || '—' },
           { label: 'Amount', value: amountUsd === null ? 'no price' : formatMoney(amountUsd), emphasis: amountUsd !== null },
-          { label: 'Threshold', value: formatPct(count.threshold, 0) },
+          { label: 'Threshold', value: formatPct(count.threshold) },
           { label: 'Projected', value: count.quorumMet ? (count.carries ? 'carries' : 'falls') : 'no quorum', emphasis: !count.carries },
         ]}
         confirmLabel="Table the matter"

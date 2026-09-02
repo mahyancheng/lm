@@ -26,7 +26,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { ResolutionPhase } from '@frontier/contracts';
 import { RESOLUTION_PHASES, quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import {
   ConfirmDialog,
   EmptyState,
@@ -415,7 +415,7 @@ export default function EndQuarterPage(): React.JSX.Element {
                       {titleise(phase)}
                     </span>
                     <span className="figure shrink-0 text-[10px] text-ink-faint">
-                      {timing === null ? '—' : `${timing.durationMs.toFixed(1)}ms · ${timing.eventsEmitted}`}
+                      {timing === null ? '—' : `${formatCount(timing.durationMs)}ms · ${timing.eventsEmitted}`}
                     </span>
                   </li>
                 );

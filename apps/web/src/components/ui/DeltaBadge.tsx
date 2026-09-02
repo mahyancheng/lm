@@ -8,8 +8,6 @@ export interface DeltaBadgeProps {
   readonly value: number;
   /** `percent` for a fractional change, `points` for a percentage-point change. */
   readonly format?: DeltaFormat;
-  /** Decimal places; the formatter's default when omitted. */
-  readonly decimals?: number;
   /** Flip the colour convention, for figures where down is good (churn, burn, attrition). */
   readonly invert?: boolean;
   /** Force a tone rather than deriving it from the sign. */
@@ -30,7 +28,6 @@ export interface DeltaBadgeProps {
 export function DeltaBadge({
   value,
   format = 'percent',
-  decimals,
   invert = false,
   tone,
   arrow = true,
@@ -38,7 +35,7 @@ export function DeltaBadge({
   className,
 }: DeltaBadgeProps): React.JSX.Element {
   const resolved = tone ?? toneOfDelta(value, invert);
-  const label = formatDelta(value, format, decimals);
+  const label = formatDelta(value, format);
   const mark = !arrow || value === 0 ? '' : value > 0 ? '▲' : '▼';
 
   if (bare) {

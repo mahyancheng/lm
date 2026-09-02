@@ -357,6 +357,72 @@ export function storedSaveVersion(): number | null {
 /*  Write                                                                      */
 /* -------------------------------------------------------------------------- */
 
+// Serialised chunks keyed by object identity. A carried checkpoint and an
+// already-resolved log record never change, and the checkpoint alone is most
+// of the file, so each is stringified once per object — not once per write.
+const checkpointJsonCache = new WeakMap<SaveCheckpoint, string>();
+const recordJsonCache = new WeakMap<QuarterRecord, string>();
+
+function cachedJson<T extends object>(cache: WeakMap<T, string>, value: T): string {
+  const hit = cache.get(value);
+  if (hit !== undefined) return hit;
+  const json = JSON.stringify(value);
+  cache.set(value, json);
+  return json;
+}
+
+/**
+ * Everything but the advisory timestamp, serialised. Two files with the same
+ * body describe the same saved game, so a write whose body matches the last
+ * one under a key is skipped rather than re-stamped.
+ */
+function saveFileBody(file: SaveFile): string {
+  const log = `[${file.log.map((record) => cachedJson(recordJsonCache, record)).join(',')}]`;
+  const checkpoint = file.checkpoint === null ? 'null' : cachedJson(checkpointJsonCache, file.checkpoint);
+  return (
+    `{"version":${JSON.stringify(file.version)}` +
+    `,"seed":${JSON.stringify(file.seed)}` +
+    `,"difficulty":${JSON.stringify(file.difficulty)}` +
+    `,"autoExecuteRoutine":${JSON.stringify(file.autoExecuteRoutine)}` +
+    `,"setup":${JSON.stringify(file.setup)}` +
+    `,"log":${log}` +
+    `,"checkpoint":${checkpoint}` +
+    `,"savedQuarter":${JSON.stringify(file.savedQuarter)}` +
+    `,"queue":${JSON.stringify(file.queue)}`
+  );
+}
+
+/**
+ * The file exactly as `JSON.stringify(file)` writes it — same fields, same
+ * order, same bytes — assembled from the cached chunks. The format is v4
+ * either way; only the cost of producing it changes.
+ */
+export function serializeSaveFile(file: SaveFile): string {
+  return `${saveFileBody(file)},"savedAtIso":${JSON.stringify(file.savedAtIso)}}`;
+}
+
+// The body last written under each key. A debounced write that would store
+// the same bytes under a fresher advisory stamp is a no-op.
+const lastWrittenBody = new Map<string, string>();
+
+/**
+ * The version inside a stored raw file, without parsing the whole thing on
+ * every write: every file this build writes opens with `{"version":N,`, so the
+ * prefix answers directly. Anything shaped differently pays the full parse.
+ */
+function versionOfRaw(raw: string): number | null {
+  const quick = /^\{"version":(-?\d+)[,}]/.exec(raw);
+  if (quick !== null) return Number(quick[1]);
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== 'object') return null;
+    const version = (parsed as Record<string, unknown>).version;
+    return typeof version === 'number' ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Assemble the file for a session, carrying or refreshing its checkpoint. */
 export function buildSaveFile(input: {
   readonly seed: number;
@@ -399,11 +465,24 @@ export function buildSaveFile(input: {
 function writeFileAt(key: string, file: SaveFile): boolean {
   const store = storage();
   if (store === null) return false;
-  const stored = storedVersionAt(key);
-  if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) return false;
-
+  let raw: string | null;
   try {
-    store.setItem(key, JSON.stringify(file));
+    raw = store.getItem(key);
+  } catch {
+    raw = null;
+  }
+  if (raw !== null) {
+    const stored = versionOfRaw(raw);
+    if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) return false;
+  }
+
+  const body = saveFileBody(file);
+  // Same body, verifiably still stored: only the advisory timestamp would
+  // change, and it is never trusted for any decision, so the write is skipped.
+  if (raw !== null && lastWrittenBody.get(key) === body) return true;
+  try {
+    store.setItem(key, `${body},"savedAtIso":${JSON.stringify(file.savedAtIso)}}`);
+    lastWrittenBody.set(key, body);
     return true;
   } catch {
     /* Quota: fall through to the pruned form. */
@@ -416,9 +495,11 @@ function writeFileAt(key: string, file: SaveFile): boolean {
   if (floor === undefined) return false;
   const pruned: SaveFile = { ...file, log: file.log.filter((record) => record.quarter >= floor) };
   try {
-    store.setItem(key, JSON.stringify(pruned));
+    store.setItem(key, serializeSaveFile(pruned));
+    lastWrittenBody.set(key, saveFileBody(pruned));
     return true;
   } catch {
+    lastWrittenBody.delete(key);
     return false;
   }
 }
@@ -437,6 +518,9 @@ export function writeSaveFile(file: SaveFile): boolean {
 
 /** Remove the save. */
 export function clearSaveFile(): void {
+  // Forgotten before the removal, not after: a delete followed by a write of
+  // the same state must actually write, never be skipped as already stored.
+  lastWrittenBody.delete(SAVE_KEY);
   const store = storage();
   if (store === null) return;
   try {
@@ -475,6 +559,7 @@ export function clearSlot(slot: number): boolean {
   const key = slotKey(slot);
   const store = storage();
   if (key === null || store === null) return false;
+  lastWrittenBody.delete(key);
   try {
     store.removeItem(key);
     // Verified, not assumed: a browser that swallows the remove would otherwise

@@ -240,7 +240,7 @@ export function BoardroomScene({
       ) : (
         <div>
           <ProgressBar
-            label={`Whip count against a ${formatPct(whip.threshold, 0)} threshold`}
+            label={`Whip count against a ${formatPct(whip.threshold)} threshold`}
             value={cast === 0 ? 0 : whip.support / cast}
             ghostValue={whip.threshold}
             tone={whip.carries ? 'gain' : 'loss'}

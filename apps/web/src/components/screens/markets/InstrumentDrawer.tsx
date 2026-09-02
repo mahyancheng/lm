@@ -87,7 +87,7 @@ export function InstrumentDrawer({
       open={open}
       onClose={onClose}
       title={`${row.instrument.symbol} · ${row.companyName}`}
-      subtitle={`${humanise(row.instrument.kind)} · beta ${row.instrument.beta.toFixed(2)}${
+      subtitle={`${humanise(row.instrument.kind)} · beta ${formatPct(row.instrument.beta)}${
         row.instrument.sectorId === null ? '' : ` · ${humanise(row.instrument.sectorId)}`
       }`}
       width={560}
@@ -148,7 +148,7 @@ export function InstrumentDrawer({
               columns={2}
               items={[
                 { label: 'Your position', value: formatCount(heldShares) },
-                { label: 'Stake', value: issued === 0 ? '—' : formatPct(heldShares / issued, 2) },
+                { label: 'Stake', value: issued === 0 ? '—' : formatPct(heldShares / issued) },
               ]}
             />
             <div className="mt-4">
@@ -177,15 +177,15 @@ export function InstrumentDrawer({
             />
           ) : (
             <div className="mt-2">
-              <BarChart data={bars} formatValue={(value) => formatDelta(value, 'percent', 2)} />
+              <BarChart data={bars} formatValue={(value) => formatDelta(value, 'percent')} />
               <dl className="mt-3 divide-y divide-hair rounded-card border border-hair bg-raised/60">
                 <div className="flex items-baseline justify-between gap-3 px-3 py-2">
                   <dt className="label-caps-faint">Components sum</dt>
-                  <dd className="figure text-[12px] text-ink-dim">{formatDelta(decomposition.sum, 'percent', 4)}</dd>
+                  <dd className="figure text-[12px] text-ink-dim">{formatDelta(decomposition.sum, 'percent')}</dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-3 px-3 py-2">
                   <dt className="label-caps-faint">Applied return</dt>
-                  <dd className="figure text-[12px] text-ink">{formatDelta(decomposition.total, 'percent', 4)}</dd>
+                  <dd className="figure text-[12px] text-ink">{formatDelta(decomposition.total, 'percent')}</dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-3 px-3 py-2">
                   <dt className="label-caps-faint">Reconciles</dt>
@@ -239,7 +239,7 @@ export function InstrumentDrawer({
                     <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
                       <dt className="truncate text-[10px] text-ink-faint">{key}</dt>
                       <dd className="figure text-[11px] text-ink-dim">
-                        {Math.abs(value) >= 1000 ? formatMoney(value) : value.toFixed(4)}
+                        {Math.abs(value) >= 1000 ? formatMoney(value) : formatPct(value)}
                       </dd>
                     </div>
                   ))}

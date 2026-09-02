@@ -429,6 +429,84 @@
     padding-right: 26px;
   }
 
+  /* The action-form slider (`SliderField`). The input itself is the tap zone
+     — a full 44px tall — while the drawn track stays 10px. The brand fill is
+     painted by --fc-fill, set inline from the current value; Firefox gets the
+     same fill from ::-moz-range-progress instead of the gradient. */
+  .fc-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: var(--tap);
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: pan-y;
+  }
+
+  .fc-slider:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .fc-slider::-webkit-slider-runnable-track {
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-hair-strong);
+    background: linear-gradient(
+      to right,
+      var(--color-brand) var(--fc-fill, 0%),
+      var(--color-raised) var(--fc-fill, 0%)
+    );
+  }
+
+  .fc-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    margin-top: -8px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    border: 2px solid var(--color-brand-strong);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
+  }
+
+  .fc-slider::-moz-range-track {
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-hair-strong);
+    background-color: var(--color-raised);
+  }
+
+  .fc-slider::-moz-range-progress {
+    height: 10px;
+    border-radius: 999px;
+    background-color: var(--color-brand);
+  }
+
+  .fc-slider::-moz-range-thumb {
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    border: 2px solid var(--color-brand-strong);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
+  }
+
+  .fc-slider:focus-visible {
+    outline: none;
+  }
+
+  .fc-slider:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  }
+
+  .fc-slider:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  }
+
   /* Data table ----------------------------------------------------------
      Light stripes, a white sticky header, a soft tinted hover. */
   .data-table {

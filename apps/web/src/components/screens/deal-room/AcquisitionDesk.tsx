@@ -119,7 +119,7 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
 
           <label className="block">
             <span className="label-caps-faint">
-              Consideration · {formatPct(cashPct, 0)} cash / {formatPct(stockPct, 0)} stock
+              Consideration · {formatPct(cashPct)} cash / {formatPct(stockPct)} stock
             </span>
             <input
               type="range"
@@ -194,8 +194,8 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
         body="An acquisition hands you the target's technology, its staff and its problems. It may attract antitrust attention, and with a board in place it is the board's decision, not yours."
         terms={[
           { label: 'Offer value', value: formatMoney(offer), emphasis: true },
-          { label: 'Cash', value: `${formatPct(cashPct, 0)} · ${formatMoney(cashNeeded)}` },
-          { label: 'Stock', value: formatPct(stockPct, 0) },
+          { label: 'Cash', value: `${formatPct(cashPct)} · ${formatMoney(cashNeeded)}` },
+          { label: 'Stock', value: formatPct(stockPct) },
           { label: 'Premium', value: premium === null ? '—' : formatPct(premium) },
         ]}
         confirmLabel="Queue the offer"

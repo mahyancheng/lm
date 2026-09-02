@@ -260,7 +260,7 @@ export default function CommandCentrePage(): React.JSX.Element {
                       className="mt-1.5"
                       value={objective.progress}
                       tone={objective.completedQuarter !== null ? 'gain' : 'brand'}
-                      valueLabel={formatPct(objective.progress, 0)}
+                      valueLabel={formatPct(objective.progress)}
                     />
                   </div>
                 ))}

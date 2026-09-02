@@ -23,7 +23,7 @@ import {
   MORALE_ATTRITION_COEFFICIENT,
   SCARCITY_ATTRITION_COEFFICIENT,
 } from '@frontier/simulation';
-import { clamp, formatMoney, formatPct, formatScore } from '@frontier/shared';
+import { clamp, formatCount, formatMoney, formatMultiple, formatPct, formatScore } from '@frontier/shared';
 import {
   BarChart,
   DeltaBadge,
@@ -133,13 +133,13 @@ export default function PeoplePage(): React.JSX.Element {
               { label: 'Blended market rate', value: formatMoney(marketComp), hint: 'Headcount-weighted across the five functions' },
               {
                 label: 'Competitiveness',
-                value: `${(competitiveness * 100).toFixed(0)}%`,
+                value: formatPct(competitiveness),
                 tone: competitiveness >= 1.15 ? 'gain' : competitiveness <= 0.9 ? 'loss' : 'info',
                 hint: `Reads as the ${preferredBand.replace(/_/g, ' ')} band`,
               },
               {
                 label: 'Salary pressure',
-                value: session.world.talent.salaryPressure.toFixed(2),
+                value: formatMultiple(session.world.talent.salaryPressure),
                 tone: session.world.talent.salaryPressure > 1.2 ? 'warn' : undefined,
                 hint: 'World multiplier on every market rate',
               },
@@ -165,7 +165,7 @@ export default function PeoplePage(): React.JSX.Element {
               { label: 'Talent scarcity', value: drivers.scarcity, tone: 'warn' },
               { label: 'Band retention', value: drivers.retention, tone: 'gain', caption: 'Subtracted' },
             ]}
-            formatValue={(value) => formatPct(value, 1)}
+            formatValue={(value) => formatPct(value)}
           />
           <div className="mt-3 border-t border-hair pt-2.5">
             <div className="flex items-baseline justify-between">
@@ -192,7 +192,7 @@ export default function PeoplePage(): React.JSX.Element {
           />
           <div className="mt-3">
             <div className="label-caps mb-2">Expected departures by function</div>
-            <BarChart data={departures} formatValue={(value) => value.toFixed(1)} />
+            <BarChart data={departures} formatValue={formatCount} />
           </div>
           <div className="mt-3 flex items-center gap-2 border-t border-hair pt-2.5">
             <DeltaBadge value={-(headcount - (outlook[outlook.length - 1] ?? headcount)) / Math.max(1, headcount)} format="percent" />

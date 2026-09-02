@@ -73,14 +73,14 @@ export function ConnectionBreakdown({ inputs, standingLevel }: ConnectionBreakdo
         <div>
           <div className="label-caps-faint">Pull next quarter</div>
           <div className="mt-1">
-            <DeltaBadge value={drift} format="rank" decimals={1} />
+            <DeltaBadge value={drift} format="rank" />
           </div>
         </div>
       </div>
 
       <p className="text-[11px] leading-relaxed text-ink-dim">
         Each input is a percentile within this session, never a raw dollar amount. Standing moves slowly:{' '}
-        {formatPct(CONNECTION_INERTIA, 0)} of last quarter's level survives and no level may move more than {MAX_CONNECTION_STEP} points in one
+        {formatPct(CONNECTION_INERTIA)} of last quarter's level survives and no level may move more than {MAX_CONNECTION_STEP} points in one
         quarter.
       </p>
 
@@ -98,12 +98,12 @@ export function ConnectionBreakdown({ inputs, standingLevel }: ConnectionBreakdo
                 label={
                   <span>
                     {LABELS[key]}
-                    <span className="ml-1.5 text-ink-faint">w {weight.toFixed(2)}</span>
+                    <span className="ml-1.5 text-ink-faint">w {formatPct(weight)}</span>
                   </span>
                 }
               />
               <div className="mt-0.5 text-[10px] text-ink-faint">
-                {formatPct(percentile, 0)} percentile · explains {formatPct(share, 0)} of the level
+                {formatPct(percentile)} percentile · explains {formatPct(share)} of the level
               </div>
             </div>
           );

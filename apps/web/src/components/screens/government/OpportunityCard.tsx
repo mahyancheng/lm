@@ -228,7 +228,7 @@ export function OpportunityCard({
         <div className="lg:order-1">
           <SectionHeading rule>How it will be judged</SectionHeading>
           <div className="mt-2">
-            <BarChart data={weights} max={1} formatValue={(value) => formatPct(value, 0)} />
+            <BarChart data={weights} max={1} formatValue={(value) => formatPct(value)} />
           </div>
         </div>
       </div>
@@ -322,7 +322,7 @@ export function OpportunityCard({
             <div>
               <span className="label-caps-faint mb-1 flex items-baseline justify-between">
                 <span>Your share</span>
-                <span className="figure text-ink-dim">{formatPct(share, 0)}</span>
+                <span className="figure text-ink-dim">{formatPct(share)}</span>
               </span>
               <ProgressBar value={share} tone="brand" />
               <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0.05} max={1} step={0.05} value={share} onChange={(event) => setShare(Number(event.target.value))} />

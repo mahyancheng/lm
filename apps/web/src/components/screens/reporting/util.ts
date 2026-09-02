@@ -51,23 +51,10 @@ export function titleise(value: string): string {
 /**
  * Group an integer count with ASCII separators: `12000000` → `12,000,000`.
  *
- * Share counts and headcounts are not money and not percentages, so they have
- * no formatter in `@frontier/shared`. This is deliberately locale-independent
- * for the same reason everything else in the game is: the same number must read
- * the same way on every machine.
+ * Now lives in `@frontier/shared` beside the money and percentage formatters;
+ * re-exported here so the reporting cluster keeps one import path.
  */
-export function formatCount(value: number): string {
-  if (!Number.isFinite(value)) return '—';
-  const sign = value < 0 ? '-' : '';
-  const digits = String(Math.round(Math.abs(value)));
-  let out = '';
-  for (let index = 0; index < digits.length; index += 1) {
-    const fromEnd = digits.length - index;
-    out += digits[index] ?? '';
-    if (fromEnd > 1 && (fromEnd - 1) % 3 === 0) out += ',';
-  }
-  return `${sign}${out}`;
-}
+export { formatCount } from '@frontier/shared';
 
 /**
  * A five-band label for a 0..1 world reading.

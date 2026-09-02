@@ -171,7 +171,7 @@ export function ComputeDrawer({ open, onClose, session, company, projects }: Com
               value={holdings.trainingAllocation}
               max={1}
               tone="info"
-              valueLabel={`${formatPct(holdings.trainingAllocation, 0)} training · ${formatPct(1 - holdings.trainingAllocation, 0)} serving`}
+              valueLabel={`${formatPct(holdings.trainingAllocation)} training · ${formatPct(1 - holdings.trainingAllocation)} serving`}
             />
           </div>
           <p className="mt-3 text-[11px] text-ink-faint">

@@ -53,13 +53,13 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
     },
     { key: 'class', header: 'Class', render: (row) => <Tag>{row.shareClassLabel}</Tag>, hideOnMobile: true },
     { key: 'shares', header: 'Shares', align: 'right', render: (row) => formatCount(row.shares), sortable: true, sortValue: (row) => row.shares },
-    { key: 'economic', header: 'Economic', align: 'right', render: (row) => formatPct(row.economicPct, 2), sortable: true, sortValue: (row) => row.economicPct },
+    { key: 'economic', header: 'Economic', align: 'right', render: (row) => formatPct(row.economicPct), sortable: true, sortValue: (row) => row.economicPct },
     {
       key: 'voting',
       header: 'Voting',
       align: 'right',
       render: (row) => (
-        <span className={row.votingPct > row.economicPct + 0.001 ? 'tone-brand' : undefined}>{formatPct(row.votingPct, 2)}</span>
+        <span className={row.votingPct > row.economicPct + 0.001 ? 'tone-brand' : undefined}>{formatPct(row.votingPct)}</span>
       ),
       sortable: true,
       sortValue: (row) => row.votingPct,
@@ -70,7 +70,7 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
       align: 'right',
       hideOnMobile: true,
       cardHidden: true,
-      render: (row) => formatPct(row.fullyDilutedPct, 2),
+      render: (row) => formatPct(row.fullyDilutedPct),
       sortable: true,
       sortValue: (row) => row.fullyDilutedPct,
     },
@@ -110,14 +110,14 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
           {bands.map((band) => (
             <div
               key={band.key}
-              title={`${band.label} — ${formatPct(band.pct, 2)} fully diluted`}
+              title={`${band.label} — ${formatPct(band.pct)} fully diluted`}
               style={{ width: `${Math.max(0, band.pct * 100)}%`, backgroundColor: TONE_VAR[band.tone] }}
               className="h-full"
             />
           ))}
           {poolPct > 0 ? (
             <div
-              title={`Option pool — ${formatPct(poolPct, 2)} fully diluted`}
+              title={`Option pool — ${formatPct(poolPct)} fully diluted`}
               style={{ width: `${poolPct * 100}%` }}
               className="h-full bg-raised"
             />
@@ -128,14 +128,14 @@ export function CapTableVisual({ session, table, pricePerShare, priceBasis }: Ca
             <li key={band.key} className="flex items-center gap-2 text-[12.5px] text-ink-dim sm:text-[11px]">
               <span className={cx('inline-block size-2.5 shrink-0 rounded-pill')} style={{ backgroundColor: TONE_VAR[band.tone] }} />
               <span className="min-w-0 flex-1 truncate sm:flex-none">{band.label}</span>
-              <span className="figure shrink-0 text-ink-faint">{formatPct(band.pct, 1)}</span>
+              <span className="figure shrink-0 text-ink-faint">{formatPct(band.pct)}</span>
             </li>
           ))}
           {poolPct > 0 ? (
             <li className="flex items-center gap-2 text-[12.5px] text-ink-dim sm:text-[11px]">
               <span className="inline-block size-2.5 shrink-0 rounded-pill border border-hair bg-raised" />
               <span className="min-w-0 flex-1 truncate sm:flex-none">Option pool</span>
-              <span className="figure shrink-0 text-ink-faint">{formatPct(poolPct, 1)}</span>
+              <span className="figure shrink-0 text-ink-faint">{formatPct(poolPct)}</span>
             </li>
           ) : null}
         </ul>

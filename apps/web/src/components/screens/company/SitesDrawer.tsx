@@ -102,7 +102,7 @@ export function SitesDrawer({ open, onClose, session, company }: SitesDrawerProp
                         label="Capacity used"
                         value={share}
                         tone={share > 0.9 ? 'warn' : 'brand'}
-                        valueLabel={formatPct(share, 0)}
+                        valueLabel={formatPct(share)}
                       />
                     </div>
                     <div className="mt-2 flex items-baseline justify-between">

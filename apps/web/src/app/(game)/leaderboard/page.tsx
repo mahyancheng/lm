@@ -100,14 +100,14 @@ const BOARD_BLURB: Readonly<Record<LeaderboardBoard, string>> = {
 
 function formatValue(units: Units, value: number): string {
   if (units === 'money') return formatMoney(value);
-  if (units === 'index') return formatScore(value * 100, 1);
-  return formatScore(value, 1);
+  if (units === 'index') return formatScore(value * 100);
+  return formatScore(value);
 }
 
 function formatValueDelta(units: Units, value: number): string {
   if (units === 'money') return formatDelta(value, 'money');
-  if (units === 'index') return formatDelta(value * 100, 'number', 1);
-  return formatDelta(value, 'number', 1);
+  if (units === 'index') return formatDelta(value * 100, 'number');
+  return formatDelta(value, 'number');
 }
 
 export default function LeaderboardPage(): React.JSX.Element {
@@ -207,7 +207,7 @@ export default function LeaderboardPage(): React.JSX.Element {
       render: (row) => (
         <span className="flex items-center gap-2">
           <ProgressBar className="w-16" value={row.percentile} tone={row.percentile >= 0.66 ? 'gain' : row.percentile >= 0.33 ? 'info' : 'warn'} height={4} />
-          <span className="figure text-[10px] text-ink-faint">{formatScore(row.percentile * 100, 0)}</span>
+          <span className="figure text-[10px] text-ink-faint">{formatScore(row.percentile * 100)}</span>
         </span>
       ),
       sortable: true,
@@ -227,7 +227,7 @@ export default function LeaderboardPage(): React.JSX.Element {
         <StatCard
           iconName="trophy"
           label="Founder Index"
-          value={headline.composite === null ? '—' : formatScore(headline.composite.value * 100, 1)}
+          value={headline.composite === null ? '—' : formatScore(headline.composite.value * 100)}
           hint={headline.composite === null ? 'Computed at the first resolution' : `Rank #${headline.composite.rank} of ${boards.find((entry) => entry.board === 'founder_index')?.entries.length ?? 0}`}
           delta={headline.composite === null || headline.composite.delta === 0 ? undefined : headline.composite.delta * 100}
           deltaFormat="number"
@@ -251,7 +251,7 @@ export default function LeaderboardPage(): React.JSX.Element {
         <StatCard
           iconName="people"
           label="Network"
-          value={headline.network === null ? '—' : formatScore(headline.network.value, 0)}
+          value={headline.network === null ? '—' : formatScore(headline.network.value)}
           hint={headline.network === null ? 'Computed at the first resolution' : `Rank #${headline.network.rank}`}
           delta={headline.network === null || headline.network.delta === 0 ? undefined : headline.network.delta}
           deltaFormat="number"

@@ -18,7 +18,7 @@ import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Product, SessionState } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { SEGMENT_PRICE_ELASTICITY, SEGMENT_REFERENCE_PRICE_USD, priceFactor } from '@frontier/simulation';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { formatCount, formatMoney, formatMultiple, formatPct } from '@frontier/shared';
 import {
   DeltaBadge,
   Drawer,
@@ -27,8 +27,10 @@ import {
   LineChart,
   Meter,
   SectionHeading,
+  SliderField,
   Tag,
   ValidationBanner,
+  roundStep,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import {
@@ -68,6 +70,13 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
   }, [product, hasPrice, proposedPrice]);
 
   const projection = useMemo(() => (product === null ? [] : projectCustomers(product, PROJECTION_QUARTERS)), [product]);
+
+  // Four times the published reference or today's price, whichever is larger:
+  // the whole range a defensible reprice lives in, with Exact beyond it.
+  const repriceMax =
+    product === null
+      ? 10
+      : Math.max(SEGMENT_REFERENCE_PRICE_USD[product.segment] * 4, product.pricePerSeat * 4, hasPrice ? proposedPrice : 0, 10);
 
   function applyPrice(): void {
     if (product === null || !hasPrice) return;
@@ -119,8 +128,8 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                   { label: 'Gross margin', value: formatPct(product.grossMarginPct) },
                   {
                     label: 'Serving compute',
-                    value: `${productServingUnits(session, product).toFixed(1)} units`,
-                    hint: `Compute intensity ${product.computeIntensity.toFixed(2)}`,
+                    value: `${formatCount(productServingUnits(session, product))} units`,
+                    hint: `Compute intensity ${formatPct(product.computeIntensity)}`,
                   },
                 ]}
               />
@@ -164,23 +173,21 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
 
           <div>
             <SectionHeading rule>Reprice</SectionHeading>
-            <div className="mt-2 flex flex-wrap items-end gap-2">
-              <label className="w-full min-w-0 sm:flex-1">
-                <span className="label-caps-faint mb-1 block">New price ({SEGMENT_UNIT[product.segment]})</span>
-                <input
-                  className="field tap-target"
-                  type="number"
-                  min={0}
-                  step="1"
-                  inputMode="decimal"
-                  placeholder={String(product.pricePerSeat)}
-                  value={priceText}
-                  onChange={(event) => setPriceText(event.target.value)}
-                />
-              </label>
+            {/* The untouched slider sits at today's price; Queue stays
+                disabled until it moves, exactly as the empty field did. */}
+            <div className="mt-2">
+              <SliderField
+                label={`New price (${SEGMENT_UNIT[product.segment]})`}
+                value={hasPrice ? proposedPrice : product.pricePerSeat}
+                onChange={(next) => setPriceText(String(next))}
+                min={0}
+                max={repriceMax}
+                step={roundStep(repriceMax)}
+                format={formatMoney}
+              />
               <button
                 type="button"
-                className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto"
+                className="btn btn-primary tap-target mt-2 w-full gap-1.5 sm:w-auto"
                 disabled={!hasPrice}
                 onClick={applyPrice}
               >
@@ -194,13 +201,13 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="label-caps-faint">Demand multiplier</span>
                   <span className="figure flex items-center gap-1.5 text-[13px] text-ink">
-                    {preview.current.toFixed(2)}
+                    {formatMultiple(preview.current)}
                     {hasPrice ? (
                       <span className="text-ink-faint">
                         <Icon name="chevronRight" size={12} accent="current" />
                       </span>
                     ) : null}
-                    {hasPrice ? preview.next.toFixed(2) : null}
+                    {hasPrice ? formatMultiple(preview.next) : null}
                   </span>
                 </div>
                 {hasPrice ? (
@@ -210,7 +217,7 @@ export function ProductDrawer({ session, product, onClose }: ProductDrawerProps)
                   </div>
                 ) : null}
                 <p className="mt-2 text-[10px] text-ink-faint">
-                  Segment elasticity {SEGMENT_PRICE_ELASTICITY[product.segment].toFixed(1)} against a published reference of{' '}
+                  Segment elasticity {formatPct(SEGMENT_PRICE_ELASTICITY[product.segment])} against a published reference of{' '}
                   {formatMoney(preview.reference, 'full')}. The engine judges price against the live customer-weighted market mean, which moves each
                   quarter and is not yours to see.
                 </p>

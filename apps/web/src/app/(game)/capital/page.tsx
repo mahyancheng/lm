@@ -12,7 +12,7 @@
 import Link from 'next/link';
 import { useMemo } from 'react';
 import { quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
+import { formatMoney, formatMultiple, formatPct, formatQuarterCount } from '@frontier/shared';
 import {
   DataTable,
   EmptyState,
@@ -94,7 +94,7 @@ export default function CapitalPage(): React.JSX.Element {
     { key: 'amount', header: 'Raised', align: 'right', render: (row) => formatMoney(row.amount), sortable: true, sortValue: (row) => row.amount },
     { key: 'pre', header: 'Pre-money', align: 'right', render: (row) => formatMoney(row.preMoney), hideOnMobile: true, cardHidden: true },
     { key: 'post', header: 'Post-money', align: 'right', render: (row) => formatMoney(row.postMoney), sortable: true, sortValue: (row) => row.postMoney },
-    { key: 'dilution', header: 'Dilution', align: 'right', render: (row) => formatPct(row.dilution, 2), sortable: true, sortValue: (row) => row.dilution },
+    { key: 'dilution', header: 'Dilution', align: 'right', render: (row) => formatPct(row.dilution), sortable: true, sortValue: (row) => row.dilution },
     { key: 'price', header: 'Per share', align: 'right', render: (row) => formatMoney(row.pricePerShareUsd), hideOnMobile: true, cardHidden: true },
     {
       key: 'lead',
@@ -167,8 +167,8 @@ export default function CapitalPage(): React.JSX.Element {
         <StatCard
           iconName="coins"
           label="Your stake"
-          value={issued === 0 ? '—' : formatPct(founderShares / issued, 2)}
-          hint={`${formatCount(founderShares)} shares · ${formatPct(founderRow?.votingPct ?? 0, 2)} of votes`}
+          value={issued === 0 ? '—' : formatPct(founderShares / issued)}
+          hint={`${formatCount(founderShares)} shares · ${formatPct(founderRow?.votingPct ?? 0)} of votes`}
         />
       </div>
 
@@ -208,10 +208,10 @@ export default function CapitalPage(): React.JSX.Element {
                     items={[
                       { label: 'Issued', value: formatCount(shareClass.issuedShares) },
                       { label: 'Authorised', value: formatCount(shareClass.authorisedShares) },
-                      { label: 'Votes / share', value: shareClass.votesPerShare.toFixed(2) },
+                      { label: 'Votes / share', value: formatCount(shareClass.votesPerShare) },
                       {
                         label: 'Liquidation pref.',
-                        value: `${shareClass.liquidationPreferenceMultiple.toFixed(2)}×${shareClass.participating ? ' participating' : ''}`,
+                        value: `${formatMultiple(shareClass.liquidationPreferenceMultiple)}${shareClass.participating ? ' participating' : ''}`,
                       },
                     ]}
                   />
@@ -275,7 +275,7 @@ export default function CapitalPage(): React.JSX.Element {
         subtitle={
           rounds.length === 0
             ? 'No financings recorded.'
-            : `${rounds.length} recorded · ${formatPct(cumulativeDilution, 1)} cumulative dilution across closed rounds`
+            : `${rounds.length} recorded · ${formatPct(cumulativeDilution)} cumulative dilution across closed rounds`
         }
         actions={openRounds.length > 0 ? <Tag tone="warn">{openRounds.length} open</Tag> : undefined}
       >

@@ -35,7 +35,7 @@ import type {
   WorldEventType,
   WorldState,
 } from '@frontier/contracts';
-import { fnv1a64, formatPct } from '@frontier/shared';
+import { fnv1a64, formatMultiple, formatPct } from '@frontier/shared';
 import type { Tone } from '@/components/ui';
 import {
   DISTRICTS,
@@ -462,7 +462,7 @@ export function districtReadings(world: WorldState, id: DistrictId): readonly Re
  * world state itself describes it.
  */
 export function formatReading(reading: Reading): string {
-  if (reading.unit === 'index') return `${reading.value.toFixed(2)}×`;
+  if (reading.unit === 'index') return formatMultiple(reading.value);
   return formatPct(reading.value);
 }
 

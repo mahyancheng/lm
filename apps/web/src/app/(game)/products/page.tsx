@@ -16,7 +16,7 @@ import { useMemo, useState } from 'react';
 import type { Product } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { servingComputeUnits } from '@frontier/simulation';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { formatCount, formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import {
   DataTable,
   DeltaBadge,
@@ -154,7 +154,7 @@ export default function ProductsPage(): React.JSX.Element {
       header: 'Quality',
       align: 'right',
       hideOnMobile: true,
-      render: (row) => row.qualityScore.toFixed(2),
+      render: (row) => formatPct(row.qualityScore),
       sortable: true,
       sortValue: (row) => row.qualityScore,
     },
@@ -163,7 +163,7 @@ export default function ProductsPage(): React.JSX.Element {
       header: 'Compute',
       align: 'right',
       hideOnMobile: true,
-      render: (row) => `${row.computeIntensity.toFixed(2)} · ${productServingUnits(session, row).toFixed(1)}u`,
+      render: (row) => `${formatPct(row.computeIntensity)} · ${formatCount(productServingUnits(session, row))}u`,
       sortable: true,
       sortValue: (row) => productServingUnits(session, row),
     },
@@ -196,10 +196,10 @@ export default function ProductsPage(): React.JSX.Element {
         <StatCard
           label="Headroom"
           iconName="box"
-          value={`${headroom >= 0 ? '+' : ''}${headroom.toFixed(1)}`}
+          value={formatDelta(headroom, 'number')}
           unit="units"
           tone={headroom < 0 ? 'loss' : headroom < servingCapacity * 0.1 ? 'warn' : 'gain'}
-          hint={`${servingDemand.toFixed(1)} demanded of ${servingCapacity.toFixed(1)} served`}
+          hint={`${formatCount(servingDemand)} demanded of ${formatCount(servingCapacity)} served`}
           href="/company"
         />
       </div>
@@ -228,7 +228,7 @@ export default function ProductsPage(): React.JSX.Element {
           tone={headroom < 0 ? 'loss' : 'gain'}
           height={10}
           label="Demand vs capacity"
-          valueLabel={`${servingDemand.toFixed(1)} / ${servingCapacity.toFixed(1)}u`}
+          valueLabel={`${formatCount(servingDemand)} / ${formatCount(servingCapacity)}u`}
         />
         <p className="mt-2 text-[11px] text-ink-faint">
           Capacity is held compute times the serving share of the training split. Change the split on Research, or buy capacity from the compute
@@ -295,7 +295,7 @@ export default function ProductsPage(): React.JSX.Element {
                       Gross profit <span className="figure text-ink-dim">{formatMoney(productGrossProfit(product))}</span>
                     </span>
                     <span>
-                      Serving <span className="figure text-ink-dim">{productServingUnits(session, product).toFixed(1)}u</span>
+                      Serving <span className="figure text-ink-dim">{formatCount(productServingUnits(session, product))}u</span>
                     </span>
                   </div>
                 </div>

@@ -25,7 +25,7 @@ import { useMemo, useState } from 'react';
 import type { BoardProposal, Character } from '@frontier/contracts';
 import { DEFAULT_QUORUM_RULE, quarterLabel } from '@frontier/contracts';
 import { tallyProposal } from '@frontier/simulation';
-import { formatMoney, formatPct, formatScore } from '@frontier/shared';
+import { formatCount, formatMoney, formatPct, formatScore } from '@frontier/shared';
 import {
   Drawer,
   EmptyState,
@@ -156,7 +156,7 @@ export default function BoardroomPage(): React.JSX.Element {
           tone={meanRelationship >= 40 ? 'gain' : meanRelationship >= 0 ? 'warn' : 'loss'}
           hint="How the room feels about the chief executive, on a -100 to 100 scale"
         />
-        <StatCard iconName="stamp" label="Pass threshold" value={formatPct(rule.passThresholdFraction, 0)} hint={`Supermajority ${formatPct(rule.supermajorityThresholdFraction, 0)}`} />
+        <StatCard iconName="stamp" label="Pass threshold" value={formatPct(rule.passThresholdFraction)} hint={`Supermajority ${formatPct(rule.supermajorityThresholdFraction)}`} />
         <StatCard
           iconName="handshake"
           label="Commitments"
@@ -277,7 +277,7 @@ export default function BoardroomPage(): React.JSX.Element {
                     ghostValue={proposal.requiredThresholdFraction}
                     tone={tally.passes ? 'gain' : 'loss'}
                     valueLabel={`${tally.support} for · ${tally.against} against · ${tally.abstain} abstaining`}
-                    label={`Decision ${quarterLabel(session.startYear, proposal.decisionQuarter)} · threshold ${formatPct(proposal.requiredThresholdFraction, 0)}`}
+                    label={`Decision ${quarterLabel(session.startYear, proposal.decisionQuarter)} · threshold ${formatPct(proposal.requiredThresholdFraction)}`}
                   />
                 </div>
               </button>
@@ -336,7 +336,7 @@ export default function BoardroomPage(): React.JSX.Element {
                         Will {commitment.stance} a {PROPOSAL_KIND_LABEL[commitment.proposalKind].toLowerCase()} {commitmentText(commitment.conditions)}.
                       </p>
                       <p className="mt-1 text-[10px] text-ink-faint">
-                        Strength {commitment.commitmentStrength.toFixed(2)} · expires {quarterLabel(session.startYear, commitment.expiresQuarter)}
+                        Strength {formatPct(commitment.commitmentStrength)} · expires {quarterLabel(session.startYear, commitment.expiresQuarter)}
                         {commitment.rationale.length === 0 ? '' : ` · “${commitment.rationale}”`}
                       </p>
                     </div>
@@ -351,9 +351,9 @@ export default function BoardroomPage(): React.JSX.Element {
           <KeyValueGrid
             columns={2}
             items={[
-              { label: 'Quorum', value: formatPct(rule.minPresentFraction, 0), hint: 'Of seated voting weight' },
-              { label: 'Ordinary matter', value: formatPct(rule.passThresholdFraction, 0), hint: 'Of votes cast' },
-              { label: 'Supermajority', value: formatPct(rule.supermajorityThresholdFraction, 0) },
+              { label: 'Quorum', value: formatPct(rule.minPresentFraction), hint: 'Of seated voting weight' },
+              { label: 'Ordinary matter', value: formatPct(rule.passThresholdFraction), hint: 'Of votes cast' },
+              { label: 'Supermajority', value: formatPct(rule.supermajorityThresholdFraction) },
               { label: 'Chair breaks ties', value: rule.chairBreaksTies ? 'Yes' : 'No', mono: false },
               { label: 'Seats authorised', value: board.seatsAuthorised.toString() },
               { label: 'Next meeting', value: quarterLabel(session.startYear, board.nextMeetingQuarter) },
@@ -445,7 +445,7 @@ export default function BoardroomPage(): React.JSX.Element {
             <KeyValueGrid
               columns={2}
               items={[
-                { label: 'Voting weight', value: openDirector.votingWeight.toFixed(1) },
+                { label: 'Voting weight', value: formatCount(openDirector.votingWeight) },
                 { label: 'Appointed', value: quarterLabel(session.startYear, openDirector.appointedQuarter) },
                 { label: 'Represents', value: openDirector.representedHolderId ?? 'nobody — independent', mono: false, wide: true },
               ]}
@@ -488,12 +488,12 @@ export default function BoardroomPage(): React.JSX.Element {
               columns={2}
               items={[
                 { label: 'Amount', value: openProposal.amountUsd === null ? 'no price' : formatMoney(openProposal.amountUsd) },
-                { label: 'Threshold', value: formatPct(openProposal.requiredThresholdFraction, 0) },
+                { label: 'Threshold', value: formatPct(openProposal.requiredThresholdFraction) },
                 { label: 'Tabled', value: quarterLabel(session.startYear, openProposal.quarterProposed) },
                 { label: 'Decision', value: quarterLabel(session.startYear, openProposal.decisionQuarter) },
                 {
                   label: 'Stock component',
-                  value: openProposal.stockComponentPct === null ? '—' : formatPct(openProposal.stockComponentPct, 0),
+                  value: openProposal.stockComponentPct === null ? '—' : formatPct(openProposal.stockComponentPct),
                 },
                 { label: 'Target', value: openProposal.targetCompanyId ?? '—', mono: false },
               ]}

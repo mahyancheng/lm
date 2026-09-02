@@ -11,7 +11,7 @@
 
 import { useState } from 'react';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { KeyValueGrid, SectionHeading } from '@/components/ui';
+import { KeyValueGrid, SectionHeading, SliderField, roundStep } from '@/components/ui';
 import { formatCount } from '../reporting/util';
 
 export interface DilutionCalculatorProps {
@@ -44,6 +44,10 @@ export function DilutionCalculator({
   const pre = numberOf(preMoney);
   const poolPct = Math.min(0.5, Math.max(0, numberOf(poolIncrease) / 100));
 
+  const mark = fullyDilutedShares * Math.max(pricePerShare, 0);
+  const raiseMax = Math.max(mark, raise, 20_000_000);
+  const preMoneyMax = Math.max(mark * 4, pre, 100_000_000);
+
   const post = pre + raise;
   const dilution = post > 0 ? raise / post : 0;
   const newInvestorShares = dilution > 0 && dilution < 1 ? (fullyDilutedShares * dilution) / (1 - dilution) : 0;
@@ -58,22 +62,40 @@ export function DilutionCalculator({
     <div className="flex flex-col gap-3">
       <SectionHeading>Dilution calculator</SectionHeading>
 
+      {/* Ranges follow the current mark: a round is argued inside what the
+          company is worth today, and Exact covers ambition beyond it. */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <label className="block">
-          <span className="label-caps-faint">Raise (USD)</span>
-          <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={amount} onChange={(event) => setAmount(event.target.value)} />
-          <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(raise)}</span>
-        </label>
-        <label className="block">
-          <span className="label-caps-faint">Pre-money (USD)</span>
-          <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={preMoney} onChange={(event) => setPreMoney(event.target.value)} />
-          <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(pre)}</span>
-        </label>
-        <label className="block">
-          <span className="label-caps-faint">Pool top-up (%)</span>
-          <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={poolIncrease} onChange={(event) => setPoolIncrease(event.target.value)} />
+        <SliderField
+          label="Raise (USD)"
+          value={raise}
+          onChange={(next) => setAmount(String(next))}
+          min={0}
+          max={raiseMax}
+          step={roundStep(raiseMax)}
+          format={formatMoney}
+        />
+        <SliderField
+          label="Pre-money (USD)"
+          value={pre}
+          onChange={(next) => setPreMoney(String(next))}
+          min={0}
+          max={preMoneyMax}
+          step={roundStep(preMoneyMax)}
+          format={formatMoney}
+        />
+        <div>
+          <SliderField
+            label="Pool top-up"
+            value={poolPct}
+            onChange={(next) => setPoolIncrease(String(Math.round(next * 100)))}
+            min={0}
+            max={0.5}
+            step={0.01}
+            format={formatPct}
+            exact={false}
+          />
           <span className="mt-1 block text-[10px] text-ink-faint">{formatCount(poolShares)} shares</span>
-        </label>
+        </div>
       </div>
 
       {/* Two columns, not three: this panel is half a row on a desktop, and a
@@ -83,13 +105,13 @@ export function DilutionCalculator({
         columns={2}
         items={[
           { label: 'Post-money', value: formatMoney(post) },
-          { label: 'Round dilution', value: formatPct(dilution, 2) },
+          { label: 'Round dilution', value: formatPct(dilution) },
           { label: 'Price per new share', value: pricePerNewShare > 0 ? formatMoney(pricePerNewShare) : '—' },
           { label: 'New investor shares', value: formatCount(newInvestorShares) },
           { label: 'Fully diluted after', value: formatCount(dilutedTotal) },
           {
             label: 'Founder stake',
-            value: `${formatPct(founderBefore, 2)} → ${formatPct(founderAfter, 2)}`,
+            value: `${formatPct(founderBefore)} → ${formatPct(founderAfter)}`,
             tone: founderAfter < founderBefore ? 'warn' : undefined,
           },
         ]}

@@ -345,7 +345,7 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
                 <label className="mt-2.5 block">
                   <span className="label-caps-faint mb-1 flex items-baseline justify-between">
                     <span>Domestic sourcing</span>
-                    <span className="figure text-ink-dim">{formatPct(draft.domesticSourcingPct, 0)}</span>
+                    <span className="figure text-ink-dim">{formatPct(draft.domesticSourcingPct)}</span>
                   </span>
                   <input
                     type="range"
@@ -377,7 +377,7 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
                     <label key={key} className="block">
                       <span className="label-caps-faint mb-1 flex items-baseline justify-between">
                         <span>{label}</span>
-                        <span className="figure text-ink-dim">{draft[key].toFixed(2)}</span>
+                        <span className="figure text-ink-dim">{formatPct(draft[key])}</span>
                       </span>
                       <input
                         type="range"

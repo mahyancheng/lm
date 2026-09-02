@@ -400,7 +400,7 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
             caption={
               model.server.racks + model.server.cloudRacks === 0
                 ? 'No capacity held'
-                : `1 rack ≈ ${countLabel(model.server.acceleratorsPerRack)} · ${formatPct(model.server.utilisation, 0)} utilised`
+                : `1 rack ≈ ${countLabel(model.server.acceleratorsPerRack)} · ${formatPct(model.server.utilisation)} utilised`
             }
             badge={
               <ZoneBadge tone={model.server.expiryWarning ? 'warn' : 'info'}>
@@ -408,7 +408,7 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
                 {model.server.cloudRacks > 0 ? <span className="text-ink-faint"> · {countLabel(model.server.cloudUnits)} rented</span> : null}
               </ZoneBadge>
             }
-            ariaLabel={`Server room. ${countLabel(model.server.owned)} owned and ${countLabel(model.server.reserved)} reserved accelerators, ${countLabel(model.server.cloudUnits)} rented on demand, running at ${formatPct(model.server.utilisation, 0)} utilisation. Opens the compute drill-down.`}
+            ariaLabel={`Server room. ${countLabel(model.server.owned)} owned and ${countLabel(model.server.reserved)} reserved accelerators, ${countLabel(model.server.cloudUnits)} rented on demand, running at ${formatPct(model.server.utilisation)} utilisation. Opens the compute drill-down.`}
             empty={model.server.racks + model.server.cloudRacks === 0}
             href={serverDrawer === undefined ? fallbackHref : undefined}
             onActivate={serverDrawer}

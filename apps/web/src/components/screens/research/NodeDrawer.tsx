@@ -16,15 +16,18 @@
 import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
 import { PUBLICATION_MODES, quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { heldComputeUnits } from '@frontier/simulation';
+import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import {
   Drawer,
   KeyValueGrid,
   Meter,
   ProgressBar,
   SectionHeading,
+  SliderField,
   Tag,
   ValidationBanner,
+  roundStep,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
@@ -61,6 +64,14 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
 
   const existing = node === null ? null : (projects.find((project) => project.targetNodeId === node.id) ?? null);
   const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
+
+  /* --- ticket bounds ------------------------------------------------------ */
+  const budgetValue = Math.max(0, Number.parseFloat(budget) || 0);
+  const computeValue = Math.max(0, Math.round(Number.parseFloat(computeUnits) || 0));
+  const researcherValue = Math.max(0, Math.round(Number.parseFloat(researchers) || 0));
+  const budgetMax = Math.max(company.financials.cash, budgetValue, 250_000);
+  const computeMax = Math.max(Math.round(heldComputeUnits(session, company)), computeValue, 10);
+  const researcherMax = Math.max(company.employees.researchers, researcherValue, 1);
 
   const startIntent =
     node === null
@@ -155,11 +166,11 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                 columns={2}
                 items={[
                   { label: 'Arrival window', value: `${node.estimatedWindow[0]}–${node.estimatedWindow[1]}` },
-                  { label: 'Compute intensity', value: node.computeIntensity.toFixed(2) },
+                  { label: 'Compute intensity', value: formatPct(node.computeIntensity) },
                   { label: 'Cost estimate (low)', value: formatMoney(node.researchCostRange[0]) },
                   { label: 'Cost estimate (high)', value: formatMoney(node.researchCostRange[1]) },
-                  { label: 'Novelty', value: node.novelty.toFixed(2), hint: 'Distance from what the world already believes' },
-                  { label: 'Plausibility', value: node.plausibility.toFixed(2), hint: 'Coherence with physics, economics and the frontier' },
+                  { label: 'Novelty', value: formatPct(node.novelty), hint: 'Distance from what the world already believes' },
+                  { label: 'Plausibility', value: formatPct(node.plausibility), hint: 'Coherence with physics, economics and the frontier' },
                 ]}
               />
             </div>
@@ -174,8 +185,8 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                 node.talentRequirements.map((area) => {
                   const strength = company.techCapabilities[area] ?? 0;
                   return (
-                    <Tag key={area} tone={strength >= 0.5 ? 'gain' : strength >= 0.25 ? 'warn' : 'loss'} title={`Your strength: ${strength.toFixed(2)}`}>
-                      {area.replace(/_/g, ' ')} · {strength.toFixed(2)}
+                    <Tag key={area} tone={strength >= 0.5 ? 'gain' : strength >= 0.25 ? 'warn' : 'loss'} title={`Your strength: ${formatPct(strength)}`}>
+                      {area.replace(/_/g, ' ')} · {formatPct(strength)}
                     </Tag>
                   );
                 })
@@ -218,19 +229,38 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
           {existing === null ? (
             <div>
               <SectionHeading rule>Start a programme</SectionHeading>
+              {/* Bounds are the validator's, not the form's: cash caps the
+                  budget, held capacity caps compute, and the researcher clamp
+                  ("the rest are on other programmes") shows live below. */}
               <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
-                <label className="block">
-                  <span className="label-caps-faint mb-1 block">Budget / quarter</span>
-                  <input className="field tap-target sm:min-h-0" type="number" min={0} step="50000" value={budget} onChange={(event) => setBudget(event.target.value)} />
-                </label>
-                <label className="block">
-                  <span className="label-caps-faint mb-1 block">Compute units</span>
-                  <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={computeUnits} onChange={(event) => setComputeUnits(event.target.value)} />
-                </label>
-                <label className="block">
-                  <span className="label-caps-faint mb-1 block">Researchers</span>
-                  <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={researchers} onChange={(event) => setResearchers(event.target.value)} />
-                </label>
+                <SliderField
+                  label="Budget / quarter"
+                  value={budgetValue}
+                  onChange={(next) => setBudget(String(next))}
+                  min={0}
+                  max={budgetMax}
+                  step={roundStep(budgetMax)}
+                  format={formatMoney}
+                  chips
+                />
+                <SliderField
+                  label="Compute units"
+                  value={computeValue}
+                  onChange={(next) => setComputeUnits(String(next))}
+                  min={0}
+                  max={computeMax}
+                  step={roundStep(computeMax)}
+                  format={formatCount}
+                />
+                <SliderField
+                  label="Researchers"
+                  value={researcherValue}
+                  onChange={(next) => setResearchers(String(next))}
+                  min={0}
+                  max={researcherMax}
+                  step={1}
+                  format={formatCount}
+                />
               </div>
 
               {/* The label is the target: a finger gets the whole 44px row,
@@ -275,7 +305,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                   label="Progress to demonstration"
                   value={existing.progress}
                   tone="brand"
-                  valueLabel={`${formatPct(existing.progress, 0)} · ${existing.quartersElapsed}/${existing.expectedQuarters} quarters`}
+                  valueLabel={`${formatPct(existing.progress)} · ${existing.quartersElapsed}/${existing.expectedQuarters} quarters`}
                 />
                 <Meter value={existing.internalConfidence * 100} label="Internal confidence" tone="info" />
                 <KeyValueGrid

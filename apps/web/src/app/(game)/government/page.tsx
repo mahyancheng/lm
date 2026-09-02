@@ -290,7 +290,7 @@ export default function GovernmentPage(): React.JSX.Element {
                     { label: 'Performance to date', value: formatScore(contract.performanceToDate) },
                     { label: 'Penalties', value: formatMoney(contract.penaltiesUsd), tone: contract.penaltiesUsd > 0 ? 'loss' : undefined },
                     { label: 'Compliance', value: `${formatMoney(contract.complianceBurdenQuarterlyUsd)} / quarter` },
-                    { label: 'Controversy', value: formatPct(contract.publicControversyLevel, 0), tone: contract.publicControversyLevel > 0.5 ? 'warn' : undefined },
+                    { label: 'Controversy', value: formatPct(contract.publicControversyLevel), tone: contract.publicControversyLevel > 0.5 ? 'warn' : undefined },
                     {
                       label: 'Export restricted',
                       value: contract.exportRestricted ? 'Yes — limits foreign sale' : 'No',

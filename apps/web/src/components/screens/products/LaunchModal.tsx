@@ -12,9 +12,10 @@
 import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionValidationResult, ProductSegment } from '@frontier/contracts';
 import { PRODUCT_SEGMENTS } from '@frontier/contracts';
+import { SEGMENT_REFERENCE_PRICE_USD } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { Modal, ValidationBanner } from '@/components/ui';
-import { useGameActions } from '@/lib/game';
+import { Modal, SliderField, ValidationBanner, roundStep } from '@/components/ui';
+import { useGameActions, usePlayerCompany } from '@/lib/game';
 import { SEGMENT_BLURB, SEGMENT_LABEL, SEGMENT_UNIT } from './labels';
 
 export interface LaunchModalProps {
@@ -24,6 +25,7 @@ export interface LaunchModalProps {
 
 export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
+  const company = usePlayerCompany();
   const [name, setName] = useState('');
   const [segment, setSegment] = useState<ProductSegment>('enterprise');
   const [price, setPrice] = useState('60');
@@ -48,6 +50,14 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
   }, [name, segment, price, intensity, quality, marketing]);
 
   const preview = intent === null ? null : validateIntent(intent);
+
+  /* --- slider bounds ------------------------------------------------------ */
+  const priceValue = Math.max(0, Number.parseFloat(price) || 0);
+  // Four times the engine's published segment reference: demand collapses long
+  // before that, so it is the whole range a launch price argument lives in.
+  const priceMax = Math.max(SEGMENT_REFERENCE_PRICE_USD[segment] * 4, priceValue, 10);
+  const marketingValue = Math.max(0, Number.parseFloat(marketing) || 0);
+  const marketingMax = Math.max(company.financials.cash, marketingValue, 100_000);
 
   function submit(): void {
     if (intent === null) return;
@@ -94,59 +104,64 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="label-caps-faint mb-1 block">Launch price ({SEGMENT_UNIT[segment]})</span>
-            <input className="field" type="number" min={0} step="1" value={price} onChange={(event) => setPrice(event.target.value)} />
-          </label>
+          <SliderField
+            label={`Launch price (${SEGMENT_UNIT[segment]})`}
+            value={priceValue}
+            onChange={(next) => setPrice(String(next))}
+            min={0}
+            max={priceMax}
+            step={roundStep(priceMax)}
+            format={formatMoney}
+          />
         </div>
 
         <p className="text-[10px] text-ink-faint">{SEGMENT_BLURB[segment]}</p>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-              <span>Compute intensity</span>
-              <span className="figure text-ink-dim">{intensity.toFixed(2)}</span>
-            </span>
-            <input
-              className="tap-target w-full"
-              type="range"
+          <div>
+            <SliderField
+              label="Compute intensity"
+              value={intensity}
+              onChange={setIntensity}
               min={0.05}
               max={1}
               step={0.05}
-              value={intensity}
-              onChange={(event) => setIntensity(Number(event.target.value))}
+              format={formatPct}
+              exact={false}
             />
             <span className="mt-1 block text-[10px] text-ink-faint">Higher intensity buys quality and costs margin.</span>
-          </label>
-          <label className="block">
-            <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-              <span>Target quality</span>
-              <span className="figure text-ink-dim">{quality.toFixed(2)}</span>
-            </span>
-            <input
-              className="tap-target w-full"
-              type="range"
+          </div>
+          <div>
+            <SliderField
+              label="Target quality"
+              value={quality}
+              onChange={setQuality}
               min={0.05}
               max={1}
               step={0.05}
-              value={quality}
-              onChange={(event) => setQuality(Number(event.target.value))}
+              format={formatPct}
+              exact={false}
             />
             <span className="mt-1 block text-[10px] text-ink-faint">Discounted by real capability and by how rushed the launch is.</span>
-          </label>
+          </div>
         </div>
 
-        <label className="block">
-          <span className="label-caps-faint mb-1 block">Launch marketing</span>
-          <input className="field" type="number" min={0} step="10000" value={marketing} onChange={(event) => setMarketing(event.target.value)} />
-          <span className="mt-1 block text-[10px] text-ink-faint">
-            One-off spend, {formatMoney(Number.parseFloat(marketing) || 0)}. Charged against this quarter&apos;s uncommitted cash.
-          </span>
-        </label>
+        <div>
+          <SliderField
+            label="Launch marketing"
+            value={marketingValue}
+            onChange={(next) => setMarketing(String(next))}
+            min={0}
+            max={marketingMax}
+            step={roundStep(marketingMax)}
+            format={formatMoney}
+            chips
+          />
+          <span className="mt-1 block text-[10px] text-ink-faint">One-off spend, charged against this quarter&apos;s uncommitted cash.</span>
+        </div>
 
         <p className="text-[11px] text-ink-dim">
-          A launch at {formatPct(quality, 0)} target quality into {SEGMENT_LABEL[segment]} competes against the segment frontier from the quarter it
+          A launch at {formatPct(quality)} target quality into {SEGMENT_LABEL[segment]} competes against the segment frontier from the quarter it
           ships. Nothing is promised: the resolution report will say what actually landed.
         </p>
 

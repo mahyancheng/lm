@@ -58,6 +58,11 @@ export type { ProgressBarProps } from './ProgressBar';
 export { Meter } from './Meter';
 export type { MeterProps } from './Meter';
 
+export { SliderField } from './SliderField';
+export type { SliderFieldProps } from './SliderField';
+export { chipStops, roundStep, snapToStep } from './sliderMath';
+export type { ChipStop } from './sliderMath';
+
 export { AccessBadge, CompanyChip, PersonChip, initialsOf } from './Chips';
 export type { AccessBadgeProps, CompanyChipProps, CompanyLike, PersonChipProps, PersonLike } from './Chips';
 

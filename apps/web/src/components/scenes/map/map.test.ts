@@ -407,7 +407,9 @@ describe('world map overlays: the world state, read not invented', () => {
   });
 
   it('renders an index as a multiple and a share as a percentage', () => {
-    expect(formatReading({ label: 'x', value: 1.618, unit: 'index', hint: 'h', meter: null })).toBe('1.62×');
+    // Whole-figure house style: near-parity indices read as deviation, never "1.618".
+    expect(formatReading({ label: 'x', value: 1.618, unit: 'index', hint: 'h', meter: null })).toBe('+62%');
+    expect(formatReading({ label: 'x', value: 2.4, unit: 'index', hint: 'h', meter: null })).toBe('2x');
     expect(formatReading({ label: 'x', value: 0.5, unit: 'share', hint: 'h', meter: 50 })).toContain('%');
   });
 });

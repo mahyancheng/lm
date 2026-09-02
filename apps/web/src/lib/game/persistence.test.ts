@@ -36,6 +36,7 @@ import {
   readSlotFile,
   replay,
   replayAsync,
+  serializeSaveFile,
   slotSummaries,
   writeSaveFile,
   writeSlotFile,
@@ -545,6 +546,72 @@ describe('files from other builds of the save format', () => {
       expect(writeSaveFile(fileOf([]))).toBe(false);
       expect(globals.window.localStorage.getItem(SAVE_KEY)).toBe(alien);
     }
+  });
+});
+
+describe('the write path is cheap without changing a byte of the format', () => {
+  /** A file with every field populated, so the serialiser is exercised in full. */
+  function fullFile(savedAtIso: string | null): SaveFile {
+    const start = createSession({ seed: SEED });
+    const action = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 250_000 }, 0);
+    return {
+      version: SAVE_VERSION,
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: true,
+      setup: { companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' },
+      log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')] }],
+      checkpoint: { quarter: 0, state: start },
+      savedQuarter: 1,
+      queue: [action],
+      savedAtIso,
+    };
+  }
+
+  it('serialises byte-for-byte what JSON.stringify writes, cached chunks included', () => {
+    const file = fullFile(STAMP);
+    // Twice, so the second pass reads the checkpoint and record caches and
+    // must still produce the identical bytes.
+    expect(serializeSaveFile(file)).toBe(JSON.stringify(file));
+    expect(serializeSaveFile(file)).toBe(JSON.stringify(file));
+    const empty = fileOf([]);
+    expect(serializeSaveFile(empty)).toBe(JSON.stringify(empty));
+  });
+
+  it('skips a write whose body is unchanged, so only the advisory stamp would differ', () => {
+    const first = fullFile('2030-01-01T00:00:00.000Z');
+    expect(writeSaveFile(first)).toBe(true);
+    const storedBefore = globals.window?.localStorage.getItem(SAVE_KEY);
+    expect(storedBefore).toContain('2030-01-01T00:00:00.000Z');
+
+    // Same body, later stamp: nothing is written, and true still means "the
+    // stored file holds this state".
+    expect(writeSaveFile({ ...fullFile('2030-06-01T00:00:00.000Z'), checkpoint: first.checkpoint, log: first.log, queue: first.queue })).toBe(true);
+    expect(globals.window?.localStorage.getItem(SAVE_KEY)).toBe(storedBefore);
+
+    // A body change writes through.
+    expect(writeSaveFile({ ...first, queue: [], savedAtIso: '2030-06-01T00:00:00.000Z' })).toBe(true);
+    expect(globals.window?.localStorage.getItem(SAVE_KEY)).not.toBe(storedBefore);
+  });
+
+  it('writes again after a delete, even when the body matches the last write', () => {
+    const file = fileOf([]);
+    expect(writeSaveFile(file)).toBe(true);
+    globals.window?.localStorage.removeItem(SAVE_KEY);
+    expect(writeSaveFile(fileOf([]))).toBe(true);
+    expect(globals.window?.localStorage.getItem(SAVE_KEY)).not.toBeNull();
+    expect(inspectSave().status).toBe('ok');
+  });
+
+  it('round-trips the cached serialisation through inspectSave unchanged', () => {
+    const file = fullFile(STAMP);
+    expect(writeSaveFile(file)).toBe(true);
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('ok');
+    expect(inspection.file?.savedAtIso).toBe(STAMP);
+    expect(inspection.file?.checkpoint?.quarter).toBe(0);
+    expect(inspection.file?.log).toHaveLength(1);
+    expect(inspection.file?.queue).toHaveLength(1);
   });
 });
 

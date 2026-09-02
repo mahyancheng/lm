@@ -16,7 +16,7 @@ import type { ActionValidationResult, Company, ProductSegment, SubmittedAction }
 import { PRODUCT_SEGMENTS } from '@frontier/contracts';
 import { marketingPlan } from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
-import { BarChart, Icon, Panel, Tag, ValidationBanner } from '@/components/ui';
+import { BarChart, Icon, Panel, SliderField, Tag, ValidationBanner, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { SEGMENT_LABEL } from './labels';
 
@@ -35,6 +35,7 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
   const plan = useMemo(() => marketingPlan(company, queued), [company, queued]);
+  const cashBound = Math.max(company.financials.cash, 100_000);
 
   const allocations = useMemo(
     () =>
@@ -108,23 +109,22 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
           </button>
         </div>
 
-        {/* Two per row on a phone: four money fields stacked full-width is a
-            page of scrolling for four numbers that are read together. */}
-        <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+        {/* One slider per segment, all bounded by the same uncommitted cash
+            the validator scales the total against. A segment slid to zero is
+            an explicit zero, exactly as a typed 0 was. */}
+        <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
           {PRODUCT_SEGMENTS.map((segment) => (
-            <label key={segment} className="min-w-0">
-              <span className="label-caps-faint mb-1 block truncate">{SEGMENT_LABEL[segment]}</span>
-              <input
-                className="field tap-target"
-                type="number"
-                min={0}
-                step="1000"
-                inputMode="numeric"
-                placeholder="0"
-                value={draft[segment]}
-                onChange={(event) => setDraft((current) => ({ ...current, [segment]: event.target.value }))}
-              />
-            </label>
+            <SliderField
+              key={segment}
+              label={SEGMENT_LABEL[segment]}
+              value={Number.parseFloat(draft[segment]) || 0}
+              onChange={(next) => setDraft((current) => ({ ...current, [segment]: String(next) }))}
+              min={0}
+              max={cashBound}
+              step={roundStep(cashBound)}
+              format={formatMoney}
+              chips
+            />
           ))}
         </div>
 

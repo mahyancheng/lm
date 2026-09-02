@@ -9,7 +9,7 @@
  */
 
 import type { Character, SocialAccount, SocialPost } from '@frontier/contracts';
-import { formatPct, formatScore } from '@frontier/shared';
+import { formatMultiple, formatPct } from '@frontier/shared';
 import { AiLabel, DeltaBadge, PersonChip, Tag } from '@/components/ui';
 import { audienceLabel, countLabel } from './audiences';
 
@@ -61,11 +61,11 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
           <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5">
             <Figure label="Reach" value={countLabel(engagement.reach)} />
             <Figure label="Engagement" value={formatPct(engagement.engagementScore)} />
-            <Figure label="Virality" value={`${formatScore(engagement.viralityFactor, 2)}x`} />
+            <Figure label="Virality" value={formatMultiple(engagement.viralityFactor)} />
             {engagement.competitorHostilityDelta === 0 ? null : (
               <div>
                 <span className="label-caps-faint mr-1.5">Hostility</span>
-                <DeltaBadge value={engagement.competitorHostilityDelta} format="number" decimals={1} invert bare />
+                <DeltaBadge value={engagement.competitorHostilityDelta} format="number" invert bare />
               </div>
             )}
           </div>
@@ -78,7 +78,7 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
                   className="inline-flex items-center gap-1 rounded-pill border border-hair bg-raised px-2 py-px text-[10px] text-ink-dim"
                 >
                   {audienceLabel(shift.audience)}
-                  <DeltaBadge value={shift.delta} format="number" decimals={1} bare arrow={false} />
+                  <DeltaBadge value={shift.delta} format="number" bare arrow={false} />
                 </span>
               ))}
             </div>

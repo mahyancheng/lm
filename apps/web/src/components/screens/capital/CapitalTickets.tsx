@@ -13,8 +13,9 @@
 import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionValidationResult, FundingStage } from '@frontier/contracts';
 import { FUNDING_STAGES } from '@frontier/contracts';
-import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, TabBar, ValidationBanner } from '@/components/ui';
+import { MAX_ROUND_DILUTION_PCT } from '@frontier/simulation';
+import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
+import { ConfirmDialog, SliderField, TabBar, ValidationBanner, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { formatCount, titleise } from '../reporting/util';
 
@@ -58,7 +59,7 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
 
   // buyback
   const [budget, setBudget] = useState('1000000');
-  const [maxPrice, setMaxPrice] = useState(() => (pricePerShare > 0 ? pricePerShare.toFixed(2) : '1'));
+  const [maxPrice, setMaxPrice] = useState(() => (pricePerShare > 0 ? String(Math.max(1, Math.round(pricePerShare))) : '1'));
 
   const intent = useMemo<ActionIntent | null>(() => {
     if (tab === 'raise') {
@@ -82,6 +83,17 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
 
   const preCheck = useMemo(() => (intent === null ? null : validateIntent(intent)), [intent, validateIntent]);
 
+  /* --- slider bounds -------------------------------------------------------
+     A raise or a debt issue rarely exceeds what the whole company is marked
+     at, so the current mark is the range worth arguing inside; Exact covers
+     conviction beyond it. The dilution ceiling is the validator's own
+     MAX_ROUND_DILUTION_PCT and the coupon ceiling is the schema's 0.5. */
+  const mark = fullyDilutedShares * Math.max(pricePerShare, 0);
+  const raiseMax = Math.max(mark, numberOf(raiseAmount), 10_000_000);
+  const debtMax = Math.max(mark, numberOf(debtAmount), 10_000_000);
+  const buybackMax = Math.max(cash, numberOf(budget), 1_000_000);
+  const sharePriceMax = Math.max(pricePerShare * 4, numberOf(maxPrice), 10);
+
   /* --- previews ----------------------------------------------------------- */
 
   const raiseDilution = Math.min(1, Math.max(0, numberOf(maxDilution) / 100));
@@ -102,7 +114,7 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
       : tab === 'debt'
         ? [
             { label: 'Principal', value: formatMoney(numberOf(debtAmount)), emphasis: true },
-            { label: 'Coupon ceiling', value: formatPct(numberOf(maxRate) / 100, 2) },
+            { label: 'Coupon ceiling', value: formatPct(numberOf(maxRate) / 100) },
             { label: 'Term', value: `${Math.round(numberOf(term))} quarters` },
             { label: 'Interest at ceiling', value: `${formatMoney(quarterlyInterest)} per quarter` },
           ]
@@ -141,55 +153,100 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="label-caps-faint">Target (USD)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={raiseAmount} onChange={(event) => setRaiseAmount(event.target.value)} />
-            <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(numberOf(raiseAmount))}</span>
-          </label>
-          <label className="block">
-            <span className="label-caps-faint">Max dilution (%)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxDilution} onChange={(event) => setMaxDilution(event.target.value)} />
+          <SliderField
+            label="Target (USD)"
+            value={numberOf(raiseAmount)}
+            onChange={(next) => setRaiseAmount(String(next))}
+            min={0}
+            max={raiseMax}
+            step={roundStep(raiseMax)}
+            format={formatMoney}
+          />
+          <div>
+            <SliderField
+              label="Max dilution"
+              value={Math.min(1, Math.max(0, numberOf(maxDilution) / 100))}
+              onChange={(next) => setMaxDilution(String(Math.round(next * 100)))}
+              min={0}
+              max={MAX_ROUND_DILUTION_PCT}
+              step={0.01}
+              format={formatPct}
+              exact={false}
+            />
             <span className="mt-1 block text-[10px] text-ink-faint">
               Post-money {formatMoney(impliedPostMoney)} · {formatCount(newShares)} new shares
             </span>
-          </label>
+          </div>
         </div>
       ) : null}
 
       {tab === 'debt' ? (
         <div className="grid gap-3 sm:grid-cols-3">
-          <label className="block">
-            <span className="label-caps-faint">Principal (USD)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={debtAmount} onChange={(event) => setDebtAmount(event.target.value)} />
-            <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(numberOf(debtAmount))}</span>
-          </label>
-          <label className="block">
-            <span className="label-caps-faint">Max coupon (%)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxRate} onChange={(event) => setMaxRate(event.target.value)} />
+          <SliderField
+            label="Principal (USD)"
+            value={numberOf(debtAmount)}
+            onChange={(next) => setDebtAmount(String(next))}
+            min={0}
+            max={debtMax}
+            step={roundStep(debtMax)}
+            format={formatMoney}
+          />
+          <div>
+            <SliderField
+              label="Max coupon"
+              value={Math.min(0.5, Math.max(0, numberOf(maxRate) / 100))}
+              onChange={(next) => setMaxRate(String(Math.round(next * 100)))}
+              min={0}
+              max={0.5}
+              step={0.01}
+              format={formatPct}
+              exact={false}
+            />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatMoney(quarterlyInterest)} interest per quarter</span>
-          </label>
-          <label className="block">
-            <span className="label-caps-faint">Term (quarters)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={term} onChange={(event) => setTerm(event.target.value)} />
+          </div>
+          <div>
+            <SliderField
+              label="Term"
+              value={Math.min(40, Math.max(1, Math.round(numberOf(term)) || 1))}
+              onChange={(next) => setTerm(String(next))}
+              min={1}
+              max={40}
+              step={1}
+              format={formatQuarterCount}
+              exact={false}
+            />
             <span className="mt-1 block text-[10px] text-ink-faint">The issue fails rather than clearing above your ceiling.</span>
-          </label>
+          </div>
         </div>
       ) : null}
 
       {tab === 'buyback' ? (
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="label-caps-faint">Budget (USD)</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="numeric" value={budget} onChange={(event) => setBudget(event.target.value)} />
-            <span className="mt-1 block text-[10px] text-ink-faint">
-              {formatMoney(numberOf(budget))} of {formatMoney(cash)} cash
-            </span>
-          </label>
-          <label className="block">
-            <span className="label-caps-faint">Max price per share</span>
-            <input className="field tap-target mt-1 sm:min-h-0" inputMode="decimal" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} />
+          <div>
+            <SliderField
+              label="Budget (USD)"
+              value={numberOf(budget)}
+              onChange={(next) => setBudget(String(next))}
+              min={0}
+              max={buybackMax}
+              step={roundStep(buybackMax)}
+              format={formatMoney}
+              chips
+            />
+            <span className="mt-1 block text-[10px] text-ink-faint">Of {formatMoney(cash)} cash</span>
+          </div>
+          <div>
+            <SliderField
+              label="Max price per share"
+              value={numberOf(maxPrice)}
+              onChange={(next) => setMaxPrice(String(next))}
+              min={0}
+              max={sharePriceMax}
+              step={roundStep(sharePriceMax)}
+              format={formatMoney}
+            />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatCount(buybackShares)} shares at the ceiling</span>
-          </label>
+          </div>
         </div>
       ) : null}
 

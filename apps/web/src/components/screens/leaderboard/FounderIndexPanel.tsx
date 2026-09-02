@@ -76,12 +76,12 @@ export function FounderIndexPanel({
         <div className="min-w-0">
           <div className="label-caps-faint">{founderName}</div>
           <div className="flex items-baseline gap-2">
-            <span className="figure text-[19px] font-medium text-ink">{formatScore(published.value * 100, 1)}</span>
+            <span className="figure text-[19px] font-medium text-ink">{formatScore(published.value * 100)}</span>
             <span className="text-[11px] text-ink-faint">index · rank #{published.rank}</span>
           </div>
         </div>
         <Tag tone={reconciles ? 'gain' : 'warn'} dot title="The weighted sum of the eight components against the published composite.">
-          {reconciles ? 'Components reconcile' : `Off by ${formatScore((computed - published.value) * 100, 2)}`}
+          {reconciles ? 'Components reconcile' : `Off by ${formatScore((computed - published.value) * 100)}`}
         </Tag>
       </div>
 
@@ -91,14 +91,14 @@ export function FounderIndexPanel({
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="text-[13px] font-medium text-ink">{COMPONENT_LABEL[component.key]}</span>
               <span className="flex items-baseline gap-3">
-                <span className="figure text-[10px] text-ink-faint">weight {formatPct(component.weight, 0)}</span>
-                <span className="figure text-[12px] text-ink">{formatPct(component.percentile, 0)}</span>
+                <span className="figure text-[10px] text-ink-faint">weight {formatPct(component.weight)}</span>
+                <span className="figure text-[12px] text-ink">{formatPct(component.percentile)}</span>
               </span>
             </div>
             <Meter value={component.percentile * 100} showValue={false} className="mt-1" />
             <div className="mt-0.5 flex items-baseline justify-between gap-2">
               <span className="text-[10px] text-ink-faint">{COMPONENT_SOURCE[component.key]}</span>
-              <span className="figure text-[10px] text-ink-faint">contributes {formatScore(component.contribution * 100, 1)}</span>
+              <span className="figure text-[10px] text-ink-faint">contributes {formatScore(component.contribution * 100)}</span>
             </div>
           </div>
         ))}
@@ -109,9 +109,8 @@ export function FounderIndexPanel({
         <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
           {weakest === null
             ? 'No component is scored yet.'
-            : `${COMPONENT_LABEL[weakest.key]} sits at the ${formatPct(weakest.percentile, 0)} percentile and carries ${formatPct(
+            : `${COMPONENT_LABEL[weakest.key]} sits at the ${formatPct(weakest.percentile)} percentile and carries ${formatPct(
                 weakest.weight,
-                0,
               )} of the composite. It is the cheapest point on the index to move.`}
         </p>
         <p className="mt-2 text-[10px] text-ink-faint">

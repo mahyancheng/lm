@@ -27,7 +27,7 @@ import type {
 } from '@frontier/contracts';
 import { COMMITMENT_COMPARATORS, COMMITMENT_FIELDS } from '@frontier/contracts';
 import { checkAccess } from '@frontier/simulation';
-import { formatScore } from '@frontier/shared';
+import { formatPct, formatScore } from '@frontier/shared';
 import { AccessBadge, EmptyState, Meter, Panel, PersonChip, SectionHeading, Tag, ValidationBanner } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { commitmentText, conditionText } from './labels';
@@ -183,7 +183,7 @@ export function LobbyPanel({ session, board, founder, proposals, directorsById, 
                   <Tag tone={commitment.stance === 'support' ? 'gain' : commitment.stance === 'oppose' ? 'loss' : 'neutral'}>{commitment.stance}s</Tag>{' '}
                   {commitmentText(commitment.conditions)}
                   <span className="block text-[10px] text-ink-faint">
-                    strength {commitment.commitmentStrength.toFixed(2)} · expires in quarter {commitment.expiresQuarter}
+                    strength {formatPct(commitment.commitmentStrength)} · expires in quarter {commitment.expiresQuarter}
                   </span>
                 </div>
               ))}

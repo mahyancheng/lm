@@ -137,7 +137,7 @@ export default function CompanyPage(): React.JSX.Element {
       header: 'Share',
       align: 'right',
       hideOnMobile: true,
-      render: (row) => formatPct(row.share, 0),
+      render: (row) => formatPct(row.share),
       sortable: true,
       sortValue: (row) => row.share,
     },
@@ -232,7 +232,7 @@ export default function CompanyPage(): React.JSX.Element {
               { label: 'Archetype', value: ARCHETYPE_LABEL[company.archetype], mono: false },
               { label: 'Sector', value: company.sectorId.replace(/_/g, ' '), mono: false },
               { label: 'Posture', value: POSTURE_LABEL[company.posture], mono: false, hint: POSTURE_BLURB[company.posture] },
-              { label: 'Risk tolerance', value: formatPct(company.riskTolerance, 0), hint: 'Variance this company will accept for upside' },
+              { label: 'Risk tolerance', value: formatPct(company.riskTolerance), hint: 'Variance this company will accept for upside' },
               { label: 'Founded', value: quarterLabel(session.startYear, company.foundedQuarter) },
               { label: 'Headquarters', value: company.headquartersCity, mono: false },
               {
@@ -385,7 +385,7 @@ export default function CompanyPage(): React.JSX.Element {
           {capabilities.length === 0 ? (
             <EmptyState icon="flask" title="No capability recorded" message="Capability accrues from delivered research and hired specialists." />
           ) : (
-            <BarChart data={capabilities} max={1} formatValue={(value) => value.toFixed(2)} />
+            <BarChart data={capabilities} max={1} formatValue={formatPct} />
           )}
         </Panel>
       </div>
@@ -466,7 +466,7 @@ export default function CompanyPage(): React.JSX.Element {
             columns={1}
             items={[
               { label: 'Headcount', value: drawerRole.headcount },
-              { label: 'Share of company', value: formatPct(drawerRole.share, 0) },
+              { label: 'Share of company', value: formatPct(drawerRole.share) },
               { label: 'Market compensation', value: formatMoney(drawerRole.marketCompUsd), hint: 'Annual, at the current salary pressure' },
               {
                 label: 'Company average',

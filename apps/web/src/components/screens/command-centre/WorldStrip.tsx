@@ -13,7 +13,7 @@
  */
 
 import type { WorldState } from '@frontier/contracts';
-import { formatPct } from '@frontier/shared';
+import { formatMultiple, formatPct } from '@frontier/shared';
 import { DeltaBadge, Meter, cx } from '@/components/ui';
 import { bandLabel, humanise } from '../reporting/util';
 
@@ -48,7 +48,7 @@ function readings(world: WorldState, previous: WorldState | null): Reading[] {
     {
       key: 'policyRate',
       label: 'Policy rate',
-      value: formatPct(world.macro.policyRate, 2),
+      value: formatPct(world.macro.policyRate),
       meter: null,
       delta: delta(world.macro.policyRate, p?.macro.policyRate),
       format: 'points',
@@ -57,7 +57,7 @@ function readings(world: WorldState, previous: WorldState | null): Reading[] {
     {
       key: 'creditSpreads',
       label: 'Credit spreads',
-      value: formatPct(world.macro.creditSpreads, 2),
+      value: formatPct(world.macro.creditSpreads),
       meter: null,
       delta: delta(world.macro.creditSpreads, p?.macro.creditSpreads),
       format: 'points',
@@ -102,7 +102,7 @@ function readings(world: WorldState, previous: WorldState | null): Reading[] {
     {
       key: 'spotPrice',
       label: 'Compute spot',
-      value: `${world.compute.spotPrice.toFixed(2)}×`,
+      value: formatMultiple(world.compute.spotPrice),
       meter: null,
       delta: delta(world.compute.spotPrice, p?.compute.spotPrice),
       format: 'number',
@@ -120,7 +120,7 @@ function readings(world: WorldState, previous: WorldState | null): Reading[] {
     {
       key: 'salaryPressure',
       label: 'Salary pressure',
-      value: `${world.talent.salaryPressure.toFixed(2)}×`,
+      value: formatMultiple(world.talent.salaryPressure),
       meter: null,
       delta: delta(world.talent.salaryPressure, p?.talent.salaryPressure),
       format: 'number',

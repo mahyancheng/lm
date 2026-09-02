@@ -25,15 +25,17 @@ import type {
   TechGraph,
 } from '@frontier/contracts';
 import { assessCostUsd, assessPlausibility, reachableCapitalUsd } from '@frontier/simulation';
-import { formatMoney } from '@frontier/shared';
+import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import {
   DeltaBadge,
   EmptyState,
   KeyValueGrid,
   Panel,
   SectionHeading,
+  SliderField,
   Tag,
   ValidationBanner,
+  roundStep,
 } from '@/components/ui';
 import { useGameActions, useLlm } from '@/lib/game';
 import { buildInnovationInput, requestInnovation } from './innovationClient';
@@ -75,6 +77,9 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
   const allowed = session.config.allowPlayerInnovation;
+
+  const costEstimateValue = Math.max(0, Number.parseFloat(form.estimatedCost) || 0);
+  const costEstimateMax = Math.max(reachableCapitalUsd(company), costEstimateValue, 1_000_000_000);
 
   const assessment = useMemo(() => {
     if (proposal === null) return null;
@@ -241,14 +246,14 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             <label className="block">
               <span className="label-caps-faint mb-1 flex items-baseline justify-between">
                 <span>Novelty</span>
-                <span className="figure text-ink-dim">{form.novelty.toFixed(2)}</span>
+                <span className="figure text-ink-dim">{formatPct(form.novelty)}</span>
               </span>
               <input type="range" className="tap-target w-full sm:min-h-0" min={0} max={1} step={0.05} value={form.novelty} onChange={(event) => setForm({ ...form, novelty: Number(event.target.value) })} />
             </label>
             <label className="block">
               <span className="label-caps-faint mb-1 flex items-baseline justify-between">
                 <span>Plausibility</span>
-                <span className="figure text-ink-dim">{form.plausibility.toFixed(2)}</span>
+                <span className="figure text-ink-dim">{formatPct(form.plausibility)}</span>
               </span>
               <input
                 type="range"
@@ -267,24 +272,32 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
               <span className="label-caps-faint mb-1 block">Capabilities needed, comma separated</span>
               <input className="field tap-target sm:min-h-0" value={form.capabilities} onChange={(event) => setForm({ ...form, capabilities: event.target.value })} placeholder="agents, training_systems" />
             </label>
-            <label className="block">
-              <span className="label-caps-faint mb-1 block">Quarters</span>
-              <input
-                className="field tap-target sm:min-h-0"
-                type="number"
-                min={1}
-                max={60}
-                value={form.estimatedQuarters}
-                onChange={(event) => setForm({ ...form, estimatedQuarters: Math.max(1, Math.min(60, Number(event.target.value) || 1)) })}
-              />
-            </label>
+            {/* 1..60 is the InnovationProposalSchema bound the same clamp
+                enforced when this was a typed field. */}
+            <SliderField
+              label="Quarters"
+              value={form.estimatedQuarters}
+              onChange={(next) => setForm({ ...form, estimatedQuarters: Math.max(1, Math.min(60, Math.round(next))) })}
+              min={1}
+              max={60}
+              step={1}
+              format={formatQuarterCount}
+              exact={false}
+            />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="label-caps-faint mb-1 block">Your cost estimate</span>
-              <input className="field tap-target sm:min-h-0" type="number" min={0} step="10000000" value={form.estimatedCost} onChange={(event) => setForm({ ...form, estimatedCost: event.target.value })} />
-            </label>
+            {/* The engine judges the estimate against reachable capital, so
+                that is the range worth stating an estimate inside. */}
+            <SliderField
+              label="Your cost estimate"
+              value={costEstimateValue}
+              onChange={(next) => setForm({ ...form, estimatedCost: String(next) })}
+              min={0}
+              max={costEstimateMax}
+              step={roundStep(costEstimateMax)}
+              format={formatMoney}
+            />
             <label className="block">
               <span className="label-caps-faint mb-1 block">Initial visibility</span>
               <select className="field tap-target sm:min-h-0" value={form.visibility} onChange={(event) => setForm({ ...form, visibility: event.target.value as 'company_private' | 'public' })}>
@@ -345,8 +358,8 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
               <KeyValueGrid
                 columns={2}
                 items={[
-                  { label: 'Novelty', value: proposal.novelty.toFixed(2) },
-                  { label: 'Plausibility', value: proposal.plausibility.toFixed(2) },
+                  { label: 'Novelty', value: formatPct(proposal.novelty) },
+                  { label: 'Plausibility', value: formatPct(proposal.plausibility) },
                   { label: 'Cost', value: formatMoney(proposal.estimatedCost) },
                   { label: 'Duration', value: `${proposal.estimatedQuarters} quarters` },
                   {
@@ -376,9 +389,9 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
                 <div className="raised-surface flex flex-wrap items-center justify-between gap-2 px-3 py-2">
                   <span className="text-[11px] text-ink-dim">Plausibility</span>
                   <span className="figure text-[12px] text-ink">
-                    you {proposal.plausibility.toFixed(2)} <span className="text-ink-faint">→</span> engine {assessment.plausibility.toFixed(2)}
+                    you {formatPct(proposal.plausibility)} <span className="text-ink-faint">→</span> engine {formatPct(assessment.plausibility)}
                   </span>
-                  <DeltaBadge value={assessment.plausibility - proposal.plausibility} format="points" decimals={2} />
+                  <DeltaBadge value={assessment.plausibility - proposal.plausibility} format="points" />
                 </div>
                 <div className="raised-surface flex flex-wrap items-center justify-between gap-2 px-3 py-2">
                   <span className="text-[11px] text-ink-dim">Cost</span>

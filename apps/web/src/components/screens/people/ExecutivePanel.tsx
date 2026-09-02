@@ -36,8 +36,10 @@ import {
   Panel,
   PersonChip,
   SectionHeading,
+  SliderField,
   Tag,
   ValidationBanner,
+  roundStep,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 
@@ -114,6 +116,11 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
   }
 
   const appointCompValue = Number.parseFloat(appointComp);
+  const appointCompMax = Math.max(
+    Math.min(company.financials.cash * 4, 20_000_000),
+    Number.isFinite(appointCompValue) ? appointCompValue : 0,
+    1_000_000,
+  );
   const appointPreview =
     appointId.length === 0 || !Number.isFinite(appointCompValue)
       ? null
@@ -182,21 +189,18 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
           </label>
         </div>
 
-        <label className="mt-2.5 block">
-          <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-            <span>Compensation premium</span>
-            <span className="figure text-ink-dim">{formatPct(premium, 0)}</span>
-          </span>
-          <input
-            className="tap-target w-full"
-            type="range"
+        <div className="mt-2.5">
+          <SliderField
+            label="Compensation premium"
+            value={premium}
+            onChange={setPremium}
             min={0}
             max={2}
             step={0.05}
-            value={premium}
-            onChange={(event) => setPremium(Number(event.target.value))}
+            format={formatPct}
+            exact={false}
           />
-        </label>
+        </div>
 
         {target === null ? null : (
           <div className="raised-surface mt-2.5 px-3 py-2.5">
@@ -279,20 +283,20 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
           </label>
         </div>
 
-        <label className="mt-2.5 block">
-          <span className="label-caps-faint mb-1 block">Annual compensation</span>
-          <input
-            className="field tap-target"
-            type="number"
+        <div className="mt-2.5">
+          {/* The appoint rule charges one quarter of the package against
+              uncommitted cash, so four times cash is the honest ceiling. */}
+          <SliderField
+            label="Annual compensation"
+            value={Number.isFinite(appointCompValue) ? appointCompValue : 0}
+            onChange={(next) => setAppointComp(String(next))}
             min={0}
-            step="10000"
-            value={appointComp}
-            onChange={(event) => setAppointComp(event.target.value)}
+            max={appointCompMax}
+            step={roundStep(appointCompMax)}
+            format={formatMoney}
           />
-          <span className="mt-1 block text-[11px] text-ink-faint">
-            {formatMoney(Number.isFinite(appointCompValue) ? appointCompValue : 0)} a year — the first quarter is charged against uncommitted cash.
-          </span>
-        </label>
+          <span className="mt-1 block text-[11px] text-ink-faint">A year — the first quarter is charged against uncommitted cash.</span>
+        </div>
 
         <div className="mt-2.5 flex justify-end">
           <button

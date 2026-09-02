@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { SimEventType } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
+import { formatMoney, formatMultiple, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import type { ReactNode } from 'react';
 import {
   DataTable,
@@ -366,12 +366,12 @@ export default function FinancialsPage(): React.JSX.Element {
               <FactCard label="Interest this quarter" value={formatMoney(company.financials.interestExpense)} />
               <FactCard
                 label="Implied annual rate"
-                value={impliedRate === null ? '—' : formatPct(impliedRate, 2)}
+                value={impliedRate === null ? '—' : formatPct(impliedRate)}
                 hint="Quarterly interest annualised over principal."
               />
               <FactCard
                 label="Interest coverage"
-                value={coverage === null ? '—' : `${coverage.toFixed(2)}×`}
+                value={coverage === null ? '—' : formatMultiple(coverage)}
                 tone={coverage === null ? undefined : coverage >= 2 ? 'gain' : coverage >= 1 ? 'warn' : 'loss'}
                 hint="Operating income over interest expense."
               />
@@ -383,10 +383,10 @@ export default function FinancialsPage(): React.JSX.Element {
               />
               <FactCard
                 label="Credit spreads (world)"
-                value={formatPct(view.world.macro.creditSpreads, 2)}
+                value={formatPct(view.world.macro.creditSpreads)}
                 hint="Over the policy rate; widening spreads reprice every future issue."
               />
-              <FactCard label="Policy rate (world)" value={formatPct(view.world.macro.policyRate, 2)} />
+              <FactCard label="Policy rate (world)" value={formatPct(view.world.macro.policyRate)} />
               <FactCard
                 label="Debt availability"
                 value={formatPct(view.world.capitalMarkets.debtAvailability)}

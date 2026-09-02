@@ -225,7 +225,7 @@ export default function MarketsPage(): React.JSX.Element {
       align: 'right',
       hideOnMobile: true,
       cardHidden: true,
-      render: (row) => row.instrument.beta.toFixed(2),
+      render: (row) => formatPct(row.instrument.beta),
       sortable: true,
       sortValue: (row) => row.instrument.beta,
     },
@@ -235,7 +235,7 @@ export default function MarketsPage(): React.JSX.Element {
     { key: 'company', header: 'Company', render: (row) => <span className="text-ink">{row.companyName}</span>, sortable: true, sortValue: (row) => row.companyName },
     { key: 'holder', header: 'Held by', render: (row) => <span className="text-ink-dim">{row.holderLabel}</span>, hideOnMobile: true },
     { key: 'shares', header: 'Shares', align: 'right', render: (row) => formatCount(row.shares), sortable: true, sortValue: (row) => row.shares },
-    { key: 'pct', header: 'Stake', align: 'right', render: (row) => formatPct(row.economicPct, 2), sortable: true, sortValue: (row) => row.economicPct },
+    { key: 'pct', header: 'Stake', align: 'right', render: (row) => formatPct(row.economicPct), sortable: true, sortValue: (row) => row.economicPct },
     {
       key: 'threshold',
       header: 'Threshold',
@@ -294,7 +294,7 @@ export default function MarketsPage(): React.JSX.Element {
         <StatCard
           iconName="chart"
           label="AI index"
-          value={aiIndex === null || aiIndex.quote === null ? '—' : aiIndex.quote.price.toFixed(2)}
+          value={aiIndex === null || aiIndex.quote === null ? '—' : formatCount(aiIndex.quote.price)}
           delta={aiIndex?.quote?.return}
           spark={aiIndex?.history}
           hint={aiIndex === null ? 'Capitalisation-weighted' : aiIndex.instrument.name}
@@ -302,7 +302,7 @@ export default function MarketsPage(): React.JSX.Element {
         <StatCard
           iconName="network"
           label="Compute index"
-          value={semiIndex === null || semiIndex.quote === null ? '—' : semiIndex.quote.price.toFixed(2)}
+          value={semiIndex === null || semiIndex.quote === null ? '—' : formatCount(semiIndex.quote.price)}
           delta={semiIndex?.quote?.return}
           spark={semiIndex?.history}
           hint={semiIndex === null ? 'Semiconductors and compute' : semiIndex.instrument.name}
@@ -394,7 +394,7 @@ export default function MarketsPage(): React.JSX.Element {
                   <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
                     <span className="truncate text-[10px] text-ink-faint">{key}</span>
                     <span className="figure text-[11px] text-ink-dim">
-                      {Math.abs(value) >= 1000 ? formatMoney(value) : value.toFixed(4)}
+                      {Math.abs(value) >= 1000 ? formatMoney(value) : formatPct(value)}
                     </span>
                   </div>
                 ))}

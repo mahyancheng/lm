@@ -25,7 +25,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { PublicDisclosure } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { formatPct, formatScore } from '@frontier/shared';
+import { formatDelta, formatPct, formatScore } from '@frontier/shared';
 import {
   AiLabel,
   EmptyState,
@@ -461,8 +461,7 @@ export default function WorldPage(): React.JSX.Element {
 
                             {item.sentiment === null ? null : (
                               <p className="mt-1 text-[10px] text-ink-faint">
-                                Tone toward the subject {item.sentiment >= 0 ? '+' : ''}
-                                {item.sentiment.toFixed(2)} · reach{' '}
+                                Tone toward the subject {formatDelta(item.sentiment, 'percent')} · reach{' '}
                                 {formatCount(session.mediaStories.find((story) => story.id === item.id)?.reach ?? 0)}
                               </p>
                             )}
@@ -477,7 +476,7 @@ export default function WorldPage(): React.JSX.Element {
                                         ? formatCount(value)
                                         : Number.isInteger(value)
                                           ? String(value)
-                                          : value.toFixed(2)}
+                                          : formatPct(value)}
                                     </dd>
                                   </div>
                                 ))}

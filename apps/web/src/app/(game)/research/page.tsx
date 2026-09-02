@@ -30,10 +30,12 @@ import {
   PageHeader,
   Panel,
   ProgressBar,
+  SliderField,
   StatCard,
   TabBar,
   Tag,
   ValidationBanner,
+  roundStep,
   type Column,
 } from '@/components/ui';
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
@@ -155,6 +157,10 @@ export default function ResearchPage(): React.JSX.Element {
     .filter((project) => project.status === 'active' || project.status === 'paused')
     .reduce((total, project) => total + project.talentAllocated, 0);
 
+  const parsedBudget = Number.parseFloat(budgetText);
+  const budgetValue = Number.isFinite(parsedBudget) && parsedBudget >= 0 ? parsedBudget : Math.round(envelope);
+  const budgetMax = Math.max(company.financials.cash, envelope, budgetValue, 1_000_000);
+
   function applyBudget(): void {
     const value = Number.parseFloat(budgetText);
     if (!Number.isFinite(value) || value < 0) return;
@@ -188,7 +194,7 @@ export default function ResearchPage(): React.JSX.Element {
       header: 'Progress',
       width: '20%',
       render: (row) => (
-        <ProgressBar value={row.progress} tone={row.setbacks > 0 ? 'warn' : 'brand'} valueLabel={formatPct(row.progress, 0)} />
+        <ProgressBar value={row.progress} tone={row.setbacks > 0 ? 'warn' : 'brand'} valueLabel={formatPct(row.progress)} />
       ),
       sortable: true,
       sortValue: (row) => row.progress,
@@ -197,7 +203,7 @@ export default function ResearchPage(): React.JSX.Element {
       key: 'confidence',
       header: 'Internal confidence',
       align: 'right',
-      render: (row) => formatPct(row.internalConfidence, 0),
+      render: (row) => formatPct(row.internalConfidence),
       sortable: true,
       sortValue: (row) => row.internalConfidence,
     },
@@ -257,7 +263,7 @@ export default function ResearchPage(): React.JSX.Element {
       key: 'progress',
       header: 'Progress',
       width: '22%',
-      render: (row) => <ProgressBar value={row.progress} tone="info" valueLabel={formatPct(row.progress, 0)} />,
+      render: (row) => <ProgressBar value={row.progress} tone="info" valueLabel={formatPct(row.progress)} />,
       sortable: true,
       sortValue: (row) => row.progress,
     },
@@ -403,9 +409,9 @@ export default function ResearchPage(): React.JSX.Element {
               >
                 <span className="min-w-0 flex-1 truncate text-[13px] text-ink sm:text-[12px]">{move.title}</span>
                 <span className="figure text-[11px] text-ink-dim">
-                  {formatPct(move.previous, 0)} <span className="text-ink-faint">→</span> {formatPct(move.next, 0)}
+                  {formatPct(move.previous)} <span className="text-ink-faint">→</span> {formatPct(move.next)}
                 </span>
-                <DeltaBadge value={move.next - move.previous} format="points" decimals={1} />
+                <DeltaBadge value={move.next - move.previous} format="points" />
                 {move.previousStatus === move.nextStatus ? null : (
                   <Tag tone="info">
                     {move.previousStatus.replace(/_/g, ' ')} → {move.nextStatus.replace(/_/g, ' ')}
@@ -459,23 +465,29 @@ export default function ResearchPage(): React.JSX.Element {
           </div>
 
           <div className="mt-4 border-t border-hair pt-3">
-            <label className="block">
-              <span className="label-caps-faint mb-1 block">Research budget this quarter</span>
-              <div className="flex items-end gap-2">
-                <input
-                  className="field tap-target min-w-0 flex-1 sm:min-h-0"
-                  type="number"
-                  min={0}
-                  step="50000"
-                  placeholder={String(Math.round(envelope))}
-                  value={budgetText}
-                  onChange={(event) => setBudgetText(event.target.value)}
-                />
-                <button type="button" className="btn btn-primary btn-sm tap-target shrink-0 px-4 sm:min-h-0" onClick={applyBudget}>
-                  Set
-                </button>
-              </div>
-            </label>
+            {/* The validator clamps the envelope to uncommitted cash, so cash
+                is the slider's honest ceiling; the untouched slider shows the
+                current envelope and Set stays disabled until it moves. */}
+            <SliderField
+              label="Research budget this quarter"
+              value={budgetValue}
+              onChange={(next) => setBudgetText(String(next))}
+              min={0}
+              max={budgetMax}
+              step={roundStep(budgetMax)}
+              format={formatMoney}
+              chips
+            />
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm tap-target w-full px-4 sm:w-auto sm:min-h-0"
+                disabled={budgetText === ''}
+                onClick={applyBudget}
+              >
+                Set
+              </button>
+            </div>
             <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
               Currently {formatMoney(envelope)}. Individual programmes draw from this envelope in priority order.
             </p>
@@ -487,23 +499,18 @@ export default function ResearchPage(): React.JSX.Element {
           </div>
 
           <div className="mt-4 border-t border-hair pt-3">
-            <label className="block">
-              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                <span>Training share of compute</span>
-                <span className="figure text-ink-dim">{formatPct(trainingSplit, 0)}</span>
-              </span>
-              <input
-                type="range"
-                className="tap-target w-full sm:min-h-0"
-                min={0}
-                max={1}
-                step={0.05}
-                value={trainingSplit}
-                onChange={(event) => setTrainingSplit(Number(event.target.value))}
-              />
-            </label>
+            <SliderField
+              label="Training share of compute"
+              value={trainingSplit}
+              onChange={setTrainingSplit}
+              min={0}
+              max={1}
+              step={0.05}
+              format={formatPct}
+              exact={false}
+            />
             <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
-              Serving takes the remainder. Currently {formatPct(company.compute.trainingAllocation, 0)} — pivoting compute out of training into
+              Serving takes the remainder. Currently {formatPct(company.compute.trainingAllocation)} — pivoting compute out of training into
               inference is how a company survives a shortage.
             </p>
             <div className="mt-2 flex justify-end">

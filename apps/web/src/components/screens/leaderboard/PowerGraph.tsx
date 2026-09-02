@@ -127,7 +127,7 @@ export function PowerGraph({ session, view }: PowerGraphProps): React.JSX.Elemen
           to: table.companyId,
           kind: 'holding',
           weight: pct,
-          title: `${holderLabel(session, holding.holderId, holding.holderKind)} holds ${formatPct(pct, 1)} of ${companyLabel(table.companyId)}`,
+          title: `${holderLabel(session, holding.holderId, holding.holderKind)} holds ${formatPct(pct)} of ${companyLabel(table.companyId)}`,
         });
       }
     }

@@ -15,7 +15,7 @@
 
 import type { PlayerView, SessionState } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
-import { formatMoney, formatQuarterCount } from '@frontier/shared';
+import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import { toneOfLine, type Tone } from '@/components/ui';
 import { humanise } from '../reporting/util';
 
@@ -121,7 +121,7 @@ export function buildFeed(
     items.push({
       id: 'morale',
       text: `Morale is ${Math.round(company.employees.morale)} and below the attrition threshold.`,
-      meta: `${Math.round(company.employees.attrition * 100)}% attrition`,
+      meta: `${formatPct(company.employees.attrition)} attrition`,
       tone: 'warn',
       href: '/people',
       group: 'company',

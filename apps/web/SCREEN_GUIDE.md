@@ -332,15 +332,19 @@ exception.
 
 ## 7. Formatting
 
-All figures go through `@frontier/shared`. Never `toLocaleString`, never a hand-rolled
-`.toFixed(2)` on money, never `Intl`.
+All figures go through `@frontier/shared`. Never `toLocaleString`, never a
+hand-rolled `.toFixed(...)`, never `Intl`. Players never see a decimal digit:
+money is whole dollars or whole compact units, percentages are whole percents,
+ratios are `formatMultiple` ("12x", "+8%").
 
 ```ts
 import {
-  formatMoney,        // 1_240_000_000 -> "$1.24B";  formatMoney(v, 'full') -> "$1,240,000,000"
-  formatPct,          // 0.0473 -> "4.7%"
-  formatDelta,        // (0.13,'percent') -> "+13%"; (-0.021,'points') -> "-2.1pp"; (2,'rank') -> "+2"
-  formatScore,        // 0..100 scores
+  formatMoney,        // 4_230_000 -> "$4,230,000"; 42_400_000 -> "$42M"; formatMoney(v, 'full') -> long form
+  formatPercent,      // 0.043 -> "4%"; 0.004 -> "<1%"  (formatPct is the same function)
+  formatCount,        // 12_500_000 -> "12,500,000" — shares, headcount, units
+  formatMultiple,     // 12.4 -> "12x"; 1.08 -> "+8%"
+  formatDelta,        // (0.13,'percent') -> "+13%"; (-0.021,'points') -> "-2pp"; (2,'rank') -> "+2"
+  formatScore,        // 0..100 scores, whole points
   formatQuarter,      // (2027, 5) -> "2028 Q2"
   formatQuarterCount, // 34 -> "34 quarters"
   formatRankMove,
@@ -348,7 +352,7 @@ import {
 import { quarterLabel } from '@frontier/contracts';
 ```
 
-- **Percent vs points.** A change in a percentage is `points` (`-2.1pp`); a
+- **Percent vs points.** A change in a percentage is `points` (`-2pp`); a
   change in a quantity is `percent` (`+13%`). Getting this wrong is a bug.
 - Every figure in a column that can be compared vertically gets the `figure`
   class (monospace + tabular numerals). `DataTable` applies it to right-aligned

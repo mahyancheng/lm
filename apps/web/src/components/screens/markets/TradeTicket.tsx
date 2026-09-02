@@ -42,7 +42,7 @@ export function TradeTicket({
   const { validateIntent, queueAction } = useGameActions();
   const [side, setSide] = useState<Side>('buy');
   const [shares, setShares] = useState('100000');
-  const [limit, setLimit] = useState(() => (lastPrice > 0 ? lastPrice.toFixed(2) : '0'));
+  const [limit, setLimit] = useState(() => (lastPrice > 0 ? String(Math.max(1, Math.round(lastPrice))) : '0'));
   const [pending, setPending] = useState<ActionIntent | null>(null);
   const [queued, setQueued] = useState<ActionValidationResult | null>(null);
 
@@ -116,11 +116,11 @@ export function TradeTicket({
         </div>
         <div className="flex items-baseline justify-between gap-3 py-2">
           <dt className="label-caps-faint">Stake now</dt>
-          <dd className="figure text-ink-dim">{formatPct(stakeNow, 2)}</dd>
+          <dd className="figure text-ink-dim">{formatPct(stakeNow)}</dd>
         </div>
         <div className="flex items-baseline justify-between gap-3 py-2">
           <dt className="label-caps-faint">Stake if filled</dt>
-          <dd className="figure text-ink">{formatPct(stakeAfter, 2)}</dd>
+          <dd className="figure text-ink">{formatPct(stakeAfter)}</dd>
         </div>
       </dl>
 
@@ -166,7 +166,7 @@ export function TradeTicket({
           { label: 'Shares', value: formatCount(shareCount) },
           { label: side === 'buy' ? 'Maximum price' : 'Minimum price', value: formatMoney(limitPrice) },
           { label: 'Consideration at limit', value: formatMoney(consideration), emphasis: true },
-          { label: 'Stake if filled', value: formatPct(stakeAfter, 2) },
+          { label: 'Stake if filled', value: formatPct(stakeAfter) },
         ]}
         confirmLabel={side === 'buy' ? 'Queue purchase' : 'Queue sale'}
         onCancel={() => setPending(null)}

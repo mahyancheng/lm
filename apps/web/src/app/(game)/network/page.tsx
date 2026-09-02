@@ -26,7 +26,7 @@
 
 import { useMemo, useState } from 'react';
 import { quarterLabel } from '@frontier/contracts';
-import { formatScore } from '@frontier/shared';
+import { formatDelta, formatScore } from '@frontier/shared';
 import { connectionInputs } from '@frontier/simulation';
 import {
   AccessBadge,
@@ -371,7 +371,7 @@ export default function NetworkPage(): React.JSX.Element {
                 header: 'Change',
                 align: 'right',
                 hideOnMobile: true,
-                render: (row) => <span className="text-[11px] text-ink-dim">{row.delta === 0 ? '—' : row.delta.toFixed(1)}</span>,
+                render: (row) => <span className="text-[11px] text-ink-dim">{row.delta === 0 ? '—' : formatDelta(row.delta, 'number')}</span>,
               },
             ]}
           />

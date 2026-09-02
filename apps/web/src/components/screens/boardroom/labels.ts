@@ -107,7 +107,7 @@ export function conditionText(condition: CommitmentCondition): string {
   const value = USD_FIELDS.has(condition.field)
     ? formatMoney(condition.value)
     : PCT_FIELDS.has(condition.field)
-      ? formatPct(condition.value, 0)
+      ? formatPct(condition.value)
       : `${condition.value} quarters`;
   return `${field} ${comparator} ${value}`;
 }

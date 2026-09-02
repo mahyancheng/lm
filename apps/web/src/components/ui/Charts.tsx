@@ -9,6 +9,7 @@
  */
 
 import { useId, useMemo } from 'react';
+import { formatCount, formatPct } from '@frontier/shared';
 import { TONE_VAR, cx, type Tone } from './tokens';
 
 /* -------------------------------------------------------------------------- */
@@ -189,7 +190,7 @@ export function LineChart({
   const extent = extentOf(all, includeZero);
   const pointCount = Math.max(...series.map((entry) => entry.values.length), 2);
   const step = (width - padLeft - padRight) / Math.max(1, pointCount - 1);
-  const format = formatValue ?? ((value: number) => (Math.abs(value) >= 1000 ? value.toFixed(0) : value.toFixed(2)));
+  const format = formatValue ?? ((value: number) => (Math.abs(value) < 1 && value !== 0 ? formatPct(value) : formatCount(value)));
 
   const ticks = [extent.max, (extent.max + extent.min) / 2, extent.min];
 
@@ -322,7 +323,7 @@ export function BarChart({
   max,
   className,
 }: BarChartProps): React.JSX.Element {
-  const format = formatValue ?? ((value: number) => (Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2)));
+  const format = formatValue ?? ((value: number) => (Math.abs(value) < 1 && value !== 0 ? formatPct(value) : formatCount(value)));
   const ceiling = max ?? Math.max(...data.map((datum) => Math.abs(datum.value)), 1e-9);
 
   if (orientation === 'horizontal') {

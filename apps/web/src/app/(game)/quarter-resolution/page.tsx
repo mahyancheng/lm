@@ -29,7 +29,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { NarratorOutput, ResolutionLine, SessionState } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct, formatRankMove, formatScore } from '@frontier/shared';
+import { formatCount, formatMoney, formatPct, formatRankMove, formatScore } from '@frontier/shared';
 import {
   DataTable,
   DeltaBadge,
@@ -495,8 +495,13 @@ export default function QuarterResolutionPage(): React.JSX.Element {
               <RankPodium rows={ranks} reveal={reveal} />
             </div>
           )}
+          {/* Card mode below `sm`, like the quote table above it: five columns
+              of figures squeezed into 390px is exactly the misaligned table
+              `cardMode` exists to prevent. */}
           <DataTable
             dense
+            cardMode="auto"
+            cardTitleKey="board"
             rows={ranks}
             rowKey={(row) => row.board}
             rowHref={() => '/leaderboard'}
@@ -535,7 +540,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
                   header: 'Percentile',
                   align: 'right',
                   hideOnMobile: true,
-                  render: (row) => formatPct(row.percentile, 0),
+                  render: (row) => formatPct(row.percentile),
                 },
               ] as readonly Column<RankRow>[]
             }
@@ -594,7 +599,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
               <li key={timing.phase} className="flex items-baseline justify-between gap-3 text-[11px]">
                 <span className="truncate text-ink-dim">{timing.phase.replace(/_/g, ' ')}</span>
                 <span className="figure shrink-0 text-[10px] text-ink-faint">
-                  {timing.durationMs.toFixed(1)}ms · {timing.eventsEmitted}
+                  {formatCount(timing.durationMs)}ms · {timing.eventsEmitted}
                 </span>
               </li>
             ))}

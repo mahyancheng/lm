@@ -26,7 +26,7 @@ import type {
   SocialAccount,
 } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, POST_INTENTS } from '@frontier/contracts';
-import { formatPct } from '@frontier/shared';
+import { formatMultiple, formatPct } from '@frontier/shared';
 import { BarChart, Icon, Modal, SectionHeading, Tag, ValidationBanner, cx, type BarDatum } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { audienceLabel, intentProfile, networkFit, networkLabel, networkProfile, predictedAudiences } from './audiences';
@@ -327,18 +327,18 @@ export function ComposeModal({
           {shareData.length === 0 ? (
             <p className="text-[11px] text-ink-faint">This network reaches nobody for this account.</p>
           ) : (
-            <BarChart data={shareData} formatValue={(value) => formatPct(value, 0)} max={1} />
+            <BarChart data={shareData} formatValue={(value) => formatPct(value)} max={1} />
           )}
 
           <div className="raised-surface px-3 py-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
-              <Tag tone={fit >= 0.8 ? 'gain' : fit >= 0.5 ? 'info' : 'warn'}>fit {formatPct(fit, 0)}</Tag>
-              <Tag tone={profile.virality >= 1.4 ? 'warn' : 'neutral'}>virality {profile.virality.toFixed(2)}x</Tag>
-              <Tag tone={profile.pressBias >= 0.35 ? 'warn' : 'neutral'}>press bias {formatPct(profile.pressBias, 0)}</Tag>
+              <Tag tone={fit >= 0.8 ? 'gain' : fit >= 0.5 ? 'info' : 'warn'}>fit {formatPct(fit)}</Tag>
+              <Tag tone={profile.virality >= 1.4 ? 'warn' : 'neutral'}>virality {formatMultiple(profile.virality)}</Tag>
+              <Tag tone={profile.pressBias >= 0.35 ? 'warn' : 'neutral'}>press bias {formatPct(profile.pressBias)}</Tag>
               {profile.hostility > 0 ? <Tag tone="loss">hostility +{profile.hostility}</Tag> : null}
             </div>
             <p className="mt-2 text-[10px] leading-relaxed text-ink-faint">
-              {networkLabel(network)} resharing multiplier {platform.virality.toFixed(2)}x, press affinity {formatPct(platform.pressAffinity, 0)}.
+              {networkLabel(network)} resharing multiplier {formatMultiple(platform.virality)}, press affinity {formatPct(platform.pressAffinity)}.
               Attention is not approval: an attack travels furthest and costs the most with the audiences that matter.
             </p>
           </div>

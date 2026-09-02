@@ -73,9 +73,12 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
                 {move === null ? 'held' : move === 'new' ? 'new' : move}
               </Tag>
 
+              {/* The step is a fixed-height box, so a board name that wraps to
+                  three lines at 390px must clip inside it rather than spill
+                  over the base bar below. */}
               <div
                 className={cx(
-                  'flex w-full min-w-0 items-start justify-center rounded-t-card border border-b-0 px-1.5 pt-2',
+                  'flex w-full min-w-0 items-start justify-center overflow-hidden rounded-t-card border border-b-0 px-1.5 pt-2',
                   best ? 'border-brand/40 bg-brand-wash' : 'border-hair bg-raised',
                 )}
                 style={{ height: PODIUM_HEIGHTS[index] }}
@@ -99,7 +102,7 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
       <p className="mt-2 text-center text-[10px] leading-relaxed text-ink-faint">
         The {top.length === 1 ? 'board' : 'boards'} you sit highest on by percentile, counted from where you were to where you are. Every
         figure is the leaderboard the ledger recomputed —{' '}
-        {top.map((row) => `${row.board.replace(/_/g, ' ')} ${formatPct(row.percentile, 0)}`).join(' · ')}.
+        {top.map((row) => `${row.board.replace(/_/g, ' ')} ${formatPct(row.percentile)}`).join(' · ')}.
       </p>
     </div>
   );

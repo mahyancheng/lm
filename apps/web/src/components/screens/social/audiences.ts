@@ -126,7 +126,8 @@ export function networkIcon(network: NetworkArchetype): IconName {
 }
 
 /**
- * A compact people count: "2.4m", "18k", "740".
+ * A compact people count: "2m", "18k", "740". Whole units only — players never
+ * see a decimal digit.
  *
  * Followers and reach are counts of people, not money and not a fraction, so
  * none of the `@frontier/shared` money or percentage formatters apply. This is
@@ -135,8 +136,11 @@ export function networkIcon(network: NetworkArchetype): IconName {
  */
 export function countLabel(value: number): string {
   if (!Number.isFinite(value)) return '—';
+  const sign = value < 0 ? '-' : '';
   const abs = Math.abs(value);
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}m`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
-  return String(Math.round(value));
+  const thousands = Math.round(abs / 1_000);
+  if (thousands < 1) return `${sign}${Math.round(abs)}`;
+  // The rounding carry keeps 999,600 reading "1m", never "1,000k".
+  if (thousands < 1_000) return `${sign}${thousands}k`;
+  return `${sign}${Math.round(abs / 1_000_000)}m`;
 }

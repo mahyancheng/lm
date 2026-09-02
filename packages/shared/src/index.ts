@@ -26,8 +26,11 @@ export type { StableStringifyOptions } from './hash';
 export {
   formatMoney,
   formatMoneyFull,
+  formatCount,
+  formatPercent,
   formatPct,
   formatScore,
+  formatMultiple,
   formatDelta,
   formatRankMove,
   formatQuarter,

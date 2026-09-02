@@ -136,10 +136,28 @@ export const ROLE_TIMEOUT_MS = 45_000;
 
 /**
  * The ceiling for calls that stand between the player and a resolved quarter.
- * Shorter on purpose: a quarter that takes half a minute to submit is a worse
- * game than a quarter the World Director sat out.
+ *
+ * This used to be 20s, on the reasoning that a quarter taking half a minute to
+ * submit is a worse game than a quarter the World Director sat out. That was
+ * right when the five quarter calls — the Director and one per rival — all ran
+ * at once, and each request's clock measured only model time.
+ *
+ * It is wrong now. The gateway bounds how many model calls run at once
+ * (`LLM_MAX_CONCURRENCY`, default 1), because each `claude-session` call spawns
+ * a Claude Code subprocess and a small always-on host cannot afford five of
+ * them at once. So a request's clock now covers **queue time plus model time**,
+ * and queue time is not the model being slow — it is this deployment being
+ * careful. At the default bound the last rival waits behind four calls ahead of
+ * it, and a 20s ceiling would abort it every single quarter: every rival past
+ * the second would silently drop to its archetype default, which is exactly the
+ * degradation the bound was added to avoid.
+ *
+ * 90s covers five sequential turns at the measured 4-10s each, with room for
+ * the transport's one permitted repair attempt. Aborting earlier does not free
+ * the server's permit or stop the subprocess — it only throws away an answer
+ * that was already being paid for.
  */
-export const QUARTER_ROLE_TIMEOUT_MS = 20_000;
+export const QUARTER_ROLE_TIMEOUT_MS = 90_000;
 
 async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT_MS): Promise<T | null> {
   if (typeof window === 'undefined') return null;

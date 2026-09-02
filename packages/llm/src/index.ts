@@ -81,6 +81,15 @@ export { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFo
 export type { NullTransportConfig } from './transport/none';
 export { createNullTransport } from './transport/none';
 
+export type { ConcurrencyLimiter } from './transport/limited';
+export {
+  DEFAULT_LLM_MAX_CONCURRENCY,
+  MAX_CONCURRENCY_ENV,
+  createConcurrencyLimiter,
+  resolveMaxConcurrency,
+  withConcurrencyLimit,
+} from './transport/limited';
+
 /* ------------------------------ session store ----------------------------- */
 
 export type { InMemoryLlmSessionStore, LlmSessionStore } from './sessionStore';
@@ -145,6 +154,7 @@ import { type LlmSessionStore, createInMemorySessionStore } from './sessionStore
 import { type ClaudeQueryFn, createClaudeSessionTransport } from './transport/claudeSession';
 import { createApiTransport } from './transport/api';
 import { createNullTransport } from './transport/none';
+import { type ConcurrencyLimiter, resolveMaxConcurrency, withConcurrencyLimit } from './transport/limited';
 import type { LlmTransport, LlmTransportKind } from './transport/types';
 import type { RunSink } from './runSink';
 
@@ -156,6 +166,8 @@ export interface GatewayEnv {
   readonly CLAUDE_CODE_OAUTH_TOKEN?: string | undefined;
   readonly ANTHROPIC_API_KEY?: string | undefined;
   readonly ANTHROPIC_MODEL?: string | undefined;
+  /** How many model calls may be in flight at once. Whole number ≥ 1; anything else means 1. */
+  readonly LLM_MAX_CONCURRENCY?: string | undefined;
 }
 
 export interface GatewayOptions {
@@ -169,12 +181,25 @@ export interface GatewayOptions {
   readonly queryFn?: ClaudeQueryFn;
   /** Injected Anthropic client for the `api` transport, for tests. */
   readonly anthropicClient?: Anthropic;
+  /**
+   * A concurrency bound to share rather than build.
+   *
+   * Supply one when the gateway itself is rebuilt during a process's life — the
+   * web app rebuilds it whenever the pasted credential changes — so that the
+   * calls already in flight and the calls made after the rebuild are counted
+   * against the *same* ceiling. A per-gateway limiter would let a rebuild
+   * double the number of live Claude Code subprocesses, which is precisely the
+   * failure the bound exists to prevent.
+   */
+  readonly concurrencyLimiter?: ConcurrencyLimiter;
 }
 
 export interface LlmGateway {
   readonly transport: LlmTransport;
   readonly transportKind: LlmTransportKind;
   readonly sessionStore: LlmSessionStore;
+  /** How many model calls this gateway allows in flight at once. */
+  readonly maxConcurrency: number;
   /** Roles bound to `options.roles`, or to a placeholder session when none was supplied. */
   readonly roles: LlmRoles;
   /** Bind a fresh set of roles to a specific session. */
@@ -196,29 +221,45 @@ export function resolveTransportKind(value: string | undefined): LlmTransportKin
  * key. `none` is a first-class configuration, not a degraded one: it produces
  * the deterministic fallback for every role, which is exactly what demo mode
  * wants and what every test in this package uses.
+ *
+ * Whichever model-bearing transport is chosen is then wrapped in the
+ * `LLM_MAX_CONCURRENCY` bound (see `transport/limited.ts`). The bound belongs
+ * here rather than at any call site: a quarter fans out over every rival
+ * strategist, each `claude-session` call spawns a subprocess, and a limit that
+ * one caller can forget to apply is not a limit. `none` is left unwrapped —
+ * there is no subprocess to bound, and a queue in front of a function that
+ * returns immediately is only latency.
  */
 export function createGateway(env: GatewayEnv = {}, options: GatewayOptions = {}): LlmGateway {
   const kind = resolveTransportKind(env.LLM_TRANSPORT);
   const sessionStore = options.sessionStore ?? createInMemorySessionStore();
+  const limiter = options.concurrencyLimiter;
+  const maxConcurrency = limiter?.max ?? resolveMaxConcurrency(env.LLM_MAX_CONCURRENCY);
 
   let transport: LlmTransport;
   if (kind === 'none') {
     transport = createNullTransport();
   } else if (kind === 'api') {
-    transport = createApiTransport({
-      model: env.ANTHROPIC_MODEL,
-      apiKey: env.ANTHROPIC_API_KEY,
-      client: options.anthropicClient,
-      env,
-    });
+    transport = withConcurrencyLimit(
+      createApiTransport({
+        model: env.ANTHROPIC_MODEL,
+        apiKey: env.ANTHROPIC_API_KEY,
+        client: options.anthropicClient,
+        env,
+      }),
+      limiter ?? maxConcurrency,
+    );
   } else {
-    transport = createClaudeSessionTransport({
-      model: env.LLM_MODEL,
-      oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
-      sessionStore,
-      queryFn: options.queryFn,
-      env,
-    });
+    transport = withConcurrencyLimit(
+      createClaudeSessionTransport({
+        model: env.LLM_MODEL,
+        oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+        sessionStore,
+        queryFn: options.queryFn,
+        env,
+      }),
+      limiter ?? maxConcurrency,
+    );
   }
 
   const defaults: LlmRolesOptions = options.roles ?? { sessionId: 'unbound-session', quarter: 0 };
@@ -228,6 +269,7 @@ export function createGateway(env: GatewayEnv = {}, options: GatewayOptions = {}
     transport,
     transportKind: kind,
     sessionStore,
+    maxConcurrency,
     roles: createLlmRoles(transport, rolesOptions),
     createRoles(next: LlmRolesOptions): LlmRoles {
       return createLlmRoles(transport, { ...next, runSink: next.runSink ?? options.runSink });

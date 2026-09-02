@@ -31,8 +31,11 @@ import type { z, ZodTypeAny } from 'zod';
 import {
   DEFAULT_API_MODEL,
   DEFAULT_CLAUDE_SESSION_MODEL,
+  createConcurrencyLimiter,
   createGateway,
+  resolveMaxConcurrency,
   resolveTransportKind,
+  type ConcurrencyLimiter,
   type LlmGateway,
   type LlmTransportKind,
 } from '@frontier/llm';
@@ -78,6 +81,33 @@ export function llmEnv(): LlmEnv {
 }
 
 /**
+ * How many model calls this process will run at once.
+ *
+ * Held on the **process**, not on the gateway, and deliberately so. A quarter
+ * fans out over every rival strategist at once, and each `claude-session` call
+ * spawns a Claude Code subprocess of a couple of hundred megabytes; on a small
+ * always-on host four of those at once is the difference between a slow quarter
+ * and an out-of-memory kill that takes the whole machine's other tenants with
+ * it. The gateway is rebuilt whenever the credential changes, so a limiter
+ * built *inside* it would reset mid-flight and let a second wave of
+ * subprocesses start alongside the calls already running — the exact situation
+ * the bound exists to prevent. One limiter per process, shared by every gateway
+ * the process ever builds.
+ *
+ * The ceiling is read from `process.env` rather than from `llmEnv()`: the
+ * pasted-credential overlay can name a transport and a secret, and neither of
+ * those is a statement about how much memory this host has.
+ */
+const concurrencyLimiter = processSingleton<ConcurrencyLimiter>('llm.concurrencyLimiter', () =>
+  createConcurrencyLimiter(resolveMaxConcurrency(process.env.LLM_MAX_CONCURRENCY)),
+);
+
+/** The bound in force, for diagnostics. */
+export function maxConcurrency(): number {
+  return concurrencyLimiter.max;
+}
+
+/**
  * The process-wide gateway.
  *
  * Cached, because building one starts a session store; rebuilt whenever the
@@ -90,8 +120,13 @@ export function llmEnv(): LlmEnv {
  * answer rather than an oversight: the stored ids name Claude sessions opened
  * under the *previous* credential, and resuming one of those on a new account
  * is at best a failed call. A changed credential starts fresh threads.
+ *
+ * What a rebuild does **not** take with it is the concurrency bound: that one
+ * is handed in from the process singleton above and survives every rebuild.
  */
-const cachedGateway = createGenerationCache<LlmGateway>(() => createGateway(llmEnv()));
+const cachedGateway = createGenerationCache<LlmGateway>(() =>
+  createGateway(llmEnv(), { concurrencyLimiter }),
+);
 
 export function gateway(): LlmGateway {
   return cachedGateway();

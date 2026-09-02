@@ -4,8 +4,10 @@
  * A saved game is not a serialised world. It is the seed and the *inputs to F*:
  *
  * ```json
- * { "version": 4, "seed": 424242, "difficulty": "standard",
- *   "setup": { "companyName": "Acme AI", "founderName": "Dana Vale", "backgroundId": "consumer_ai" },
+ * { "version": 5, "seed": 424242, "difficulty": "standard",
+ *   "setup": { "companyName": "Acme AI", "founderName": "Dana Vale", "backgroundId": "consumer_ai",
+ *              "sector": "ai", "region": "north_america", "worldVersion": 2 },
+ *   "worldVersion": 2,
  *   "log": [{ "quarter": 0, "actions": [...], "gmProposal": null, "npcBundles": [] }],
  *   "checkpoint": { "quarter": 8, "state": { ... } },
  *   "queue": [...], "savedAtIso": "2027-01-01T00:00:00.000Z" }
@@ -40,27 +42,46 @@ import type {
   SessionDifficulty,
   SessionState,
   SubmittedAction,
+  WorldVersion,
 } from '@frontier/contracts';
 import {
   GmProposalBatchSchema,
+  LEGACY_WORLD_VERSION,
   NewGameSetupSchema,
   NpcActionBundleSchema,
   SESSION_DIFFICULTIES,
   SessionStateSchema,
   SubmittedActionSchema,
+  WORLD_VERSIONS,
 } from '@frontier/contracts';
 import { getEngine, createSession, DEMO_SEED } from './engine';
 
 export const SAVE_KEY = 'frontier-demo-v1';
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /**
  * Versions this build can read. A save written by any of these loads; anything
  * else is preserved untouched, never overwritten. v1 recorded only the player's
  * actions; v2 added agent proposals and checkpoints; v3 added the new-game
- * setup; v4 adds the unresolved action queue and an advisory timestamp.
+ * setup; v4 added the unresolved action queue and an advisory timestamp; v5
+ * records which world the session was built from.
  */
-export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4];
+export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
+
+/**
+ * Which world a stored file was built from, read off the file itself.
+ *
+ * The **setup** is the authority: it is the actual input to `F`, the scenario
+ * dispatcher reads `setup.worldVersion` and nothing else, and a save with no
+ * setup can only ever have been the frozen world-1 demo. The stored number is a
+ * convenience for readers — a slot row, the Continue panel — that should not
+ * have to reach inside the setup, and it is believed only when there is no
+ * setup to contradict it.
+ */
+function worldVersionOf(setup: NewGameSetup | null, stored: unknown): WorldVersion {
+  if (setup !== null) return setup.worldVersion;
+  return WORLD_VERSIONS.find((version) => version === stored) ?? LEGACY_WORLD_VERSION;
+}
 
 /** Manual save slots, beside the autosave. */
 export const SAVE_SLOT_COUNT = 3;
@@ -104,6 +125,12 @@ export interface SaveFile {
   readonly autoExecuteRoutine: boolean;
   /** The new-game setup (company name, founder name, background), or null for the default world. */
   readonly setup: NewGameSetup | null;
+  /**
+   * Which world scenario this session was built from. Derived from the setup on
+   * every write — the setup is what the dispatcher actually reads — and stored
+   * so a reader can label a save without parsing one.
+   */
+  readonly worldVersion: WorldVersion;
   /** One entry per resolved quarter, in order, holding every input to it. */
   readonly log: readonly QuarterRecord[];
   readonly checkpoint: SaveCheckpoint | null;
@@ -130,6 +157,8 @@ export interface LoadedGame {
   readonly autoExecuteRoutine: boolean;
   /** The new-game setup the save was made with, or null for the default world. */
   readonly setup: NewGameSetup | null;
+  /** Which world the replayed session was built from. */
+  readonly worldVersion: WorldVersion;
   /** Quarters that were replayed but did not commit, if any. */
   readonly rejectedQuarters: number[];
   /** True when every recorded quarter replayed and committed. */
@@ -283,6 +312,8 @@ function inspectKey(key: string): SaveInspection {
       difficulty,
       autoExecuteRoutine: parsed.autoExecuteRoutine === true,
       setup,
+      // v5 records it; a v1–v4 file states it through its setup, or is world 1.
+      worldVersion: worldVersionOf(setup, parsed.worldVersion),
       log,
       checkpoint,
       savedQuarter,
@@ -385,6 +416,7 @@ function saveFileBody(file: SaveFile): string {
     `,"difficulty":${JSON.stringify(file.difficulty)}` +
     `,"autoExecuteRoutine":${JSON.stringify(file.autoExecuteRoutine)}` +
     `,"setup":${JSON.stringify(file.setup)}` +
+    `,"worldVersion":${JSON.stringify(file.worldVersion)}` +
     `,"log":${log}` +
     `,"checkpoint":${checkpoint}` +
     `,"savedQuarter":${JSON.stringify(file.savedQuarter)}` +
@@ -453,6 +485,10 @@ export function buildSaveFile(input: {
     difficulty: input.difficulty,
     autoExecuteRoutine: input.autoExecuteRoutine,
     setup: input.setup,
+    // Derived, never passed in: the setup is what `createSession` dispatches on,
+    // so a `worldVersion` that could disagree with it would be a second answer
+    // to a question that already has one.
+    worldVersion: worldVersionOf(input.setup, null),
     log: input.log,
     checkpoint,
     savedQuarter: input.session.quarter,
@@ -580,6 +616,8 @@ export interface SlotSummary {
   readonly difficulty: SessionDifficulty | null;
   readonly companyName: string | null;
   readonly founderName: string | null;
+  /** Which world this slot holds. Null only when the slot is empty or unreadable. */
+  readonly worldVersion: WorldVersion | null;
   readonly savedAtIso: string | null;
 }
 
@@ -608,6 +646,7 @@ function summariseKey(slot: number, key: string | null): SlotSummary {
     difficulty: null,
     companyName: null,
     founderName: null,
+    worldVersion: null,
     savedAtIso: null,
   };
   const store = storage();
@@ -646,6 +685,7 @@ function summariseKey(slot: number, key: string | null): SlotSummary {
       : null,
     companyName: setup?.companyName ?? null,
     founderName: setup?.founderName ?? null,
+    worldVersion: worldVersionOf(setup, parsed.worldVersion),
     savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
   };
 }
@@ -673,6 +713,7 @@ export function importSave(text: string): SaveFile | null {
   if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) return null;
 
   const log = version === 1 ? migrateV1(value.actionLog) : parseRecords(value.log);
+  const setup = parseSetup(value.setup);
   const file: SaveFile = {
     version: SAVE_VERSION,
     seed: typeof value.seed === 'number' && Number.isFinite(value.seed) ? value.seed : DEMO_SEED,
@@ -680,7 +721,8 @@ export function importSave(text: string): SaveFile | null {
       ? (value.difficulty as SessionDifficulty)
       : 'standard',
     autoExecuteRoutine: value.autoExecuteRoutine === true,
-    setup: parseSetup(value.setup),
+    setup,
+    worldVersion: worldVersionOf(setup, value.worldVersion),
     log,
     checkpoint: version === 1 ? null : parseCheckpoint(value.checkpoint ?? null),
     savedQuarter:
@@ -790,6 +832,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     difficulty: file.difficulty,
     autoExecuteRoutine: file.autoExecuteRoutine,
     setup: file.setup,
+    worldVersion: file.worldVersion,
     rejectedQuarters,
     complete,
     replayedFrom,

@@ -16,8 +16,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { ContractMilestone, GovernmentContract, ProcurementOpportunity } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import type { ContractMilestone, GovernmentContract, ProcurementOpportunity, Sector } from '@frontier/contracts';
+import { SECTORS, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatScore } from '@frontier/shared';
 import { checkAccess } from '@frontier/simulation';
 import {
@@ -31,12 +31,14 @@ import {
   PersonChip,
   ProgressBar,
   SectionHeading,
+  SectorFilter,
   StatCard,
   Tag,
   type Column,
 } from '@/components/ui';
 import { BidBuilder } from '@/components/screens/government/BidBuilder';
 import { OpportunityCard } from '@/components/screens/government/OpportunityCard';
+import { opportunitySector, opportunitySectorCounts } from '@/components/screens/government/sectors';
 import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 
 const MILESTONE_TONE: Readonly<Record<ContractMilestone['status'], 'neutral' | 'gain' | 'warn' | 'loss' | 'info'>> = {
@@ -54,12 +56,28 @@ export default function GovernmentPage(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const [composing, setComposing] = useState<ProcurementOpportunity | null>(null);
+  const [sector, setSector] = useState<Sector | null>(null);
 
   const agencyName = useMemo(() => new Map(session.agencies.map((agency) => [agency.id, agency.shortName])), [session.agencies]);
 
   const openOpportunities = useMemo(
     () => view.opportunities.filter((opportunity) => opportunity.status === 'open' && opportunity.closeQuarter >= session.quarter),
     [view.opportunities, session.quarter],
+  );
+
+  /* --- which sectors are being bought for ----------------------------------
+      Only the programmes whose notice names a sector are counted. The control
+      appears when two or more sectors are actually open; a competition with no
+      declared sector is always shown, filtered or not, because filtering it out
+      would hide it behind a fact it does not carry. */
+  const sectorCounts = useMemo(() => opportunitySectorCounts(openOpportunities), [openOpportunities]);
+  const openSectors = useMemo(() => SECTORS.filter((entry) => (sectorCounts[entry] ?? 0) > 0), [sectorCounts]);
+  const filteredOpportunities = useMemo(
+    () =>
+      sector === null
+        ? openOpportunities
+        : openOpportunities.filter((opportunity) => opportunitySector(opportunity) === sector || opportunitySector(opportunity) === null),
+    [openOpportunities, sector],
   );
 
   const ownBids = useMemo(
@@ -170,14 +188,17 @@ export default function GovernmentPage(): React.JSX.Element {
       </div>
 
       <Panel iconName="capitol" iconTone="brand" title="Opportunities" subtitle="What is open, how it will be judged, and whether this company qualifies" bodyClassName="space-y-3.5">
-        {openOpportunities.length === 0 ? (
+        {openSectors.length < 2 ? null : (
+          <SectorFilter sectors={openSectors} value={sector} onChange={setSector} counts={sectorCounts} totalLabel="Every programme" />
+        )}
+        {filteredOpportunities.length === 0 ? (
           <EmptyState
             icon="capitol"
             title="No open competition"
             message="Agencies open competitions from their quarterly budget and the world's procurement conditions. Nothing is biddable this quarter."
           />
         ) : (
-          openOpportunities.map((opportunity) => (
+          filteredOpportunities.map((opportunity) => (
             <OpportunityCard
               key={opportunity.id}
               session={session}

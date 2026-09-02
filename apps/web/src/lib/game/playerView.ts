@@ -39,10 +39,12 @@ import { PLAYER_ID, playerCharacterOf, playerCompanyOf } from './engine';
 /**
  * What one player may know about a company that is not theirs.
  *
- * Identity, listing status, sector, market linkage and multi-audience
+ * Identity, listing status, sector, region, market linkage and multi-audience
  * reputation are public. Everything operational — headcount, compute, offices,
  * capability scores, product economics — is not. A listed company additionally
- * discloses its financial statements, because it files them.
+ * discloses its financial statements and the fundamentals derived from them,
+ * because it files them; a private company's trailing revenue and margin are
+ * exactly the kind of figure it keeps to itself.
  */
 export function redactRival(company: Company): Partial<Company> {
   const base: Partial<Company> = {
@@ -54,6 +56,10 @@ export function redactRival(company: Company): Partial<Company> {
     isPublic: company.isPublic,
     controllerPlayerId: company.controllerPlayerId,
     sectorId: company.sectorId,
+    // What a company does and where it is based are on the public register in
+    // every jurisdiction the game models; neither is a disclosure.
+    sector: company.sector,
+    region: company.region,
     foundedQuarter: company.foundedQuarter,
     headquartersCity: company.headquartersCity,
     isActive: company.isActive,
@@ -71,6 +77,7 @@ export function redactRival(company: Company): Partial<Company> {
     ...base,
     financials: company.financials,
     balanceSheet: company.balanceSheet,
+    fundamentals: company.fundamentals,
     governmentPastPerformance: company.governmentPastPerformance,
     posture: company.posture,
   };

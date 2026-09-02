@@ -10,8 +10,9 @@
  */
 
 import { useMemo, useState } from 'react';
+import type { Sector } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { formatMoney, formatMultiple, formatPct } from '@frontier/shared';
 import {
   DataTable,
   DeltaBadge,
@@ -22,15 +23,27 @@ import {
   PageHeader,
   Panel,
   ProgressBar,
+  RegionBadge,
+  SectorBadge,
+  SectorFilter,
   Sparkline,
   StatCard,
   Tag,
+  sectorOf,
+  sectorsPresent,
   type Column,
 } from '@/components/ui';
 import { useGame, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { InstrumentDrawer } from '@/components/screens/markets/InstrumentDrawer';
 import { decompositionsFrom, type DecompositionView } from '@/components/screens/markets/decomposition';
 import {
+  registerRows,
+  sectorCounts,
+  sectorRollups,
+  type RegisterRow,
+} from '@/components/screens/reporting/register';
+import {
+  anchorInputRows,
   anchorOf,
   capTableRows,
   companyNameOf,
@@ -65,6 +78,8 @@ export default function MarketsPage(): React.JSX.Element {
   const founder = usePlayerCharacter();
   const { lastOutcome } = useGame();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [tapeSector, setTapeSector] = useState<Sector | null>(null);
+  const [registerSector, setRegisterSector] = useState<Sector | null>(null);
 
   const rows = useMemo(() => instrumentRows(session, view), [session, view]);
   const decompositions = useMemo<Map<string, DecompositionView>>(
@@ -86,9 +101,43 @@ export default function MarketsPage(): React.JSX.Element {
 
   const indices = rows.filter((row) => row.instrument.kind === 'in_world_index');
   const equities = rows.filter((row) => row.instrument.kind === 'in_world_equity');
-  const aiIndex = indices.find((row) => row.instrument.symbol === 'FCAI') ?? indices[0] ?? null;
-  const semiIndex = indices.find((row) => row.instrument.symbol === 'FCSC') ?? indices[1] ?? null;
+  // World 1 lists FCAI and FCSC; world 2 lists FCW and FCIN. Nothing on this
+  // screen may name an index id, so both cards read off whatever the session
+  // actually has and fall back to a world reading when it has only one.
+  const primaryIndex = indices[0] ?? null;
+  const secondaryIndex = indices[1] ?? null;
   const ownAnchor = anchorOf(session, company.id);
+
+  /* --- the register: every company, listed or not -------------------------- */
+
+  const register = useMemo(() => registerRows(session, view), [session, view]);
+  const rollups = useMemo(() => sectorRollups(register), [register]);
+  const counts = useMemo(() => sectorCounts(register), [register]);
+  const presentSectors = useMemo(() => sectorsPresent(register), [register]);
+  const multiSector = presentSectors.length > 1;
+
+  const tapeRows = useMemo(
+    () =>
+      tapeSector === null
+        ? rows
+        : rows.filter((row) => row.company !== null && sectorOf(row.company) === tapeSector),
+    [rows, tapeSector],
+  );
+  const registerFiltered = useMemo(
+    () => (registerSector === null ? register : register.filter((row) => row.sector === registerSector)),
+    [register, registerSector],
+  );
+
+  /** How many instruments each sector has on the tape, for the tape's filter. */
+  const tapeCounts = useMemo(() => {
+    const out: Partial<Record<Sector, number>> = {};
+    for (const row of rows) {
+      if (row.company === null) continue;
+      const sector = sectorOf(row.company);
+      out[sector] = (out[sector] ?? 0) + 1;
+    }
+    return out;
+  }, [rows]);
 
   /* --- positions ---------------------------------------------------------- */
 
@@ -146,14 +195,33 @@ export default function MarketsPage(): React.JSX.Element {
       render: (row) => (
         <span className="min-w-0">
           <span className="block truncate text-[13px] text-ink sm:text-[12px]">{row.companyName}</span>
-          <span className="block truncate text-[10px] text-ink-faint">
-            {humanise(row.instrument.kind)}
-            {row.instrument.sectorId === null ? '' : ` · ${humanise(row.instrument.sectorId)}`}
-          </span>
+          {row.company === null ? (
+            <span className="block truncate text-[10px] text-ink-faint">
+              {humanise(row.instrument.kind)}
+              {row.instrument.sectorId === null ? '' : ` · ${humanise(row.instrument.sectorId)}`}
+            </span>
+          ) : (
+            <span className="mt-0.5 flex flex-wrap items-center gap-1">
+              <SectorBadge sector={sectorOf(row.company)} />
+              <RegionBadge region={row.company.region ?? 'north_america'} />
+            </span>
+          )}
         </span>
       ),
       sortable: true,
       sortValue: (row) => row.companyName,
+    },
+    {
+      key: 'sector',
+      header: 'Sector',
+      cardHidden: true,
+      hideOnMobile: true,
+      width: '112px',
+      mono: false,
+      render: (row) =>
+        row.company === null ? <span className="text-[10px] text-ink-faint">Index</span> : <SectorBadge sector={sectorOf(row.company)} />,
+      sortable: true,
+      sortValue: (row) => (row.company === null ? 'zz_index' : sectorOf(row.company)),
     },
     {
       key: 'trend',
@@ -194,6 +262,50 @@ export default function MarketsPage(): React.JSX.Element {
       render: (row) => (row.quote === null || row.quote.marketCapUsd === 0 ? '—' : formatMoney(row.quote.marketCapUsd)),
       sortable: true,
       sortValue: (row) => row.quote?.marketCapUsd ?? 0,
+    },
+    {
+      key: 'revenue',
+      header: 'Revenue',
+      cardLabel: 'Trailing revenue',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) => (row.fundamentals === null ? '—' : formatMoney(row.fundamentals.revenueTtmUsd)),
+      sortable: true,
+      sortValue: (row) => row.fundamentals?.revenueTtmUsd ?? 0,
+    },
+    {
+      key: 'growth',
+      header: 'Growth',
+      cardLabel: 'Revenue growth, year on year',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) =>
+        row.fundamentals === null ? (
+          <span className="text-ink-faint">—</span>
+        ) : (
+          <DeltaBadge value={row.fundamentals.revenueGrowthYoY} format="percent" bare />
+        ),
+      sortable: true,
+      sortValue: (row) => row.fundamentals?.revenueGrowthYoY ?? 0,
+    },
+    {
+      key: 'margin',
+      header: 'Margin',
+      cardLabel: 'Gross margin',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) => (row.fundamentals === null ? '—' : formatPct(row.fundamentals.grossMarginPct)),
+      sortable: true,
+      sortValue: (row) => row.fundamentals?.grossMarginPct ?? 0,
+    },
+    {
+      key: 'multiple',
+      header: 'Multiple',
+      cardLabel: 'Capitalisation over revenue',
+      align: 'right',
+      render: (row) => (row.revenueMultiple === null ? '—' : `${formatCount(row.revenueMultiple)}x`),
+      sortable: true,
+      sortValue: (row) => row.revenueMultiple ?? 0,
     },
     {
       key: 'anchor',
@@ -272,6 +384,99 @@ export default function MarketsPage(): React.JSX.Element {
     },
   ];
 
+  /* --- the register table -------------------------------------------------- */
+
+  const registerColumns: readonly Column<RegisterRow>[] = [
+    {
+      key: 'company',
+      header: 'Company',
+      render: (row) => (
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className={`truncate text-[13px] sm:text-[12px] ${row.isOwn ? 'font-semibold text-brand' : 'text-ink'}`}>{row.name}</span>
+            {row.ticker === null ? null : <span className="figure shrink-0 text-[10px] text-ink-faint">{row.ticker}</span>}
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-1">
+            <SectorBadge sector={row.sector} />
+            <RegionBadge region={row.region} />
+          </span>
+        </span>
+      ),
+      sortable: true,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: 'listing',
+      header: 'Listing',
+      width: '92px',
+      mono: false,
+      render: (row) => <Tag tone={row.isPublic ? 'info' : 'neutral'} dot>{row.isPublic ? 'listed' : 'private'}</Tag>,
+      sortable: true,
+      sortValue: (row) => (row.isPublic ? 0 : 1),
+    },
+    {
+      key: 'value',
+      header: 'Value',
+      cardLabel: 'Market value',
+      align: 'right',
+      render: (row) =>
+        row.valueUsd === null ? (
+          <span
+            className="text-ink-faint"
+            title="Privately held: no quote exists and a private company's anchor is not public information."
+          >
+            undisclosed
+          </span>
+        ) : (
+          <span title={row.valueBasis === 'quote' ? 'Last quoted capitalisation.' : 'Your own fundamental anchor.'}>
+            {formatMoney(row.valueUsd)}
+          </span>
+        ),
+      sortable: true,
+      sortValue: (row) => row.valueUsd ?? -1,
+    },
+    {
+      key: 'revenue',
+      header: 'Revenue',
+      cardLabel: 'Trailing revenue',
+      align: 'right',
+      render: (row) => (row.revenueTtmUsd === null ? '—' : formatMoney(row.revenueTtmUsd)),
+      sortable: true,
+      sortValue: (row) => row.revenueTtmUsd ?? -1,
+    },
+    {
+      key: 'growth',
+      header: 'Growth',
+      cardLabel: 'Revenue growth, year on year',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) =>
+        row.revenueGrowthYoY === null ? <span className="text-ink-faint">—</span> : <DeltaBadge value={row.revenueGrowthYoY} format="percent" bare />,
+      sortable: true,
+      sortValue: (row) => row.revenueGrowthYoY ?? -1,
+    },
+    {
+      key: 'margin',
+      header: 'Margin',
+      cardLabel: 'Gross margin',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) => (row.grossMarginPct === null ? '—' : formatPct(row.grossMarginPct)),
+      sortable: true,
+      sortValue: (row) => row.grossMarginPct ?? -1,
+    },
+    {
+      key: 'multiple',
+      header: 'Multiple',
+      cardLabel: 'Value over revenue',
+      align: 'right',
+      hideOnMobile: true,
+      render: (row) => (row.revenueMultiple === null ? '—' : `${formatCount(row.revenueMultiple)}x`),
+      sortable: true,
+      sortValue: (row) => row.revenueMultiple ?? -1,
+    },
+  ];
+
   const allBeliefs = session.beliefs
     .slice()
     .sort((a, b) => Math.abs(b.probability - b.priorProbability) - Math.abs(a.probability - a.priorProbability));
@@ -285,7 +490,7 @@ export default function MarketsPage(): React.JSX.Element {
         subtitle="Prices reflect what the market believes, not what the database knows. Open any name for the working."
         actions={
           <Tag tone="neutral">
-            {equities.length} equities · {indices.length} indices
+            {register.length} companies · {equities.length} listed · {indices.length} indices
           </Tag>
         }
       />
@@ -293,25 +498,34 @@ export default function MarketsPage(): React.JSX.Element {
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         <StatCard
           iconName="chart"
-          label="AI index"
-          value={aiIndex === null || aiIndex.quote === null ? '—' : formatCount(aiIndex.quote.price)}
-          delta={aiIndex?.quote?.return}
-          spark={aiIndex?.history}
-          hint={aiIndex === null ? 'Capitalisation-weighted' : aiIndex.instrument.name}
+          label={primaryIndex === null ? 'Market index' : primaryIndex.instrument.symbol}
+          value={primaryIndex === null || primaryIndex.quote === null ? '—' : formatCount(primaryIndex.quote.price)}
+          delta={primaryIndex?.quote?.return}
+          spark={primaryIndex?.history}
+          hint={primaryIndex === null ? 'Capitalisation-weighted' : primaryIndex.instrument.name}
         />
+        {secondaryIndex === null ? (
+          <StatCard
+            iconName="gauge"
+            label="Volatility regime"
+            value={formatPct(view.world.capitalMarkets.volatility)}
+            hint="Feeds the noise term of every quarterly return"
+          />
+        ) : (
+          <StatCard
+            iconName="network"
+            label={secondaryIndex.instrument.symbol}
+            value={secondaryIndex.quote === null ? '—' : formatCount(secondaryIndex.quote.price)}
+            delta={secondaryIndex.quote?.return}
+            spark={secondaryIndex.history}
+            hint={secondaryIndex.instrument.name}
+          />
+        )}
         <StatCard
-          iconName="network"
-          label="Compute index"
-          value={semiIndex === null || semiIndex.quote === null ? '—' : formatCount(semiIndex.quote.price)}
-          delta={semiIndex?.quote?.return}
-          spark={semiIndex?.history}
-          hint={semiIndex === null ? 'Semiconductors and compute' : semiIndex.instrument.name}
-        />
-        <StatCard
-          iconName="gauge"
-          label="Volatility regime"
-          value={formatPct(view.world.capitalMarkets.volatility)}
-          hint="Feeds the noise term of every quarterly return"
+          iconName="ledger"
+          label="Sector multiples"
+          value={formatMultiple(view.world.capitalMarkets.sectorMultiples)}
+          hint="What a dollar of revenue is worth this quarter"
         />
         <StatCard
           iconName="coins"
@@ -320,6 +534,94 @@ export default function MarketsPage(): React.JSX.Element {
           hint={company.instrumentId === null ? 'Unlisted — fundamental anchor' : 'Anchor, not price'}
         />
       </div>
+
+      {/* --- the economy, by sector -------------------------------------------
+          Only where there is more than one sector to compare. A world-version-1
+          save has a single sector, and a table of one row above the tape would
+          be a heading with nothing under it. */}
+      {!multiSector ? null : (
+        <Panel
+          iconName="globe"
+          iconTone="brand"
+          title="The economy by sector"
+          flush
+          subtitle="Aggregates cover the public figures only: a private company contributes a name and nothing else."
+        >
+          <DataTable
+            columns={[
+              {
+                key: 'sector',
+                header: 'Sector',
+                mono: false,
+                render: (row) => <SectorBadge sector={row.sector} size="md" />,
+                sortable: true,
+                sortValue: (row) => row.sector,
+              },
+              {
+                key: 'companies',
+                header: 'Companies',
+                align: 'right',
+                render: (row) => `${formatCount(row.companies)}`,
+                sortable: true,
+                sortValue: (row) => row.companies,
+              },
+              {
+                key: 'listed',
+                header: 'Listed',
+                align: 'right',
+                hideOnMobile: true,
+                render: (row) => formatCount(row.listed),
+                sortable: true,
+                sortValue: (row) => row.listed,
+              },
+              {
+                key: 'cap',
+                header: 'Market cap',
+                cardLabel: 'Listed market cap',
+                align: 'right',
+                render: (row) => (row.marketCapUsd === 0 ? '—' : formatMoney(row.marketCapUsd)),
+                sortable: true,
+                sortValue: (row) => row.marketCapUsd,
+              },
+              {
+                key: 'revenue',
+                header: 'Revenue',
+                cardLabel: 'Disclosed revenue',
+                align: 'right',
+                render: (row) => (row.revenueTtmUsd === 0 ? '—' : formatMoney(row.revenueTtmUsd)),
+                sortable: true,
+                sortValue: (row) => row.revenueTtmUsd,
+              },
+              {
+                key: 'margin',
+                header: 'Margin',
+                align: 'right',
+                hideOnMobile: true,
+                render: (row) => (row.grossMarginPct === null ? '—' : formatPct(row.grossMarginPct)),
+                sortable: true,
+                sortValue: (row) => row.grossMarginPct ?? 0,
+              },
+              {
+                key: 'multiple',
+                header: 'Multiple',
+                cardLabel: 'Cap over revenue',
+                align: 'right',
+                render: (row) => (row.blendedMultiple === null ? '—' : `${formatCount(row.blendedMultiple)}x`),
+                sortable: true,
+                sortValue: (row) => row.blendedMultiple ?? 0,
+              },
+            ]}
+            rows={rollups}
+            rowKey={(row) => row.sector}
+            onRowClick={(row) => setRegisterSector((current) => (current === row.sector ? null : row.sector))}
+            isHighlighted={(row) => row.sector === registerSector}
+            dense
+            cardMode="auto"
+            cardTitleKey="sector"
+            initialSort={{ key: 'cap', direction: 'desc' }}
+          />
+        </Panel>
+      )}
 
       <Panel
         iconName="chart"
@@ -335,9 +637,20 @@ export default function MarketsPage(): React.JSX.Element {
           </span>
         }
       >
+        {!multiSector ? null : (
+          <div className="border-b border-hair px-3 pt-3 pb-2">
+            <SectorFilter
+              sectors={presentSectors}
+              value={tapeSector}
+              onChange={setTapeSector}
+              counts={tapeCounts}
+              totalLabel="Everything"
+            />
+          </div>
+        )}
         <DataTable
           columns={tapeColumns}
-          rows={rows}
+          rows={tapeRows}
           rowKey={(row) => row.instrument.id}
           onRowClick={(row) => setOpenId(row.instrument.id)}
           isHighlighted={(row) => row.instrument.companyId === company.id}
@@ -345,7 +658,52 @@ export default function MarketsPage(): React.JSX.Element {
           cardMode="auto"
           cardTitleKey="name"
           initialSort={{ key: 'cap', direction: 'desc' }}
-          empty={<EmptyState icon="chart" title="No instruments" message="This session has no in-world exchange." />}
+          empty={
+            <EmptyState
+              icon="chart"
+              title={tapeSector === null ? 'No instruments' : 'Nothing listed in this sector'}
+              message={
+                tapeSector === null
+                  ? 'This session has no in-world exchange.'
+                  : 'Every company in this sector is privately held. They are all on the register below.'
+              }
+            />
+          }
+        />
+      </Panel>
+
+      {/* --- the register ------------------------------------------------------
+          The tape only carries the companies that are listed. This is everyone
+          the player can see, which in the multi-sector world is most of the
+          economy: private rivals show a name, a sector and a region, and their
+          figures are absent rather than invented. */}
+      <Panel
+        iconName="building"
+        iconTone="info"
+        title="Company register"
+        flush
+        subtitle="Every company on the public register. A private company discloses nothing beyond what it does and where it is."
+        actions={
+          <Tag tone="neutral">
+            {registerFiltered.length} of {register.length}
+          </Tag>
+        }
+      >
+        {!multiSector ? null : (
+          <div className="border-b border-hair px-3 pt-3 pb-2">
+            <SectorFilter sectors={presentSectors} value={registerSector} onChange={setRegisterSector} counts={counts} />
+          </div>
+        )}
+        <DataTable
+          columns={registerColumns}
+          rows={registerFiltered}
+          rowKey={(row) => row.companyId}
+          isHighlighted={(row) => row.isOwn}
+          dense
+          cardMode="auto"
+          cardTitleKey="company"
+          initialSort={{ key: 'value', direction: 'desc' }}
+          empty={<EmptyState compact icon="building" title="No companies on the register" message="Nothing is visible to this company yet." />}
         />
       </Panel>
 
@@ -390,12 +748,10 @@ export default function MarketsPage(): React.JSX.Element {
                 ]}
               />
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {Object.entries(ownAnchor.inputs).map(([key, value]) => (
-                  <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
-                    <span className="truncate text-[10px] text-ink-faint">{key}</span>
-                    <span className="figure text-[11px] text-ink-dim">
-                      {Math.abs(value) >= 1000 ? formatMoney(value) : formatPct(value)}
-                    </span>
+                {anchorInputRows(ownAnchor).map((input) => (
+                  <div key={input.key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
+                    <span className="truncate text-[10px] text-ink-faint">{input.label}</span>
+                    <span className="figure text-[11px] text-ink-dim">{input.value}</span>
                   </div>
                 ))}
               </div>

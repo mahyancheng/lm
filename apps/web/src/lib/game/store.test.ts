@@ -73,6 +73,7 @@ describe('demo store surfaces', () => {
       difficulty: 'standard',
       autoExecuteRoutine: false,
       setup: null,
+      worldVersion: 1,
       log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [] }],
       checkpoint: null,
       savedQuarter: 1,

@@ -4,13 +4,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  NEW_GAME_BACKGROUNDS,
-  SESSION_DIFFICULTIES,
+  ALL_BACKGROUNDS,
+  REGIONS,
+  SECTORS,
   quarterLabel,
-  type BackgroundId,
+  type NewGameSetup,
   type SessionDifficulty,
 } from '@frontier/contracts';
-import { formatMoney } from '@frontier/shared';
+import { formatCount } from '@frontier/shared';
 import {
   DEMO_SEED,
   continueLabel,
@@ -28,17 +29,8 @@ import {
 } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
+import { AdvancedSetup, SetupChat } from '@/components/screens/start';
 import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
-
-/** The longest a company or founder name may be, mirroring `NewGameSetupSchema`. */
-const NAME_MAX = 40;
-
-const DIFFICULTY_BLURB: Readonly<Record<SessionDifficulty, string>> = {
-  sandbox: 'A quiet world. Two events a quarter at most, and rivals that rarely reach for your throat.',
-  standard: 'The intended game. Three events a quarter, rivals that plan, and a market that reprices you honestly.',
-  hard: 'A loud world. Four events a quarter and rivals that take the opening you leave them.',
-  brutal: 'Five events a quarter, the full impact budget, and no allowance for a slow start.',
-};
 
 /* -------------------------------------------------------------------------- */
 /*  Illustration                                                               */
@@ -220,7 +212,7 @@ const FEATURES: readonly {
     icon: 'people',
     tone: 'info',
     title: 'Everyone wants something',
-    body: 'Sixteen people with goals, memory and agency. Directors you have to keep, rivals who take the opening you leave.',
+    body: 'People with goals, memory and agency. Directors you have to keep, rivals who take the opening you leave.',
   },
   {
     icon: 'chart',
@@ -236,16 +228,13 @@ const FEATURES: readonly {
 
 export default function LandingPage(): React.JSX.Element {
   const router = useRouter();
-  const { hydrated, notice, session } = useGame();
+  const { hydrated, notice } = useGame();
   const { deleteSlot, dismissNotice, loadFromSlot, loadGame, newGame } = useGameActions();
   const llm = useLlm();
   const { loading, progress } = useLoading();
 
   const [seedText, setSeedText] = useState(String(DEMO_SEED));
   const [difficulty, setDifficulty] = useState<SessionDifficulty>('standard');
-  const [companyName, setCompanyName] = useState('');
-  const [founderName, setFounderName] = useState('');
-  const [backgroundId, setBackgroundId] = useState<BackgroundId>('enterprise_ai');
   const [saveState, setSaveState] = useState<SaveInspection | null>(null);
   const [slots, setSlots] = useState<readonly SlotSummary[]>([]);
   const [showMultiplayer, setShowMultiplayer] = useState(false);
@@ -262,11 +251,6 @@ export default function LandingPage(): React.JSX.Element {
   const savePreserved = saveState?.status === 'unsupported';
   /** Every replay- or slot-touching control locks while any of them runs. */
   const busy = resuming || loading || slotBusy !== null;
-
-  const trimmedCompany = companyName.trim();
-  const trimmedFounder = founderName.trim();
-  const namesValid =
-    trimmedCompany.length > 0 && trimmedCompany.length <= NAME_MAX && trimmedFounder.length > 0 && trimmedFounder.length <= NAME_MAX;
 
   // localStorage does not re-render React, and every slot write, delete and
   // load announces itself through the store's notice — so the notice is also
@@ -292,19 +276,24 @@ export default function LandingPage(): React.JSX.Element {
 
   const supabaseReady = isSupabaseConfigured();
 
-  function startNewGame(): void {
-    // Founding during a replay would race it: the in-flight load would land on
-    // top of the fresh company. The buttons are disabled too; this guard covers
-    // the keyboard.
+  /**
+   * Found the company the conversation settled on.
+   *
+   * The setup arriving here has already been through `NewGameSetupSchema` in
+   * `setupFromProposal`, and it carries `worldVersion: 2` — a game founded on
+   * this screen is a multi-sector game. Founding during a replay would race it:
+   * the in-flight load would land on top of the fresh company, so the guard
+   * covers the keyboard as well as the disabled button.
+   */
+  function foundCompany(setup: NewGameSetup): void {
     if (busy) return;
-    if (!namesValid) {
-      // A phone may have the button in view before the fields; send the founder
-      // to them rather than starting a nameless company.
-      document.getElementById('new-company')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-    newGame({ seed, difficulty, setup: { companyName: trimmedCompany, founderName: trimmedFounder, backgroundId } });
+    newGame({ seed, difficulty, setup });
     router.push(HOME_ROUTE);
+  }
+
+  /** The hero button: the conversation is where a company is actually named. */
+  function goToConversation(): void {
+    document.getElementById('new-company')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   async function continueGame(): Promise<void> {
@@ -372,16 +361,16 @@ export default function LandingPage(): React.JSX.Element {
         <section className="order-2 grid items-center gap-6 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
           <div className="animate-pop-in flex min-w-0 flex-col gap-4">
             <span className="label-caps inline-flex w-fit items-center rounded-pill bg-brand-wash px-3 py-1 text-brand">
-              2027 Q1 · eight people · one thesis
+              2027 Q1 · {formatCount(SECTORS.length)} sectors · {formatCount(REGIONS.length)} regions
             </span>
             <h1 className="max-w-2xl text-[30px] leading-[1.1] font-extrabold tracking-tight text-ink sm:text-[42px]">
-              Found a company. Outthink everybody else in the industry.
+              Found a company. Outthink everybody else in the economy.
             </h1>
             <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-dim sm:text-[14px]">
-              You start with <span className="figure font-semibold text-ink">{formatMoney(4_000_000)}</span>, eight people and one thesis,
-              on connection level <span className="figure font-semibold text-ink">24</span> — in a world where the sovereign fund&rsquo;s
-              chief investment officer sits on <span className="figure font-semibold text-ink">93</span>. Everything this game is about is
-              visible in that gap on the very first screen.
+              Robotics, manufacturing, energy, logistics, consumer — or the models everybody else is buying. Tell the Chief of Staff where
+              you want to begin and the world is built around that answer: {formatCount(ALL_BACKGROUNDS.length)} opening positions across{' '}
+              {formatCount(SECTORS.length)} sectors and {formatCount(REGIONS.length)} regions, each with its own price for talent, power and
+              government money.
             </p>
 
             {/* Thumb buttons: full width on a phone, stacked in intent order —
@@ -401,7 +390,7 @@ export default function LandingPage(): React.JSX.Element {
               <button
                 type="button"
                 className={cx('btn btn-lg press-pop w-full sm:w-auto', save === null ? 'btn-primary' : '')}
-                onClick={startNewGame}
+                onClick={goToConversation}
                 disabled={busy}
               >
                 <Icon name="plus" size={18} accent={save === null ? 'current' : 'brand'} />
@@ -410,7 +399,7 @@ export default function LandingPage(): React.JSX.Element {
             </div>
 
             <p className="text-[11.5px] leading-relaxed text-ink-faint">
-              Seven companies, sixteen people, a seventeen-node Frontier Map and two open procurements — all running locally in this
+              Two dozen companies, a Frontier Map that spans every sector, and open procurements in all of them — running locally in this
               browser. No sign-up needed.
             </p>
           </div>
@@ -440,132 +429,29 @@ export default function LandingPage(): React.JSX.Element {
         <div id="new-company" className="order-3 grid scroll-mt-4 gap-4 lg:order-4 lg:grid-cols-3">
           <Panel
             title="Start a new company"
-            subtitle="Name it and choose how it starts"
+            subtitle="Tell the Chief of Staff where you want to begin"
             iconName="building"
             iconTone="brand"
             className={cx(save === null ? 'order-1' : 'order-2', 'lg:order-1 lg:col-span-2')}
           >
-            {/* --- identity: who you are and what you are building ---------- */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className="label-caps-faint">Company name</span>
-                <input
-                  className="field mt-1 min-h-11 sm:min-h-0"
-                  value={companyName}
-                  onChange={(event) => setCompanyName(event.target.value.slice(0, NAME_MAX))}
-                  maxLength={NAME_MAX}
-                  placeholder="e.g. Northwind AI"
-                  aria-label="Company name"
-                  autoComplete="off"
+            {/* The founding is a conversation, not a form. Six sectors, six
+                regions and fifteen openings do not fit in one grid on a phone —
+                and a founder can say the whole thing in one sentence anyway.
+                Every answer is still a tap if they would rather not type. */}
+            <SetupChat
+              busy={busy}
+              llmAvailable={llm.available}
+              onFound={foundCompany}
+              advanced={
+                <AdvancedSetup
+                  seedText={seedText}
+                  onSeedText={setSeedText}
+                  difficulty={difficulty}
+                  onDifficulty={setDifficulty}
+                  disabled={busy}
                 />
-              </label>
-              <label className="block">
-                <span className="label-caps-faint">Founder name</span>
-                <input
-                  className="field mt-1 min-h-11 sm:min-h-0"
-                  value={founderName}
-                  onChange={(event) => setFounderName(event.target.value.slice(0, NAME_MAX))}
-                  maxLength={NAME_MAX}
-                  placeholder="e.g. Rae Fontaine"
-                  aria-label="Founder name"
-                  autoComplete="off"
-                />
-              </label>
-            </div>
-
-            {/* --- background: how the company starts ----------------------- */}
-            <fieldset className="mt-4 min-w-0">
-              <legend className="label-caps-faint">Starting background</legend>
-              <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-                {NEW_GAME_BACKGROUNDS.map((background) => {
-                  const selected = backgroundId === background.id;
-                  return (
-                    <button
-                      key={background.id}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => setBackgroundId(background.id)}
-                      className={cx(
-                        'press-pop flex min-h-11 w-full flex-col gap-2 rounded-card border p-3 text-left',
-                        selected ? 'icon-knockout-wash border-brand bg-brand-wash' : 'border-hair bg-raised hover:border-brand',
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <IconChip name={background.icon as IconName} tone={selected ? 'brand' : 'neutral'} size="sm" />
-                        <span className="min-w-0">
-                          <span className="block text-[13px] font-bold text-ink">{background.label}</span>
-                          <span className="block text-[10.5px] text-ink-faint">{background.tagline}</span>
-                        </span>
-                        {selected ? <Icon name="check" size={15} accent="brand" className="ml-auto" /> : null}
-                      </div>
-                      <p className="text-[11.5px] leading-relaxed text-ink-dim">{background.blurb}</p>
-                      <dl className="flex flex-wrap gap-x-3 gap-y-1">
-                        {background.highlights.map((highlight) => (
-                          <div key={highlight.label} className="flex items-baseline gap-1">
-                            <dt className="label-caps-faint">{highlight.label}</dt>
-                            <dd className="figure text-[11px] font-semibold text-ink">{highlight.value}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-
-            {/* --- the two world dials -------------------------------------- */}
-            <div className="mt-4 grid gap-4 border-t border-hair pt-4 sm:grid-cols-[170px_1fr]">
-              <label className="block">
-                <span className="label-caps-faint">Seed</span>
-                <input
-                  className="field mt-1 min-h-11 sm:min-h-0"
-                  value={seedText}
-                  onChange={(event) => setSeedText(event.target.value.replace(/[^\d-]/g, ''))}
-                  inputMode="numeric"
-                  aria-label="Session seed"
-                />
-                <span className="mt-1.5 block text-[10.5px] text-ink-faint">
-                  The same seed and the same decisions always produce the same world.
-                </span>
-              </label>
-
-              <fieldset className="min-w-0">
-                <legend className="label-caps-faint">Difficulty</legend>
-                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                  {SESSION_DIFFICULTIES.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      aria-pressed={difficulty === option}
-                      onClick={() => setDifficulty(option)}
-                      className={cx(
-                        'btn tap-target press-pop capitalize',
-                        difficulty === option ? 'icon-knockout-wash border-brand bg-brand-wash text-brand' : '',
-                      )}
-                    >
-                      {difficulty === option ? <Icon name="check" size={15} accent="inherit" /> : null}
-                      {option}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2.5 text-[12px] leading-relaxed text-ink-dim">{DIFFICULTY_BLURB[difficulty]}</p>
-              </fieldset>
-            </div>
-
-            <div className="mt-5 flex flex-col gap-2 border-t border-hair pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-              <button
-                type="button"
-                className="btn btn-primary tap-target press-pop w-full sm:w-auto"
-                onClick={startNewGame}
-                disabled={!namesValid || busy}
-              >
-                <Icon name="plus" size={16} accent="current" />
-                {trimmedCompany.length > 0 ? `Found ${trimmedCompany} — 2027 Q1` : 'Found your company — 2027 Q1'}
-              </button>
-              <span className="text-[11px] text-ink-faint">
-                {namesValid ? `Seed ${seed}, ${difficulty} world.` : 'Enter a company and founder name to start.'}
-              </span>
-            </div>
+              }
+            />
           </Panel>
 
           <div className={cx('flex flex-col gap-4 lg:order-2', save === null ? 'order-2' : 'order-1')}>
@@ -829,7 +715,10 @@ SUPABASE_SERVICE_ROLE_KEY=`}
 
         {/* --- footer ------------------------------------------------------ */}
         <footer className="order-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-hair pt-4 text-[10.5px] text-ink-faint">
-          <span>Engine: deterministic, in-browser, {session.companies.length} companies loaded.</span>
+          {/* The session in memory before a founding is the frozen world-1
+              demo, so its company count is not what a new game will hold — the
+              engine fact is the one worth stating here. */}
+          <span>Engine: deterministic and in-browser — the same resolver a shared session runs on the server.</span>
           <span className="flex items-center gap-1.5">
             <Icon name="live" size={13} accent={llm.available ? 'gain' : 'neutral'} />
             {llm.available

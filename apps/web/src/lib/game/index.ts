@@ -115,6 +115,30 @@ export type {
 } from './persistence';
 
 export {
+  EMPTY_SETUP_PROPOSAL,
+  SETUP_ASK_ORDER,
+  SETUP_CONFIDENCE,
+  SETUP_CONFIRM_BELOW,
+  SETUP_EXAMPLES,
+  SETUP_NAME_MAX,
+  SETUP_OPENING,
+  applySetupChoice,
+  clearSetupSlot,
+  looksLikeName,
+  mergeSetupProposals,
+  nextSetupSlot,
+  normaliseSetupProposal,
+  parseSetupMessage,
+  setupAcknowledgement,
+  setupFromProposal,
+  setupQuestion,
+  setupQuickReplies,
+  setupSummaryLine,
+  setupUnderstood,
+} from './setupChat';
+export type { SetupQuickReply, SetupUnderstood } from './setupChat';
+
+export {
   DEFAULT_COMPANY_NAME,
   DEFAULT_FOUNDER_NAME,
   DEMO_START_YEAR,

@@ -206,6 +206,47 @@ describe('newGame founds a company that survives a refresh', () => {
     expect(state().session.quarter).toBe(0);
     expect(playerCompanyName(state())).toBe('Northwind AI');
   });
+
+  it('carries the setup\'s world version into the session, the settings and the save', async () => {
+    const { state, actions } = await mountGame();
+
+    const setup = NewGameSetupSchema.parse({
+      companyName: 'Kestrel Dynamics',
+      founderName: 'Rae Fontaine',
+      backgroundId: 'humanoid_lab',
+      sector: 'robotics',
+      region: 'east_asia',
+      worldVersion: 2,
+    });
+    let rawAfterCall: string | null = null;
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup });
+      rawAfterCall = storedRaw(SAVE_KEY);
+    });
+
+    // The setup is what the scenario dispatcher reads, so the built world is
+    // the one the chat chose — not the frozen demo the store started on.
+    expect(state().settings.worldVersion).toBe(2);
+    expect(state().session.config.worldVersion).toBe(2);
+    expect(playerCompanyName(state())).toBe('Kestrel Dynamics');
+
+    const parsed = JSON.parse(rawAfterCall!) as Record<string, unknown>;
+    expect(parsed.worldVersion).toBe(2);
+    expect((parsed.setup as { worldVersion: number }).worldVersion).toBe(2);
+  });
+
+  it('founds the frozen world when no setup is given, and says so', async () => {
+    const { state, actions } = await mountGame();
+    let rawAfterCall: string | null = null;
+    await act(async () => {
+      actions().newGame({ seed: SEED });
+      rawAfterCall = storedRaw(SAVE_KEY);
+    });
+
+    expect(state().settings.worldVersion).toBe(1);
+    expect(state().session.config.worldVersion).toBe(1);
+    expect((JSON.parse(rawAfterCall!) as Record<string, unknown>).worldVersion).toBe(1);
+  });
 });
 
 describe('the open queue rides the autosave', () => {

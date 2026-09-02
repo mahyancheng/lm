@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { ResearchProject, TechNode } from '@frontier/contracts';
+import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { heldComputeUnits, researchEnvelopeUsd } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
@@ -30,6 +30,8 @@ import {
   PageHeader,
   Panel,
   ProgressBar,
+  SectorBadge,
+  SectorFilter,
   SliderField,
   StatCard,
   TabBar,
@@ -42,6 +44,7 @@ import { FrontierMap } from '@/components/screens/research/FrontierMap';
 import { InnovationPanel } from '@/components/screens/research/InnovationPanel';
 import { NodeDrawer } from '@/components/screens/research/NodeDrawer';
 import { EDGE_STYLE, STATE_STYLE } from '@/components/screens/research/graphLayout';
+import { nodeIdsInSector, tracksOf } from '@/components/screens/research/tracks';
 import {
   useGameActions,
   useOutcome,
@@ -78,6 +81,7 @@ export default function ResearchPage(): React.JSX.Element {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<MapFilter>('all');
+  const [trackSector, setTrackSector] = useState<Sector | null>(null);
   const [budgetText, setBudgetText] = useState('');
   const [budgetResult, setBudgetResult] = useState<ReturnType<typeof validateIntent> | null>(null);
   const [trainingSplit, setTrainingSplit] = useState(company.compute.trainingAllocation);
@@ -101,6 +105,7 @@ export default function ResearchPage(): React.JSX.Element {
   }, [view.visibleCompanies]);
 
   const nodeTitles = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node.title])), [graph.nodes]);
+  const nodeSectors = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node.sector])), [graph.nodes]);
 
   /* --- what moved when the last quarter resolved -------------------------- */
   const moves = useMemo<ConfidenceMove[]>(() => {
@@ -138,12 +143,35 @@ export default function ResearchPage(): React.JSX.Element {
     [graph.nodes, company.id],
   );
 
+  /* --- sector tracks ------------------------------------------------------
+      Declared in world 2, derived from the nodes in world 1. Two lanes or more
+      is what turns the sector controls on; a single-lane graph gets the map it
+      has always had. */
+  const tracks = useMemo(() => tracksOf(graph), [graph]);
+  const trackSectors = useMemo(() => tracks.map((track) => track.sector), [tracks]);
+  const multiTrack = new Set(trackSectors).size > 1;
+  const trackCounts = useMemo(() => {
+    const out: Partial<Record<Sector, number>> = {};
+    for (const track of tracks) out[track.sector] = (out[track.sector] ?? 0) + track.nodes.length;
+    return out;
+  }, [tracks]);
+
   const highlightIds = useMemo<ReadonlySet<string> | null>(() => {
-    if (filter === 'all') return null;
-    if (filter === 'edge') return new Set(edgeNodes.map((node) => node.id));
-    if (filter === 'moved') return changedNodeIds;
-    return new Set(ownProjects.map((project) => project.targetNodeId));
-  }, [filter, edgeNodes, changedNodeIds, ownProjects]);
+    // The sector filter composes with the map filter: pick "your programmes" in
+    // energy and you get the intersection, not the last one you touched.
+    const bySector = trackSector === null ? null : nodeIdsInSector(tracks, trackSector);
+    const byFilter =
+      filter === 'all'
+        ? null
+        : filter === 'edge'
+          ? new Set(edgeNodes.map((node) => node.id))
+          : filter === 'moved'
+            ? changedNodeIds
+            : new Set(ownProjects.map((project) => project.targetNodeId));
+    if (bySector === null) return byFilter;
+    if (byFilter === null) return bySector;
+    return new Set([...bySector].filter((id) => byFilter.has(id)));
+  }, [filter, edgeNodes, changedNodeIds, ownProjects, trackSector, tracks]);
 
   const selectedNode: TechNode | null = selectedId === null ? null : (graph.nodes.find((node) => node.id === selectedId) ?? null);
 
@@ -180,7 +208,10 @@ export default function ResearchPage(): React.JSX.Element {
       render: (row) => (
         <div className="min-w-0">
           <div className="truncate text-[12px] font-medium text-ink">{nodeTitles.get(row.targetNodeId) ?? row.targetNodeId}</div>
-          <div className="flex items-center gap-1.5 text-[10px] text-ink-faint">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-ink-faint">
+            {!multiTrack || nodeSectors.get(row.targetNodeId) === undefined ? null : (
+              <SectorBadge sector={nodeSectors.get(row.targetNodeId) ?? 'ai'} />
+            )}
             {row.isSecret ? <Tag tone="warn" size="sm">secret</Tag> : <Tag size="sm">published</Tag>}
             <span>{row.status}</span>
           </div>
@@ -351,6 +382,18 @@ export default function ResearchPage(): React.JSX.Element {
           />
         }
       >
+        {!multiTrack ? null : (
+          <div className="mb-3">
+            <SectorFilter
+              sectors={trackSectors}
+              value={trackSector}
+              onChange={setTrackSector}
+              counts={trackCounts}
+              totalLabel="Every track"
+            />
+          </div>
+        )}
+
         {graph.nodes.length === 0 ? (
           <EmptyState icon="network" title="The map is empty" message="No technology is visible to this company yet." />
         ) : (
@@ -361,6 +404,7 @@ export default function ResearchPage(): React.JSX.Element {
             onSelect={setSelectedId}
             changedNodeIds={changedNodeIds}
             highlightIds={highlightIds}
+            showSectors={multiTrack}
           />
         )}
 
@@ -371,6 +415,21 @@ export default function ResearchPage(): React.JSX.Element {
           <Icon name="back" size={13} accent="current" />
           Drag the map to explore it. Tap a technology for its card.
         </p>
+
+        {!multiTrack ? null : (
+          <div className="mt-3 border-t border-hair pt-3">
+            <div className="label-caps mb-2">Tracks</div>
+            <div className="flex flex-wrap gap-1.5">
+              {tracks.map((track) => (
+                <SectorBadge key={`${track.sector}_${track.title}`} sector={track.sector} />
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+              The stripe along the top of a card is its track. Dependencies cross tracks freely — energy is upstream of
+              almost everything, so its lane reaches into all of them.
+            </p>
+          </div>
+        )}
 
         <div className="mt-3 border-t border-hair pt-3">
           <div className="label-caps mb-2">Epistemic state</div>
@@ -425,6 +484,45 @@ export default function ResearchPage(): React.JSX.Element {
                 )}
               </button>
             ))}
+          </div>
+        </Panel>
+      )}
+
+      {/* --- what each sector is reaching for ---------------------------------
+          One lane per sector, with the count of nodes on it and how many the
+          world already believes in. Absent in a single-track world, where the
+          lane and the map are the same thing. */}
+      {!multiTrack ? null : (
+        <Panel
+          iconName="compass"
+          iconTone="info"
+          title="Sector tracks"
+          subtitle="What each part of the economy is currently trying to reach. Selecting a track lights its nodes on the map."
+        >
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {tracks.map((track) => {
+              const demonstrated = track.nodes.filter((node) => node.achievedByCompanyId !== null).length;
+              const active = trackSector === track.sector;
+              return (
+                <button
+                  key={`${track.sector}_${track.title}`}
+                  type="button"
+                  onClick={() => setTrackSector(active ? null : track.sector)}
+                  className={`raised-surface tap-target flex w-full flex-col items-start gap-1.5 px-3 py-2.5 text-left transition-colors hover:border-hair-strong ${
+                    active ? 'border-brand/30 bg-brand-wash' : ''
+                  }`}
+                >
+                  <span className="flex w-full flex-wrap items-center justify-between gap-1.5">
+                    <SectorBadge sector={track.sector} />
+                    <span className="figure text-[10px] text-ink-faint">
+                      {demonstrated}/{track.nodes.length} demonstrated
+                    </span>
+                  </span>
+                  <span className="text-[12.5px] font-semibold text-ink">{track.title}</span>
+                  <span className="text-[11px] leading-relaxed text-ink-faint">{track.summary}</span>
+                </button>
+              );
+            })}
           </div>
         </Panel>
       )}

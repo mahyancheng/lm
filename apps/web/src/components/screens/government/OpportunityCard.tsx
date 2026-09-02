@@ -18,9 +18,10 @@ import type { ActionValidationResult, Company, PlayerView, ProcurementOpportunit
 import { quarterLabel } from '@frontier/contracts';
 import { CLEARANCE_STAFF_REQUIREMENT, recordPastPerformance } from '@frontier/simulation';
 import { formatMoney, formatPct, formatScore } from '@frontier/shared';
-import { BarChart, Icon, ProgressBar, SectionHeading, SliderField, Tag, ValidationBanner, cx } from '@/components/ui';
+import { BarChart, Icon, ProgressBar, SectionHeading, SectorBadge, SliderField, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { EVALUATION_AXIS_LABEL } from './bidModel';
+import { opportunitySector } from './sectors';
 
 export interface OpportunityCardProps {
   readonly session: SessionState;
@@ -55,6 +56,7 @@ export function OpportunityCard({
   const [share, setShare] = useState(0.5);
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
+  const sector = opportunitySector(opportunity);
   const record = recordPastPerformance(session, company, opportunity.agencyId);
   const requirements = opportunity.requirements;
   const clearedNeeded = CLEARANCE_STAFF_REQUIREMENT[requirements.clearanceLevel];
@@ -147,6 +149,10 @@ export function OpportunityCard({
           <h3 className="mt-0.5 text-[15px] font-semibold text-ink sm:text-[14px]">{opportunity.programme}</h3>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* Only where the notice actually says. A programme the engine opened
+              later carries no sector, and no badge is drawn rather than one
+              inferred from its name. */}
+          {sector === null ? null : <SectorBadge sector={sector} />}
           <Tag tone={opportunity.contractForm === 'cost_plus' ? 'info' : 'neutral'}>{opportunity.contractForm.replace(/_/g, ' ')}</Tag>
           <Tag tone={quartersLeft <= 1 ? 'warn' : 'neutral'} dot>
             closes {quarterLabel(session.startYear, opportunity.closeQuarter)}

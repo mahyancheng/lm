@@ -117,6 +117,8 @@ export { NARRATOR_SYSTEM, composeNarrator, groupLinesByPhase } from './compose/n
 export type { DialogueRegister } from './fallbacks';
 export { INNOVATION_DECLINE_REASON, dialogueRegister, fallbackCharacterReply, fallbackChiefOfStaff, fallbackNarratorOutput, narratorTone } from './fallbacks';
 
+export { EMPTY_SETUP_PROPOSAL, SETUP_HISTORY_TURNS, SETUP_INTERPRETER_SCHEMA_NAME, SETUP_INTERPRETER_SYSTEM, SETUP_TURN_MAX_CHARS, composeSetupInterpreter, interpretSetup, normaliseSetupProposal, type SetupConversationTurn, type SetupInterpretation, type SetupInterpreterInput } from './setupInterpreter';
+
 /* --------------------------------- roles ---------------------------------- */
 
 export type { LlmRoles, LlmRolesOptions, RoleCallMeta, RoleResult } from './roles';

@@ -106,6 +106,7 @@ function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'
     difficulty: 'standard',
     autoExecuteRoutine: false,
     setup: null,
+    worldVersion: 1,
     log,
     checkpoint,
     savedQuarter: (log[log.length - 1]?.quarter ?? -1) + 1,
@@ -535,8 +536,105 @@ describe('files from other builds of the save format', () => {
     expect(loaded.queue).toEqual([]);
   });
 
-  it('treats versions on either side of [1..4] as unsupported and never writes over them', () => {
-    for (const version of [0, 5]) {
+  it('reads a v4 file as world 1: the world version postdates it', () => {
+    const start = createSession({ seed: SEED });
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({
+        version: 4,
+        seed: SEED,
+        difficulty: 'standard',
+        autoExecuteRoutine: false,
+        // A v4 setup carries no sector, region or world version; the schema
+        // defaults fill all three, and its default world version is 1.
+        setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' },
+        log: [],
+        checkpoint: null,
+        savedQuarter: 0,
+        queue: [],
+        savedAtIso: STAMP,
+      }),
+    );
+
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('ok');
+    expect(inspection.version).toBe(4);
+    expect(inspection.file?.worldVersion).toBe(1);
+    expect(inspection.file?.setup?.worldVersion).toBe(1);
+    // And it still replays into the frozen world it was made in.
+    const loaded = replay(inspection.file as SaveFile);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.worldVersion).toBe(1);
+    expect(loaded.session.config.worldVersion).toBe(1);
+    expect(loaded.session.companies).toHaveLength(start.companies.length);
+  });
+
+  it('round-trips a v5 file, carrying the world its setup names', () => {
+    const setup = NewGameSetupSchema.parse({
+      companyName: 'Kestrel Dynamics',
+      founderName: 'Rae Fontaine',
+      backgroundId: 'humanoid_lab',
+      sector: 'robotics',
+      region: 'east_asia',
+      worldVersion: 2,
+    });
+    const session = createSession({ seed: SEED, setup });
+    const file = buildSaveFile({
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup,
+      log: [],
+      queue: [],
+      session,
+      now: () => STAMP,
+    });
+    expect(file.version).toBe(SAVE_VERSION);
+    expect(file.worldVersion).toBe(2);
+    expect(writeSaveFile(file)).toBe(true);
+
+    // The serialiser writes the field in the same place `JSON.stringify` does.
+    expect(serializeSaveFile(file)).toBe(JSON.stringify(file));
+
+    const read = readSaveFile() as SaveFile;
+    expect(read.worldVersion).toBe(2);
+    expect(read.setup?.sector).toBe('robotics');
+    expect(read.setup?.region).toBe('east_asia');
+    // A slot picker labels the world without parsing a checkpoint.
+    expect(writeSlotFile(1, file)).toBe(true);
+    expect(slotSummaries()[0]?.worldVersion).toBe(2);
+
+    const loaded = replay(read);
+    expect(loaded.complete).toBe(true);
+    expect(loaded.worldVersion).toBe(2);
+    expect(loaded.session.config.worldVersion).toBe(2);
+    expect(loaded.session.companies.find((company) => company.controllerPlayerId !== null)?.name).toBe('Kestrel Dynamics');
+  });
+
+  it('believes the setup over a stored world version that disagrees with it', () => {
+    globals.window?.localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({
+        version: 5,
+        seed: SEED,
+        difficulty: 'standard',
+        autoExecuteRoutine: false,
+        setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 1 },
+        // A hand-edited file: the setup is what `createSession` dispatches on,
+        // so this number may not be allowed to say otherwise.
+        worldVersion: 2,
+        log: [],
+        checkpoint: null,
+        savedQuarter: 0,
+        queue: [],
+        savedAtIso: STAMP,
+      }),
+    );
+    expect(inspectSave().file?.worldVersion).toBe(1);
+  });
+
+  it('treats versions on either side of [1..5] as unsupported and never writes over them', () => {
+    for (const version of [0, 6]) {
       globals.window = { localStorage: fakeStorage() };
       const alien = JSON.stringify({ version, seed: SEED, log: [] });
       globals.window.localStorage.setItem(SAVE_KEY, alien);
@@ -561,6 +659,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
       difficulty: 'standard',
       autoExecuteRoutine: true,
       setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' }),
+      worldVersion: 1,
       log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')] }],
       checkpoint: { quarter: 0, state: start },
       savedQuarter: 1,

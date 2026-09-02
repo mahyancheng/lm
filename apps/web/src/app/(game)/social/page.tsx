@@ -15,7 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { Audience, MediaStory, NetworkArchetype, SocialPost } from '@frontier/contracts';
+import type { Audience, MediaStory, NetworkArchetype, Sector, SocialPost } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatMultiple, formatPct } from '@frontier/shared';
 import {
@@ -29,7 +29,10 @@ import {
   SectionHeading,
   StatCard,
   Tag,
+  sectorOf,
+  sectorsPresent,
 } from '@/components/ui';
+import { allVisibleCompanies } from '@/components/screens/reporting/util';
 import { ComposeModal } from '@/components/screens/social/ComposeModal';
 import { PostCard } from '@/components/screens/social/PostCard';
 import { audienceLabel, countLabel, networkIcon, networkLabel, networkProfile } from '@/components/screens/social/audiences';
@@ -70,6 +73,16 @@ export default function SocialPage(): React.JSX.Element {
     }
     return map;
   }, [company.id, company.name, view.visibleCompanies]);
+
+  /** What each named company does, so a post about a rival says which industry. */
+  const companySector = useMemo(() => {
+    const map = new Map<string, Sector>();
+    for (const entry of allVisibleCompanies(view)) {
+      if (entry.id !== undefined) map.set(entry.id, sectorOf(entry));
+    }
+    return map;
+  }, [view]);
+  const multiSector = useMemo(() => sectorsPresent(allVisibleCompanies(view)).length > 1, [view]);
 
   const ownAccounts = useMemo(
     () =>
@@ -207,6 +220,9 @@ export default function SocialPage(): React.JSX.Element {
                   author={characterById.get(post.authorCharacterId) ?? null}
                   account={accountById.get(post.accountId) ?? null}
                   targetName={post.targetCompanyId === null ? null : (companyName.get(post.targetCompanyId) ?? null)}
+                  targetSector={
+                    !multiSector || post.targetCompanyId === null ? null : (companySector.get(post.targetCompanyId) ?? null)
+                  }
                   quarterLabelText={quarterLabel(session.startYear, post.quarter)}
                 />
               ))}

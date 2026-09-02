@@ -1,8 +1,10 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import type { Region, Sector } from '@frontier/contracts';
 import { Portrait } from '@/components/scenes/people/Portrait';
 import type { PortraitMood } from '@/components/scenes/people/look';
+import { RegionBadge, SectorBadge, regionOf, sectorOf } from './sector';
 import { cx, type Tone } from './tokens';
 
 /* -------------------------------------------------------------------------- */
@@ -106,6 +108,9 @@ export interface CompanyLike {
   readonly name?: string;
   readonly ticker?: string | null;
   readonly sectorId?: string;
+  /** The real-economy sector. Present from world version 2; defaulted before it. */
+  readonly sector?: Sector;
+  readonly region?: Region;
   readonly archetype?: string;
   readonly isPublic?: boolean;
 }
@@ -119,6 +124,15 @@ export interface CompanyChipProps {
   /** Mark this as the player's own company. */
   readonly own?: boolean;
   readonly size?: 'sm' | 'md';
+  /**
+   * Draw the sector badge — and, with `'both'`, the region beside it — on the
+   * second line instead of the derived text.
+   *
+   * Opt-in: a world-version-1 session has one sector, where a badge on every
+   * row would be six identical stickers. Screens that group or filter by sector
+   * turn it on; the rest do not.
+   */
+  readonly badges?: 'none' | 'sector' | 'both';
   readonly className?: string;
 }
 
@@ -178,7 +192,16 @@ function CompanyGlyph({ tint, size }: { readonly tint: string; readonly size: 's
 }
 
 /** A company: a flat building glyph tinted by archetype, its name, its ticker. */
-export function CompanyChip({ company, subtitle, right, onClick, own = false, size = 'md', className }: CompanyChipProps): React.JSX.Element {
+export function CompanyChip({
+  company,
+  subtitle,
+  right,
+  onClick,
+  own = false,
+  size = 'md',
+  badges = 'none',
+  className,
+}: CompanyChipProps): React.JSX.Element {
   const tint = own ? 'var(--color-brand)' : (ARCHETYPE_TINT[company.archetype ?? ''] ?? 'var(--color-build-roof)');
   const line = subtitle ?? (company.sectorId ?? company.archetype)?.replace(/_/g, ' ') ?? null;
 
@@ -194,7 +217,16 @@ export function CompanyChip({ company, subtitle, right, onClick, own = false, si
             <span className={cx('figure shrink-0 text-[10px]', own ? 'text-brand' : 'text-ink-faint')}>{company.ticker}</span>
           )}
         </span>
-        {line !== null ? <span className="block truncate text-[10px] text-ink-faint">{line}</span> : null}
+        {badges === 'none' ? (
+          line !== null ? (
+            <span className="block truncate text-[10px] text-ink-faint">{line}</span>
+          ) : null
+        ) : (
+          <span className="mt-0.5 flex flex-wrap items-center gap-1">
+            <SectorBadge sector={sectorOf(company)} />
+            {badges === 'both' ? <RegionBadge region={regionOf(company)} /> : null}
+          </span>
+        )}
       </span>
       {right !== undefined ? <span className="shrink-0">{right}</span> : null}
     </>

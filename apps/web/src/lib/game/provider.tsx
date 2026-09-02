@@ -51,8 +51,9 @@ import type {
   SessionState,
   SubmittedAction,
   WorldState,
+  WorldVersion,
 } from '@frontier/contracts';
-import { NewGameSetupSchema } from '@frontier/contracts';
+import { LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import { projectResolutionOutcomeForPlayer } from '@frontier/simulation';
 import { llmHealth, requestNpcBundle, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
@@ -108,6 +109,12 @@ export interface GameSettings {
   readonly difficulty: SessionDifficulty;
   /** The new-game setup this session was started with, or null for the default world. Immutable once set. */
   readonly setup: NewGameSetup | null;
+  /**
+   * Which world scenario this session was built from. Derived from the setup —
+   * that is what `createSession` dispatches on — and held here so a screen can
+   * ask without reaching into the setup. Immutable once set.
+   */
+  readonly worldVersion: WorldVersion;
   /** Whether low-risk interpreted instructions may execute without a click. Never applies to the thirteen. */
   readonly autoExecuteRoutine: boolean;
   /** Player opt-out for the live model even when one is configured. */
@@ -260,6 +267,9 @@ const DEFAULT_SETTINGS: GameSettings = {
   seed: DEMO_SEED,
   difficulty: 'standard',
   setup: null,
+  // The session this store starts on is the frozen demo world: no setup, so
+  // `demoSessionInput` short-circuits to world 1.
+  worldVersion: LEGACY_WORLD_VERSION,
   autoExecuteRoutine: false,
   useLiveModel: true,
   skipResolutionReveal: false,
@@ -349,6 +359,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         seed: action.loaded.seed,
         difficulty: action.loaded.difficulty,
         setup: action.loaded.setup,
+        worldVersion: action.loaded.worldVersion,
         autoExecuteRoutine: action.loaded.autoExecuteRoutine,
       };
       // A partial replay is read-only. The stored file still holds every quarter
@@ -864,6 +875,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       seed: options?.seed ?? current.settings.seed,
       difficulty: options?.difficulty ?? current.settings.difficulty,
       setup,
+      // A game founded through the chat carries world 2 in its setup; one
+      // founded with no setup at all is the frozen world, and says so.
+      worldVersion: setup?.worldVersion ?? LEGACY_WORLD_VERSION,
       autoExecuteRoutine: options?.autoExecuteRoutine ?? current.settings.autoExecuteRoutine,
     };
     const session = createSession({

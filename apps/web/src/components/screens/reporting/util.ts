@@ -16,6 +16,7 @@ import type {
   BalanceSheet,
   CapTable,
   Company,
+  CompanyFundamentals,
   Financials,
   MarketInstrument,
   PlayerView,
@@ -25,6 +26,7 @@ import type {
   ValuationAnchor,
 } from '@frontier/contracts';
 import { balanceSheetReconciles, ownershipThresholdFor, type OwnershipThreshold } from '@frontier/contracts';
+import { formatCount as groupCount, formatMoney, formatPct, formatScore } from '@frontier/shared';
 import { latestQuote, quotesFor } from '@/lib/game';
 
 /* -------------------------------------------------------------------------- */
@@ -174,6 +176,29 @@ export function tickerOf(view: PlayerView, companyId: string | null): string | n
 }
 
 /**
+ * The company record a player may read for one id: their own in full, a rival
+ * as the redacted projection, `null` for anything not on the register.
+ *
+ * Every screen that wants a rival's sector, region or filed fundamentals goes
+ * through here rather than through `SessionState.companies`.
+ */
+export function companyOf(view: PlayerView, companyId: string | null): Partial<Company> | null {
+  if (companyId === null) return null;
+  if (companyId === view.ownCompany.id) return view.ownCompany;
+  return view.visibleCompanies.find((entry) => entry.id === companyId) ?? null;
+}
+
+/**
+ * Every company on the register, the player's own first.
+ *
+ * The order is the player, then rivals by id, so a list built from it is stable
+ * across quarters — a rival that grew does not jump the queue.
+ */
+export function allVisibleCompanies(view: PlayerView): readonly Partial<Company>[] {
+  return [view.ownCompany, ...[...view.visibleCompanies].sort((a, b) => (a.id ?? '').localeCompare(b.id ?? ''))];
+}
+
+/**
  * Display label for a cap-table holder.
  *
  * Characters and companies resolve to their names; an institutional bloc
@@ -305,6 +330,19 @@ export interface InstrumentRow {
   readonly anchorPerShareUsd: number | null;
   /** (price − anchor per share) / anchor per share, or null when there is no anchor. */
   readonly premiumToAnchor: number | null;
+  /**
+   * The company behind the instrument, as the player may read it. `null` for an
+   * index, which stands for a basket rather than for a business.
+   */
+  readonly company: Partial<Company> | null;
+  /**
+   * Trailing revenue, growth, margin and share count — but only where they are
+   * public. A listed company files them; the player's own company is their own
+   * business; a private rival's are absent, not redacted.
+   */
+  readonly fundamentals: CompanyFundamentals | null;
+  /** Market capitalisation over trailing revenue, or null without both. */
+  readonly revenueMultiple: number | null;
 }
 
 /**
@@ -325,6 +363,11 @@ export function instrumentRows(session: SessionState, view: PlayerView, includeR
       const listed = companyId === null ? false : companyId === view.ownCompany.id || isListedRival(view, companyId);
       const anchor = companyId === null || !listed ? null : anchorOf(session, companyId);
       const anchorPerShare = anchor?.perShareValueUsd ?? null;
+      const company = companyOf(view, companyId);
+      // The projection already withholds a private rival's fundamentals, so
+      // reading them straight off it needs no second gate here.
+      const fundamentals = company?.fundamentals ?? null;
+      const revenue = fundamentals?.revenueTtmUsd ?? 0;
       return {
         instrument,
         quote,
@@ -334,6 +377,9 @@ export function instrumentRows(session: SessionState, view: PlayerView, includeR
         anchorPerShareUsd: anchorPerShare,
         premiumToAnchor:
           quote === null || anchorPerShare === null || anchorPerShare <= 0 ? null : quote.price / anchorPerShare - 1,
+        company,
+        fundamentals,
+        revenueMultiple: quote === null || revenue <= 0 ? null : quote.marketCapUsd / revenue,
       } satisfies InstrumentRow;
     })
     .sort((a, b) => (b.quote?.marketCapUsd ?? 0) - (a.quote?.marketCapUsd ?? 0));
@@ -342,6 +388,63 @@ export function instrumentRows(session: SessionState, view: PlayerView, includeR
 function isListedRival(view: PlayerView, companyId: string): boolean {
   const rival = view.visibleCompanies.find((entry) => entry.id === companyId);
   return rival?.isPublic === true;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Valuation anchor inputs                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How each anchor input is written down.
+ *
+ * `ValuationAnchor.inputs` is an open bag of numbers, and the anchor gained
+ * three of them with the fundamentals method — a sector revenue multiple, a
+ * quality score and the fundamental value itself. A blanket "big numbers are
+ * money, small numbers are percentages" rule renders a 28× multiple as 2,800%,
+ * so the units are declared per key instead, and an unknown key falls back to
+ * the old heuristic rather than disappearing.
+ */
+const ANCHOR_INPUT_UNITS: Readonly<Record<string, { readonly label: string; readonly unit: 'money' | 'percent' | 'multiple' | 'score' }>> = {
+  forwardRevenue: { label: 'Forward revenue', unit: 'money' },
+  grossMargin: { label: 'Gross margin', unit: 'percent' },
+  cash: { label: 'Cash', unit: 'money' },
+  debt: { label: 'Debt', unit: 'money' },
+  fundamentalValueUsd: { label: 'Fundamental value', unit: 'money' },
+  sectorRevenueMultiple: { label: 'Sector revenue multiple', unit: 'multiple' },
+  qualityScore: { label: 'Quality score', unit: 'score' },
+};
+
+export interface AnchorInputRow {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * The anchor's working, in a fixed order: the declared inputs first, in the
+ * order they are documented above, then anything the engine has since added.
+ */
+export function anchorInputRows(anchor: ValuationAnchor): readonly AnchorInputRow[] {
+  const known = Object.keys(ANCHOR_INPUT_UNITS).filter((key) => anchor.inputs[key] !== undefined);
+  const extra = Object.keys(anchor.inputs)
+    .filter((key) => ANCHOR_INPUT_UNITS[key] === undefined)
+    .sort((a, b) => a.localeCompare(b));
+  return [...known, ...extra].map((key) => {
+    const value = anchor.inputs[key] ?? 0;
+    const spec = ANCHOR_INPUT_UNITS[key];
+    if (spec === undefined) {
+      return { key, label: humanise(key), value: Math.abs(value) >= 1000 ? formatMoney(value) : formatPct(value) };
+    }
+    const rendered =
+      spec.unit === 'money'
+        ? formatMoney(value)
+        : spec.unit === 'percent'
+          ? formatPct(value)
+          : spec.unit === 'multiple'
+            ? `${groupCount(value)}x`
+            : formatScore(value * 100);
+    return { key, label: spec.label, value: rendered };
+  });
 }
 
 /* -------------------------------------------------------------------------- */

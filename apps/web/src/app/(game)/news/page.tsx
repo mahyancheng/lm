@@ -23,8 +23,8 @@
  */
 
 import { useMemo, useRef, useState } from 'react';
-import type { PublicDisclosure } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import type { PublicDisclosure, Sector } from '@frontier/contracts';
+import { SECTORS, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatPct, formatScore } from '@frontier/shared';
 import {
   AiLabel,
@@ -36,9 +36,12 @@ import {
   PageHeader,
   Panel,
   ProgressBar,
+  SectorBadge,
   StatCard,
   Tag,
   cx,
+  sectorOf,
+  sectorsPresent,
   type IconName,
   type Tone,
 } from '@/components/ui';
@@ -46,7 +49,7 @@ import { useGame, useLlm, usePlayerCompany, usePlayerView, useSession } from '@/
 import { WorldMap } from '@/components/scenes/map';
 import { QuarterInReview } from '@/components/screens/news/QuarterInReview';
 import { IconTabs } from '@/components/screens/world/IconTabs';
-import { bandLabel, companyNameOf, formatCount, humanise } from '@/components/screens/reporting/util';
+import { allVisibleCompanies, bandLabel, companyNameOf, formatCount, humanise } from '@/components/screens/reporting/util';
 
 type RecordKind = 'event' | 'story' | 'disclosure';
 
@@ -105,6 +108,34 @@ export default function WorldPage(): React.JSX.Element {
   const mapRef = useRef<HTMLDivElement | null>(null);
 
   const characters = useMemo(() => new Map(session.characters.map((entry) => [entry.id, entry])), [session.characters]);
+
+  /* --- sector context ------------------------------------------------------
+      A record names companies; with twenty-five of them the industry is the
+      part a reader needs. The badges are derived from the companies the record
+      actually names — nothing is attributed to a sector the record does not
+      touch — and the whole row is suppressed in a single-sector world. */
+  const companySectors = useMemo(() => {
+    const map = new Map<string, Sector>();
+    for (const entry of allVisibleCompanies(view)) {
+      if (entry.id !== undefined) map.set(entry.id, sectorOf(entry));
+    }
+    return map;
+  }, [view]);
+  const multiSector = useMemo(() => sectorsPresent(allVisibleCompanies(view)).length > 1, [view]);
+
+  const sectorsNamedBy = useMemo(
+    () =>
+      (companyIds: readonly string[]): readonly Sector[] => {
+        if (!multiSector) return [];
+        const seen = new Set<Sector>();
+        for (const id of companyIds) {
+          const sector = companySectors.get(id);
+          if (sector !== undefined) seen.add(sector);
+        }
+        return SECTORS.filter((entry) => seen.has(entry));
+      },
+    [companySectors, multiSector],
+  );
 
   /** The events that actually have a pin. Only these get a "show on map". */
   const mappedEventIds = useMemo(
@@ -439,6 +470,9 @@ export default function WorldPage(): React.JSX.Element {
 
                             {item.sectors.length > 0 || item.companies.length > 0 ? (
                               <div className="mt-2 flex flex-wrap gap-1.5">
+                                {sectorsNamedBy(item.companies).map((sector) => (
+                                  <SectorBadge key={sector} sector={sector} />
+                                ))}
                                 {item.sectors.map((sector) => (
                                   <Tag key={sector} tone="neutral">
                                     {humanise(sector)}

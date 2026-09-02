@@ -20,7 +20,7 @@ import type {
 } from '@frontier/contracts';
 import { WORLD_TARGET_PATHS, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
-import { impactBudgetFor } from '@frontier/simulation';
+import { impactBudgetFor, strategistCompanyIds } from '@frontier/simulation';
 import { PLAYER_ID, drawWorldCandidates, playerCompanyOf } from './engine';
 import { metricsFor } from './playerView';
 
@@ -233,11 +233,28 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
   };
 }
 
-/** Which companies get a live strategist. Major-tier rivals only; the rest run archetype defaults. */
+/**
+ * Which companies get a live strategist this quarter.
+ *
+ * Delegated to the engine's own selector, which is the only place that decides
+ * it: major tier, not player-directed, ranked by trailing revenue then market
+ * capitalisation then id, and **capped** at `MAX_LIVE_STRATEGISTS`.
+ *
+ * The cap is the whole point. This function used to return every active
+ * major-tier rival, which was fine when the world held seven companies and is
+ * a bill when it holds twenty-five across six sectors: each id here becomes one
+ * model call per quarter, and each `claude-session` call spawns a Claude Code
+ * subprocess on the operator's own subscription. Six keeps the per-quarter cost
+ * flat however large the world grows; the rivals below the line run the
+ * deterministic archetype policy, which is what the three-tier design says
+ * should happen to them anyway.
+ *
+ * The ranking is pure and total, so the same state always names the same
+ * companies — a replayed quarter asks for exactly the strategists the live
+ * quarter asked for.
+ */
 export function strategistCompanies(session: SessionState): string[] {
-  return session.companies
-    .filter((company) => company.isActive && company.controllerPlayerId === null && company.tier === 'major')
-    .map((company) => company.id);
+  return [...strategistCompanyIds(session)];
 }
 
 /** Build the Chief of Staff's input for one player instruction. */

@@ -8,9 +8,9 @@
  * label without exception (UI_SYSTEM §6).
  */
 
-import type { Character, SocialAccount, SocialPost } from '@frontier/contracts';
+import type { Character, Sector, SocialAccount, SocialPost } from '@frontier/contracts';
 import { formatMultiple, formatPct } from '@frontier/shared';
-import { AiLabel, DeltaBadge, PersonChip, Tag } from '@/components/ui';
+import { AiLabel, DeltaBadge, PersonChip, SectorBadge, Tag } from '@/components/ui';
 import { audienceLabel, countLabel } from './audiences';
 
 export interface PostCardProps {
@@ -19,10 +19,17 @@ export interface PostCardProps {
   readonly account: SocialAccount | null;
   /** Display name of the company the post is aimed at, when it names one. */
   readonly targetName: string | null;
+  /**
+   * The sector of the company the post names. With twenty-five companies a
+   * name alone stops being enough context — "aimed at Qanat" reads very
+   * differently once it says Energy beside it. Null in a single-sector world
+   * and for a post that names nobody.
+   */
+  readonly targetSector?: Sector | null;
   readonly quarterLabelText: string;
 }
 
-export function PostCard({ post, author, account, targetName, quarterLabelText }: PostCardProps): React.JSX.Element {
+export function PostCard({ post, author, account, targetName, targetSector = null, quarterLabelText }: PostCardProps): React.JSX.Element {
   const engagement = post.engagement;
 
   return (
@@ -48,6 +55,7 @@ export function PostCard({ post, author, account, targetName, quarterLabelText }
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Tag tone="neutral">{post.intent}</Tag>
         {targetName === null ? null : <Tag tone="warn">aimed at {targetName}</Tag>}
+        {targetSector === null ? null : <SectorBadge sector={targetSector} />}
         {engagement !== null && engagement.pressPickup ? <Tag tone="info">Press pickup</Tag> : null}
         {engagement !== null && engagement.viralityFactor > 4 ? <Tag tone="warn">Escaped its audience</Tag> : null}
       </div>

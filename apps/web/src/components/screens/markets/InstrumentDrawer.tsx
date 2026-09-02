@@ -25,12 +25,16 @@ import {
   LineChart,
   Meter,
   ProgressBar,
+  RegionBadge,
   SectionHeading,
+  SectorBadge,
   Tag,
+  regionOf,
+  sectorOf,
   toneOfDelta,
   type BarDatum,
 } from '@/components/ui';
-import { anchorOf, disclosuresFor, formatCount, humanise, issuedSharesOf } from '../reporting/util';
+import { anchorInputRows, anchorOf, disclosuresFor, formatCount, humanise, issuedSharesOf } from '../reporting/util';
 import type { InstrumentRow } from '../reporting/util';
 import type { DecompositionView } from './decomposition';
 import { TradeTicket } from './TradeTicket';
@@ -103,6 +107,17 @@ export function InstrumentDrawer({
       width={560}
     >
       <div className="flex flex-col gap-5">
+        {/* --- what and where ------------------------------------------------
+            An index stands for a basket, so it gets no sector badge; a company
+            gets both, because with twenty-five names the first question about
+            an unfamiliar ticker is what business it is in. */}
+        {row.company === null ? null : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <SectorBadge sector={sectorOf(row.company)} size="md" />
+            <RegionBadge region={regionOf(row.company)} size="md" />
+          </div>
+        )}
+
         {/* --- price ------------------------------------------------------- */}
         <div>
           <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -142,6 +157,35 @@ export function InstrumentDrawer({
             ]}
           />
         </div>
+
+        {/* --- fundamentals --------------------------------------------------
+            The figures the price is meant to be anchored to. Present only where
+            the company files them: a private rival's are absent, not hidden. */}
+        {row.fundamentals === null ? null : (
+          <div>
+            <SectionHeading rule>Fundamentals</SectionHeading>
+            <KeyValueGrid
+              className="mt-2"
+              columns={2}
+              items={[
+                { label: 'Trailing revenue', value: formatMoney(row.fundamentals.revenueTtmUsd) },
+                { label: 'Growth, year on year', value: formatPct(row.fundamentals.revenueGrowthYoY) },
+                { label: 'Gross margin', value: formatPct(row.fundamentals.grossMarginPct) },
+                {
+                  label: 'Trailing net income',
+                  value: formatMoney(row.fundamentals.netIncomeTtmUsd),
+                  tone: row.fundamentals.netIncomeTtmUsd < 0 ? 'loss' : undefined,
+                },
+                { label: 'Shares in issue', value: formatCount(row.fundamentals.sharesOutstanding) },
+                {
+                  label: 'Value over revenue',
+                  value: row.revenueMultiple === null ? '—' : `${formatCount(row.revenueMultiple)}x`,
+                  hint: 'Capitalisation divided by trailing revenue',
+                },
+              ]}
+            />
+          </div>
+        )}
 
         {/* --- position and ticket -------------------------------------------
             The action sits directly under the price on purpose: on a phone the
@@ -246,12 +290,10 @@ export function InstrumentDrawer({
               <div className="mt-2">
                 <div className="label-caps-faint mb-1">Inputs</div>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-                  {Object.entries(anchor.inputs).map(([key, value]) => (
-                    <div key={key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
-                      <dt className="truncate text-[10px] text-ink-faint">{key}</dt>
-                      <dd className="figure text-[11px] text-ink-dim">
-                        {Math.abs(value) >= 1000 ? formatMoney(value) : formatPct(value)}
-                      </dd>
+                  {anchorInputRows(anchor).map((input) => (
+                    <div key={input.key} className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
+                      <dt className="truncate text-[10px] text-ink-faint">{input.label}</dt>
+                      <dd className="figure text-[11px] text-ink-dim">{input.value}</dd>
                     </div>
                   ))}
                 </dl>

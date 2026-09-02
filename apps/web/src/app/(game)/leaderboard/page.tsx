@@ -12,8 +12,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { LeaderboardBoard, LeaderboardEntry } from '@frontier/contracts';
-import { LEADERBOARD_BOARDS, quarterLabel } from '@frontier/contracts';
+import type { LeaderboardBoard, LeaderboardEntry, Sector } from '@frontier/contracts';
+import { LEADERBOARD_BOARDS, SECTOR_META, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatMoney, formatRankMove, formatScore } from '@frontier/shared';
 import {
   CompanyChip,
@@ -24,9 +24,13 @@ import {
   Panel,
   PersonChip,
   ProgressBar,
+  SectorBadge,
+  SectorFilter,
   StatCard,
   Tag,
   cx,
+  sectorOf,
+  sectorsPresent,
   type Column,
   type IconName,
 } from '@/components/ui';
@@ -34,7 +38,7 @@ import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from 
 import { FounderIndexPanel } from '@/components/screens/leaderboard/FounderIndexPanel';
 import { PowerGraph } from '@/components/screens/leaderboard/PowerGraph';
 import { IconTabs } from '@/components/screens/world/IconTabs';
-import { humanise } from '@/components/screens/reporting/util';
+import { allVisibleCompanies, humanise } from '@/components/screens/reporting/util';
 
 type Units = 'money' | 'score' | 'index';
 
@@ -116,12 +120,68 @@ export default function LeaderboardPage(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const [board, setBoard] = useState<LeaderboardBoard>('founder_index');
+  const [sector, setSector] = useState<Sector | null>(null);
 
   const boards = session.leaderboards;
   const active = boards.find((entry) => entry.board === board) ?? null;
   const units = BOARD_UNITS[board];
 
   const mine = useMemo(() => new Set([company.id, founder.id, view.playerId]), [company.id, founder.id, view.playerId]);
+
+  /* --- which sector a row belongs to ---------------------------------------
+      A board ranks companies on some tabs and founders on others, so the map is
+      keyed by both: a company's id, and the id of whoever runs it. A row whose
+      subject is neither — an institution, a fund — has no sector and is only
+      ever shown unfiltered. */
+  const sectorBySubject = useMemo(() => {
+    const map = new Map<string, Sector>();
+    for (const entry of allVisibleCompanies(view)) {
+      if (entry.id === undefined) continue;
+      const value = sectorOf(entry);
+      map.set(entry.id, value);
+      if (entry.ceoCharacterId !== null && entry.ceoCharacterId !== undefined) map.set(entry.ceoCharacterId, value);
+    }
+    return map;
+  }, [view]);
+
+  const presentSectors = useMemo(() => sectorsPresent(allVisibleCompanies(view)), [view]);
+  const multiSector = presentSectors.length > 1;
+
+  const entries = active?.entries ?? [];
+  const counts = useMemo(() => {
+    const out: Partial<Record<Sector, number>> = {};
+    for (const row of entries) {
+      const value = sectorBySubject.get(row.subjectId);
+      if (value === undefined) continue;
+      out[value] = (out[value] ?? 0) + 1;
+    }
+    return out;
+  }, [entries, sectorBySubject]);
+
+  const filtered = useMemo(
+    () => (sector === null ? entries : entries.filter((row) => sectorBySubject.get(row.subjectId) === sector)),
+    [entries, sector, sectorBySubject],
+  );
+
+  /**
+   * Who leads each sector on the board in view.
+   *
+   * Ranks are computed across the whole world, so this is not a second
+   * ranking — it is the best-placed row from each sector, which is what "who is
+   * winning robotics" actually means.
+   */
+  const sectorLeaders = useMemo(
+    () =>
+      presentSectors
+        .map((entry) => {
+          const here = entries
+            .filter((row) => sectorBySubject.get(row.subjectId) === entry)
+            .sort((a, b) => a.rank - b.rank);
+          return { sector: entry, leader: here[0] ?? null, count: here.length };
+        })
+        .filter((entry) => entry.leader !== null),
+    [presentSectors, entries, sectorBySubject],
+  );
 
   const headline = useMemo(() => {
     const composite = boards.find((entry) => entry.board === 'founder_index')?.entries.find((row) => row.subjectId === founder.id) ?? null;
@@ -131,7 +191,7 @@ export default function LeaderboardPage(): React.JSX.Element {
     return { composite, value, wealth, network };
   }, [boards, company.id, founder.id]);
 
-  const columns: readonly Column<LeaderboardEntry>[] = [
+  const allColumns: readonly Column<LeaderboardEntry>[] = [
     {
       key: 'rank',
       header: '#',
@@ -173,10 +233,29 @@ export default function LeaderboardPage(): React.JSX.Element {
             subtitle={row.subjectId === founder.id ? 'You' : undefined}
           />
         ) : (
-          <CompanyChip size="sm" own={row.subjectId === company.id} company={{ id: row.subjectId, name: row.label }} />
+          <CompanyChip
+            size="sm"
+            own={row.subjectId === company.id}
+            company={{ id: row.subjectId, name: row.label, sector: sectorBySubject.get(row.subjectId) }}
+            badges={multiSector && sectorBySubject.has(row.subjectId) ? 'sector' : 'none'}
+          />
         ),
       sortable: true,
       sortValue: (row) => row.label,
+    },
+    {
+      key: 'sector',
+      header: 'Sector',
+      width: '112px',
+      mono: false,
+      hideOnMobile: true,
+      cardHidden: true,
+      render: (row) => {
+        const value = sectorBySubject.get(row.subjectId);
+        return value === undefined ? <span className="text-[10px] text-ink-faint">—</span> : <SectorBadge sector={value} />;
+      },
+      sortable: true,
+      sortValue: (row) => sectorBySubject.get(row.subjectId) ?? 'zz',
     },
     {
       key: 'value',
@@ -214,6 +293,10 @@ export default function LeaderboardPage(): React.JSX.Element {
       sortValue: (row) => row.percentile,
     },
   ];
+
+  // One sector in the session means the sector column is the same sticker on
+  // every row, so it is dropped rather than shown empty.
+  const columns = multiSector ? allColumns : allColumns.filter((entry) => entry.key !== 'sector');
 
   return (
     <>
@@ -277,8 +360,26 @@ export default function LeaderboardPage(): React.JSX.Element {
         title={BOARD_LABEL[board]}
         subtitle={BOARD_BLURB[board]}
         flush
-        actions={active === null ? undefined : <Tag tone="neutral">{quarterLabel(session.startYear, active.quarter)}</Tag>}
+        actions={
+          active === null ? undefined : (
+            <>
+              {sector === null ? null : (
+                <Tag tone="info">
+                  {filtered.length} in {SECTOR_META[sector].label}
+                </Tag>
+              )}
+              <Tag tone="neutral">{quarterLabel(session.startYear, active.quarter)}</Tag>
+            </>
+          )
+        }
       >
+        {/* The rank on a filtered row is still its rank in the whole world:
+            narrowing to one sector never renumbers anybody. */}
+        {active === null || !multiSector ? null : (
+          <div className="border-b border-hair px-3 pt-3 pb-2">
+            <SectorFilter sectors={presentSectors} value={sector} onChange={setSector} counts={counts} />
+          </div>
+        )}
         {active === null ? (
           <EmptyState
             icon="trophy"
@@ -288,16 +389,69 @@ export default function LeaderboardPage(): React.JSX.Element {
         ) : (
           <DataTable
             columns={columns}
-            rows={active.entries}
+            rows={filtered}
             rowKey={(row) => `${board}_${row.subjectId}`}
             isHighlighted={(row) => mine.has(row.subjectId)}
             dense
             cardMode="auto"
             cardTitleKey="subject"
             initialSort={{ key: 'rank', direction: 'asc' }}
+            empty={
+              <div className="p-4">
+                <EmptyState
+                  compact
+                  icon="trophy"
+                  title="Nobody from this sector is ranked here"
+                  message="This board ranks subjects that have a figure to rank. Clear the filter to see the whole field."
+                />
+              </div>
+            }
           />
         )}
       </Panel>
+
+      {/* --- who leads each sector --------------------------------------------
+          Not a second ranking: each row is the best-placed subject from that
+          sector on the board above, at its world rank. */}
+      {!multiSector || sectorLeaders.length === 0 ? null : (
+        <Panel
+          iconName="globe"
+          iconTone="info"
+          title={`${BOARD_LABEL[board]} by sector`}
+          subtitle="The best-placed name in each sector, at its rank across the whole world."
+        >
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {sectorLeaders.map((entry) => {
+              const leader = entry.leader;
+              if (leader === null) return null;
+              return (
+                <button
+                  key={entry.sector}
+                  type="button"
+                  onClick={() => setSector((current) => (current === entry.sector ? null : entry.sector))}
+                  className={cx(
+                    'raised-surface tap-target flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:border-hair-strong',
+                    sector === entry.sector ? 'border-brand/30 bg-brand-wash' : '',
+                  )}
+                >
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    <SectorBadge sector={entry.sector} className="self-start" />
+                    <span className={cx('truncate text-[12.5px]', mine.has(leader.subjectId) ? 'font-semibold text-brand' : 'text-ink')}>
+                      {leader.label}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-0.5">
+                    <span className="figure text-[12px] text-ink">{formatValue(units, leader.value)}</span>
+                    <span className="figure text-[10px] text-ink-faint">
+                      #{leader.rank} of {entry.count}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel

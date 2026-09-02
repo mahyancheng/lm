@@ -25,7 +25,8 @@
 
 import { useId, useMemo, useState } from 'react';
 import type { TechGraph, TechNode } from '@frontier/contracts';
-import { TONE_VAR, type Tone } from '@/components/ui';
+import { SECTOR_META } from '@frontier/contracts';
+import { SECTOR_TINT, TONE_VAR, type Tone } from '@/components/ui';
 import { EDGE_STYLE, STATE_STYLE, layoutGraph, wrapTitle, type LaidOutNode } from './graphLayout';
 
 export interface FrontierMapProps {
@@ -38,6 +39,15 @@ export interface FrontierMapProps {
   readonly changedNodeIds: ReadonlySet<string>;
   /** Node ids to keep at full strength; everything else dims. Null shows all. */
   readonly highlightIds: ReadonlySet<string> | null;
+  /**
+   * Draw the sector stripe along the top of every card.
+   *
+   * Off for a world-version-1 graph, where every node is AI and a stripe would
+   * be the same colour forty-two times. The stripe is deliberately a different
+   * shape and a different edge from the epistemic accent bar — the left edge
+   * and the state dot still carry the state, and nothing else does.
+   */
+  readonly showSectors?: boolean;
 }
 
 /** The pale tint of a tone. Only `achieved` ever uses one. */
@@ -63,6 +73,7 @@ export function FrontierMap({
   onSelect,
   changedNodeIds,
   highlightIds,
+  showSectors = false,
 }: FrontierMapProps): React.JSX.Element {
   const markerId = useId().replace(/:/g, '');
   const layout = useMemo(() => layoutGraph(graph), [graph]);
@@ -139,6 +150,7 @@ export function FrontierMap({
               key={laid.node.id}
               laid={laid}
               companyId={companyId}
+              showSector={showSectors}
               selected={laid.node.id === selectedNodeId}
               changed={changedNodeIds.has(laid.node.id)}
               lit={focus !== null && focus.nodes.has(laid.node.id)}
@@ -165,6 +177,8 @@ export function FrontierMap({
 interface MapNodeProps {
   readonly laid: LaidOutNode;
   readonly companyId: string;
+  /** Draw the sector stripe along the card's top edge. */
+  readonly showSector: boolean;
   readonly selected: boolean;
   readonly changed: boolean;
   /** In the focused node's one-hop neighbourhood. */
@@ -176,7 +190,7 @@ interface MapNodeProps {
   readonly onRelease: (nodeId: string) => void;
 }
 
-function MapNode({ laid, companyId, selected, changed, lit, dim, onSelect, onFocus, onRelease }: MapNodeProps): React.JSX.Element {
+function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onSelect, onFocus, onRelease }: MapNodeProps): React.JSX.Element {
   const node: TechNode = laid.node;
   const style = STATE_STYLE[node.status];
   const colour = TONE_VAR[style.tone];
@@ -205,6 +219,7 @@ function MapNode({ laid, companyId, selected, changed, lit, dim, onSelect, onFoc
         : 'var(--color-hair)';
 
   const ownLabel = own === undefined ? '' : `, your conviction ${Math.round(own * 100)} percent`;
+  const sectorLabel = showSector ? `, ${SECTOR_META[node.sector].label} track` : '';
 
   return (
     <g
@@ -226,7 +241,7 @@ function MapNode({ laid, companyId, selected, changed, lit, dim, onSelect, onFoc
       onBlur={() => onRelease(node.id)}
       role="button"
       tabIndex={0}
-      aria-label={`${node.title} — ${style.label}, public confidence ${Math.round(node.publicConfidence * 100)} percent${ownLabel}`}
+      aria-label={`${node.title}${sectorLabel} — ${style.label}, public confidence ${Math.round(node.publicConfidence * 100)} percent${ownLabel}`}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -251,6 +266,11 @@ function MapNode({ laid, companyId, selected, changed, lit, dim, onSelect, onFoc
       {/* the one place the epistemic colour lives: an accent bar and a dot */}
       <rect x={x} y={y + 8} width={4} height={height - 16} rx={2} fill={colour} />
       <circle cx={x + width - 11} cy={y + 12.5} r={3.5} fill={colour} />
+
+      {/* The sector, as a stripe along the top edge. A different edge and a
+          different shape from the state accent, so the two never read as one
+          encoding — and absent entirely in a single-sector world. */}
+      {showSector ? <rect x={x + 10} y={y + 1.5} width={width - 20} height={2.5} rx={1.25} fill={SECTOR_TINT[node.sector]} /> : null}
 
       {lines.map((line, index) => (
         <text key={index} x={x + 13} y={y + 16.5 + index * 11} fontSize="10.5" fill="var(--color-ink)" fontWeight={600}>

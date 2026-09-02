@@ -24,7 +24,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { StaffRole } from '@frontier/contracts';
-import { STAFF_ROLES, quarterLabel } from '@frontier/contracts';
+import { REGION_META, SECTOR_META, STAFF_ROLES, quarterLabel } from '@frontier/contracts';
 import { requiredCompUsd } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import {
@@ -40,15 +40,20 @@ import {
   Panel,
   PersonChip,
   ProgressBar,
+  RegionBadge,
   SectionHeading,
+  SectorBadge,
   StatCard,
   Tag,
+  regionOf,
+  sectorOf,
   type Column,
 } from '@/components/ui';
 import { OfficeScene, type OfficeDrawerId } from '@/components/scenes/office';
 import { ComputeDrawer } from '@/components/screens/company/ComputeDrawer';
 import { ComputePosition } from '@/components/screens/company/ComputePosition';
 import { ExecutiveDrawer } from '@/components/screens/company/ExecutiveDrawer';
+import { SectorPanel } from '@/components/screens/company/SectorPanel';
 import { SitesDrawer } from '@/components/screens/company/SitesDrawer';
 import {
   ARCHETYPE_BLURB,
@@ -171,6 +176,8 @@ export default function CompanyPage(): React.JSX.Element {
         subtitle={`${ARCHETYPE_LABEL[company.archetype]} · ${company.headquartersCity} · ${company.isPublic ? `listed as ${company.ticker ?? '—'}` : 'privately held'}`}
         actions={
           <>
+            <SectorBadge sector={sectorOf(company)} size="md" />
+            <RegionBadge region={regionOf(company)} size="md" />
             <Tag tone="brand">{POSTURE_LABEL[company.posture]}</Tag>
             <Tag tone="neutral">{company.tier} tier</Tag>
           </>
@@ -187,9 +194,15 @@ export default function CompanyPage(): React.JSX.Element {
         iconTone="brand"
         subtitle="Every room is drawn from committed state, and every room opens the screen that operates it."
         actions={
-          <Tag tone="neutral">
-            {headcount} people · morale {formatScore(employees.morale)}
-          </Tag>
+          <>
+            {/* The office is one company's floor, so the sector mark belongs on
+                its header rather than on every room inside it. */}
+            <SectorBadge sector={sectorOf(company)} />
+            <RegionBadge region={regionOf(company)} />
+            <Tag tone="neutral">
+              {headcount} people · morale {formatScore(employees.morale)}
+            </Tag>
+          </>
         }
         flush
       >
@@ -230,7 +243,11 @@ export default function CompanyPage(): React.JSX.Element {
             columns={1}
             items={[
               { label: 'Archetype', value: ARCHETYPE_LABEL[company.archetype], mono: false },
-              { label: 'Sector', value: company.sectorId.replace(/_/g, ' '), mono: false },
+              // Two different things called "sector": what the company does,
+              // and the bucket the market prices it in. Both are shown, named.
+              { label: 'Sector', value: SECTOR_META[sectorOf(company)].label, mono: false, hint: 'What this company does' },
+              { label: 'Market bucket', value: company.sectorId.replace(/_/g, ' '), mono: false, hint: 'How the exchange groups it for beta and multiples' },
+              { label: 'Region', value: REGION_META[regionOf(company)].label, mono: false, hint: REGION_META[regionOf(company)].tagline },
               { label: 'Posture', value: POSTURE_LABEL[company.posture], mono: false, hint: POSTURE_BLURB[company.posture] },
               { label: 'Risk tolerance', value: formatPct(company.riskTolerance), hint: 'Variance this company will accept for upside' },
               { label: 'Founded', value: quarterLabel(session.startYear, company.foundedQuarter) },
@@ -263,6 +280,8 @@ export default function CompanyPage(): React.JSX.Element {
 
         <ComputePosition session={session} company={company} projects={view.ownResearchProjects} />
       </div>
+
+      <SectorPanel company={company} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
@@ -421,6 +440,7 @@ export default function CompanyPage(): React.JSX.Element {
                     <CompanyChip
                       key={subsidiary.id ?? subsidiary.name}
                       company={subsidiary}
+                      badges="both"
                       right={subsidiary.isPublic === true ? <Tag tone="info">listed</Tag> : <Tag>private</Tag>}
                     />
                   ))}

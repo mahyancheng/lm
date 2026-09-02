@@ -66,6 +66,25 @@ export type { ChipStop } from './sliderMath';
 export { AccessBadge, CompanyChip, PersonChip, initialsOf } from './Chips';
 export type { AccessBadgeProps, CompanyChipProps, CompanyLike, PersonChipProps, PersonLike } from './Chips';
 
+export {
+  RegionBadge,
+  SECTOR_TINT,
+  SectorBadge,
+  SectorFilter,
+  SectorRegionBadges,
+  readingTone,
+  regionIcon,
+  regionLabel,
+  regionOf,
+  regionReadings,
+  regionsPresent,
+  sectorIcon,
+  sectorLabel,
+  sectorOf,
+  sectorsPresent,
+} from './sector';
+export type { RegionBadgeProps, RegionReading, SectorBadgeProps } from './sector';
+
 export { ValidationBanner, labelOfStatus, toneOfStatus } from './ValidationBanner';
 export type { ValidationBannerProps } from './ValidationBanner';
 

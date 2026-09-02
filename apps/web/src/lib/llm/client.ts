@@ -20,6 +20,7 @@ import type {
   NpcActionBundle,
   NpcStrategistInput,
   ResolutionReport,
+  SetupProposal,
   WorldDirectorInput,
 } from '@frontier/contracts';
 
@@ -278,4 +279,20 @@ export function requestNarrative(
   focusCompanyId: string | null,
 ): Promise<NarratorOutput | null> {
   return postRole<NarratorOutput>('/api/llm/narrator', { report, focusCompanyId });
+}
+
+/**
+ * Read one turn of the new-game conversation into a `SetupProposal`.
+ *
+ * The only role call made before a session exists, and the only one whose null
+ * changes nothing about what the player can do: the chat parses every message
+ * deterministically in `lib/game/setupChat.ts` first, and this reading is
+ * merged *under* that one. Offline, the conversation simply asks more directly.
+ */
+export function requestSetupProposal(
+  message: string,
+  history: readonly { readonly role: 'player' | 'chief_of_staff'; readonly text: string }[],
+  established: SetupProposal | null,
+): Promise<SetupProposal | null> {
+  return postRole<SetupProposal>('/api/llm/setup-interpreter', { message, history, established });
 }

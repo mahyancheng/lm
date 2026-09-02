@@ -1327,3 +1327,74 @@ Five new `SIM_EVENT_TYPES` in total: `sector_price_set`,
 `predatory_pricing_flagged`, `dividend_paid`. All appended. Everything else
 reuses an existing type with additional payload fields, which keeps the ledger's
 audit surface stable.
+
+---
+
+## 6. Visualising the economy the Plutocracy way — adapted for a phone
+
+The owner's read, after playing it: Plutocracy's *presentation* of its economy
+is as strong as the economy itself. The research above bears that out and also
+names its one blind spot, so this section is the visual contract for Wave 3:
+every P0 mechanic ships with one of these surfaces, or it does not ship.
+
+### 6.1 The eight patterns worth copying (each sourced in §1–§2)
+
+| # | Plutocracy pattern | What it does for the player | Frontier Capital surface |
+|---|---|---|---|
+| V1 | **Itemised modifier stack** — a price or cost shown as a base figure and a signed list (`market share +12%`, `cartel +7%`, `transport toll −18%`, `subsidy +4%`) | Every strategic act resolves to one visible line | The Company screen's price and cost cards become stacks. Base in bold, each modifier one row with icon + signed whole percentage, total at the bottom. Rows come from the ledger (`sim_event` attribution), so the stack is never invented by the UI. |
+| V2 | **Market-share bars per industry** — a per-sector ladder of every company as a horizontal bar, yours highlighted | Position at a glance; "one more rival = a visible bump" | A **Sector** screen per sector: one bar per company (24-company safe: cards scroll, bars are full-width), your bar in brand colour, the cartel members grouped, the 50% control line drawn on the axis. |
+| V3 | **Price ladder vs competitors** — your price against each rival's on one axis, with the segment average marked | Makes dumping and the monopoly ceiling self-explanatory | On the product drawer: a single horizontal axis, segment average as a tick, each rival a dot, yours a labelled marker; the achievable ceiling (P0-4) drawn as a dashed line. |
+| V4 | **Shareholder control bar with thresholds** — holders as stacked segments, 25% and 50%+1 marked, verbs shown present-but-disabled with the reason | The reward is visible before it can be claimed | Cap-table visual gains threshold ticks; the Boardroom's disabled verbs carry a one-line "needs 50%+1 — you hold 38%" caption instead of vanishing. |
+| V5 | **Before/after previews on every slider** — dividend split, share issue (cash raised vs resulting ownership), block purchase (all-in cost incl. slippage) | The cost of a decision is a number before commitment, never a surprise | Our SliderField already has the live label; Wave 3 adds a two-column *now → after* preview beneath it for dividends, issuance, stake buys (P0-5) and accord terms (P0-3). |
+| V6 | **Supply-chain view: internal vs third-party links** | The visual gap between a cheap internal link and a market-priced one *is* the pitch for the next acquisition | A **Sector Flow** panel: six sector tiles on a chain, links drawn as arrows labelled with the price index (P0-1); your company's own inputs highlighted, third-party inputs shown at the market index with a `SHORT −30%` badge when the shortage counter is live. |
+| V7 | **Headroom bars next to the number they constrain** — borrowing capacity vs net assets with remaining headroom, next-quarter debt service beside cash on hand | The bankruptcy condition is always on screen | Financials: cash card gains a "next quarter you owe" line; the debt card is a bar (used / capacity) with headroom as one number. |
+| V8 | **Risk stated as a number on risky verbs** — detection likelihood and penalty on illegal actions, exposure that visibly falls as you capture offices | Risk is the price of the effect, not a hidden penalty | The antitrust exposure score (P0-3) as `62 / 100` on the Company screen with its five signed drivers; every accord, toll and predatory-price action shows "+8 exposure" on its confirm button. |
+
+Two more, from the map layer: **companies pinned on a map by region** and
+**state macro indicators (infrastructure, GDP, unemployment) beside the map**.
+Our Map scene already places offices; Wave 3 adds a sector icon per pin and a
+per-region strip with three whole-number indices (talent cost, energy cost,
+procurement appetite — the REGION_META fields).
+
+### 6.2 The one thing not to copy — and the fix
+
+Plutocracy's players ask on its own forum for per-state supply and demand
+that the game never shows, and its modifiers exist without their causal chain
+surfacing (§1.6). The engine here writes an append-only `sim_event` for every
+economic mutation, so the rule for every surface above is:
+
+> **If the engine multiplied it, the screen names it and signs it — and
+> tapping the row shows the event that caused it.**
+
+Concretely: every modifier row in V1, every link label in V6 and every driver
+in V8 is a tap target that opens the ledger row (quarter, cause, magnitude)
+from which it was derived. Nothing in the UI computes an economic number on
+its own; it only reads what the resolver recorded.
+
+### 6.3 Phone constraints (non-negotiable, from the owner)
+
+- Whole numbers and whole percentages only (the shared formatters); no
+  decimals anywhere in these surfaces.
+- One primary figure per card; the stack, ladder or bar is the *second* thing
+  the eye lands on, never the first.
+- Bars and ladders are full-width and vertical-scrolling; no table wider than
+  the phone, ever (cards below `sm`, `overflow-x` containers above).
+- Every slider keeps the SliderField contract: live label, snap steps, chips,
+  commit on release — plus the V5 preview.
+- Icons for sectors and modifiers from the existing icon set; no monograms.
+
+### 6.4 Where each surface lands (Wave 3 file map)
+
+- `apps/web/src/components/screens/sector/` (new): SectorLadder (V2),
+  SectorFlow (V6), region strip.
+- `apps/web/src/components/screens/company/`: PriceStack and CostStack (V1),
+  ExposureCard (V8).
+- `apps/web/src/components/screens/products/ProductDrawer.tsx`: PriceLadder (V3).
+- `apps/web/src/components/screens/capital/CapTableVisual.tsx`: threshold ticks
+  (V4); `boardroom/ProposePanel.tsx`: present-but-disabled verbs with reasons.
+- `apps/web/src/components/ui/SliderField.tsx`: optional `preview` slot (V5).
+- `apps/web/src/components/screens/financials/`: headroom bar and "next
+  quarter you owe" (V7).
+- `apps/web/src/components/scenes/map/`: sector pins and the region indices.
+- Every one of them reads its rows from the projected outcome / ledger, never
+  from its own arithmetic (§6.2).

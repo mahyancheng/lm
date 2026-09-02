@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ActionIntent, ActionValidationResult } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, KeyValueGrid, Tag, ValidationBanner } from '@/components/ui';
+import { ConfirmDialog, KeyValueGrid, SliderField, Tag, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 
 export interface AcquisitionTarget {
@@ -64,6 +64,10 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
   const cashNeeded = offer * cashPct;
   const premium = target === null || target.marketCapUsd <= 0 ? null : offer / target.marketCapUsd - 1;
 
+  // Three times the mark is the far end of the premium a board will hear out;
+  // beyond that the desk stops guessing and the figure is typed.
+  const offerMax = openCeiling(10_000_000, (target?.marketCapUsd ?? 0) * 3, offer);
+
   const intent: ActionIntent | null =
     target === null || offer <= 0
       ? null
@@ -99,42 +103,38 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
                 ))}
               </select>
             </label>
-            <label className="block">
-              <span className="label-caps-faint">Offer value (USD)</span>
-              <input
-                type="number"
-                className="field tap-target mt-1 sm:min-h-0"
-                min={0}
-                step={1_000_000}
-                value={String(offer)}
-                onChange={(event) => {
-                  const parsed = Number(event.target.value);
-                  setOffer(Number.isFinite(parsed) ? parsed : 0);
-                  setResult(null);
-                  setQueued(false);
-                }}
-              />
-            </label>
-          </div>
-
-          <label className="block">
-            <span className="label-caps-faint">
-              Consideration · {formatPct(cashPct)} cash / {formatPct(stockPct)} stock
-            </span>
-            <input
-              type="range"
-              className="tap-target mt-2 w-full accent-[color:var(--color-brand)] sm:min-h-0"
-              min={0}
-              max={100}
-              step={5}
-              value={Math.round(cashPct * 100)}
-              onChange={(event) => {
-                setCashPct(Number(event.target.value) / 100);
+            <SliderField
+              label="Offer value (USD)"
+              value={offer}
+              onChange={(next) => {
+                setOffer(next);
                 setResult(null);
                 setQueued(false);
               }}
+              min={0}
+              max={offerMax}
+              step={roundStep(offerMax)}
+              format={formatMoney}
             />
-          </label>
+          </div>
+
+          {/* One split, stated from the cash side; the stock side is what is
+              left, exactly as the intent computes it. */}
+          <SliderField
+            label={`Consideration · ${formatPct(cashPct)} cash / ${formatPct(stockPct)} stock`}
+            ariaLabel="Cash share of the consideration"
+            value={cashPct}
+            onChange={(next) => {
+              setCashPct(next);
+              setResult(null);
+              setQueued(false);
+            }}
+            min={0}
+            max={1}
+            step={0.05}
+            format={(value) => `${formatPct(value)} cash`}
+            exact={false}
+          />
 
           {/* One column: this desk is the narrow half of the row on a desktop,
               and "Market capitalisation" beside a nine-character figure does

@@ -18,7 +18,7 @@ import type { ActionValidationResult, Company, PlayerView, ProcurementOpportunit
 import { quarterLabel } from '@frontier/contracts';
 import { CLEARANCE_STAFF_REQUIREMENT, recordPastPerformance } from '@frontier/simulation';
 import { formatMoney, formatPct, formatScore } from '@frontier/shared';
-import { BarChart, Icon, ProgressBar, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
+import { BarChart, Icon, ProgressBar, SectionHeading, SliderField, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { EVALUATION_AXIS_LABEL } from './bidModel';
 
@@ -320,12 +320,19 @@ export function OpportunityCard({
               </select>
             </label>
             <div>
-              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                <span>Your share</span>
-                <span className="figure text-ink-dim">{formatPct(share)}</span>
-              </span>
+              {/* A consortium share of nothing is not a consortium: 5% is the
+                  floor the card has always offered, and it stays the floor. */}
+              <SliderField
+                label="Your share"
+                value={share}
+                onChange={setShare}
+                min={0.05}
+                max={1}
+                step={0.05}
+                format={formatPct}
+                exact={false}
+              />
               <ProgressBar value={share} tone="brand" />
-              <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0.05} max={1} step={0.05} value={share} onChange={(event) => setShare(Number(event.target.value))} />
             </div>
           </div>
           <p className="text-[11px] leading-relaxed text-ink-faint">

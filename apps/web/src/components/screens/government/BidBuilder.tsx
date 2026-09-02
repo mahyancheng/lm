@@ -35,7 +35,7 @@ import {
   engineCostEstimate,
   programmeScale,
 } from '@frontier/simulation';
-import { formatMoney, formatPct } from '@frontier/shared';
+import { formatCount, formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import {
   ConfirmDialog,
   Icon,
@@ -43,9 +43,12 @@ import {
   Meter,
   Modal,
   SectionHeading,
+  SliderField,
   Tag,
   ValidationBanner,
   cx,
+  openCeiling,
+  roundStep,
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { AUDIT_RIGHTS_LABEL, IP_CONCESSION_LABEL, initialDraft, toBid, toStoredBid, type BidDraft } from './bidModel';
@@ -175,6 +178,35 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
 
   const priceValue = draft === null ? 0 : Number.parseFloat(draft.price) || 0;
 
+  /* --- slider bounds -------------------------------------------------------
+     Every ceiling here is a fact about the world rather than a number the form
+     invented: the award is capped at `maxValue` (anything above it is bid but
+     never paid), a commitment of capacity or people is capped by the capacity
+     and people this company actually has, and the schedule bounds are the
+     schema's own 1..40 and 1..20. Committing more than you hold is a
+     disqualification, so the slider stops where the gate does — and "Exact"
+     still reaches past it, because the engine, not this control, decides. */
+  const bounds =
+    active === null || draft === null || analysis === null
+      ? null
+      : {
+          price: openCeiling(1_000_000, active.maxValue, priceValue),
+          accelerators: openCeiling(
+            1,
+            company.compute.ownedAccelerators + company.compute.reservedAccelerators,
+            analysis.scale.computeUnits,
+            Number.parseFloat(draft.acceleratorUnits) || 0,
+          ),
+          engineers: openCeiling(1, company.employees.engineers, analysis.scale.staff, Number.parseFloat(draft.engineers) || 0),
+          researchers: openCeiling(1, company.employees.researchers, analysis.scale.staff, Number.parseFloat(draft.researchers) || 0),
+          cleared: openCeiling(
+            1,
+            company.employees.engineers + company.employees.researchers,
+            analysis.scale.clearedStaff,
+            Number.parseFloat(draft.clearedStaff) || 0,
+          ),
+        };
+
   return (
     <>
       <Modal
@@ -203,7 +235,7 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
           </>
         }
       >
-        {active === null || draft === null || analysis === null ? null : (
+        {active === null || draft === null || analysis === null || bounds === null ? null : (
           <div className="grid gap-4 lg:grid-cols-2">
             {/* The verdict that decides whether any of this matters, stated once
                 at the top so a phone reads it before the eight folds and a
@@ -225,44 +257,46 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
             {/* ---------------------------- the bid --------------------------- */}
             <div className="space-y-3.5">
               <Fold title="Price" defaultOpen>
-                <input
-                  className="field tap-target mt-2 sm:min-h-0"
-                  type="number"
-                  min={0}
-                  step="1000000"
-                  value={draft.price}
-                  onChange={(event) => update({ price: event.target.value })}
-                />
+                <div className="mt-2">
+                  <SliderField
+                    label="Price across the term"
+                    value={priceValue}
+                    onChange={(next) => update({ price: String(next) })}
+                    min={0}
+                    max={bounds.price}
+                    step={roundStep(bounds.price)}
+                    format={formatMoney}
+                    chips
+                  />
+                </div>
                 <p className="mt-1 text-[10px] text-ink-faint">
-                  {formatMoney(priceValue)} across the term. Under {active.contractForm.replace(/_/g, ' ')}, an implausibly low price scores badly
-                  rather than winning.
+                  Under {active.contractForm.replace(/_/g, ' ')}, an implausibly low price scores badly rather than winning, and anything above the{' '}
+                  {formatMoney(active.maxValue)} ceiling is bid but never paid.
                 </p>
               </Fold>
 
               <Fold title="Committed capacity">
                 <div className="mt-2 grid gap-2.5 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Accelerators</span>
-                    <input
-                      className="field tap-target sm:min-h-0"
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={draft.acceleratorUnits}
-                      onChange={(event) => update({ acceleratorUnits: event.target.value })}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Locked for (quarters)</span>
-                    <input
-                      className="field tap-target sm:min-h-0"
-                      type="number"
-                      min={1}
-                      max={40}
-                      value={draft.computeQuarters}
-                      onChange={(event) => update({ computeQuarters: Math.max(1, Math.min(40, Number(event.target.value) || 1)) })}
-                    />
-                  </label>
+                  <SliderField
+                    label="Accelerators"
+                    value={Math.round(Number.parseFloat(draft.acceleratorUnits) || 0)}
+                    onChange={(next) => update({ acceleratorUnits: String(Math.round(next)) })}
+                    min={0}
+                    max={bounds.accelerators}
+                    step={roundStep(bounds.accelerators)}
+                    format={formatCount}
+                    chips
+                  />
+                  <SliderField
+                    label="Locked for"
+                    value={draft.computeQuarters}
+                    onChange={(next) => update({ computeQuarters: Math.max(1, Math.min(40, Math.round(next))) })}
+                    min={1}
+                    max={40}
+                    step={1}
+                    format={formatQuarterCount}
+                    exact={false}
+                  />
                 </div>
                 <p className="mt-1 text-[10px] text-ink-faint">
                   Locked capacity is unavailable for commercial work. A competent delivery of this programme takes about {analysis.scale.computeUnits}{' '}
@@ -272,18 +306,35 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
 
               <Fold title="Committed people">
                 <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Engineers</span>
-                    <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={draft.engineers} onChange={(event) => update({ engineers: event.target.value })} />
-                  </label>
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Researchers</span>
-                    <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={draft.researchers} onChange={(event) => update({ researchers: event.target.value })} />
-                  </label>
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Cleared staff</span>
-                    <input className="field tap-target sm:min-h-0" type="number" min={0} step={1} value={draft.clearedStaff} onChange={(event) => update({ clearedStaff: event.target.value })} />
-                  </label>
+                  <SliderField
+                    label="Engineers"
+                    value={Math.round(Number.parseFloat(draft.engineers) || 0)}
+                    onChange={(next) => update({ engineers: String(Math.round(next)) })}
+                    min={0}
+                    max={bounds.engineers}
+                    step={roundStep(bounds.engineers)}
+                    format={formatCount}
+                    chips
+                  />
+                  <SliderField
+                    label="Researchers"
+                    value={Math.round(Number.parseFloat(draft.researchers) || 0)}
+                    onChange={(next) => update({ researchers: String(Math.round(next)) })}
+                    min={0}
+                    max={bounds.researchers}
+                    step={roundStep(bounds.researchers)}
+                    format={formatCount}
+                    chips
+                  />
+                  <SliderField
+                    label="Cleared staff"
+                    value={Math.round(Number.parseFloat(draft.clearedStaff) || 0)}
+                    onChange={(next) => update({ clearedStaff: String(Math.round(next)) })}
+                    min={0}
+                    max={bounds.cleared}
+                    step={roundStep(bounds.cleared)}
+                    format={formatCount}
+                  />
                 </div>
                 <p className="mt-1 text-[10px] text-ink-faint">
                   The programme scale is around {analysis.scale.staff} technical staff and {analysis.scale.clearedStaff} cleared. You employ{' '}
@@ -293,28 +344,26 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
 
               <Fold title="Schedule">
                 <div className="mt-2 grid gap-2.5 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Quarters to first full delivery</span>
-                    <input
-                      className="field tap-target sm:min-h-0"
-                      type="number"
-                      min={1}
-                      max={40}
-                      value={draft.deliveryQuarters}
-                      onChange={(event) => update({ deliveryQuarters: Math.max(1, Math.min(40, Number(event.target.value) || 1)) })}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="label-caps-faint mb-1 block">Milestones</span>
-                    <input
-                      className="field tap-target sm:min-h-0"
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={draft.milestoneCount}
-                      onChange={(event) => update({ milestoneCount: Math.max(1, Math.min(20, Number(event.target.value) || 1)) })}
-                    />
-                  </label>
+                  <SliderField
+                    label="To first full delivery"
+                    value={draft.deliveryQuarters}
+                    onChange={(next) => update({ deliveryQuarters: Math.max(1, Math.min(40, Math.round(next))) })}
+                    min={1}
+                    max={40}
+                    step={1}
+                    format={formatQuarterCount}
+                    exact={false}
+                  />
+                  <SliderField
+                    label="Milestones"
+                    value={draft.milestoneCount}
+                    onChange={(next) => update({ milestoneCount: Math.max(1, Math.min(20, Math.round(next))) })}
+                    min={1}
+                    max={20}
+                    step={1}
+                    format={formatCount}
+                    exact={false}
+                  />
                 </div>
                 <p className="mt-1 text-[10px] text-ink-faint">More milestones mean earlier revenue recognition and more chances to miss.</p>
               </Fold>
@@ -342,21 +391,19 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
                     </select>
                   </label>
                 </div>
-                <label className="mt-2.5 block">
-                  <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                    <span>Domestic sourcing</span>
-                    <span className="figure text-ink-dim">{formatPct(draft.domesticSourcingPct)}</span>
-                  </span>
-                  <input
-                    type="range"
-                    className="tap-target w-full sm:min-h-0"
+                {/* 0..1 is the schema's own `unitInterval`; nothing to type. */}
+                <div className="mt-2.5">
+                  <SliderField
+                    label="Domestic sourcing"
+                    value={draft.domesticSourcingPct}
+                    onChange={(next) => update({ domesticSourcingPct: next })}
                     min={0}
                     max={1}
                     step={0.05}
-                    value={draft.domesticSourcingPct}
-                    onChange={(event) => update({ domesticSourcingPct: Number(event.target.value) })}
+                    format={formatPct}
+                    exact={false}
                   />
-                </label>
+                </div>
               </Fold>
 
               <Fold title="Technical claims">
@@ -374,21 +421,17 @@ export function BidBuilder({ session, company, view, opportunity, onClose }: Bid
                       ['responsibleAiCommitment', 'Responsible AI commitment'],
                     ] as const
                   ).map(([key, label]) => (
-                    <label key={key} className="block">
-                      <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                        <span>{label}</span>
-                        <span className="figure text-ink-dim">{formatPct(draft[key])}</span>
-                      </span>
-                      <input
-                        type="range"
-                        className="tap-target w-full sm:min-h-0"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={draft[key]}
-                        onChange={(event) => update({ [key]: Number(event.target.value) } as Partial<BidDraft>)}
-                      />
-                    </label>
+                    <SliderField
+                      key={key}
+                      label={label}
+                      value={draft[key]}
+                      onChange={(next) => update({ [key]: next } as Partial<BidDraft>)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      format={formatPct}
+                      exact={false}
+                    />
                   ))}
                 </div>
               </Fold>

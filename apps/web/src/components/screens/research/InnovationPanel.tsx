@@ -242,29 +242,28 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             <textarea className="field tap-target sm:min-h-0" rows={3} maxLength={1000} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
           </label>
 
+          {/* Both are the schema's `unitInterval`: 0..1, nothing to type. */}
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                <span>Novelty</span>
-                <span className="figure text-ink-dim">{formatPct(form.novelty)}</span>
-              </span>
-              <input type="range" className="tap-target w-full sm:min-h-0" min={0} max={1} step={0.05} value={form.novelty} onChange={(event) => setForm({ ...form, novelty: Number(event.target.value) })} />
-            </label>
-            <label className="block">
-              <span className="label-caps-faint mb-1 flex items-baseline justify-between">
-                <span>Plausibility</span>
-                <span className="figure text-ink-dim">{formatPct(form.plausibility)}</span>
-              </span>
-              <input
-                type="range"
-                className="tap-target w-full sm:min-h-0"
-                min={0}
-                max={1}
-                step={0.05}
-                value={form.plausibility}
-                onChange={(event) => setForm({ ...form, plausibility: Number(event.target.value) })}
-              />
-            </label>
+            <SliderField
+              label="Novelty"
+              value={form.novelty}
+              onChange={(next) => setForm({ ...form, novelty: next })}
+              min={0}
+              max={1}
+              step={0.05}
+              format={formatPct}
+              exact={false}
+            />
+            <SliderField
+              label="Plausibility"
+              value={form.plausibility}
+              onChange={(next) => setForm({ ...form, plausibility: next })}
+              min={0}
+              max={1}
+              step={0.05}
+              format={formatPct}
+              exact={false}
+            />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">

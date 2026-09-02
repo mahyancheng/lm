@@ -60,7 +60,7 @@ export type { MeterProps } from './Meter';
 
 export { SliderField } from './SliderField';
 export type { SliderFieldProps } from './SliderField';
-export { chipStops, roundStep, snapToStep } from './sliderMath';
+export { chipStops, openCeiling, roundStep, snapToStep } from './sliderMath';
 export type { ChipStop } from './sliderMath';
 
 export { AccessBadge, CompanyChip, PersonChip, initialsOf } from './Chips';

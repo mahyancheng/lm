@@ -16,7 +16,18 @@ import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Board, BoardProposalKind, Character, PlayerView, SessionState } from '@frontier/contracts';
 import { BOARD_PROPOSAL_KINDS } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, Panel, PersonChip, ProgressBar, SectionHeading, Tag, ValidationBanner } from '@/components/ui';
+import {
+  ConfirmDialog,
+  Panel,
+  PersonChip,
+  ProgressBar,
+  SectionHeading,
+  SliderField,
+  Tag,
+  ValidationBanner,
+  openCeiling,
+  roundStep,
+} from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { PROPOSAL_KIND_BLURB, PROPOSAL_KIND_LABEL } from './labels';
 import { hypotheticalProposal, whipCount } from './whip';
@@ -36,15 +47,23 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
   const [kind, setKind] = useState<BoardProposalKind>('annual_plan');
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState(0);
+  const [priced, setPriced] = useState(false);
   const [targetCompanyId, setTargetCompanyId] = useState('');
   const [stockPct, setStockPct] = useState(0.3);
   const [useStock, setUseStock] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
-  const amountValue = amount.trim().length === 0 ? null : Number.parseFloat(amount);
-  const amountUsd = amountValue !== null && Number.isFinite(amountValue) ? Math.max(0, amountValue) : null;
+  // A matter can carry no price at all, and that is not the same as a price of
+  // zero — so the amount stays behind its own switch rather than becoming a
+  // slider that always states something.
+  const amountUsd = priced && Number.isFinite(amount) ? Math.max(0, amount) : null;
+
+  // What the company is marked at is the scale directors argue inside; a matter
+  // worth more than the whole company is typed through "Exact".
+  const anchorUsd = session.valuationAnchors.find((entry) => entry.companyId === board.companyId)?.anchorValueUsd ?? 0;
+  const amountMax = openCeiling(10_000_000, anchorUsd, view.ownCompany.financials.cash, amountUsd ?? 0);
 
   const draft = useMemo(
     () => ({
@@ -102,10 +121,32 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="label-caps-faint mb-1 block">Headline amount</span>
-            <input className="field tap-target sm:min-h-0" type="number" min={0} step="1000000" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="none" />
-          </label>
+          <div>
+            <label className="tap-target flex cursor-pointer items-center gap-2.5 sm:min-h-0">
+              <input
+                type="checkbox"
+                className="size-5 shrink-0 accent-[color:var(--color-brand-strong)] sm:size-4"
+                checked={priced}
+                onChange={(event) => setPriced(event.target.checked)}
+              />
+              <span className="label-caps-faint">Headline amount</span>
+            </label>
+            {priced ? (
+              <SliderField
+                className="mt-1.5"
+                label="Amount"
+                value={amountUsd ?? 0}
+                onChange={setAmount}
+                min={0}
+                max={amountMax}
+                step={roundStep(amountMax)}
+                format={formatMoney}
+                chips
+              />
+            ) : (
+              <p className="mt-1.5 text-[10px] text-ink-faint">The matter carries no price. Directors vote on the case, not a number.</p>
+            )}
+          </div>
         </div>
         <p className="mt-1.5 text-[12px] leading-relaxed text-ink-faint sm:text-[10px]">{PROPOSAL_KIND_BLURB[kind]}</p>
 
@@ -151,10 +192,17 @@ export function ProposePanel({ session, board, founder, view, directorsById }: P
               <span className="label-caps-faint">Stock component</span>
             </label>
             {useStock ? (
-              <>
-                <input type="range" className="tap-target mt-1.5 w-full sm:min-h-0" min={0} max={1} step={0.05} value={stockPct} onChange={(event) => setStockPct(Number(event.target.value))} />
-                <span className="figure text-[11px] text-ink-dim">{formatPct(stockPct)} in stock</span>
-              </>
+              <SliderField
+                className="mt-1.5"
+                label="In stock"
+                value={stockPct}
+                onChange={setStockPct}
+                min={0}
+                max={1}
+                step={0.05}
+                format={formatPct}
+                exact={false}
+              />
             ) : (
               <p className="mt-1.5 text-[10px] text-ink-faint">Directors negotiate hard over this on an acquisition.</p>
             )}

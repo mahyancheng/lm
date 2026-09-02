@@ -5,8 +5,9 @@
  * A slider is only honest when every position it can land on is a figure a
  * player would write down themselves: budgets snap to $250K, not $247,193.
  * These helpers produce that grid — a round step sized to the bound, values
- * snapped onto it with the bounds always reachable, and the 25/50/75/Max stops
- * the quick-set chips offer against a cash or budget ceiling.
+ * snapped onto it with the bounds always reachable, the 25/50/75/Max stops the
+ * quick-set chips offer against a cash or budget ceiling, and a ceiling for the
+ * actions whose schema sets no maximum at all.
  */
 
 /**
@@ -45,10 +46,35 @@ export function snapToStep(value: number, min: number, max: number, step: number
   if (Number.isNaN(value)) return min;
   const clamped = Math.min(max, Math.max(min, value));
   if (step <= 0) return clamped;
-  const snapped = Math.min(max, Math.max(min, Math.round(clamped / step) * step));
+  const snapped = Math.min(max, Math.max(min, quantise(Math.round(clamped / step) * step)));
   // The ceiling is a grid point of its own: a value nearer to it than to the
   // highest multiple below it snaps up, not down.
   return max - clamped < Math.abs(clamped - snapped) ? max : snapped;
+}
+
+/**
+ * Strip binary-representation noise from a snapped value: seven steps of 0.05
+ * is 0.35, not 0.35000000000000003. The submitted figure is the one the label
+ * showed, and a fraction the player set to 35% is stored as 35%.
+ */
+function quantise(value: number): number {
+  return Number(value.toFixed(10));
+}
+
+/**
+ * The ceiling for a slider whose action carries no schema maximum — a raise, an
+ * offer, a cash payment. `floor` keeps the track wide enough to drag when there
+ * is no context yet, and the value already set is always inside the range, so
+ * the thumb never sits pinned at a ceiling below the figure it represents. A
+ * conviction beyond every candidate is typed through "Exact", which the
+ * validator, not this range, adjudicates.
+ */
+export function openCeiling(floor: number, ...candidates: readonly number[]): number {
+  let ceiling = floor;
+  for (const candidate of candidates) {
+    if (Number.isFinite(candidate) && candidate > ceiling) ceiling = candidate;
+  }
+  return ceiling > 0 ? ceiling : Math.max(floor, 1);
 }
 
 /** One quick-set chip: a label and the snapped value it jumps to. */

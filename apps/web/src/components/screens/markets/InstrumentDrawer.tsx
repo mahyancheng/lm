@@ -72,6 +72,16 @@ export function InstrumentDrawer({
           .reduce((total, holding) => total + holding.shares, 0);
   const issued = capTable === null ? 0 : issuedSharesOf(capTable);
 
+  // The free float, summed exactly as the validator sums it when it cuts a
+  // purchase down: the ticket's buy slider must not offer shares no one is
+  // holding out for sale.
+  const floatShares =
+    capTable === null || security === null
+      ? 0
+      : capTable.holdings
+          .filter((holding) => holding.securityId === security.id && holding.holderKind === 'public_float')
+          .reduce((total, holding) => total + holding.shares, 0);
+
   const bars: BarDatum[] =
     decomposition === null
       ? []
@@ -159,6 +169,7 @@ export function InstrumentDrawer({
                 lastPrice={row.quote?.price ?? 0}
                 heldShares={heldShares}
                 issuedShares={issued}
+                floatShares={floatShares}
               />
             </div>
           </div>

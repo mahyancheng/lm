@@ -25,8 +25,8 @@ import type {
   VoteStance,
 } from '@frontier/contracts';
 import { BOARD_PROPOSAL_KINDS, DEAL_OBLIGATION_KINDS, VOTE_STANCES, quarterLabel } from '@frontier/contracts';
-import { formatMoney } from '@frontier/shared';
-import { ConfirmDialog, Icon, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
+import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
+import { ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import {
   OBLIGATION_HINTS,
@@ -455,7 +455,8 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
           <NumberField
             label="Units a quarter"
             value={obligation.units}
-            min={0}
+            max={openCeiling(1_000, obligation.units)}
+            kind="count"
             onChange={(units) => onChange({ ...obligation, units })}
           />
           <NumberField
@@ -463,6 +464,7 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
             value={obligation.quarters}
             min={1}
             max={20}
+            kind="quarters"
             onChange={(quarters) => onChange({ ...obligation, quarters })}
           />
         </Row>
@@ -471,14 +473,26 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
     case 'cash_payment':
       return (
         <Row>
-          <NumberField label="Amount (USD)" value={obligation.amount} min={0} step={100_000} onChange={(amount) => onChange({ ...obligation, amount })} />
+          <NumberField
+            label="Amount (USD)"
+            value={obligation.amount}
+            max={openCeiling(10_000_000, obligation.amount)}
+            kind="money"
+            onChange={(amount) => onChange({ ...obligation, amount })}
+          />
         </Row>
       );
 
     case 'investment':
       return (
         <Row>
-          <NumberField label="Amount (USD)" value={obligation.amount} min={0} step={100_000} onChange={(amount) => onChange({ ...obligation, amount })} />
+          <NumberField
+            label="Amount (USD)"
+            value={obligation.amount}
+            max={openCeiling(10_000_000, obligation.amount)}
+            kind="money"
+            onChange={(amount) => onChange({ ...obligation, amount })}
+          />
           <SelectField
             label="Security received"
             value={obligation.securityId}
@@ -497,7 +511,13 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
             options={securities}
             onChange={(securityId) => onChange({ ...obligation, securityId })}
           />
-          <NumberField label="Shares" value={obligation.shares} min={0} onChange={(shares) => onChange({ ...obligation, shares })} />
+          <NumberField
+            label="Shares"
+            value={obligation.shares}
+            max={openCeiling(10_000_000, obligation.shares)}
+            kind="count"
+            onChange={(shares) => onChange({ ...obligation, shares })}
+          />
         </Row>
       );
 
@@ -518,7 +538,7 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
             allowEmpty="None"
             onChange={(productId) => onChange({ ...obligation, productId: productId === '' ? null : productId })}
           />
-          <NumberField label="Quarters" value={obligation.quarters} min={1} max={20} onChange={(quarters) => onChange({ ...obligation, quarters })} />
+          <NumberField label="Quarters" value={obligation.quarters} min={1} max={20} kind="quarters" onChange={(quarters) => onChange({ ...obligation, quarters })} />
         </Row>
       );
 
@@ -537,7 +557,7 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
             options={VOTE_STANCES.map((stance) => ({ id: stance, label: stance }))}
             onChange={(stance) => onChange({ ...obligation, stance: stance as VoteStance })}
           />
-          <NumberField label="Quarters" value={obligation.quarters} min={1} max={12} onChange={(quarters) => onChange({ ...obligation, quarters })} />
+          <NumberField label="Quarters" value={obligation.quarters} min={1} max={12} kind="quarters" onChange={(quarters) => onChange({ ...obligation, quarters })} />
         </Row>
       );
 
@@ -553,7 +573,7 @@ function ObligationFields({ obligation, onChange, securities, opportunities, tec
               onChange={(event) => onChange({ ...obligation, statement: event.target.value })}
             />
           </label>
-          <NumberField label="Quarters maintained" value={obligation.quarters} min={1} max={8} onChange={(quarters) => onChange({ ...obligation, quarters })} />
+          <NumberField label="Quarters maintained" value={obligation.quarters} min={1} max={8} kind="quarters" onChange={(quarters) => onChange({ ...obligation, quarters })} />
         </div>
       );
 
@@ -578,37 +598,50 @@ function Row({ children }: { readonly children: React.ReactNode }): React.JSX.El
   return <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">{children}</div>;
 }
 
+/** How a quantity on an obligation reads, and therefore how it is set. */
+type FieldKind = 'money' | 'count' | 'quarters';
+
+const FIELD_FORMAT: Readonly<Record<FieldKind, (value: number) => string>> = {
+  money: formatMoney,
+  count: formatCount,
+  quarters: formatQuarterCount,
+};
+
+/**
+ * One quantity on one obligation.
+ *
+ * A term of the deal is a whole number of dollars, units, shares or quarters,
+ * so it is set by thumb rather than typed. Every term bound is
+ * `DealObligationSchema`'s own; a cash or share quantity has no schema ceiling,
+ * and the call site supplies the range instead — which "Exact" reaches past,
+ * because the validator is what decides whether a term clears.
+ */
 function NumberField({
   label,
   value,
-  min,
+  min = 0,
   max,
-  step,
+  kind,
   onChange,
 }: {
   readonly label: string;
   readonly value: number;
   readonly min?: number;
-  readonly max?: number;
-  readonly step?: number;
+  readonly max: number;
+  readonly kind: FieldKind;
   readonly onChange: (value: number) => void;
 }): React.JSX.Element {
   return (
-    <label className="block">
-      <span className="label-caps-faint">{label}</span>
-      <input
-        type="number"
-        className="field tap-target mt-1 sm:min-h-0"
-        value={String(value)}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => {
-          const parsed = Number(event.target.value);
-          onChange(Number.isFinite(parsed) ? parsed : 0);
-        }}
-      />
-    </label>
+    <SliderField
+      label={label}
+      value={value}
+      onChange={(next) => onChange(Math.round(next))}
+      min={min}
+      max={max}
+      step={kind === 'quarters' ? 1 : roundStep(max)}
+      format={FIELD_FORMAT[kind]}
+      exact={kind !== 'quarters'}
+    />
   );
 }
 

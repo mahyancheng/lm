@@ -13,7 +13,7 @@
 import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionValidationResult } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, SectionHeading, TabBar, ValidationBanner } from '@/components/ui';
+import { ConfirmDialog, SectionHeading, SliderField, TabBar, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { formatCount } from '../reporting/util';
 
@@ -27,6 +27,8 @@ export interface TradeTicketProps {
   readonly heldShares: number;
   /** Issued shares in the class, so the ticket can state the resulting stake. */
   readonly issuedShares: number;
+  /** Shares held by the public float — the validator's own ceiling on a purchase. */
+  readonly floatShares: number;
 }
 
 type Side = 'buy' | 'sell';
@@ -38,6 +40,7 @@ export function TradeTicket({
   lastPrice,
   heldShares,
   issuedShares,
+  floatShares,
 }: TradeTicketProps): React.JSX.Element {
   const { validateIntent, queueAction } = useGameActions();
   const [side, setSide] = useState<Side>('buy');
@@ -63,6 +66,15 @@ export function TradeTicket({
   const stakeAfter = issuedShares > 0 ? sharesAfter / issuedShares : 0;
   const stakeNow = issuedShares > 0 ? heldShares / issuedShares : 0;
 
+  /* --- slider bounds -------------------------------------------------------
+     Both ceilings are the validator's: a purchase is cut to the free float, a
+     sale to the whole position, so "Max" is the largest order that clears
+     rather than a number this ticket made up. The limit price is not a budget,
+     so it carries no chips — a few multiples of the last trade is the range,
+     and conviction past it is typed. */
+  const sharesMax = side === 'buy' ? Math.max(1, floatShares) : Math.max(1, heldShares);
+  const priceMax = openCeiling(10, lastPrice * 3, limitPrice);
+
   return (
     <div className="flex flex-col gap-3">
       <SectionHeading rule>Trade ticket</SectionHeading>
@@ -82,31 +94,32 @@ export function TradeTicket({
         }}
       />
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="label-caps-faint">Shares</span>
-          <input
-            className="field tap-target mt-1 sm:min-h-0"
-            inputMode="numeric"
-            value={shares}
-            onChange={(event) => {
-              setShares(event.target.value);
-              setQueued(null);
-            }}
-          />
-        </label>
-        <label className="block">
-          <span className="label-caps-faint">{side === 'buy' ? 'Max price' : 'Min price'}</span>
-          <input
-            className="field tap-target mt-1 sm:min-h-0"
-            inputMode="decimal"
-            value={limit}
-            onChange={(event) => {
-              setLimit(event.target.value);
-              setQueued(null);
-            }}
-          />
-        </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SliderField
+          label="Shares"
+          value={shareCount}
+          onChange={(next) => {
+            setShares(String(next));
+            setQueued(null);
+          }}
+          min={0}
+          max={sharesMax}
+          step={roundStep(sharesMax)}
+          format={formatCount}
+          chips
+        />
+        <SliderField
+          label={side === 'buy' ? 'Max price' : 'Min price'}
+          value={limitPrice}
+          onChange={(next) => {
+            setLimit(String(next));
+            setQueued(null);
+          }}
+          min={0}
+          max={priceMax}
+          step={roundStep(priceMax)}
+          format={formatMoney}
+        />
       </div>
 
       <dl className="raised-surface divide-y divide-hair px-3 py-1 text-[12px]">

@@ -49,6 +49,7 @@
  * | `events`      | World events, families, hazards, the GM proposal envelope   |
  * | `company`     | Companies, products, people, compute, financials            |
  * | `ownership`   | Share classes, securities, holdings, cap tables, rounds     |
+ * | `economy`     | Sector prices, tolls, accords, exposure, dividends, control |
  * | `markets`     | Instruments, quotes, anchors, beliefs, return decomposition |
  * | `governance`  | Boards, directors, proposals, votes, commitments            |
  * | `government`  | Agencies, opportunities, bids, contracts, past performance  |
@@ -71,6 +72,7 @@ export * from './modifiers';
 export * from './events';
 export * from './company';
 export * from './ownership';
+export * from './economy';
 export * from './markets';
 export * from './governance';
 export * from './government';

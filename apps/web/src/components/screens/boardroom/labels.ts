@@ -30,6 +30,7 @@ export const PROPOSAL_KIND_LABEL: Readonly<Record<BoardProposalKind, string>> = 
   model_release: 'Model release',
   restructuring: 'Restructuring',
   ceo_dismissal: 'Dismissal of the chief executive',
+  dividend: 'Dividend policy',
 };
 
 export const PROPOSAL_KIND_BLURB: Readonly<Record<BoardProposalKind, string>> = {
@@ -45,6 +46,7 @@ export const PROPOSAL_KIND_BLURB: Readonly<Record<BoardProposalKind, string>> = 
   model_release: 'Governs a safety-sensitive launch.',
   restructuring: 'Survival.',
   ceo_dismissal: 'Removes the chief executive — for a player, executive control without losing a share.',
+  dividend: 'Pays capital out to shareholders instead of spending it on the business.',
 };
 
 export const MANDATE_LABEL: Readonly<Record<DirectorMandate, string>> = {

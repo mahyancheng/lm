@@ -119,6 +119,9 @@ export const BOARD_PROPOSAL_KINDS = [
   'model_release',
   'restructuring',
   'ceo_dismissal',
+  // Appended: a payout is a capital-allocation decision of exactly the kind a
+  // board exists to weigh, and appending to this array is safe.
+  'dividend',
 ] as const;
 
 export const BoardProposalKindSchema = z
@@ -188,6 +191,11 @@ export const BoardTallySchema = z
     quorumMet: z.boolean().describe('False when too few directors attended; the matter does not resolve and rolls to the next meeting.'),
     passes: z.boolean().describe('Whether the matter carried under the board rule set.'),
     perDirector: z.array(BoardVoteSchema).describe('Every individual vote, so the boardroom screen can show who moved and why.'),
+    decidedByControl: z
+      .boolean()
+      .default(false)
+      .describe('True when a holder of 50% + 1 share decided the matter outright rather than the room. Never true for ceo_dismissal, which stays a genuine board matter.'),
+    controllingHolderId: z.string().nullable().default(null).describe('The holder whose stake was decisive, or null when the room decided it.'),
   })
   .describe('The resolved outcome of a board vote.');
 export type BoardTally = z.infer<typeof BoardTallySchema>;

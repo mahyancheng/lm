@@ -221,6 +221,26 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
         ],
       };
 
+    case 'set_dividend_policy':
+      return {
+        label: 'Set the payout policy',
+        terms: [
+          term('Payout', `${intent.payoutPct}% of net income`),
+          term('Struck on', "Last quarter's result"),
+          term('Cap', 'Never more than half of cash'),
+        ],
+      };
+
+    case 'set_logistics_toll':
+      return {
+        label: `Set the freight toll in ${intent.region.replace(/_/g, ' ')}`,
+        terms: [
+          term('Toll', `${intent.tollPct}% on rivals' inputs`),
+          term('Your group', 'Exempt'),
+          term('Ceiling', "What your group's regional share earns"),
+        ],
+      };
+
     case 'buy_shares':
       return {
         label: `Accumulate ${intent.securityId}`,
@@ -371,6 +391,8 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   buyback: 'capital_resolution',
   issue_shares: 'capital_resolution',
   ipo: 'capital_resolution',
+  set_dividend_policy: 'capital_resolution',
+  set_logistics_toll: 'capital_resolution',
   buy_shares: 'capital_resolution',
   sell_shares: 'capital_resolution',
   acquire_company: 'capital_resolution',
@@ -486,6 +508,10 @@ export function cashEffectOf(session: SessionState, intent: ActionIntent): CashE
         inflowUsd: 0,
         note: 'The cash component only; the stock component dilutes instead.',
       };
+    case 'set_dividend_policy':
+      return { outflowUsd: 0, inflowUsd: 0, note: 'The payout is settled next quarter, on this quarter\u2019s net income.' };
+    case 'set_logistics_toll':
+      return { outflowUsd: 0, inflowUsd: 0, note: 'A toll costs you nothing; it costs everybody else in the region.' };
     case 'buy_shares':
       return {
         outflowUsd: intent.shares === null ? 0 : intent.shares * intent.maxPricePerShareUsd,

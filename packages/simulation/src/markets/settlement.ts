@@ -24,7 +24,17 @@
  */
 
 import type { CapTable, SessionState, SubmittedAction } from '@frontier/contracts';
-import { OWNERSHIP_THRESHOLDS, makeId } from '@frontier/contracts';
+import {
+  BLOCK_PREMIUM,
+  CONTROL_DECISIVE_PCT,
+  OWNERSHIP_THRESHOLDS,
+  blockExecutionPriceUsd,
+  makeId,
+  sharesWithinLimit,
+  stakeExecutionPriceUsd,
+  stakeImpactPct,
+} from '@frontier/contracts';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { round } from '../economy/util';
 
 /**
@@ -40,7 +50,18 @@ export interface TradeSettlement {
   readonly side: 'buy' | 'sell';
   readonly requestedShares: number;
   readonly settledShares: number;
+  /** Blended price actually paid per share: the quote in world 1, the execution price after. */
   readonly pricePerShare: number;
+  /** The quote the trade was struck against, before any own-order impact. */
+  readonly quotePriceUsd: number;
+  /** What the float tranche executed at, after its own impact. Equals the quote in world 1. */
+  readonly executionPriceUsd: number;
+  /** Whole-percentage impact of this order's own size on its execution price. */
+  readonly impactPct: number;
+  /** Shares taken out of the public float. */
+  readonly floatShares: number;
+  /** Shares bought out of a named institutional block, at double the quote. */
+  readonly blockShares: number;
   readonly considerationUsd: number;
   readonly ownershipPctBefore: number;
   readonly ownershipPctAfter: number;
@@ -148,23 +169,82 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
       const float = capTable.holdings.filter((holding) => holding.securityId === security.id && holding.holderKind === 'public_float');
       const available = float.reduce((sum, holding) => sum + holding.shares, 0);
       const buyer = state.companies.find((company) => company.id === holderId) ?? null;
-      const affordable = buyer === null ? requested : Math.floor(buyer.financials.cash / price);
-      const settled = Math.max(0, Math.min(requested, available, Math.floor(absorbableShares(state, security.instrumentId, quarter, issued)), affordable));
+      const cash = buyer === null ? Number.POSITIVE_INFINITY : buyer.financials.cash;
+      const absorbable = Math.floor(absorbableShares(state, security.instrumentId, quarter, issued));
+      const convex = isMultiSectorWorld(state);
+
+      // World 1 pays the quote flat. From world 2 the last shares of a float cost
+      // more than the first — buying the whole of it costs twice the quote — and
+      // the limit price therefore has to bind on the *execution* price, not on
+      // the quote, or a raider would never feel the slippage they asked for.
+      const byLimit = convex ? sharesWithinLimit(price, intent.maxPricePerShareUsd, available) : available;
+      let floatShares = Math.max(0, Math.min(requested, available, absorbable, byLimit));
+      if (convex) {
+        // Cost rises faster than size, so shrink until it fits. Bounded, integer,
+        // and monotone, so it terminates and it replays.
+        for (let step = 0; step < 64 && floatShares > 0; step += 1) {
+          const unitPrice = stakeExecutionPriceUsd(price, floatShares, available);
+          if (floatShares * unitPrice <= cash) break;
+          const next = Math.min(floatShares - 1, Math.floor(cash / Math.max(unitPrice, 1e-6)));
+          floatShares = next >= floatShares ? floatShares - 1 : Math.max(0, next);
+        }
+      } else {
+        floatShares = Math.max(0, Math.min(floatShares, Math.floor(cash / price)));
+      }
+
+      const executionPrice = convex ? stakeExecutionPriceUsd(price, floatShares, available) : price;
+      const impactPct = convex ? stakeImpactPct(floatShares, available) : 0;
+      let consideration = round(floatShares * executionPrice, 2);
+
+      // The last tranche is a social problem, not a cash one — except from an
+      // institutional bloc, which will always sell at a price. That price is flat
+      // double the quote, which is what pushes a raider out of the anonymous
+      // market and into a negotiation with the named holders who will not.
+      const blockPrice = blockExecutionPriceUsd(price);
+      let blockShares = 0;
+      if (convex && floatShares < requested && blockPrice <= intent.maxPricePerShareUsd) {
+        const blocks = capTable.holdings
+          .filter(
+            (holding) =>
+              holding.securityId === security.id &&
+              holding.holderKind === 'fund' &&
+              holding.holderId !== holderId &&
+              holding.shares > 0 &&
+              (holding.lockupUntilQuarter === null || quarter >= holding.lockupUntilQuarter),
+          )
+          .slice()
+          .sort((a, b) => (b.shares !== a.shares ? b.shares - a.shares : a.id < b.id ? -1 : 1));
+        const blockSupply = blocks.reduce((sum, holding) => sum + holding.shares, 0);
+        const cashLeft = cash === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : Math.max(0, cash - consideration);
+        const affordableBlocks = cashLeft === Number.POSITIVE_INFINITY ? blockSupply : Math.floor(cashLeft / Math.max(blockPrice, 1e-6));
+        let wantBlocks = Math.max(0, Math.min(requested - floatShares, absorbable - floatShares, blockSupply, affordableBlocks));
+        for (const holding of blocks) {
+          if (wantBlocks <= 0) break;
+          const taken = Math.min(holding.shares, wantBlocks);
+          holding.shares -= taken;
+          holding.costBasisUsd = round(Math.max(0, holding.costBasisUsd * (holding.shares + taken > 0 ? holding.shares / (holding.shares + taken) : 0)), 2);
+          wantBlocks -= taken;
+          blockShares += taken;
+        }
+        consideration = round(consideration + blockShares * blockPrice, 2);
+      }
+
+      const settled = floatShares + blockShares;
       if (settled <= 0) {
         settlements.push(
           rejectTrade(
             action,
             security.id,
             security.companyId,
-            buyer !== null && affordable <= 0 ? 'insufficient_cash' : 'requirement_not_met',
-            'Nothing could be bought: no float available, no absorbable volume, or no cash.',
+            buyer !== null && cash < price ? 'insufficient_cash' : 'requirement_not_met',
+            'Nothing could be bought: no float available, no absorbable volume, no cash, or the execution price would have passed the limit.',
           ),
         );
         continue;
       }
 
-      // Take the shares from the float, largest position first, deterministically.
-      let remaining = settled;
+      // Take the float shares from the float, largest position first, deterministically.
+      let remaining = floatShares;
       for (const holding of float.slice().sort((a, b) => (b.shares !== a.shares ? b.shares - a.shares : a.id < b.id ? -1 : 1))) {
         if (remaining <= 0) break;
         const taken = Math.min(holding.shares, remaining);
@@ -172,8 +252,6 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
         holding.costBasisUsd = round(Math.max(0, holding.costBasisUsd * (holding.shares + taken > 0 ? holding.shares / (holding.shares + taken) : 0)), 2);
         remaining -= taken;
       }
-
-      const consideration = round(settled * price, 2);
       if (existing === null) {
         capTable.holdings = [
           ...capTable.holdings,
@@ -210,7 +288,12 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
         side: 'buy',
         requestedShares: requested,
         settledShares: settled,
-        pricePerShare: price,
+        pricePerShare: settled > 0 ? round(consideration / settled, 4) : price,
+        quotePriceUsd: price,
+        executionPriceUsd: executionPrice,
+        impactPct,
+        floatShares,
+        blockShares,
         considerationUsd: consideration,
         ownershipPctBefore: round(pctBefore, 6),
         ownershipPctAfter: round(pctAfter, 6),
@@ -289,6 +372,11 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
       requestedShares: requested,
       settledShares: settled,
       pricePerShare: price,
+      quotePriceUsd: price,
+      executionPriceUsd: price,
+      impactPct: 0,
+      floatShares: settled,
+      blockShares: 0,
       considerationUsd: proceeds,
       ownershipPctBefore: round(pctBefore, 6),
       ownershipPctAfter: round(pctAfter, 6),
@@ -311,6 +399,11 @@ function rejectTrade(action: SubmittedAction, securityId: string, companyId: str
     requestedShares: 0,
     settledShares: 0,
     pricePerShare: 0,
+    quotePriceUsd: 0,
+    executionPriceUsd: 0,
+    impactPct: 0,
+    floatShares: 0,
+    blockShares: 0,
     considerationUsd: 0,
     ownershipPctBefore: 0,
     ownershipPctAfter: 0,

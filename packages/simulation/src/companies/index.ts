@@ -42,9 +42,10 @@ export {
   customersPerUnit,
   servingComputeUnits,
   heldComputeUnits,
+  unclampedGrossMargin,
 } from './products';
 export { resolveComputeOrders, reservedUnitPriceUsd } from './compute';
-export { resolveFinancials, computeCost } from './financials';
+export { resolveFinancials, computeCost, lastQuarterNetIncomeUsd } from './financials';
 export type { ComputeCostBreakdown } from './financials';
 export {
   resolveDistress,
@@ -57,7 +58,7 @@ export {
 } from './distress';
 export type { AdministrationCause } from './distress';
 export { applyNpcDefaults, bidTarget } from './npc';
-export { recomputeMetrics } from './metrics';
+export { recomputeMetrics, recomputeAntitrustExposure, recomputeControlStatus } from './metrics';
 export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';
 export type { MarketingPlan } from './policy';
 export { ARCHETYPE_POLICIES, POSTURE_ADJUSTMENTS, effectivePolicy } from './archetypes';

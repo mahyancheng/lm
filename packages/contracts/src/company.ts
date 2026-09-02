@@ -372,6 +372,47 @@ export const CompanySchema = z
       'Rolled-up figures the share price is anchored to. Written by the metrics phase, read by the market phase. Defaults to DEFAULT_COMPANY_FUNDAMENTALS so a world-version-1 save parses unchanged.',
     ),
 
+    // --- priced economy (world version 2 and later) ---
+    //
+    // Every field below is `.optional()` rather than defaulted, and that is
+    // load-bearing: a defaulted field would materialise on every world-version-1
+    // company the moment the schema parsed one, and the frozen world would stop
+    // hashing to the value it has always hashed to. Absent means "this world does
+    // not have priced goods", and every reader treats absent as the neutral value.
+    antitrustExposure: score100(
+      'Antitrust exposure, 0-100. Built from sector share, accord membership, recent acquisitions, tolls charged and quarters of predatory pricing; about a tenth of it decays every quarter, so a player can de-escalate. Drives the probability that an investigation names this company.',
+    )
+      .optional(),
+    predatoryQuarters: z
+      .number()
+      .int()
+      .min(0)
+      .max(8)
+      .optional()
+      .describe('Consecutive quarters this company has priced below cost and materially under its segment. Rises by one, falls by one, capped at eight, and worth eight points of antitrust exposure each.'),
+    dividendPolicyPct: z
+      .number()
+      .int()
+      .min(0)
+      .max(80)
+      .optional()
+      .describe('Share of last quarter\'s net income paid out to holders, 0-80. Settled in the capital phase and capped at half of cash however high the policy is.'),
+    accordSuspendedUntilQuarter: QuarterIndexSchema.nullable()
+      .optional()
+      .describe('Quarter until which every price accord this company is party to pays nothing, set by an antitrust enforcement action. Null or absent when nothing is suspended.'),
+    logisticsTollPct: z
+      .number()
+      .int()
+      .min(0)
+      .max(25)
+      .optional()
+      .describe('The toll this company charges rivals on its inputs in regions where its group dominates logistics. A dial, not a right: the engine caps it at what the group\'s regional share actually earns.'),
+    recentAcquisitionQuarters: z
+      .array(QuarterIndexSchema)
+      .max(8)
+      .optional()
+      .describe('Quarters in which this company completed an acquisition, pruned to the antitrust window. Bounded history: the full record lives in the ledger.'),
+
     // --- strategy (drives NPC behaviour and describes player companies) ---
     posture: CompanyPostureSchema,
     riskTolerance: unitInterval('How much variance this company will accept for upside. Drives NPC leverage, hiring pace and bid aggression.'),

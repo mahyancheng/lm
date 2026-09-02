@@ -46,6 +46,8 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   buyback: '/capital',
   issue_shares: '/capital',
   ipo: '/capital',
+  set_dividend_policy: '/capital',
+  set_logistics_toll: '/company',
   buy_shares: '/markets',
   sell_shares: '/markets',
   acquire_company: '/deal-room',

@@ -24,6 +24,7 @@ import { SectorStateMapSchema, WorldStateSchema } from './world';
 import { ActiveModifierSchema } from './modifiers';
 import { EventHazardMapSchema, WorldEventSchema } from './events';
 import { CompanySchema, CompanyQuarterMetricsSchema } from './company';
+import { EconomyReportSchema, SECTOR_PRICE_BOUNDS, SECTOR_SHORTAGE_MAX, TOLL_MAX_PCT } from './economy';
 import { CapTableSchema, FundingRoundSchema, SecuritySchema } from './ownership';
 import { MarketBeliefSchema, MarketInstrumentSchema, PublicDisclosureSchema, QuoteSchema, ValuationAnchorSchema } from './markets';
 import { BoardProposalSchema, BoardSchema, StoredCommitmentSchema } from './governance';
@@ -590,6 +591,31 @@ export const SessionStateSchema = z
     activeEvents: z.array(WorldEventSchema).default([]).describe('World events still within their duration.'),
     eventHazards: EventHazardMapSchema.describe('Per-family hazard state, keyed by family id. This is where causal cascades live between quarters.'),
 
+    // --- the priced economy (world version 2 and later) ---
+    //
+    // Optional rather than defaulted, and deliberately so: a defaulted map would
+    // materialise as `{}` on every world-version-1 save the moment it parsed, and
+    // the frozen world would stop hashing to the value it has always hashed to.
+    // Absent is the neutral reading — index 100, no shortage, no toll — and the
+    // accessors in `economy.ts` are the only sanctioned way to read them.
+    sectorPrices: z
+      .record(z.string(), z.number().int().min(SECTOR_PRICE_BOUNDS.min).max(SECTOR_PRICE_BOUNDS.max))
+      .optional()
+      .describe('Goods price index per sector, whole numbers around a baseline of 100. Computed from last quarter\'s supply and demand, so they are plannable.'),
+    sectorShortages: z
+      .record(z.string(), z.number().int().min(0).max(SECTOR_SHORTAGE_MAX))
+      .optional()
+      .describe('The stateful half of the price rule: a 0-60 counter per sector that deepens by ten when the price clamp saturates and heals by five when it does not.'),
+    regionTolls: z
+      .record(z.string(), z.number().int().min(0).max(TOLL_MAX_PCT))
+      .optional()
+      .describe('Logistics toll in force per region, whole percentage points of a rival\'s cash cost of goods. Zero unless somebody dominates that region\'s freight.'),
+    economyReport: EconomyReportSchema.nullable()
+      .optional()
+      .describe(
+        'One quarter of itemised economic attribution — price and cost stacks, sector ladders, exposure drivers, dividend previews, control thresholds. Derived state, rebuilt every quarter and never accumulated. Null or absent in world version 1.',
+      ),
+
     // --- companies and ownership ---
     companies: z.array(CompanySchema).default([]),
     companyMetrics: z.array(CompanyQuarterMetricsSchema).default([]).describe('Derived metrics for the current quarter, one entry per active company.'),
@@ -700,6 +726,9 @@ export const PlayerViewSchema = z
     deals: z.array(DealProposalSchema).describe('Deals this player is party to.'),
     leaderboards: z.array(LeaderboardSchema),
     objectives: z.array(SessionObjectiveSchema),
+    economyReport: EconomyReportSchema.nullable()
+      .default(null)
+      .describe('The quarter\'s itemised economic attribution, already redacted to this seat: sector ladders and tolls are public, stacks and exposure are the seat\'s own.'),
     alerts: z.array(z.string()).describe('Command Centre alert lines for the open quarter.'),
   })
   .describe('The redacted projection sent to one client. Information boundaries are enforced here and again by row-level policy.');

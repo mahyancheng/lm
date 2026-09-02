@@ -32,6 +32,9 @@ import type {
   SessionState,
   StaffRole,
 } from '@frontier/contracts';
+import { ANTITRUST_EXPOSURE_WEIGHTS, DIVIDEND_MAX_PAYOUT_PCT, TOLL_FLOOR_SHARE } from '@frontier/contracts';
+import { maxTollForCompany } from '../economy/prices';
+import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import {
   COMP_BAND_MULTIPLIER,
   CLOUD_UNIT_COST_USD_PER_QUARTER,
@@ -643,6 +646,44 @@ const ipo: Rule<'ipo'> = (intent, verdict, ctx) => {
   }
 };
 
+const setDividendPolicy: Rule<'set_dividend_policy'> = (intent, verdict, ctx) => {
+  if (intent.payoutPct > DIVIDEND_MAX_PAYOUT_PCT) {
+    verdict.clamp(
+      (draft) => {
+        draft.payoutPct = DIVIDEND_MAX_PAYOUT_PCT;
+      },
+      'illegal_value',
+      `Payout cut to ${DIVIDEND_MAX_PAYOUT_PCT}%: no board authorises paying out more of a quarter's earnings than that.`,
+    );
+  }
+  // Nothing is reserved. The payout is struck on *last* quarter's net income in
+  // the capital phase and capped at half of cash there, so a policy set today
+  // cannot overspend cash committed to something else today.
+  const basis = Math.max(0, lastQuarterNetIncomeUsd(ctx.company));
+  if (basis <= 0 && verdict.current.payoutPct > 0) {
+    verdict.note('requirement_not_met', `${ctx.company.name} made no profit last quarter, so the policy stands but pays nothing until it does.`);
+  }
+};
+
+const setLogisticsToll: Rule<'set_logistics_toll'> = (intent, verdict, ctx) => {
+  // A dial, not a right. Below the dominance floor the ceiling is zero, and the
+  // instruction is clamped rather than refused: the player's intent survives, and
+  // it starts charging the moment their group actually dominates the region.
+  const ceiling = maxTollForCompany(ctx.draft, ctx.company, intent.region);
+  if (intent.tollPct <= ceiling) return;
+  verdict.clamp(
+    (draft) => {
+      draft.tollPct = ceiling;
+    },
+    'requirement_not_met',
+    ceiling <= 0
+      ? `${ctx.company.name}'s group does not dominate freight in ${intent.region.replace(/_/g, ' ')}, so the toll is 0%. Below ${Math.round(
+          TOLL_FLOOR_SHARE * 100,
+        )}% of a region's logistics revenue nobody pays you anything.`
+      : `Toll cut from ${intent.tollPct}% to ${ceiling}%: that is what your group's share of ${intent.region.replace(/_/g, ' ')} freight earns.`,
+  );
+};
+
 /* -------------------------------------------------------------------------- */
 /*  Ownership                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -1133,6 +1174,35 @@ const proposeDeal: Rule<'propose_deal'> = (intent, verdict, ctx) => {
           );
         }
         break;
+      case 'price_accord': {
+        // Every member has to be a real, active company in the sector the accord
+        // names, and the proposer has to be one of them. A mixed-sector accord is
+        // not a cartel, it is a misunderstanding.
+        const members = obligation.memberCompanyIds.map((id) => findCompany(ctx.draft, id));
+        const missing = obligation.memberCompanyIds.filter((id, index) => members[index] === null || members[index]?.isActive !== true);
+        if (missing.length > 0) {
+          verdict.reject('unknown_target', `An accord cannot bind companies that do not exist or are no longer operating: ${missing.join(', ')}.`);
+          break;
+        }
+        const wrongSector = members.filter((member) => member !== null && (member.sector ?? 'ai') !== obligation.sector).map((member) => member?.id ?? '');
+        if (wrongSector.length > 0) {
+          verdict.reject('illegal_value', `A price accord covers one sector. These members do not operate in ${obligation.sector}: ${wrongSector.join(', ')}.`);
+          break;
+        }
+        if (!obligation.memberCompanyIds.includes(ctx.company.id)) {
+          verdict.reject('illegal_value', `${ctx.company.name} is proposing an accord it is not a member of. Every party to a price accord is bound by it.`);
+          break;
+        }
+        if (!obligation.memberCompanyIds.includes(intent.proposal.counterpartyId)) {
+          verdict.reject('illegal_value', 'The counterparty must be a member of the accord it is being asked to sign.');
+          break;
+        }
+        verdict.note(
+          'requirement_not_met',
+          `Signing this accord adds ${ANTITRUST_EXPOSURE_WEIGHTS.accord} points of antitrust exposure every quarter it is in force, for every member.`,
+        );
+        break;
+      }
       default:
         break;
     }
@@ -1238,6 +1308,8 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   buyback,
   issue_shares: issueShares,
   ipo,
+  set_dividend_policy: setDividendPolicy,
+  set_logistics_toll: setLogisticsToll,
   buy_shares: buyShares,
   sell_shares: sellShares,
   acquire_company: acquireCompany,

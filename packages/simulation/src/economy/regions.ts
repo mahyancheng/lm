@@ -10,7 +10,7 @@
  * | index                | multiplies                                          |
  * |----------------------|-----------------------------------------------------|
  * | `talentCostIndex`    | the compensation a role costs (`companies/hiring`)   |
- * | `energyCostIndex`    | the energy line of compute cost (`companies/financials`) |
+ * | `energyCostIndex`    | the energy line of compute cost (`companies/financials`) — and, from world version 2, the energy sector's own goods price rides in through the same accessor rather than beside it |
  * | `procurementAppetite`| how often competitions open (`government`)           |
  * | `capitalDepth`       | how readily a round clears (`resolver/capital`)       |
  * | `sectorAffinities`   | new demand for a company in that sector (`companies/products`) |
@@ -23,7 +23,7 @@
  */
 
 import type { Company, SessionState } from '@frontier/contracts';
-import { DEFAULT_REGION, REGION_INDEX_BASELINE, regionMeta, regionSectorAffinity, type Region } from '@frontier/contracts';
+import { DEFAULT_REGION, REGION_INDEX_BASELINE, regionMeta, regionSectorAffinity, sectorPriceIndex, type Region } from '@frontier/contracts';
 import { clamp } from './util';
 import { isMultiSectorWorld, sectorOf } from './sectors';
 
@@ -95,9 +95,23 @@ export function companyTalentCostFactor(state: SessionState, company: Company): 
   return isMultiSectorWorld(state) ? regionTalentCostFactor(regionOf(company)) : 1;
 }
 
+/**
+ * The regional energy basis as a whole-number index around 100: the energy
+ * sector's own goods price, scaled by what a megawatt-hour costs here.
+ *
+ * This is the *only* place the energy price and the regional factor meet, which
+ * is what stops the two compounding. `companyEnergyCostFactor` still has exactly
+ * one call site, in `companies/financials.ts`; the sector price arrives through
+ * it rather than beside it.
+ */
+export function regionalEnergyIndex(state: SessionState, region: Region): number {
+  return Math.round(sectorPriceIndex(state, 'energy') * regionEnergyCostFactor(region));
+}
+
 /** Energy-cost multiplier for this company's region. Exactly 1 in world version 1. */
 export function companyEnergyCostFactor(state: SessionState, company: Company): number {
-  return isMultiSectorWorld(state) ? regionEnergyCostFactor(regionOf(company)) : 1;
+  if (!isMultiSectorWorld(state)) return 1;
+  return clamp(regionalEnergyIndex(state, regionOf(company)) / REGION_INDEX_BASELINE, REGION_FACTOR_BOUNDS.min, REGION_FACTOR_BOUNDS.max);
 }
 
 /** Capital-depth multiplier for this company's region. Exactly 1 in world version 1. */

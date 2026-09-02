@@ -245,6 +245,10 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
       return { type, shares: 100_000, shareClassId: 'shc_player_ventures_common', minPricePerShareUsd: 1 };
     case 'ipo':
       return { type, targetRaiseUsd: 40_000_000, floatPct: 0.2, minPricePerShareUsd: 4 };
+    case 'set_dividend_policy':
+      return { type, payoutPct: 30 };
+    case 'set_logistics_toll':
+      return { type, region: 'north_america', tollPct: 10 };
     case 'buy_shares':
       return { type, securityId: 'sec_nexus_common', targetPct: null, shares: 20_000, maxPricePerShareUsd: 200 };
     case 'sell_shares':
@@ -404,7 +408,7 @@ describe('every accepted action changes something', () => {
   });
 
   it('covers every action type in the contract', () => {
-    expect(ACTION_TYPES.length).toBe(37);
+    expect(ACTION_TYPES.length).toBe(39);
   });
 
   for (const type of ACTION_TYPES) {

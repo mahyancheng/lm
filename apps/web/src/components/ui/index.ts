@@ -60,6 +60,9 @@ export type { MeterProps } from './Meter';
 
 export { SliderField } from './SliderField';
 export type { SliderFieldProps } from './SliderField';
+
+export { NowAfter } from './NowAfter';
+export type { NowAfterProps, NowAfterRow } from './NowAfter';
 export { chipStops, openCeiling, roundStep, snapToStep } from './sliderMath';
 export type { ChipStop } from './sliderMath';
 

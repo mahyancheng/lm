@@ -33,7 +33,18 @@
  */
 
 import type { Company, SessionState } from '@frontier/contracts';
-import { DEFAULT_SECTOR, SECTORS, SECTOR_META, sectorInputs, type Sector, type WholeBand } from '@frontier/contracts';
+import {
+  DEFAULT_SECTOR,
+  SECTORS,
+  SECTOR_META,
+  sectorInputs,
+  sectorPriceFactor,
+  sectorPriceIndex,
+  sectorShortage,
+  shortageGate,
+  type Sector,
+  type WholeBand,
+} from '@frontier/contracts';
 import { clamp, clamp01 } from './util';
 
 /* -------------------------------------------------------------------------- */
@@ -69,8 +80,15 @@ export function sectorOf(company: Company): Sector {
  */
 export const SECTOR_CYCLE_AMPLITUDE = 0.16;
 
-/** Hard bounds on the demand multiplier after every term has been applied. */
-export const SECTOR_DEMAND_BOUNDS = { min: 0.6, max: 1.5 } as const;
+/**
+ * Hard bounds on the demand multiplier after every term has been applied.
+ *
+ * The floor is 0.35 rather than 0.6 because the stateful shortage counter can
+ * take the realisation gate down to 0.40 on its own (`SECTOR_SHORTAGE_MAX` is
+ * 60), and a crisis a bound quietly cancels is not a crisis. Nothing but a fully
+ * developed shortage reaches anywhere near it.
+ */
+export const SECTOR_DEMAND_BOUNDS = { min: 0.35, max: 1.5 } as const;
 
 /**
  * The floor the upstream supply gate can pull demand realisation down to. A
@@ -98,8 +116,14 @@ export const AI_PRODUCTIVITY_MAX_UPLIFT = 0.12;
  */
 export const ENERGY_COST_PASS_THROUGH = 0.35;
 
-/** Hard bounds on the input-cost multiplier after every term has been applied. */
-export const SECTOR_INPUT_COST_BOUNDS = { min: 0.85, max: 1.4 } as const;
+/**
+ * Hard bounds on the input-cost multiplier after every term has been applied.
+ *
+ * Widened from `[0.85, 1.40]` when goods prices arrived: the mean input price
+ * index alone spans 0.25 to 1.75, and clamping it back to the old band would
+ * have made the whole chain unreadable at exactly the moment it mattered.
+ */
+export const SECTOR_INPUT_COST_BOUNDS = { min: 0.7, max: 1.8 } as const;
 
 /**
  * Sustaining capital as a share of revenue at capital intensity 100. Energy
@@ -153,10 +177,16 @@ export interface SectorEconomy {
   readonly supplyGate: number;
   /** Multiplier on new demand: cycle x gate x market sentiment, bounded. */
   readonly demandMultiplier: number;
-  /** Multiplier on cost of goods: energy pass-through x AI productivity, bounded. */
+  /** Multiplier on cost of goods: energy pass-through x AI productivity x input prices, bounded. */
   readonly inputCostMultiplier: number;
   /** Sustaining capital as a share of revenue, from the sector's capital intensity. */
   readonly sustainingCapitalShare: number;
+  /** Mean price index of this sector's inputs as a multiplier around 1. Exactly 1 with no inputs and no prices. */
+  readonly inputPriceFactor: number;
+  /** This sector's own goods price index, whole number around 100. */
+  readonly priceIndex: number;
+  /** This sector's stateful shortage counter, 0..60. */
+  readonly shortage: number;
 }
 
 /** The neutral row a version-1 session sees: every multiplier exactly one. */
@@ -170,18 +200,37 @@ export function neutralSectorEconomy(sector: Sector): SectorEconomy {
     demandMultiplier: 1,
     inputCostMultiplier: 1,
     sustainingCapitalShare: 0,
+    inputPriceFactor: 1,
+    priceIndex: 100,
+    shortage: 0,
   };
 }
 
+/**
+ * One company's contribution to its sector's supply, in whole dollars.
+ *
+ * Trailing revenue where the metrics phase has written it, four times the
+ * quarter otherwise. Stated once and exported so a screen drawing a
+ * market-share bar divides by the same numerator the engine summed, rather than
+ * restating the rule and drifting from it. Structurally typed because the
+ * interface reads it off a redacted rival, which is a `Partial<Company>`.
+ */
+export function annualisedRevenueUsd(company: {
+  readonly fundamentals?: { readonly revenueTtmUsd: number } | undefined;
+  readonly financials?: { readonly revenueQuarterly: number } | undefined;
+}): number {
+  const trailing = company.fundamentals?.revenueTtmUsd ?? 0;
+  if (trailing > 0) return trailing;
+  return Math.max(0, company.financials?.revenueQuarterly ?? 0) * 4;
+}
+
 /** Annualised revenue by sector. Trailing revenue where the metrics phase has written it. */
-function supplyBySector(state: SessionState): Record<Sector, number> {
+export function supplyBySector(state: SessionState): Record<Sector, number> {
   const supply = {} as Record<Sector, number>;
   for (const sector of SECTORS) supply[sector] = 0;
   for (const company of state.companies) {
     if (!company.isActive) continue;
-    const trailing = company.fundamentals.revenueTtmUsd;
-    const annualised = trailing > 0 ? trailing : Math.max(0, company.financials.revenueQuarterly) * 4;
-    supply[sectorOf(company)] += annualised;
+    supply[sectorOf(company)] += annualisedRevenueUsd(company);
   }
   return supply;
 }
@@ -192,7 +241,7 @@ function supplyBySector(state: SessionState): Record<Sector, number> {
  * demand of the sectors downstream, and saturates rather than rewarding surplus.
  * A sector nobody consumes is always 1: there is nothing for it to be short of.
  */
-function tightnessBySector(state: SessionState, supply: Record<Sector, number>): Record<Sector, number> {
+export function tightnessBySector(state: SessionState, supply: Record<Sector, number>): Record<Sector, number> {
   const tightness = {} as Record<Sector, number>;
   for (const sector of SECTORS) {
     let downstream = 0;
@@ -239,10 +288,7 @@ export function sectorEconomy(state: SessionState): Readonly<Record<Sector, Sect
   for (const sector of SECTORS) {
     const meta = SECTOR_META[sector];
 
-    let gate = 1;
-    for (const input of sectorInputs(sector)) {
-      gate = Math.min(gate, SUPPLY_GATE_FLOOR + (1 - SUPPLY_GATE_FLOOR) * tightness[input]);
-    }
+    const gate = supplyGateFor(state, sector, tightness);
 
     const cycle = sectorDemandCycle(sector, state.quarter);
     const marketSector = state.sectors[MARKET_SECTOR_FOR[sector]];
@@ -250,7 +296,10 @@ export function sectorEconomy(state: SessionState): Readonly<Record<Sector, Sect
     const sentiment = 1 + 0.08 * (marketSector?.sentiment ?? 0);
 
     const energyExposure = meta.inputs.includes('energy') ? meta.capexIntensity / 100 : 0;
-    const inputCost = (1 + ENERGY_COST_PASS_THROUGH * energyExposure * (electricity - 1)) * productivity;
+    // The buyer side of the goods chain: what this sector's inputs cost, as the
+    // mean of their price indices. A sector with no inputs pays exactly 1.
+    const inputPrice = meanInputPriceFactor(state, sector);
+    const inputCost = (1 + ENERGY_COST_PASS_THROUGH * energyExposure * (electricity - 1)) * productivity * inputPrice;
 
     out[sector] = {
       sector,
@@ -261,9 +310,50 @@ export function sectorEconomy(state: SessionState): Readonly<Record<Sector, Sect
       demandMultiplier: clamp(cycle * gate * sentiment, SECTOR_DEMAND_BOUNDS.min, SECTOR_DEMAND_BOUNDS.max),
       inputCostMultiplier: clamp(inputCost, SECTOR_INPUT_COST_BOUNDS.min, SECTOR_INPUT_COST_BOUNDS.max),
       sustainingCapitalShare: (SUSTAINING_CAPITAL_MAX_REVENUE_SHARE * meta.capexIntensity) / 100,
+      inputPriceFactor: inputPrice,
+      priceIndex: sectorPriceIndex(state, sector),
+      shortage: sectorShortage(state, sector),
     };
   }
   return out;
+}
+
+/**
+ * The realisation gate one sector faces from its inputs.
+ *
+ * Two constraints, and the binding one wins:
+ *
+ * - the **tightness gate**, `SUPPLY_GATE_FLOOR + (1 - floor) x tightness`, which
+ *   is the original soft coupling and costs at most 25% of realised demand;
+ * - the **shortage gate**, `1 - shortage/100`, which is the stateful half of the
+ *   price rule and takes over once the price clamp has saturated.
+ *
+ * With no shortage the shortage term is exactly 1, so the gate is the number it
+ * has always been. A fully developed shortage upstream takes it to 0.40, which
+ * is a crisis rather than a headwind — and takes six quarters of neglect to
+ * arrive at and twelve to recover from.
+ *
+ * Deliberately a `min` of the two rather than the study's outright replacement:
+ * dropping the tightness gate would have deleted a tuned mechanic and its tests
+ * along with it, and a shortage is by construction the tighter of the two
+ * wherever it matters at all.
+ */
+export function supplyGateFor(state: SessionState, sector: Sector, tightness: Readonly<Record<Sector, number>>): number {
+  let gate = 1;
+  for (const input of sectorInputs(sector)) {
+    const byTightness = SUPPLY_GATE_FLOOR + (1 - SUPPLY_GATE_FLOOR) * tightness[input];
+    gate = Math.min(gate, byTightness, shortageGate(sectorShortage(state, input)));
+  }
+  return clamp01(gate);
+}
+
+/** Mean price index of a sector's inputs, as a multiplier around 1. Exactly 1 with no inputs. */
+export function meanInputPriceFactor(state: SessionState, sector: Sector): number {
+  const inputs = sectorInputs(sector);
+  if (inputs.length === 0) return 1;
+  let sum = 0;
+  for (const input of inputs) sum += sectorPriceFactor(sectorPriceIndex(state, input));
+  return sum / inputs.length;
 }
 
 /* -------------------------------------------------------------------------- */

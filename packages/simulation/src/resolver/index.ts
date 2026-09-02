@@ -88,7 +88,7 @@ export {
 export * from './capital';
 export * from './disclosure';
 export * from './leaderboards';
-export { audienceFor, isEventVisibleTo, projectResolutionOutcomeForPlayer } from './projection';
+export { audienceFor, isEventVisibleTo, projectEconomyReportForPlayer, projectResolutionOutcomeForPlayer } from './projection';
 export type { PlayerAudience, ProjectableOutcome, ProjectedOutcome } from './projection';
 export { projectPublicRecord, worldEventVisibleTo, PUBLIC_RECORD_DEFAULT_LIMIT } from './publicRecord';
 export type { PublicRecordOptions } from './publicRecord';
@@ -469,6 +469,10 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
 function runWorldEvents(draft: SessionState, ctx: ResolverContext, subsystems: Subsystems, gmProposal: GmProposalBatch | null): void {
   subsystems.economy.updateMacro(draft, ctx);
+  // Goods prices, shortages and tolls settle before the hazard draw, so an
+  // antitrust investigation is drawn against a world whose concentration is
+  // already priced. Draws no random numbers, so the phase stream is unmoved.
+  subsystems.economy.priceSectors(draft, ctx);
   const candidates = subsystems.economy.computeEventCandidates(draft, ctx);
   const budget = impactBudgetFor(draft);
 

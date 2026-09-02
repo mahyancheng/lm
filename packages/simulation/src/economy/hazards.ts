@@ -38,7 +38,8 @@ import type {
   WorldEventType,
   WorldModifier,
 } from '@frontier/contracts';
-import { IMPACT_BUDGET_BY_DIFFICULTY, getTargetPathSpec, makeId, slugify } from '@frontier/contracts';
+import { IMPACT_BUDGET_BY_DIFFICULTY, antitrustHazardWeight, getTargetPathSpec, makeId, slugify } from '@frontier/contracts';
+import { isMultiSectorWorld } from './sectors';
 import { EVENT_FAMILY_DEFINITIONS, eventFamilyById, type EventFamilyDefinition } from './eventFamilies';
 import { buildTargetPathScope } from './scope';
 import { clamp, clamp01, lerp, round, weightedPick } from './util';
@@ -142,6 +143,39 @@ export function preconditionHolds(scope: TargetPathScope, condition: EventPrecon
   return condition.op === 'gt' ? value > condition.value : value < condition.value;
 }
 
+/** The family whose hazard the player's own behaviour drives. */
+export const EXPOSURE_DRIVEN_FAMILY_ID = 'fam_antitrust';
+
+/** The highest antitrust exposure any active company carries, 0 when none do. */
+export function maxAntitrustExposure(state: SessionState): number {
+  let worst = 0;
+  for (const company of state.companies) {
+    if (!company.isActive) continue;
+    const exposure = company.antitrustExposure;
+    if (exposure !== undefined && exposure > worst) worst = exposure;
+  }
+  return clamp(worst, 0, 100);
+}
+
+/**
+ * The hazard a family actually fires against.
+ *
+ * For every family but one this is the accumulated hazard unchanged. Antitrust
+ * is the exception, and deliberately so: an investigation that has nothing to do
+ * with what the player did is the largest missed feedback loop in the engine, so
+ * its hazard is scaled by `0.25 + 1.75 × maxExposure/100` — a quarter of the
+ * base when nobody is concentrating, twice the base when somebody is at 100.
+ *
+ * The weight is applied **in place**, not as an extra draw, so the RNG
+ * consumption of `world_events` is byte-identical to what it was. And it is
+ * gated on the multi-sector world, so a version-1 session sees the hazard it has
+ * always seen.
+ */
+export function familyHazardFor(state: SessionState, familyId: string, hazard: number): number {
+  if (familyId !== EXPOSURE_DRIVEN_FAMILY_ID || !isMultiSectorWorld(state)) return hazard;
+  return clamp01(hazard * antitrustHazardWeight(maxAntitrustExposure(state)));
+}
+
 /** Why a family was not drawn this quarter. Diagnostics only; never an input. */
 export interface FamilyDrawDiagnostic {
   readonly familyId: string;
@@ -199,7 +233,7 @@ export function drawCandidates(draft: SessionState, quarter: number, rngIn: Seed
   for (const def of EVENT_FAMILY_DEFINITIONS) {
     const state = draft.eventHazards[def.family.id];
     if (state === undefined) continue;
-    const hazard = currentHazard(state);
+    const hazard = familyHazardFor(draft, def.family.id, currentHazard(state));
 
     if (state.cooldownRemaining > 0) {
       diagnostics.push({ familyId: def.family.id, hazard, eligible: false, reason: `cooldown ${state.cooldownRemaining}`, roll: null, fired: false });
@@ -347,7 +381,11 @@ export function selectCompanySubject(draft: SessionState, rule: 'concentration' 
     if (rule === 'concentration') {
       const scale = Math.log10(Math.max(1e6, metrics?.enterpriseValueUsd ?? metrics?.marketCapUsd ?? company.financials.revenueQuarterly * 8 + 1e6));
       const subsidiaries = draft.companies.filter((other) => other.parentCompanyId === company.id).length;
-      return { item: company.id, weight: Math.max(0.01, scale - 5) * (1 + 0.5 * subsidiaries) };
+      // Scale still matters — a competition authority notices size — but from
+      // world version 2 on, what the company actually *did* matters more. The
+      // weight is a multiplier on the existing one, so version 1 is untouched.
+      const exposure = isMultiSectorWorld(draft) ? antitrustHazardWeight(company.antitrustExposure ?? 0) : 1;
+      return { item: company.id, weight: Math.max(0.01, scale - 5) * (1 + 0.5 * subsidiaries) * exposure };
     }
     const headcount =
       company.employees.engineers + company.employees.researchers + company.employees.sales + company.employees.ops + company.employees.execs;

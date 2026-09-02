@@ -124,6 +124,15 @@ export type WorldEventCandidate = z.infer<typeof WorldEventCandidateSchema>;
 export interface EconomySubsystem {
   /** Advance macro, capital-market, compute, energy and society variables by their own dynamics, before any event or modifier applies. */
   updateMacro(draft: SessionState, ctx: ResolverContext): void;
+  /**
+   * Price the six-sector goods chain and the regional logistics tolls from last
+   * quarter's supply and demand, and step the stateful shortage counters.
+   *
+   * Runs immediately after `updateMacro` and before `computeEventCandidates`, so
+   * a price is settled before anybody plans against it. Pure with respect to
+   * randomness: it draws nothing, and it is a no-op in a single-sector world.
+   */
+  priceSectors(draft: SessionState, ctx: ResolverContext): void;
   /** Run hazard calculation, eligibility, cooldown and contradiction checks, then draw candidate skeletons within the severity budget. May legitimately return an empty array: a quiet quarter is a valid outcome. */
   computeEventCandidates(draft: SessionState, ctx: ResolverContext): WorldEventCandidate[];
   /** Apply every active modifier to its target path, clamping to the registered bounds and emitting a ledger row per application. */

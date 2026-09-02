@@ -29,6 +29,7 @@
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, unitInterval, usd } from './ids';
 import { CompBandSchema, CompanyPostureSchema, ExecutiveRoleSchema, ProductSegmentSchema, StaffRoleSchema } from './company';
+import { RegionSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
 import { BoardProposalKindSchema, CommitmentConditionSchema } from './governance';
 import { GovernmentBidSchema } from './government';
@@ -279,6 +280,31 @@ export const ActionIntentSchema = z
       })
       .describe('Take the company public. Requires board approval and an open listing window; brings quarterly disclosure, activists and permanent scrutiny.'),
 
+    z
+      .object({
+        type: z.literal('set_dividend_policy'),
+        payoutPct: z
+          .number()
+          .int()
+          .min(0)
+          .max(80)
+          .describe('Share of last quarter\'s net income to pay out to holders, 0 to 80 whole percentage points. The engine caps the payment at half of cash on hand however high this is.'),
+      })
+      .describe('Set the payout policy. The growth-versus-extraction decision: capital paid out is capital the business does not get to spend. Raising it is a matter for the board.'),
+
+    z
+      .object({
+        type: z.literal('set_logistics_toll'),
+        region: RegionSchema.describe('Region whose freight your group dominates. A region you do not dominate earns a toll of zero.'),
+        tollPct: z
+          .number()
+          .int()
+          .min(0)
+          .max(25)
+          .describe('Toll to charge rivals on their inputs in that region, 0 to 25 whole percentage points. Clamped to what your group\'s regional share actually earns; your own group never pays it.'),
+      })
+      .describe('Set the toll your logistics group charges everyone else in a region. Cheap inputs for you, dear inputs for them — and antitrust exposure for charging it.'),
+
     /* --------------------------- ownership ---------------------------- */
     z
       .object({
@@ -453,6 +479,8 @@ export const ACTION_TYPES = [
   'buyback',
   'issue_shares',
   'ipo',
+  'set_dividend_policy',
+  'set_logistics_toll',
   'buy_shares',
   'sell_shares',
   'acquire_company',
@@ -484,6 +512,7 @@ export const CONFIRMATION_REQUIRED_ACTIONS: readonly ActionType[] = [
   'buyback',
   'issue_shares',
   'ipo',
+  'set_dividend_policy',
   'acquire_company',
   'layoff',
   'bid_government',

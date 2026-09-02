@@ -111,6 +111,12 @@ export const SIM_EVENT_TYPES = [
   'leaderboard_updated',
   'llm_call_logged',
   'fallback_engaged',
+  // priced economy (appended: SIM_EVENT_TYPES is a zod enum and is append-only)
+  'sector_price_set',
+  'sector_shortage_changed',
+  'antitrust_exposure_changed',
+  'predatory_pricing_flagged',
+  'dividend_paid',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');

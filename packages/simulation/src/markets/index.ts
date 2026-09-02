@@ -26,7 +26,7 @@ import type {
   SessionState,
   ValuationAnchor,
 } from '@frontier/contracts';
-import { returnDecompositionSums } from '@frontier/contracts';
+import { CONTROL_DECISIVE_PCT, CONTROL_INFORMATION_PCT, returnDecompositionSums } from '@frontier/contracts';
 import { companyTransientMetrics } from '../economy/scope';
 import { round } from '../economy/util';
 import { computeValuationAnchor, selectValuationMethod } from './valuation';
@@ -302,6 +302,14 @@ export function createMarketsSubsystem(): MarketsSubsystem {
           issuerCompanyId: settlement.companyId,
           ownershipPctBefore: settlement.ownershipPctBefore,
           ownershipPctAfter: settlement.ownershipPctAfter,
+          // Slippage is a decision, not a surprise: the quote, what the order
+          // actually executed at, and what its own size cost.
+          quotePriceUsd: settlement.quotePriceUsd,
+          executionPriceUsd: settlement.executionPriceUsd,
+          impactPct: settlement.impactPct,
+          floatShares: settlement.floatShares,
+          blockShares: settlement.blockShares,
+          blockPremiumApplied: settlement.blockShares > 0,
         },
         visibility: disclosed ? 'public' : 'company',
       });
@@ -328,6 +336,8 @@ export function createMarketsSubsystem(): MarketsSubsystem {
             threshold,
             securityId: settlement.securityId,
             ownershipPct: settlement.ownershipPctAfter,
+            grantsControl: settlement.ownershipPctAfter > CONTROL_DECISIVE_PCT,
+            grantsInformationRight: settlement.ownershipPctAfter >= CONTROL_INFORMATION_PCT,
           },
           visibility: threshold === 'strategic_holding' ? 'company' : 'public',
         });

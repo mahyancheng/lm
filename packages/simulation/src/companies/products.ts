@@ -32,8 +32,17 @@
  * quarter and writes it for every active company, launch spend included.
  */
 
-import type { Company, Product, ProductSegment, ResolverContext, SessionState } from '@frontier/contracts';
-import { makeId } from '@frontier/contracts';
+import type { Company, PredationRow, Product, ProductSegment, ResolverContext, RivalPressureRow, SessionState } from '@frontier/contracts';
+import {
+  ANTITRUST_EXPOSURE_WEIGHTS,
+  combinedPressure,
+  isPredatoryPrice,
+  makeId,
+  nextPredatoryQuarters,
+  predatorPressure,
+  undercutFraction,
+} from '@frontier/contracts';
+import { isMultiSectorWorld } from '../economy/sectors';
 import {
   BASELINE_COMPUTE_INTENSITY,
   CAPACITY_BASE_LOSS_CEILING,
@@ -230,7 +239,36 @@ interface DemandDraft {
   readonly marketingUsd: number;
 }
 
-/** Resolve capacity, pricing, demand and churn for every product of every company. */
+/** What the action pass leaves behind for the demand pass. */
+interface StagedProduct {
+  readonly plan: ReturnType<typeof marketingPlan>;
+  /** How hard each product was repriced this quarter, for the churn model. */
+  readonly shockByProduct: ReadonlyMap<string, number>;
+}
+
+/** Demand a company loses to rivals dumping in its segments, keyed `companyId|segment`. */
+type PressureMap = ReadonlyMap<string, { readonly pct: number; readonly from: readonly string[] }>;
+
+const NO_PRESSURE: PressureMap = new Map();
+
+/**
+ * Resolve capacity, pricing, demand and churn for every product of every company.
+ *
+ * ## Why there are two shapes of this loop
+ *
+ * A price cut is an attack from world version 2 on, and an attack has to be
+ * order-independent: whether Helion's dumping squeezes you must not depend on
+ * whether Helion happens to sit before or after you in the company array. So the
+ * multi-sector path stages **every** company's repricing first, then computes
+ * the segment-wide pressures once, then resolves demand.
+ *
+ * World version 1 keeps the original single merged loop, byte for byte. Splitting
+ * it there would change the order ledger rows are written in and, because
+ * `segmentReferencePrice` reads every company's *current* price, would change the
+ * numbers a frozen save replays to. The two paths call exactly the same two
+ * functions in exactly the same per-company order, so the RNG sequence is
+ * identical either way.
+ */
 export function resolveProducts(draft: SessionState, ctx: ResolverContext): void {
   const rng = ctx.rng;
 
@@ -243,8 +281,28 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
   // building them per company would walk the whole company list per company.
   // Every multiplier is exactly 1 in world version 1.
   const economy = sectorEconomy(draft);
+  const companies = activeCompanies(draft);
 
-  for (const company of activeCompanies(draft)) {
+  if (!isMultiSectorWorld(draft)) {
+    for (const company of companies) {
+      resolveCompanyDemand(draft, ctx, rng, economy, company, applyProductActions(draft, ctx, company), NO_PRESSURE);
+    }
+    return;
+  }
+
+  const staged = new Map<string, StagedProduct>();
+  for (const company of companies) staged.set(company.id, applyProductActions(draft, ctx, company));
+  const pressure = resolvePredation(draft, ctx);
+  for (const company of companies) {
+    const own = staged.get(company.id);
+    if (own === undefined) continue;
+    resolveCompanyDemand(draft, ctx, rng, economy, company, own, pressure);
+  }
+}
+
+/** Reprice, launch, sunset and set the marketing plan for one company. */
+function applyProductActions(draft: SessionState, ctx: ResolverContext, company: Company): StagedProduct {
+  {
     const actions = companyActions(draft, ctx, company.id);
 
     /* --- repricing, launches and sunsets --------------------------------- */
@@ -358,9 +416,24 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
     /* --- marketing plan --------------------------------------------------- */
     const plan = marketingPlan(company, actions);
     company.financials.marketing = money(plan.recurringUsd + plan.oneOffUsd);
+    return { plan, shockByProduct };
+  }
+}
 
+/** Resolve one company's demand, capacity rationing and churn. */
+function resolveCompanyDemand(
+  draft: SessionState,
+  ctx: ResolverContext,
+  rng: ResolverContext['rng'],
+  economy: ReturnType<typeof sectorEconomy>,
+  company: Company,
+  staged: StagedProduct,
+  pressureMap: PressureMap,
+): void {
+  {
+    const { plan, shockByProduct } = staged;
     const products = activeProducts(company);
-    if (products.length === 0) continue;
+    if (products.length === 0) return;
 
     /* --- desired demand, before capacity ---------------------------------- */
     const segmentProductCount: Record<string, number> = {};
@@ -395,8 +468,13 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
       const lift = marketingLift(share, product.activeCustomers * product.pricePerSeat);
       const noise = rng.range(DEMAND_NOISE_BAND.min, DEMAND_NOISE_BAND.max);
 
+      // One more multiplicative term, in the same place as every other one: what
+      // rivals dumping in this segment took off the top. Exactly zero when nobody
+      // is, and bounded to a quarter of new demand however many of them there are.
+      const squeeze = 1 - (pressureMap.get(`${company.id}|${segment}`)?.pct ?? 0);
+
       const base = (product.activeCustomers + SEGMENT_SEED_POOL[segment]) * SEGMENT_BASE_ADD_RATE[segment];
-      const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise * sectorDemandFactor);
+      const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise * sectorDemandFactor * squeeze);
 
       const churn = productChurn(segment, qualityEdge, priceEdge, reputation, 0, shockByProduct.get(product.id) ?? 0);
       const retained = product.activeCustomers * (1 - churn);
@@ -468,6 +546,9 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
           marketingUsd: money(d.marketingUsd),
           capacityConstrained: shortfall > 0,
           customersLostToCapacity: Math.round(Math.max(0, d.desiredCustomers - allowed)),
+          // So a squeezed rival can see who is squeezing them.
+          rivalPricePressurePct: Math.round((pressureMap.get(`${company.id}|${product.segment}`)?.pct ?? 0) * 100),
+          pressureFrom: [...(pressureMap.get(`${company.id}|${product.segment}`)?.from ?? [])],
         },
         'company',
       );
@@ -524,4 +605,192 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
       );
     }
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Dumping and price wars                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The unclamped gross margin a product is running at.
+ *
+ * `Product.grossMarginPct` is a unit interval and is floored at zero, so the
+ * stored figure can never say "below cost" — which is exactly half of the
+ * predation test. This restates the serving-cost arithmetic the demand pass
+ * books at the end of the quarter, without the clamp, so a product genuinely
+ * selling under cost reads as negative.
+ */
+export function unclampedGrossMargin(draft: SessionState, product: Product): number {
+  const revenue = product.activeCustomers * product.pricePerSeat;
+  if (!(revenue > 0)) return 0;
+  const unitsUsed = product.activeCustomers / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity));
+  const servingCost = unitsUsed * CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, draft.world.compute.spotPrice) * 0.6 + revenue * 0.04;
+  return 1 - servingCost / revenue;
+}
+
+/**
+ * Flag predatory prices, step every company's predatory counter, and compute the
+ * demand pressure each squeezed rival is under.
+ *
+ * Order-independent by construction: every product's undercut and flag is
+ * computed first, then pressures are combined multiplicatively, so shuffling the
+ * company array cannot change a single number. Pure except for the ledger rows
+ * and the counters it writes; draws no random numbers.
+ */
+function resolvePredation(draft: SessionState, ctx: ResolverContext): PressureMap {
+  const pressureMap = new Map<string, { pct: number; from: string[] }>();
+  const predationRows: PredationRow[] = [];
+  const pressureRows: RivalPressureRow[] = [];
+
+  interface Candidate {
+    readonly company: Company;
+    readonly product: Product;
+    readonly segment: ProductSegment;
+    readonly reference: number;
+    readonly undercut: number;
+    readonly margin: number;
+    readonly predatory: boolean;
+  }
+
+  const candidates: Candidate[] = [];
+  const segmentCustomers = new Map<ProductSegment, number>();
+  const companySegmentCustomers = new Map<string, number>();
+  const companiesInSegment = new Map<ProductSegment, Set<string>>();
+
+  // One reference per segment, not one per product: the reference is a walk over
+  // every company, so computing it per product would be quadratic.
+  const referenceBySegment = new Map<ProductSegment, number>();
+  const segmentOf = (segment: ProductSegment): number => {
+    const cached = referenceBySegment.get(segment);
+    if (cached !== undefined) return cached;
+    const computed = segmentReferencePrice(draft, segment, SEGMENT_REFERENCE_PRICE_USD[segment]);
+    referenceBySegment.set(segment, computed);
+    return computed;
+  };
+
+  for (const company of activeCompanies(draft)) {
+    for (const product of activeProducts(company)) {
+      const segment = product.segment;
+      const reference = segmentOf(segment);
+      const undercut = undercutFraction(product.pricePerSeat, reference);
+      const margin = unclampedGrossMargin(draft, product);
+      candidates.push({ company, product, segment, reference, undercut, margin, predatory: isPredatoryPrice(margin, undercut) });
+
+      segmentCustomers.set(segment, (segmentCustomers.get(segment) ?? 0) + product.activeCustomers);
+      const key = `${company.id}|${segment}`;
+      companySegmentCustomers.set(key, (companySegmentCustomers.get(key) ?? 0) + product.activeCustomers);
+      const set = companiesInSegment.get(segment) ?? new Set<string>();
+      set.add(company.id);
+      companiesInSegment.set(segment, set);
+    }
+  }
+
+  // One pressure per predator per segment: a predator running three dumped
+  // products in one segment is one attacker, not three.
+  const predatorPressureBySegment = new Map<ProductSegment, Map<string, number>>();
+  for (const candidate of candidates) {
+    if (!candidate.predatory) continue;
+    const total = segmentCustomers.get(candidate.segment) ?? 0;
+    const share = total <= 0 ? 0 : (companySegmentCustomers.get(`${candidate.company.id}|${candidate.segment}`) ?? 0) / total;
+    const pressure = predatorPressure(share, candidate.undercut);
+    const bucket = predatorPressureBySegment.get(candidate.segment) ?? new Map<string, number>();
+    bucket.set(candidate.company.id, Math.max(bucket.get(candidate.company.id) ?? 0, pressure));
+    predatorPressureBySegment.set(candidate.segment, bucket);
+  }
+
+  for (const [segment, predators] of predatorPressureBySegment) {
+    const members = companiesInSegment.get(segment) ?? new Set<string>();
+    for (const companyId of [...members].sort()) {
+      const pressures: number[] = [];
+      const from: string[] = [];
+      for (const predatorId of [...predators.keys()].sort()) {
+        if (predatorId === companyId) continue;
+        const pressure = predators.get(predatorId) ?? 0;
+        if (pressure <= 0) continue;
+        pressures.push(pressure);
+        from.push(predatorId);
+      }
+      if (pressures.length === 0) continue;
+      const combined = combinedPressure(pressures);
+      pressureMap.set(`${companyId}|${segment}`, { pct: combined, from });
+      pressureRows.push({ companyId, segment, pressurePct: Math.round(combined * 100), fromCompanyIds: from.slice(0, 8), causeEventId: null });
+    }
+  }
+
+  // Counters step for every active company, predator or not, so a company that
+  // stopped dumping visibly cools off.
+  const predatorIds = new Set(candidates.filter((candidate) => candidate.predatory).map((candidate) => candidate.company.id));
+  for (const company of activeCompanies(draft)) {
+    company.predatoryQuarters = nextPredatoryQuarters(company.predatoryQuarters ?? 0, predatorIds.has(company.id));
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate.predatory) continue;
+    const eventId = emitEvent(
+      draft,
+      ctx,
+      'predatory_pricing_flagged',
+      candidate.company.id,
+      candidate.product.id,
+      {
+        companyId: candidate.company.id,
+        productId: candidate.product.id,
+        segment: candidate.segment,
+        price: money(candidate.product.pricePerSeat),
+        referencePrice: money(candidate.reference),
+        undercutPct: Math.round(candidate.undercut * 100),
+        grossMarginPct: Math.round(candidate.margin * 100),
+        predatoryQuarters: candidate.company.predatoryQuarters ?? 0,
+        exposurePoints: ANTITRUST_EXPOSURE_WEIGHTS.predation,
+      },
+      // A price war is public by nature, and it should move belief.
+      'public',
+    );
+    predationRows.push({
+      companyId: candidate.company.id,
+      productId: candidate.product.id,
+      segment: candidate.segment,
+      priceUsd: money(candidate.product.pricePerSeat),
+      referencePriceUsd: money(candidate.reference),
+      undercutPct: Math.round(candidate.undercut * 100),
+      grossMarginPct: Math.round(candidate.margin * 100),
+      predatoryQuarters: candidate.company.predatoryQuarters ?? 0,
+      exposurePoints: ANTITRUST_EXPOSURE_WEIGHTS.predation,
+      causeEventId: eventId,
+    });
+    ctx.log({
+      phase: 'product_demand_resolution',
+      text: `${candidate.company.name} is selling ${candidate.product.name} at $${candidate.product.pricePerSeat.toFixed(0)} against a segment average of $${candidate.reference.toFixed(
+        0,
+      )} and below cost: ${Math.round(candidate.undercut * 100)}% under the market, and ${ANTITRUST_EXPOSURE_WEIGHTS.predation} points of antitrust exposure a quarter.`,
+      deltaLabel: `-${Math.round(candidate.undercut * 100)}%`,
+      refEventIds: [eventId],
+      tone: 'warning',
+      subjectId: candidate.company.id,
+    });
+  }
+
+  // Name the attacker on the squeezed company's own screen. `PRESSURE_MAX` is
+  // small enough that a line only appears when it is worth reading.
+  const nameById = new Map(draft.companies.map((company) => [company.id, company.name]));
+  for (const row of pressureRows) {
+    const cause = predationRows.find((entry) => row.fromCompanyIds.includes(entry.companyId))?.causeEventId ?? null;
+    if (cause === null || row.pressurePct < 1) continue;
+    row.causeEventId = cause;
+    const attackers = row.fromCompanyIds.map((id) => nameById.get(id) ?? id).join(', ');
+    ctx.log({
+      phase: 'product_demand_resolution',
+      text: `${attackers} cut below cost in ${row.segment.replace(/_/g, ' ')} and took ${row.pressurePct}% of ${nameById.get(row.companyId) ?? row.companyId}'s gross additions.`,
+      deltaLabel: `-${row.pressurePct}%`,
+      refEventIds: [cause],
+      tone: 'negative',
+      subjectId: row.companyId,
+    });
+  }
+
+  if (draft.economyReport !== undefined && draft.economyReport !== null) {
+    draft.economyReport = { ...draft.economyReport, predation: predationRows, rivalPressure: pressureRows };
+  }
+
+  return pressureMap;
 }

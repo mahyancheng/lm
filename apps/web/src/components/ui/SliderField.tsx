@@ -26,6 +26,16 @@ export interface SliderFieldProps {
   readonly disabled?: boolean;
   /** Required when `label` is not plain text. */
   readonly ariaLabel?: string;
+  /**
+   * The V5 slot: what this value would do, shown before it is committed.
+   *
+   * Rendered under the chips, and rendered **while a drag is in flight** from
+   * the held value rather than the settled one — the point of the slot is that
+   * the cost of a decision is a number before the thumb is released. Pass a
+   * function to read the position the thumb is at; pass a node for a preview
+   * that does not depend on it.
+   */
+  readonly preview?: ReactNode | ((value: number) => ReactNode);
   readonly className?: string;
 }
 
@@ -59,6 +69,7 @@ export function SliderField({
   exact = true,
   disabled = false,
   ariaLabel,
+  preview,
   className,
 }: SliderFieldProps): React.JSX.Element {
   const id = useId();
@@ -178,6 +189,10 @@ export function SliderField({
           onBlur={() => setDraft(null)}
         />
       ) : null}
+
+      {preview === undefined ? null : (
+        <div className="mt-1.5">{typeof preview === 'function' ? preview(shown) : preview}</div>
+      )}
     </div>
   );
 }

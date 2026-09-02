@@ -42,6 +42,7 @@ export const BOARD_MATTER_BY_ACTION: Partial<Record<ActionType, BoardProposalKin
   appoint_executive: 'csuite_appointment',
   publish_research: 'model_release',
   layoff: 'restructuring',
+  set_dividend_policy: 'dividend',
 };
 
 /** What a transformed proposal carries into the boardroom. */
@@ -178,6 +179,23 @@ export function boardMatterFor(intent: ActionIntent, company: Company): BoardMat
         targetCompanyId: null,
         stockComponentPct: null,
       };
+
+    case 'set_dividend_policy': {
+      // Cutting or holding a payout is management's to do. *Raising* one is a
+      // capital-allocation decision, and that is what a board is for.
+      const current = company.dividendPolicyPct ?? 0;
+      if (intent.payoutPct <= current) return null;
+      return {
+        kind: 'dividend',
+        title: 'Approve a higher payout',
+        summary: `Management proposes paying out ${pct(intent.payoutPct / 100)} of net income to shareholders, up from ${pct(
+          current / 100,
+        )}. Cash on hand is ${usd(company.financials.cash)} against a quarterly burn of ${usd(Math.abs(company.financials.quarterlyBurn))}; capital paid out is capital the business does not get to spend.`,
+        amountUsd: null,
+        targetCompanyId: null,
+        stockComponentPct: null,
+      };
+    }
 
     case 'layoff': {
       const headcount = totalHeadcount(company);

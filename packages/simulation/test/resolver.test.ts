@@ -81,6 +81,12 @@ function makeStubs(options: StubOptions = {}): Stubs {
   };
 
   const economy: EconomySubsystem & { materialiseCandidate?: unknown } = {
+    // The priced economy is a no-op in this stub: the pipeline tests are about
+    // phase order and the fork-per-phase rule, not about goods prices.
+    priceSectors() {
+      // Deliberately silent: recording here would consume a draw and change the
+      // call sequence these tests exist to pin.
+    },
     updateMacro(draft, ctx) {
       record('economy.updateMacro', ctx);
       if (options.narrate !== false) {
@@ -238,7 +244,7 @@ function makeStubs(options: StubOptions = {}): Stubs {
 
   const boards: BoardsSubsystem = {
     tallyProposal(_draft, proposalId) {
-      return { proposalId, support: 0, against: 0, abstain: 0, absent: 0, quorumMet: false, passes: false, perDirector: [] };
+      return { proposalId, support: 0, against: 0, abstain: 0, absent: 0, quorumMet: false, passes: false, perDirector: [], decidedByControl: false, controllingHolderId: null };
     },
     resolveProposals(_draft, ctx) {
       record('boards.resolveProposals', ctx);

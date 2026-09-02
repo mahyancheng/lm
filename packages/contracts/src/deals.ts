@@ -29,6 +29,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, usd } from './ids';
+import { SectorSchema } from './sectors';
 import { BoardProposalKindSchema, VoteStanceSchema } from './governance';
 
 /* -------------------------------------------------------------------------- */
@@ -44,6 +45,8 @@ export const DEAL_OBLIGATION_KINDS = [
   'public_endorsement',
   'consortium_membership',
   'investment',
+  // Appended: the discriminated union below grows safely at the end.
+  'price_accord',
 ] as const;
 
 /**
@@ -110,6 +113,20 @@ export const DealObligationSchema = z
         securityId: z.string().min(1).describe('Security received in exchange.'),
       })
       .describe('Invest capital for equity. Creates new shares or transfers existing ones depending on the security.'),
+    z
+      .object({
+        kind: z.literal('price_accord'),
+        sector: SectorSchema.describe('The sector the accord covers. Every member must operate in it; a mixed-sector accord is refused.'),
+        memberCompanyIds: z
+          .array(z.string().min(1))
+          .min(2)
+          .max(6)
+          .describe('Every company bound by the accord, the proposer and the counterparty included. At least two, at most six.'),
+        quarters: z.number().int().min(1).max(20).describe('How many quarters the accord runs for, starting the quarter after acceptance.'),
+      })
+      .describe(
+        'Hold the sector price together. While it is active every member earns a bonus on the part of its revenue the sector chain reprices, scaled by the members\' combined share of the sector with a floor of five per cent — and every member carries the antitrust exposure that goes with it. An enforcement action suspends the accord for six quarters.',
+      ),
   ])
   .describe('One obligation. The set of obligations on each side is what makes a deal mechanically enforceable rather than a conversation.');
 export type DealObligation = z.infer<typeof DealObligationSchema>;

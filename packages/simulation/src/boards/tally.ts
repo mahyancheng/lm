@@ -38,7 +38,8 @@ import type {
   StoredCommitment,
   VoteStance,
 } from '@frontier/contracts';
-import { DEFAULT_QUORUM_RULE, commitmentConditionsHold } from '@frontier/contracts';
+import { CONTROL_EXEMPT_PROPOSAL_KINDS, DEFAULT_QUORUM_RULE, commitmentConditionsHold, grantsControl } from '@frontier/contracts';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { boardById, boardForCompany, centred, clamp, companyById, normalised, ratio, round, unit, usdLabel } from './util';
 
 /* -------------------------------------------------------------------------- */
@@ -333,7 +334,43 @@ const EMPTY_TALLY = (proposalId: string): BoardTally => ({
   quorumMet: false,
   passes: false,
   perDirector: [],
+  decidedByControl: false,
+  controllingHolderId: null,
 });
+
+/**
+ * The holder of 50% + 1 share of a company's ordinary equity, or null.
+ *
+ * Compared in shares rather than in a rounded percentage, so exactly half the
+ * register is *not* control. The public float is excluded: it is the anonymous
+ * remainder, not a holder with a view. Ties cannot happen — two holders cannot
+ * both hold more than half — and the scan is in sorted holder order anyway so
+ * the answer never depends on array order.
+ */
+export function controllingHolderId(draft: SessionState, companyId: string): string | null {
+  const company = companyById(draft, companyId);
+  const table = draft.capTables.find((candidate) => candidate.companyId === companyId);
+  if (company === null || table === undefined) return null;
+
+  const security =
+    draft.securities.find((candidate) => candidate.id === company.primarySecurityId) ??
+    draft.securities.find((candidate) => candidate.companyId === companyId) ??
+    null;
+  if (security === null) return null;
+  const shareClass = table.shareClasses.find((klass) => klass.id === security.shareClassId) ?? table.shareClasses[0] ?? null;
+  const issued = shareClass?.issuedShares ?? 0;
+  if (issued <= 0) return null;
+
+  const byHolder = new Map<string, number>();
+  for (const holding of table.holdings) {
+    if (holding.securityId !== security.id || holding.holderKind === 'public_float') continue;
+    byHolder.set(holding.holderId, (byHolder.get(holding.holderId) ?? 0) + holding.shares);
+  }
+  for (const holderId of [...byHolder.keys()].sort()) {
+    if (grantsControl(byHolder.get(holderId) ?? 0, issued)) return holderId;
+  }
+  return null;
+}
 
 /** The board a proposal belongs to, by id or by the company it governs. */
 export function boardForProposal(draft: SessionState, proposal: BoardProposal): Board | null {
@@ -404,6 +441,32 @@ export function tallyProposal(draft: SessionState, proposalId: string): BoardTal
     }
   }
 
+  /* --- 50% + 1 share is decisive, on everything but a dismissal ----------- */
+  //
+  // This is what makes the ownership bar the player is always reading mean
+  // something every quarter rather than once. The one exception is
+  // `ceo_dismissal`: a controlling player can still be voted out of the office,
+  // which is a better story than a stake that makes its holder unremovable.
+  //
+  // The holder has to be *in the room* — through the director representing them,
+  // or by sitting themselves — because a stake does not vote, a seat does.
+  let decidedByControl = false;
+  let controllingHolder: string | null = null;
+  if (isMultiSectorWorld(draft) && !(CONTROL_EXEMPT_PROPOSAL_KINDS as readonly string[]).includes(proposal.kind)) {
+    controllingHolder = controllingHolderId(draft, proposal.companyId);
+    if (controllingHolder !== null) {
+      const seat =
+        board.directors.find((director) => director.representedHolderId === controllingHolder) ??
+        board.directors.find((director) => director.characterId === controllingHolder) ??
+        null;
+      const stance = seat === null ? null : perDirector.find((vote) => vote.directorCharacterId === seat.characterId)?.vote ?? null;
+      if (stance === 'support' || stance === 'oppose') {
+        passes = stance === 'support';
+        decidedByControl = true;
+      }
+    }
+  }
+
   return {
     proposalId,
     support: round(support, 4),
@@ -413,5 +476,7 @@ export function tallyProposal(draft: SessionState, proposalId: string): BoardTal
     quorumMet,
     passes,
     perDirector,
+    decidedByControl,
+    controllingHolderId: decidedByControl ? controllingHolder : null,
   };
 }

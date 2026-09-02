@@ -54,7 +54,20 @@ import type {
   SessionState,
   ActiveModifier,
 } from '@frontier/contracts';
-import { BALANCE_SHEET_TOLERANCE_USD, balanceSheetReconciles, makeId } from '@frontier/contracts';
+import type { CompanyModifierStack, ModifierRow } from '@frontier/contracts';
+import {
+  BALANCE_SHEET_TOLERANCE_USD,
+  SECTOR_META,
+  SECTOR_PRICE_BASELINE,
+  TRADE_UPLIFT_REVENUE_CAP,
+  balanceSheetReconciles,
+  makeId,
+  sectorPriceFactor,
+  sectorTradeShare,
+} from '@frontier/contracts';
+import { accordBonusPctFor, activeAccords, chargesTollPct, regionLogistics, tollPaidPct } from '../economy/prices';
+import { isMultiSectorWorld } from '../economy/sectors';
+import { regionOf, regionalEnergyIndex } from '../economy/regions';
 import {
   BALANCE_ROUNDING_EPSILON_USD,
   BRIDGE_ROUND_COVER_MULTIPLE,
@@ -136,6 +149,26 @@ export function computeCost(draft: SessionState, company: Company): ComputeCostB
     totalUsd: ownedDepreciation + reserved + cloud + energy,
     servingShare: 1 - unit(compute.trainingAllocation),
   };
+}
+
+/**
+ * Last quarter's net income, reconstructed from the figures on the company.
+ *
+ * `Financials` holds the quarter that has already resolved, so at
+ * `capital_resolution` (phase six) this is genuinely *last* quarter's result —
+ * which is exactly what a dividend is struck on. The arithmetic is the same
+ * arithmetic `resolveFinancials` uses, restated here so the payout and the
+ * income statement can never disagree.
+ *
+ * This is the thing a future reader will "fix" into reading the current
+ * quarter's revenue. Do not: the current quarter has not been earned yet at
+ * phase six, and a dividend paid out of it would be paid out of a forecast.
+ */
+export function lastQuarterNetIncomeUsd(company: Company): number {
+  const f = company.financials;
+  const operatingIncome = f.revenueQuarterly - f.cogs - f.payroll - f.marketing - f.rdSpend;
+  const preTax = operatingIncome - f.interestExpense;
+  return signedMoney(preTax > 0 ? preTax * (1 - TAX_RATE) : preTax);
 }
 
 /** Contract revenue recognised this quarter: milestones the government phase accepted. */
@@ -247,8 +280,14 @@ export function resolveFinancials(
   // are, so rescue cash is on the balance sheet when the bills are paid.
   resolveDistress(draft, ctx);
 
-  // Computed once, ahead of the loop: it walks every company. Neutral in v1.
+  // Computed once, ahead of the loop: each walks every company. All three are
+  // neutral or empty in world version 1.
   const economy = sectorEconomy(draft);
+  const multiSector = isMultiSectorWorld(draft);
+  const logistics = multiSector ? regionLogistics(draft) : null;
+  const accords = activeAccords(draft);
+  const priceStacks: CompanyModifierStack[] = [];
+  const costStacks: CompanyModifierStack[] = [];
 
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
@@ -274,7 +313,26 @@ export function resolveFinancials(
       revenueBySegment.set('government', (revenueBySegment.get('government') ?? 0) + contractRevenue);
       supportCost += contractRevenue * SEGMENT_SUPPORT_COST_SHARE.government;
     }
-    const revenue = productRevenue + contractRevenue;
+    const grossRevenue = productRevenue + contractRevenue;
+
+    /* --- the seller side of the goods chain -------------------------------- */
+    // Only the part of a sector's output sold to the other five sectors is
+    // repriced by the chain; what goes to end customers was already priced by
+    // the product phase. The uplift is bounded to a quarter of revenue either
+    // way, so an accord can raise it but can never break the P0-1 clamp.
+    const sector = economy[sectorOf(company)];
+    const ownSector = sectorOf(company);
+    const tradeShare = multiSector ? sectorTradeShare(ownSector) : 0;
+    const chainPriceFactor = multiSector ? sectorPriceFactor(sector.priceIndex) : 1;
+    const accordBonusPct = multiSector ? accordBonusPctFor(company.id, accords) : 0;
+    const rawSectorUplift = grossRevenue * tradeShare * (chainPriceFactor - 1);
+    const rawTotalUplift = grossRevenue * tradeShare * (chainPriceFactor * (1 + accordBonusPct / 100) - 1);
+    const upliftCap = grossRevenue * TRADE_UPLIFT_REVENUE_CAP;
+    const tradeUplift = signedMoney(clamp(rawTotalUplift, -upliftCap, upliftCap));
+    const upliftScale = rawTotalUplift === 0 ? 0 : tradeUplift / rawTotalUplift;
+    const sectorUpliftUsd = signedMoney(rawSectorUplift * upliftScale);
+    const accordUpliftUsd = signedMoney(tradeUplift - sectorUpliftUsd);
+    const revenue = grossRevenue + tradeUplift;
 
     /* --- cost ------------------------------------------------------------- */
     const compute = computeCost(draft, company);
@@ -291,12 +349,17 @@ export function resolveFinancials(
     // a charge against an asset the balance sheet already carries; scaling it
     // would invent property, so it is excluded and the cash-flow split below
     // continues to subtract exactly the depreciation that was booked.
-    const sector = economy[sectorOf(company)];
     const depreciationInCogs = depreciation * compute.servingShare;
     const cashCogsBeforeSector = Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance;
-    const sectorCostAdjustment =
-      (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapitalUsd(sector, revenue);
-    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment;
+    const sustainingCapital = sustainingCapitalUsd(sector, revenue);
+    const sectorCostAdjustment = (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapital;
+    // The Rockefeller squeeze: a group that dominates a region's freight charges
+    // every rival in it a toll on the cash cost of goods, and its own companies
+    // ride free. Cash-only, for the same reason the sector adjustment is:
+    // scaling depreciation would invent property.
+    const tollPct = logistics === null ? 0 : tollPaidPct(draft, company, logistics);
+    const tollAdjustment = (tollPct / 100) * cashCogsBeforeSector;
+    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment + tollAdjustment;
 
     // Payroll and marketing were staged by the talent and product phases. The
     // fallbacks below only bite when this phase is run in isolation.
@@ -434,6 +497,11 @@ export function resolveFinancials(
         productRevenueUsd: money(productRevenue),
         contractRevenueUsd: money(contractRevenue),
         deferredReleasedUsd: money(deferredRelease),
+        tradeUpliftUsd: tradeUplift,
+        sectorPriceIndex: sector.priceIndex,
+        tradeSharePct: Math.round(tradeShare * 100),
+        accordBonusPct,
+        upliftCapUsd: money(upliftCap),
       },
       company.isPublic ? 'public' : 'company',
     );
@@ -454,9 +522,105 @@ export function resolveFinancials(
         rdSpendUsd: money(rdSpend),
         interestUsd: money(interestExpense),
         taxUsd: money(tax),
+        // P0-2 attribution: the number the Financials screen prints traces to
+        // this row, and only to this row.
+        logisticsTollPct: tollPct,
+        tollExempt: multiSector && tollPct === 0,
+        logisticsTollUsd: money(tollAdjustment),
+        regionalEnergyIndex: multiSector ? regionalEnergyIndex(draft, regionOf(company)) : SECTOR_PRICE_BASELINE,
+        inputPriceIndex: Math.round(sector.inputPriceFactor * SECTOR_PRICE_BASELINE),
+        sectorCostAdjustmentUsd: signedMoney(sectorCostAdjustment),
+        sustainingCapitalUsd: money(sustainingCapital),
       },
       'company',
     );
+    /* --- attribution: the rows the interface renders ------------------------ */
+    // Rule §6.2: if the engine multiplied it, the screen names it and signs it.
+    // Every row below carries the committed ledger row it came from, and the
+    // rows sum exactly to `totalUsd - baseUsd`, so no screen has to add anything
+    // up itself. Nothing is written in a single-sector world.
+    if (multiSector) {
+      const chainRow = draft.economyReport?.sectorPrices.find((row) => row.sector === ownSector) ?? null;
+      const priceRows: ModifierRow[] = [];
+      if (sectorUpliftUsd !== 0) {
+        priceRows.push(
+          stackRow(
+            'sector_price',
+            `${SECTOR_META[ownSector].label} goods price ${sector.priceIndex}`,
+            SECTOR_META[ownSector].icon,
+            sectorUpliftUsd,
+            grossRevenue,
+            chainRow?.causeEventId ?? revenueEventId,
+            'price',
+          ),
+        );
+      }
+      if (accordUpliftUsd !== 0) {
+        priceRows.push(stackRow('price_accord', `Price accord +${accordBonusPct}%`, 'network', accordUpliftUsd, grossRevenue, revenueEventId, 'price'));
+      }
+      priceStacks.push({
+        companyId: company.id,
+        quarter: ctx.quarter,
+        kind: 'price',
+        baseUsd: money(grossRevenue),
+        totalUsd: money(revenue),
+        netPct: pctOfBase(tradeUplift, grossRevenue),
+        rows: priceRows,
+      });
+
+      // The energy line already sits inside the cash cost of goods, so the base
+      // is stated at a neutral energy index and the deviation is its own row.
+      const energyInCogs = compute.energyUsd * compute.servingShare;
+      const energyPriceEffect = energyInCogs * (1 - SECTOR_PRICE_BASELINE / Math.max(1, economy.energy.priceIndex));
+      const costBase = cashCogsBeforeSector - energyPriceEffect;
+      const inputPriceUsd = (sector.inputPriceFactor - 1) * cashCogsBeforeSector;
+      const sectorConditionsUsd = (sector.inputCostMultiplier - sector.inputPriceFactor) * cashCogsBeforeSector;
+      const energyRow = draft.economyReport?.sectorPrices.find((row) => row.sector === 'energy') ?? null;
+      const tollRow = draft.economyReport?.regionTolls.find((row) => row.region === regionOf(company)) ?? null;
+
+      const costRows: ModifierRow[] = [];
+      if (Math.round(energyPriceEffect) !== 0) {
+        costRows.push(
+          stackRow('energy_basis', `Energy basis ${regionalEnergyIndex(draft, regionOf(company))}`, 'live', energyPriceEffect, costBase, energyRow?.causeEventId ?? costEventId, 'cost'),
+        );
+      }
+      if (Math.round(inputPriceUsd) !== 0) {
+        costRows.push(
+          stackRow('input_price', `Input goods price ${Math.round(sector.inputPriceFactor * SECTOR_PRICE_BASELINE)}`, 'box', inputPriceUsd, costBase, chainRow?.causeEventId ?? costEventId, 'cost'),
+        );
+      }
+      if (Math.round(sectorConditionsUsd) !== 0) {
+        costRows.push(stackRow('sector_conditions', 'Energy pass-through and AI productivity', 'settings', sectorConditionsUsd, costBase, costEventId, 'cost'));
+      }
+      if (Math.round(sustainingCapital) !== 0) {
+        costRows.push(stackRow('sustaining_capital', 'Sustaining capital', 'building', sustainingCapital, costBase, costEventId, 'cost'));
+      }
+      if (Math.round(tollAdjustment) !== 0) {
+        costRows.push(stackRow('logistics_toll', `Logistics toll ${tollPct}%`, 'network', tollAdjustment, costBase, tollRow?.causeEventId ?? costEventId, 'cost'));
+      } else if (logistics !== null && chargesTollPct(draft, company, logistics) > 0) {
+        costRows.push({
+          key: 'logistics_toll',
+          label: `Logistics toll — exempt (your group charges ${chargesTollPct(draft, company, logistics)}%)`,
+          icon: 'network',
+          pct: 0,
+          amountUsd: 0,
+          tone: 'positive',
+          causeEventId: tollRow?.causeEventId ?? costEventId,
+        });
+      }
+
+      const costTotal = cashCogsBeforeSector + sectorCostAdjustment + tollAdjustment;
+      costStacks.push({
+        companyId: company.id,
+        quarter: ctx.quarter,
+        kind: 'cost',
+        baseUsd: money(costBase),
+        totalUsd: money(costTotal),
+        netPct: pctOfBase(costTotal - costBase, costBase),
+        rows: costRows,
+      });
+    }
+
     const runway = quarterlyBurn < 0 ? clamp(ratio(sheet.assets.cash, -quarterlyBurn, RUNWAY_CAP_QUARTERS), 0, RUNWAY_CAP_QUARTERS) : RUNWAY_CAP_QUARTERS;
 
     // Distress is decided before the cash event is written, so the ledger row
@@ -551,5 +715,50 @@ export function resolveFinancials(
     }
   }
 
+  if (multiSector && draft.economyReport !== undefined && draft.economyReport !== null) {
+    draft.economyReport = { ...draft.economyReport, priceStacks, costStacks };
+  }
+
   return { pnl, balanceChecks };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Attribution rows                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** A signed whole percentage of a base. Zero base reads as zero rather than infinity. */
+function pctOfBase(amountUsd: number, baseUsd: number): number {
+  const base = Math.abs(baseUsd);
+  if (!(base > 1)) return 0;
+  return Math.round((amountUsd / base) * 100);
+}
+
+/**
+ * One row of an itemised stack.
+ *
+ * Tone is read from the reader's point of view, not the arithmetic's: money onto
+ * the revenue line is positive, money onto the cost line is negative, and a row
+ * that moved nothing is neutral.
+ */
+function stackRow(
+  key: string,
+  label: string,
+  icon: string,
+  amountUsd: number,
+  baseUsd: number,
+  causeEventId: string | null,
+  kind: 'price' | 'cost',
+): ModifierRow {
+  const amount = Math.round(amountUsd);
+  const good = kind === 'price' ? amount > 0 : amount < 0;
+  const bad = kind === 'price' ? amount < 0 : amount > 0;
+  return {
+    key,
+    label: label.slice(0, 80),
+    icon,
+    pct: pctOfBase(amount, baseUsd),
+    amountUsd: amount,
+    tone: good ? 'positive' : bad ? 'negative' : 'neutral',
+    causeEventId,
+  };
 }

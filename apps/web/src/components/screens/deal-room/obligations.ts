@@ -8,7 +8,7 @@
  * parties merely *said* lives in `intentStatements`, unenforced and labelled.
  */
 
-import type { BoardProposalKind, DealObligation, VoteStance } from '@frontier/contracts';
+import type { BoardProposalKind, DealObligation, Sector, VoteStance } from '@frontier/contracts';
 import { DEAL_OBLIGATION_KINDS } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 
@@ -23,6 +23,7 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
   public_endorsement: 'Public endorsement',
   consortium_membership: 'Consortium membership',
   investment: 'Investment',
+  price_accord: 'Price accord',
 };
 
 export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
@@ -34,6 +35,7 @@ export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
   public_endorsement: 'Spends the endorser’s credibility with their own audiences.',
   consortium_membership: 'How a specialist reaches a programme it could not deliver alone.',
   investment: 'Capital for equity. Creates or transfers shares depending on the security.',
+  price_accord: 'Every member earns a bonus on the part of its revenue the sector chain reprices — and carries the antitrust exposure of a cartel.',
 };
 
 /**
@@ -60,6 +62,8 @@ export function blankObligation(kind: ObligationKind, quarter: number): DealObli
       return { kind, opportunityId: '' };
     case 'investment':
       return { kind, amount: 0, securityId: '' };
+    case 'price_accord':
+      return { kind, sector: 'ai' as Sector, memberCompanyIds: [], quarters: 4 };
     default:
       return { kind: 'cash_payment', amount: 0 };
   }
@@ -84,6 +88,8 @@ export function describeObligation(obligation: DealObligation): string {
       return `Joint bid on ${obligation.opportunityId || 'an unnamed opportunity'}`;
     case 'investment':
       return `${formatMoney(obligation.amount)} invested for ${obligation.securityId || 'an unnamed security'}`;
+    case 'price_accord':
+      return `A ${obligation.sector} price accord between ${obligation.memberCompanyIds.length || 'no'} companies for ${obligation.quarters} quarters`;
     default:
       return 'An obligation';
   }

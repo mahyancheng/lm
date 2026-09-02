@@ -28,7 +28,7 @@ import type {
   SessionState,
   WorldEvent,
 } from '@frontier/contracts';
-import { researchProjectsForCompany, techGraphForCompany } from '@frontier/simulation';
+import { projectEconomyReportForPlayer, researchProjectsForCompany, techGraphForCompany } from '@frontier/simulation';
 import { formatMoney, formatQuarterCount } from '@frontier/shared';
 import { PLAYER_ID, playerCharacterOf, playerCompanyOf } from './engine';
 
@@ -192,6 +192,9 @@ export function projectPlayerView(session: SessionState): PlayerView {
     quarter: session.quarter,
     startYear: session.startYear,
     playerId: PLAYER_ID,
+    // The quarter's itemised economic attribution, already redacted to this
+    // seat by the engine. Null in a single-sector world, which has none.
+    economyReport: projectEconomyReportForPlayer(session, PLAYER_ID),
     world: session.world,
     sectors: session.sectors,
     ownCompany: company,

@@ -34,7 +34,16 @@ import type {
   WorldEventType,
   WorldModifier,
 } from '@frontier/contracts';
-import { WORLD_EVENT_TYPES, makeId } from '@frontier/contracts';
+import {
+  ACCORD_SUSPENSION_QUARTERS,
+  ANTITRUST_ENFORCEMENT_RELIEF,
+  WORLD_EVENT_TYPES,
+  antitrustBand,
+  antitrustFineUsd,
+  makeId,
+} from '@frontier/contracts';
+import { isMultiSectorWorld } from './sectors';
+import { priceSectors } from './prices';
 import { driftWorld, selectDominantNarrative, type DriftChange } from './macro';
 import {
   budgetFor,
@@ -105,8 +114,24 @@ export {
 } from './sectors';
 export type { SectorEconomy } from './sectors';
 export {
+  accordBonusPctFor,
+  activeAccords,
+  chargesTollPct,
+  maxTollForCompany,
+  priceSectors,
+  regionLogistics,
+  sectorBalances,
+  isAccordMember,
+  tollPaidPct,
+  ultimateControllerId,
+} from './prices';
+export type { ActiveAccord, RegionLogistics, SectorBalance } from './prices';
+export { annualisedRevenueUsd, meanInputPriceFactor, supplyBySector, supplyGateFor, tightnessBySector } from './sectors';
+export { EXPOSURE_DRIVEN_FAMILY_ID, familyHazardFor, maxAntitrustExposure } from './hazards';
+export {
   AFFINITY_DEMAND_WEIGHT,
   REGION_FACTOR_BOUNDS,
+  regionalEnergyIndex,
   companyCapitalDepthFactor,
   companyEnergyCostFactor,
   companyRegionFitFactor,
@@ -308,7 +333,87 @@ export function createEconomySubsystem(): EconomySubsystemImpl {
       subjectId: event.affectedCompanyIds[0] ?? null,
     });
 
+    applyAntitrustRemedy(draft, event, ctx);
+
     return eventId;
+  }
+
+  /* ---------------------------- antitrust remedy -------------------------- */
+
+  /**
+   * What an antitrust investigation actually *does* to the company it names.
+   *
+   * A bounded remedy, not a narrative: a fine that is the lower of a twentieth
+   * of cash and a fiftieth of trailing revenue, six quarters with every price
+   * accord suspended, and thirty points off the exposure score — being caught
+   * clears the air, which is what stops the score being a one-way ratchet.
+   *
+   * Cash and equity move together, so the balance-sheet identity survives the
+   * fine and the financial phase later this quarter reads a sheet that already
+   * reconciles.
+   */
+  function applyAntitrustRemedy(draft: SessionState, event: WorldEvent, ctx: ResolverContext): void {
+    if (event.familyId !== 'fam_antitrust' || !isMultiSectorWorld(draft)) return;
+    const companyId = event.affectedCompanyIds[0];
+    if (companyId === undefined) return;
+    const company = draft.companies.find((candidate) => candidate.id === companyId);
+    if (company === undefined || !company.isActive) return;
+
+    const fine = antitrustFineUsd(company.balanceSheet.assets.cash, company.fundamentals.revenueTtmUsd);
+    if (fine > 0) {
+      company.balanceSheet.assets.cash = round(Math.max(0, company.balanceSheet.assets.cash - fine), 2);
+      company.financials.cash = company.balanceSheet.assets.cash;
+      company.balanceSheet.equity = round(company.balanceSheet.equity - fine, 2);
+    }
+
+    const before = clamp(company.antitrustExposure ?? 0, 0, 100);
+    const after = clamp(before - ANTITRUST_ENFORCEMENT_RELIEF, 0, 100);
+    company.antitrustExposure = after;
+    company.accordSuspendedUntilQuarter = ctx.quarter + ACCORD_SUSPENSION_QUARTERS;
+
+    const remedyId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: ctx.quarter,
+      type: 'world_event_applied',
+      // The company is the actor, not the world: the invariant gate reconstructs
+      // equity movement per actor, and a fine is a movement it has to see.
+      actorId: company.id,
+      targetId: company.id,
+      payload: {
+        kind: 'antitrust_remedy',
+        worldEventId: event.id,
+        fineUsd: fine,
+        accordSuspendedUntilQuarter: company.accordSuspendedUntilQuarter,
+        accordSuspensionQuarters: ACCORD_SUSPENSION_QUARTERS,
+        exposureBefore: before,
+        exposureAfter: after,
+      },
+      visibility: 'public',
+    });
+    ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: ctx.quarter,
+      type: 'antitrust_exposure_changed',
+      actorId: company.id,
+      targetId: company.id,
+      payload: {
+        companyId: company.id,
+        before,
+        after,
+        band: antitrustBand(after),
+        reason: 'enforcement',
+        fineUsd: fine,
+      },
+      visibility: 'company',
+    });
+    ctx.log({
+      phase: 'world_events',
+      text: `${company.name} was fined and every price accord it is party to is suspended for ${ACCORD_SUSPENSION_QUARTERS} quarters.`,
+      deltaLabel: `-${Math.round(before - after)} exposure`,
+      refEventIds: [remedyId],
+      tone: 'negative',
+      subjectId: company.id,
+    });
   }
 
   function materialiseCandidate(draft: SessionState, candidate: WorldEventCandidate, ctx: ResolverContext): MaterialisedEvent | null {
@@ -572,6 +677,7 @@ export function createEconomySubsystem(): EconomySubsystemImpl {
 
   return {
     updateMacro,
+    priceSectors,
     computeEventCandidates,
     applyModifiers,
     decayModifiers,

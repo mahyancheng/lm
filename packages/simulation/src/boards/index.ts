@@ -24,6 +24,7 @@ import { commitmentsFromLobbying, expireCommitments, resolveCommitmentOutcomes }
 import { emitEvent, line, round } from './util';
 
 export {
+  controllingHolderId,
   tallyProposal,
   assessDirector,
   bindingCommitments,

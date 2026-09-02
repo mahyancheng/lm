@@ -28,7 +28,9 @@
  * figure. What a player may not see is absent, not blurred.
  */
 
-import type { ResolutionLine, ResolutionPhaseReport, ResolutionReport, SessionState, SimEvent } from '@frontier/contracts';
+import type { EconomyReport, ResolutionLine, ResolutionPhaseReport, ResolutionReport, SessionState, SimEvent } from '@frontier/contracts';
+import { grantsInformationRight } from '@frontier/contracts';
+import { isMultiSectorWorld } from '../economy/sectors';
 
 /** Everything the projection needs from a resolution outcome. */
 export interface ProjectableOutcome {
@@ -51,6 +53,15 @@ export interface PlayerAudience {
   readonly characterIds: ReadonlySet<string>;
   /** Sectors those companies compete in. */
   readonly sectorIds: ReadonlySet<string>;
+  /**
+   * Companies this seat holds 25% or more of.
+   *
+   * An **entitlement**, not a leak: a quarter of the register buys the right to
+   * see what the company reported, a quarter before the market gets it. Rule 9
+   * is intact because the reporting still happens — this only decides who is
+   * standing at the front of the queue for it.
+   */
+  readonly informationRightCompanyIds: ReadonlySet<string>;
 }
 
 /**
@@ -82,7 +93,21 @@ export function audienceFor(session: SessionState, playerId: string): PlayerAudi
     if (companyIds.has(company.id)) sectorIds.add(company.sectorId);
   }
 
-  return { playerId, companyIds, characterIds, sectorIds };
+  const informationRightCompanyIds = new Set<string>();
+  if (isMultiSectorWorld(session)) {
+    const holders = new Set<string>([playerId, ...companyIds, ...characterIds]);
+    for (const table of session.capTables) {
+      const issued = table.shareClasses.reduce((sum, klass) => sum + klass.issuedShares, 0);
+      if (issued <= 0) continue;
+      let held = 0;
+      for (const holding of table.holdings) {
+        if (holders.has(holding.holderId)) held += holding.shares;
+      }
+      if (grantsInformationRight(held, issued)) informationRightCompanyIds.add(table.companyId);
+    }
+  }
+
+  return { playerId, companyIds, characterIds, sectorIds, informationRightCompanyIds };
 }
 
 /** Whether one ledger row may be shown to this seat. */
@@ -93,6 +118,14 @@ export function isEventVisibleTo(event: SimEvent, session: SessionState, audienc
   for (const subject of subjects) {
     if (subject === null) continue;
     if (audience.companyIds.has(subject) || audience.characterIds.has(subject)) return true;
+  }
+  // The 25% information right: a company-scoped row about a company this seat
+  // holds a quarter of is a row it is entitled to. Never applies to `private`,
+  // which belongs to the engine.
+  if (event.visibility === 'company') {
+    for (const subject of subjects) {
+      if (subject !== null && audience.informationRightCompanyIds.has(subject)) return true;
+    }
   }
   if (event.visibility !== 'sector') return false;
 
@@ -169,4 +202,38 @@ function headlineFor(report: ResolutionReport, kept: readonly ResolutionLine[], 
 
 function clip(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Economy report                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Project the quarter's economic attribution to one seat.
+ *
+ * Sector prices, tolls and flagged predation are public — a price war *should*
+ * move belief, and the whole point of the Sector Flow readout is that everyone
+ * reads the same numbers. Everything else is the seat's own: your cost stack is
+ * your cost stack, and your antitrust exposure is your compliance risk, not a
+ * rival's intelligence. The 25% information right widens that set and nothing
+ * else does.
+ */
+export function projectEconomyReportForPlayer(session: SessionState, playerId: string): EconomyReport | null {
+  const report = session.economyReport;
+  if (report === undefined || report === null) return null;
+  const audience = audienceFor(session, playerId);
+  const own = (companyId: string): boolean => audience.companyIds.has(companyId) || audience.informationRightCompanyIds.has(companyId);
+
+  return {
+    quarter: report.quarter,
+    sectorPrices: report.sectorPrices,
+    regionTolls: report.regionTolls,
+    predation: report.predation,
+    priceStacks: report.priceStacks.filter((stack) => own(stack.companyId)),
+    costStacks: report.costStacks.filter((stack) => own(stack.companyId)),
+    exposures: report.exposures.filter((entry) => own(entry.companyId)),
+    rivalPressure: report.rivalPressure.filter((row) => own(row.companyId)),
+    dividends: report.dividends.filter((row) => own(row.companyId)),
+    control: report.control.filter((row) => own(row.companyId) || audience.companyIds.has(row.holderId) || audience.characterIds.has(row.holderId)),
+  };
 }

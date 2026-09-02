@@ -37,9 +37,24 @@ import type {
   SessionState,
   ShareClass,
 } from '@frontier/contracts';
-import { makeId, ownershipThresholdFor, priceWithinBand, sharesForMarketCap } from '@frontier/contracts';
+import type { DividendPreview } from '@frontier/contracts';
+import {
+  CONTROL_DECISIVE_PCT,
+  CONTROL_INFORMATION_PCT,
+  DIVIDEND_CASH_CAP_SHARE,
+  DIVIDEND_MAX_PAYOUT_PCT,
+  dividendReputationBonus,
+  dividendUsd,
+  grantsControl,
+  makeId,
+  ownershipThresholdFor,
+  priceWithinBand,
+  sharesForMarketCap,
+} from '@frontier/contracts';
 import { companyCapitalDepthFactor } from '../economy/regions';
 import { isMultiSectorWorld } from '../economy/sectors';
+import { maxTollForCompany } from '../economy/prices';
+import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { pendingOfType } from './actions';
 import { routeDeals } from './routing';
 
@@ -274,7 +289,15 @@ function reportThreshold(
     type: 'ownership_threshold_crossed',
     actorId: holderId,
     targetId: companyId,
-    payload: { threshold: crossed.label, pct: round(after, 4), previousPct: round(before, 4), effect: crossed.effect },
+    payload: {
+      threshold: crossed.label,
+      pct: round(after, 4),
+      previousPct: round(before, 4),
+      effect: crossed.effect,
+      // 50% + 1 share is the only threshold that flips anything in the engine.
+      grantsControl: after > CONTROL_DECISIVE_PCT,
+      grantsInformationRight: after >= CONTROL_INFORMATION_PCT,
+    },
     // Crossing the disclosure line is exactly the moment a position stops
     // being private, which is why the visibility depends on the threshold.
     visibility: after >= 0.05 ? 'public' : 'company',
@@ -302,14 +325,179 @@ function reportThreshold(
  */
 export function resolveCapital(draft: SessionState, ctx: ResolverContext): void {
   const rng = ctx.rng.fork('capital');
+  resolvePolicies(draft, ctx);
   resolveFundingRounds(draft, ctx, rng);
   resolveDebtIssues(draft, ctx, rng);
   resolveShareIssues(draft, ctx);
   resolveListings(draft, ctx);
   resolveBuybacks(draft, ctx);
+  // Dividends settle after buybacks and before acquisitions, so a company cannot
+  // pay a dividend with money it needs for a deal it has already agreed.
+  resolveDividends(draft, ctx);
   resolveAcquisitions(draft, ctx);
   routeDeals(draft, ctx);
 }
+
+/* ------------------------------- policies --------------------------------- */
+
+/**
+ * Record the standing policies this quarter's actions set.
+ *
+ * Neither is an economic mutation on its own — no money moves — so neither
+ * writes its own ledger row: the `action_accepted` row the collection phase
+ * already wrote is the record, and the quarter the policy actually costs
+ * something is the quarter that emits `dividend_paid` or carries
+ * `logisticsTollPct` on a `cost_recognised` row.
+ */
+function resolvePolicies(draft: SessionState, ctx: ResolverContext): void {
+  for (const { action, intent } of pendingOfType(draft, 'set_dividend_policy')) {
+    const company = findCompany(draft, action.actorCompanyId);
+    if (company === null) continue;
+    const before = company.dividendPolicyPct ?? 0;
+    company.dividendPolicyPct = clamp(Math.round(intent.payoutPct), 0, DIVIDEND_MAX_PAYOUT_PCT);
+    if (company.dividendPolicyPct === before) continue;
+    ctx.log({
+      phase: 'capital_resolution',
+      text: `${company.name} set its payout policy to ${company.dividendPolicyPct}% of net income, from ${before}%.`,
+      deltaLabel: `${company.dividendPolicyPct >= before ? '+' : ''}${company.dividendPolicyPct - before}pp`,
+      refEventIds: [],
+      tone: 'neutral',
+      subjectId: company.id,
+    });
+  }
+
+  for (const { action, intent } of pendingOfType(draft, 'set_logistics_toll')) {
+    const company = findCompany(draft, action.actorCompanyId);
+    if (company === null) continue;
+    // A dial, not a right: the ceiling is what the group's regional share has
+    // actually earned, and it is recomputed here rather than trusted from the
+    // validator, because the world moved between submission and resolution.
+    const ceiling = maxTollForCompany(draft, company, intent.region);
+    company.logisticsTollPct = clamp(Math.round(intent.tollPct), 0, ceiling);
+  }
+}
+
+/* ------------------------------- dividends -------------------------------- */
+
+/**
+ * Pay dividends on **last** quarter's net income.
+ *
+ * Last quarter's, because `financial_resolution` is phase eleven and this is
+ * phase six: at this point in the quarter the current period has not been earned
+ * yet, and a payout struck on it would be a payout from a forecast. Saying so
+ * here is what stops a future reader "fixing" it.
+ *
+ * Cash and equity fall together, so the balance-sheet identity survives. Holders
+ * are paid pro rata: a corporate holder books cash and the matching equity, a
+ * person books it as personal wealth, and the public float is money that has
+ * left the session's companies.
+ */
+function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
+  if (!isMultiSectorWorld(draft)) return;
+  const rows: DividendPreview[] = [];
+
+  for (const company of draft.companies) {
+    if (!company.isActive) continue;
+    const payoutPct = clamp(Math.round(company.dividendPolicyPct ?? 0), 0, DIVIDEND_MAX_PAYOUT_PCT);
+    const basis = lastQuarterNetIncomeUsd(company);
+    const cash = company.balanceSheet.assets.cash;
+    const payable = Math.max(0, (Math.max(0, basis) * payoutPct) / 100);
+    const dividend = dividendUsd(basis, payoutPct, cash);
+    if (payoutPct <= 0 || dividend <= 0) continue;
+
+    const table = findCapTable(draft, company.id);
+    const security = findSecurity(draft, company.primarySecurityId) ?? draft.securities.find((s) => s.companyId === company.id) ?? null;
+    const shareClass = table?.shareClasses.find((klass) => klass.id === security?.shareClassId) ?? table?.shareClasses[0] ?? null;
+    const issued = shareClass?.issuedShares ?? 0;
+    if (table === null || security === null || issued <= 0) continue;
+
+    company.balanceSheet.assets.cash = round(Math.max(0, cash - dividend), 2);
+    company.financials.cash = company.balanceSheet.assets.cash;
+    company.balanceSheet.equity = round(company.balanceSheet.equity - dividend, 2);
+    company.reputation.investor = clamp(company.reputation.investor + dividendReputationBonus(payoutPct), 0, 100);
+
+    const perShare = dividend / issued;
+    const corporateRecipients: { holderId: string; amountUsd: number }[] = [];
+    let distributed = 0;
+    const holders = table.holdings
+      .filter((holding) => holding.securityId === security.id && holding.shares > 0)
+      .slice()
+      .sort((a, b) => (b.shares !== a.shares ? b.shares - a.shares : a.id < b.id ? -1 : 1));
+
+    for (const holding of holders) {
+      const amount = round(holding.shares * perShare, 2);
+      if (amount <= 0) continue;
+      distributed += amount;
+      if (holding.holderKind === 'company') {
+        const holder = findCompany(draft, holding.holderId);
+        if (holder === null) continue;
+        holder.balanceSheet.assets.cash = round(holder.balanceSheet.assets.cash + amount, 2);
+        holder.financials.cash = holder.balanceSheet.assets.cash;
+        // Dividend income is income: assets up, equity up, identity intact.
+        holder.balanceSheet.equity = round(holder.balanceSheet.equity + amount, 2);
+        corporateRecipients.push({ holderId: holder.id, amountUsd: amount });
+        continue;
+      }
+      if (holding.holderKind === 'player' || holding.holderKind === 'character') {
+        const character = draft.characters.find((candidate) => candidate.id === holding.holderId);
+        if (character !== undefined) character.personalWealthUsd = round(character.personalWealthUsd + amount, 2);
+      }
+    }
+
+    const eventId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'dividend_paid',
+      actorId: company.id,
+      targetId: security.id,
+      payload: {
+        companyId: company.id,
+        payoutPct,
+        netIncomeBasisUsd: round(basis, 2),
+        dividendUsd: dividend,
+        perShareUsd: round(perShare, 4),
+        cashAfterUsd: company.balanceSheet.assets.cash,
+        sharesOutstanding: issued,
+        distributedUsd: round(distributed, 2),
+        cappedByCash: payable > dividend + 0.5,
+        // Named so the invariant gate can reconstruct every balance sheet the
+        // payout moved, not just the one it left.
+        corporateRecipients: corporateRecipients.slice(0, 24),
+      },
+      visibility: 'public',
+    });
+    ctx.log({
+      phase: 'capital_resolution',
+      text: `${company.name} paid ${compactUsd(dividend)} to shareholders at a ${payoutPct}% payout, keeping ${compactUsd(Math.max(0, basis) - dividend)} in the business.`,
+      deltaLabel: `-${compactUsd(dividend)}`,
+      refEventIds: [eventId],
+      tone: 'neutral',
+      subjectId: company.id,
+    });
+
+    rows.push({
+      companyId: company.id,
+      quarter: draft.quarter,
+      payoutPct,
+      netIncomeBasisUsd: round(basis, 0),
+      cashUsd: Math.round(cash),
+      payableUsd: Math.round(payable),
+      dividendUsd: dividend,
+      retainedUsd: Math.round(Math.max(0, basis) - dividend),
+      perShareUsd: round(perShare, 4),
+      sharesOutstanding: issued,
+      cappedByCash: payable > dividend + 0.5,
+      causeEventId: eventId,
+    });
+  }
+
+  if (rows.length > 0 && draft.economyReport !== undefined && draft.economyReport !== null) {
+    draft.economyReport = { ...draft.economyReport, dividends: rows };
+  }
+}
+
+/** The share of cash a payout may never exceed. Re-exported for the interface preview. */
+export { DIVIDEND_CASH_CAP_SHARE, grantsControl };
 
 /* ------------------------------- financing -------------------------------- */
 
@@ -922,6 +1110,13 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
     for (const [area, strength] of Object.entries(target.techCapabilities)) {
       const current = acquirer.techCapabilities[area] ?? 0;
       acquirer.techCapabilities[area] = clamp01(Math.max(current, strength * ACQUISITION_CAPABILITY_RETENTION));
+    }
+
+    // Bounded history: what the antitrust score reads to know this group has
+    // been consolidating. Pruned back to the window every quarter by the metrics
+    // phase, and never written at all in a single-sector world.
+    if (isMultiSectorWorld(draft)) {
+      acquirer.recentAcquisitionQuarters = [...(acquirer.recentAcquisitionQuarters ?? []), draft.quarter].slice(-8);
     }
 
     /* --- extinguish the target -------------------------------------------- */

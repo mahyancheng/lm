@@ -305,6 +305,29 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
       case 'buyback_executed':
         add(event, actor, 'costUsd', (value) => (actor.capital -= value));
         break;
+      case 'dividend_paid': {
+        // Capital leaving the company, and the same capital arriving on the
+        // balance sheet of every corporate holder it reached. Holders who are
+        // people book it as personal wealth, which is not a balance sheet.
+        add(event, actor, 'dividendUsd', (value) => (actor.capital -= value));
+        const recipients = event.payload.corporateRecipients;
+        if (Array.isArray(recipients)) {
+          for (const recipient of recipients) {
+            if (typeof recipient !== 'object' || recipient === null) continue;
+            const row = recipient as { holderId?: unknown; amountUsd?: unknown };
+            const holder = typeof row.holderId === 'string' ? entry(row.holderId) : null;
+            if (holder === null || typeof row.amountUsd !== 'number' || !Number.isFinite(row.amountUsd)) continue;
+            holder.capital += row.amountUsd;
+          }
+        }
+        break;
+      }
+      case 'world_event_applied':
+        // An antitrust fine is the one world event that moves a balance sheet.
+        // It states its own size, so the reconstruction reads it like any other
+        // declared flow rather than guessing.
+        if (event.payload.kind === 'antitrust_remedy') add(event, actor, 'fineUsd', (value) => (actor.capital -= value));
+        break;
       case 'acquisition_completed': {
         add(event, actor, 'stockUsd', (value) => (actor.capital += value));
         // A purchase below net asset value is a gain, not negative goodwill.

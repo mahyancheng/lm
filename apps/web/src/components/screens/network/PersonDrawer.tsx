@@ -265,14 +265,14 @@ export function PersonDrawer({
             </p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
-              {offers.map((offer) => (
+              {offers.map((offer) => {
+                // One verdict per offer per render, computed whether the form is
+                // open or shut: a refusal belongs on the collapsed row, so a
+                // player does not have to open a form to learn it is closed.
+                const verdict = verdictFor(offer.kind);
+                return (
                 <li key={offer.kind}>
-                  <OfferRow
-                    offer={offer}
-                    open={openKind === offer.kind}
-                    onToggle={() => toggle(offer.kind)}
-                    verdict={openKind === offer.kind ? verdictFor(offer.kind) : null}
-                  >
+                  <OfferRow offer={offer} open={openKind === offer.kind} onToggle={() => toggle(offer.kind)} verdict={verdict}>
                     {offer.kind === 'talk' ? (
                       <TalkPanel
                         key={target.id}
@@ -490,15 +490,11 @@ export function PersonDrawer({
 
                     {offer.kind === 'talk' ? null : (
                       <>
-                        <ValidationBanner result={queuedKind === offer.kind ? result : verdictFor(offer.kind)} compact />
+                        <ValidationBanner result={queuedKind === offer.kind ? result : verdict} compact />
                         <button
                           type="button"
                           className="btn btn-primary tap-target icon-knockout-brand mt-2 w-full sm:w-auto"
-                          disabled={
-                            !isComplete(offer.kind) ||
-                            queuedKind === offer.kind ||
-                            verdictFor(offer.kind)?.status === 'rejected'
-                          }
+                          disabled={!isComplete(offer.kind) || queuedKind === offer.kind || verdict?.status === 'rejected'}
                           onClick={() => queue(offer.kind)}
                         >
                           <Icon name={offer.icon} size={15} accent="inherit" />
@@ -508,7 +504,8 @@ export function PersonDrawer({
                     )}
                   </OfferRow>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

@@ -7,8 +7,12 @@
  * first-quarter founder on connection 24 cannot open a channel to a sovereign
  * fund on 93, and the screen says so in those words, with the gap on the row.
  * What it also does is show the way through: who you *can* reach, which of them
- * can reach the person you want, and a `request_introduction` that runs the same
- * reachability check the validator will.
+ * can reach the person you want, and — in the drawer behind every face — the
+ * typed actions that person's role admits, each carrying the validator's own
+ * live verdict. Reachability here is `checkAccess`, which is the function the
+ * validator's `canReach` now *is* rather than restates; when those two drifted
+ * apart the whole screen went quiet, because every route it offered ran through
+ * somebody the engine said could not be reached.
  *
  * The primary surface is a web of faces in rings around you — reachable inside,
  * one introduction away in the middle, out of reach outside — because "how far
@@ -24,8 +28,9 @@
  *   the player are read, and only the player's own memories.
  */
 
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { quarterLabel } from '@frontier/contracts';
+import { CONNECTION_GAP_RULE, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatScore } from '@frontier/shared';
 import { connectionInputs } from '@frontier/simulation';
 import {
@@ -90,6 +95,8 @@ export default function NetworkPage(): React.JSX.Element {
   const viaOverride = directory.filter((entry) => entry.state === 'override');
   const blocked = directory.filter((entry) => entry.state === 'blocked');
   const routed = blocked.filter((entry) => entry.brokerIds.length > 0);
+  /** No channel open and no channel obtainable: the one state with no move on it. */
+  const stranded = open.length === 0 && viaOverride.length === 0 && routed.length === 0;
   const selectedEntry = selected === null ? null : (directory.find((entry) => entry.character.id === selected) ?? null);
 
   /**
@@ -275,7 +282,10 @@ export default function NetworkPage(): React.JSX.Element {
           iconName="handshake"
           label="Via override"
           value={String(viaOverride.length)}
-          hint="A board, a deal, a favour"
+          // A structural bypass is a channel that is open *today*, so it reads
+          // as a gain: these are the people a founder can act on this quarter.
+          tone={viaOverride.length > 0 ? 'gain' : undefined}
+          hint="A board, a deal, a shared investor"
         />
         <StatCard
           iconName="warning"
@@ -286,6 +296,28 @@ export default function NetworkPage(): React.JSX.Element {
           hint={`${routed.length} have a route in`}
         />
       </div>
+
+      {/* --- the dead screen -------------------------------------------------
+          Nobody reachable and nobody who can pass a message along. A founder
+          landing here has no move on this page, so the page stops showing them
+          a web of faces they cannot touch and shows them the ten things that
+          actually move standing, each one a tap away. */}
+      {stranded ? (
+        <Panel
+          iconName="warning"
+          iconTone="warn"
+          title="Nobody is in reach yet"
+          subtitle={`Every one of the ${directory.length} people here sits more than ${CONNECTION_GAP_RULE.symmetricGap} points above you, and none of them can be reached through anybody else either.`}
+        >
+          <p className="text-[12.5px] leading-relaxed text-ink-dim">
+            Connection level is not a number to grind: it is recomputed every quarter from ten inputs, each a percentile within this session.
+            These are the ten, largest first, and the screen where each one is played.
+          </p>
+          <div className="mt-3">
+            <ConnectionLevers />
+          </div>
+        </Panel>
+      ) : null}
 
       <IconTabs
         ariaLabel="How to read the network"
@@ -377,6 +409,14 @@ export default function NetworkPage(): React.JSX.Element {
           className="lg:col-span-2"
         >
           <ConnectionBreakdown inputs={inputs} standingLevel={founder.connectionLevel} />
+          {stranded ? null : (
+            <div className="mt-4">
+              <SectionHeading rule>Where each one is played</SectionHeading>
+              <div className="mt-2">
+                <ConnectionLevers />
+              </div>
+            </div>
+          )}
         </Panel>
 
         <Panel iconName="handshake" title="Access" subtitle="Who you can open a channel with this quarter">
@@ -521,5 +561,33 @@ function AccessGroup({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * The ten inputs of the connection hierarchy, as places to go.
+ *
+ * The weights are the engine's own, so the order is the real order of leverage
+ * rather than a list of encouraging suggestions — and `publicFollowing` sits
+ * last at five percent, because this game is emphatically not follower count.
+ */
+function ConnectionLevers(): React.JSX.Element {
+  return (
+    <ul className="grid gap-1.5 sm:grid-cols-2">
+      {CONNECTION_LEVERS.map((lever) => (
+        <li key={lever.label}>
+          <Link href={lever.href} className="tap-target flex w-full items-center gap-2.5 rounded-chip px-2 py-1.5 transition-colors hover:bg-raised">
+            <span className="shrink-0">
+              <Icon name={lever.icon} size={17} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12px] font-semibold text-ink">{lever.label}</span>
+              <span className="block text-[10.5px] leading-relaxed text-ink-faint">{lever.how}</span>
+            </span>
+            <span className="figure shrink-0 text-[11px] text-ink-dim">{lever.weightPct}%</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }

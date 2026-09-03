@@ -11,9 +11,12 @@
  *   not on this screen, and neither is what anyone privately remembers about
  *   the player.
  *
- * `checkAccess` is the engine's own pure query — the same function the
- * validator calls for `request_introduction` — so the badge on a row and the
- * verdict on the action can never disagree.
+ * `checkAccess` is the engine's own pure query, and since `canReach` in the
+ * validator delegates to it rather than restating it, the badge on a row and
+ * the verdict on the action can never disagree. They once did: `canReach` read
+ * the connection gap and the *stored* overrides only, so the twenty-seven
+ * people world 2 makes reachable through a shared investor were marked
+ * reachable here and refused by every rule that gates on reach.
  */
 
 import type { AccessDecision, AccessOverride, Character, Memory, PlayerView, Relationship, SessionState } from '@frontier/contracts';

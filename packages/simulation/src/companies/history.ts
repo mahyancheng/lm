@@ -97,10 +97,16 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
   const opexResearch = money(research - opexCompute);
 
   /* --- balance ------------------------------------------------------------ */
-  const cash = money(sheet.assets.cash);
+  // Signed: from world version 2 a company may close a quarter overdrawn, and a
+  // statement that floored the balance at zero would report a solvency the
+  // company does not have — and break the cash-flow identity below.
+  const cash = signedMoney(sheet.assets.cash);
   const receivables = money(sheet.assets.receivables);
   const computeAssets = money(sheet.assets.ppe);
   const otherAssets = money(sheet.assets.goodwill + sheet.assets.investments);
+  // The investments half of `otherAssets`, restated rather than added: the
+  // portfolio screen needs a carrying value per quarter and goodwill is not one.
+  const investments = money(sheet.assets.investments);
   const debt = money(sheet.liabilities.debt);
   const deferred = money(sheet.liabilities.deferredRevenue);
   const otherLiabilities = money(sheet.liabilities.payables);
@@ -110,7 +116,7 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
   // actually moved; investing and financing are the two named outflows; and
   // operating is the remainder, so the three always sum to the movement rather
   // than to an estimate of it.
-  const openingCash = money(input.openingCashUsd);
+  const openingCash = signedMoney(input.openingCashUsd);
   const netChange = signedMoney(cash - openingCash);
   const investing = signedMoney(-money(input.capexUsd));
   const financing = signedMoney(-money(input.debtRepaidUsd));
@@ -170,7 +176,8 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
       receivablesUsd: receivables,
       computeAssetsUsd: computeAssets,
       otherAssetsUsd: otherAssets,
-      totalAssetsUsd: money(cash + receivables + computeAssets + otherAssets),
+      investmentsUsd: investments,
+      totalAssetsUsd: signedMoney(cash + receivables + computeAssets + otherAssets),
       debtUsd: debt,
       deferredRevenueUsd: deferred,
       otherLiabilitiesUsd: otherLiabilities,

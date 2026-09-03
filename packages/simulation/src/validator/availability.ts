@@ -58,6 +58,7 @@ import {
   RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
 import { quarterlyHireCostUsd, reservableUnits } from './rules';
+import { sellersFor } from '../companies/sellers';
 
 /* -------------------------------------------------------------------------- */
 /*  Probe shape                                                                */
@@ -108,6 +109,13 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
   const heldCompute = company.compute.ownedAccelerators + company.compute.reservedAccelerators;
   const activeProducts = company.products.filter((product) => product.isActive);
   const staff = company.employees;
+  // What running programmes already hold, so a re-resourcing probe can hand a
+  // programme's own allocation back before counting what is free.
+  const onProgrammes = draft.researchProjects.filter(
+    (project) => project.companyId === company.id && (project.status === 'active' || project.status === 'paused'),
+  );
+  const startedCompute = onProgrammes.reduce((total, project) => total + project.computeAllocated, 0);
+  const startedResearchers = onProgrammes.reduce((total, project) => total + project.talentAllocated, 0);
 
   switch (type) {
     /* --------------------------- research --------------------------- */
@@ -145,6 +153,39 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
           countBound('researchersAssigned', 'Researchers assigned', staff.researchers),
         ],
         targets: nodes.slice(0, 24).map((entry) => ({ id: entry.id, label: entry.title })),
+        maxCashUsd: cash,
+      };
+    }
+
+    case 'adjust_research_project': {
+      const running = draft.researchProjects.filter(
+        (project) => project.companyId === company.id && (project.status === 'active' || project.status === 'paused'),
+      );
+      const project = running[0];
+      if (project === undefined) {
+        return { intent: null, reason: `${company.name} has no running research programme to re-resource.`, ...NOTHING };
+      }
+      // The programme hands its own allocation back before free capacity is
+      // counted, exactly as the rule does.
+      const freeCompute = heldCompute - startedCompute + project.computeAllocated;
+      const freeResearchers = staff.researchers - startedResearchers + project.talentAllocated;
+      return {
+        intent: {
+          type,
+          projectId: project.id,
+          budgetUsd: Math.max(cash, project.budgetQuarterly),
+          computeUnits: Math.max(0, freeCompute),
+          researchersAssigned: Math.max(0, freeResearchers),
+        },
+        bounds: [
+          usdBound('budgetUsd', 'Cash per quarter', null),
+          countBound('computeUnits', 'Accelerator-equivalents', Math.max(0, freeCompute)),
+          countBound('researchersAssigned', 'Researchers assigned', Math.max(0, freeResearchers)),
+        ],
+        targets: running.slice(0, 24).map((entry) => ({
+          id: entry.id,
+          label: draft.techGraph.nodes.find((node) => node.id === entry.targetNodeId)?.title ?? entry.targetNodeId,
+        })),
         maxCashUsd: cash,
       };
     }
@@ -317,7 +358,7 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
       const unitCost = RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice;
       const affordable = unitCost <= 0 ? marketCap : Math.min(marketCap, Math.floor(cash / unitCost));
       return {
-        intent: { type, units: Math.max(1, affordable), quarters: 4, maxPricePerUnitUsd: Math.round(unitCost * 1.2) },
+        intent: { type, units: Math.max(1, affordable), quarters: 4, maxPricePerUnitUsd: Math.round(unitCost * 1.2), providerCompanyId: null },
         bounds: [
           countBound('units', 'Accelerator-equivalents', Math.max(1, affordable), 1),
           quarterBound('quarters', 'Reservation term', 1, 16),
@@ -338,6 +379,34 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
           .map((entry) => ({ id: entry.id, label: entry.name })),
         maxCashUsd: cash,
       };
+
+    case 'buy_accelerators': {
+      // Probed against the market rather than against the cash: from world
+      // version 2 cash notes an order, it never refuses one, so the honest
+      // ceiling is what the cheapest manufacturer can actually ship.
+      const market = sellersFor(draft, 'accelerators', company.id);
+      const seller = market[0];
+      if (seller === undefined) {
+        return { intent: null, reason: 'No manufacturer has accelerators to sell this quarter.', ...NOTHING };
+      }
+      return {
+        intent: {
+          type,
+          units: seller.sellableUnits,
+          maxPricePerUnitUsd: Math.round(seller.unitPriceUsd * 1.1),
+          sellerCompanyId: seller.company.id,
+        },
+        bounds: [
+          countBound('units', 'Accelerators', seller.sellableUnits, 1),
+          usdBound('maxPricePerUnitUsd', 'Price ceiling per accelerator', null),
+        ],
+        targets: market.slice(0, 24).map((entry) => ({
+          id: entry.company.id,
+          label: `${entry.company.name} — ${entry.sellableUnits} units at ${Math.round(entry.unitPriceUsd)} each`,
+        })),
+        maxCashUsd: Math.round(seller.sellableUnits * seller.unitPriceUsd),
+      };
+    }
 
     case 'allocate_compute':
       return {

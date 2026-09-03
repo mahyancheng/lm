@@ -19,6 +19,7 @@
 import type { Character } from '@frontier/contracts';
 import { AiLabel, Tag } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard, type PortraitMood } from '@/components/scenes/people';
+import { FindingsCards } from './FindingsCards';
 import { InterpretationCard } from './InterpretationCard';
 import type { TranscriptEntry } from './transcript';
 
@@ -35,6 +36,9 @@ const MODE_LABEL: Readonly<Record<TranscriptEntry['interpretation']['mode'], str
   answer: 'Answer',
   plan: 'Advice',
   act: 'Instruction',
+  // A research reply is the assistant saying it went and looked. It only reaches
+  // the transcript when the second turn never came back.
+  research: 'Sourced',
 };
 
 /**
@@ -99,12 +103,19 @@ export function Exchange({ entry, founder, startYear, dense = false }: ExchangeP
               <span className="text-[10px] text-ink-faint">{CHIEF_OF_STAFF.title}</span>
               <AiLabel />
               <Tag tone={interpretation.mode === 'act' ? 'brand' : 'neutral'}>{MODE_LABEL[interpretation.mode]}</Tag>
+              {entry.findings !== undefined && entry.findings.length > 0 ? <Tag tone="info">Sourced</Tag> : null}
               {entry.fallback ? <Tag tone="loss">No model reached</Tag> : null}
             </>
           }
         >
-          {/* The words come first and stand alone. The diff below them is the
-              control surface; a reply with nothing to approve shows none. */}
+          {/* What it went and looked up, then the words, then the diff. The
+              evidence comes before the reading of it: a founder who disagrees
+              with the reading can still see the figures it was made from. */}
+          {entry.findings === undefined || entry.findings.length === 0 ? null : (
+            <div className="mb-2.5">
+              <FindingsCards findings={entry.findings} dense={dense} />
+            </div>
+          )}
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{interpretation.reply}</p>
           {hasProposal(entry) ? (
             <div className="mt-2.5">

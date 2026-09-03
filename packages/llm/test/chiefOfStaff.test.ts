@@ -89,6 +89,7 @@ describe('mode policy', () => {
     requiresConfirmation: false,
     confidence: 0.9,
     unsupportedRequests: [],
+    lookups: [],
   };
 
   it('leaves an answer with no actions alone', () => {

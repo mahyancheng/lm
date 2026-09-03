@@ -3,6 +3,20 @@
  *
  * What happens after a company cannot pay its bills.
  *
+ * ## Which world
+ *
+ * Everything below the bridge settlement is **world version 1**. In world 1
+ * `financial_resolution` floors cash at zero, dumps the shortfall into payables
+ * and queues a forced bridge; three failed rescues, or six quarters of being
+ * rescued without becoming a business, wind the company up.
+ *
+ * World version 2 has one bankruptcy rule and it is not either of those: two
+ * consecutive quarter-ends with a negative cash balance, counted off the filed
+ * statements by `negativeCashQuarters` and acted on in `resolveFinancials`,
+ * which calls `enterAdministration` with the cause `insolvent`. Bridges still
+ * settle here for **bots** — a player-controlled company is never force-bridged
+ * — but neither world-1 trigger is read. See `companies/solvency.ts`.
+ *
  * `financial_resolution` floors cash at zero, dumps the shortfall into payables
  * and queues a forced bridge round (`queueBridgeRound`). This module is the
  * other half of that loop, and it runs at the **top** of the same phase, one
@@ -58,8 +72,10 @@ import {
   CHRONIC_DISTRESS_QUARTERS,
   CHRONIC_DISTRESS_REVENUE_FLOOR,
   INSOLVENCY_FAILED_BRIDGES,
+  SOLVENCY_NEGATIVE_QUARTERS,
   TALENT_RELEASE_SUPPLY_LIFT,
 } from './balance';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { activeCompanies, emitEvent, money, ratio, signedMoney, totalHeadcount, unit, usdLabel } from './util';
 
 /* -------------------------------------------------------------------------- */
@@ -220,8 +236,10 @@ function closeBridge(draft: SessionState, ctx: ResolverContext, company: Company
   });
   setIssued(table, shareClass, shareClass.issuedShares + newShares, ctx.quarter);
 
-  company.financials.cash = money(company.financials.cash + amount);
-  company.balanceSheet.assets.cash = money(company.balanceSheet.assets.cash + amount);
+  // Signed: rescue capital landing on an overdrawn balance reduces the overdraft
+  // rather than resetting it to the amount raised.
+  company.financials.cash = signedMoney(company.financials.cash + amount);
+  company.balanceSheet.assets.cash = signedMoney(company.balanceSheet.assets.cash + amount);
   company.balanceSheet.equity = signedMoney(company.balanceSheet.equity + amount);
 
   round.status = 'closed';
@@ -305,8 +323,15 @@ function failBridge(draft: SessionState, ctx: ResolverContext, company: Company,
 /*  Administration                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Why a company was wound up. Both routes take the same path through the estate. */
-export type AdministrationCause = 'failed_rescues' | 'chronic_distress';
+/**
+ * Why a company was wound up. Every route takes the same path through the estate.
+ *
+ * `failed_rescues` and `chronic_distress` are world-version-1 routes and stay
+ * that way. `insolvent` is world 2's whole bankruptcy rule: two consecutive
+ * quarter-ends with a negative cash balance, decided in `resolveFinancials`
+ * against the filed statements, for players and bots alike.
+ */
+export type AdministrationCause = 'failed_rescues' | 'chronic_distress' | 'insolvent';
 
 /**
  * Wind the company down: products off, people out, compute surrendered, estate
@@ -322,7 +347,7 @@ export function enterAdministration(
   ctx: ResolverContext,
   company: Company,
   cause: AdministrationCause = 'failed_rescues',
-): void {
+): string {
   // Read before the wind-up zeroes them: the row explains why this company died.
   const lastRevenue = company.financials.revenueQuarterly;
   const lastPayroll = company.financials.payroll;
@@ -437,13 +462,18 @@ export function enterAdministration(
   sheet.assets.goodwill = 0;
   sheet.assets.investments = 0;
   sheet.assets.receivables = 0;
-  sheet.assets.cash = money(realisable);
+  // Signed, and this matters: an overdrawn company's estate can be worth less
+  // than nothing. Flooring it here would mint whatever the overdraft was, and
+  // the equity movement stated on the row below would no longer be the movement
+  // that happened — which `financial_integrity` refuses.
+  sheet.assets.cash = signedMoney(realisable);
 
   // Creditors are paid out of the estate in order — debt, then trade payables,
-  // then the deferred obligations — and write off whatever is not covered.
+  // then the deferred obligations — and write off whatever is not covered. An
+  // estate in deficit pays nobody, so every obligation is written off.
   let remaining = sheet.assets.cash;
   const settle = (owed: number): number => {
-    const paid = Math.min(owed, remaining);
+    const paid = Math.min(owed, Math.max(0, remaining));
     remaining -= paid;
     return paid;
   };
@@ -456,7 +486,7 @@ export function enterAdministration(
   sheet.liabilities.debt = 0;
   sheet.liabilities.payables = 0;
   sheet.liabilities.deferredRevenue = 0;
-  sheet.assets.cash = money(remaining);
+  sheet.assets.cash = signedMoney(remaining);
   // Every movement above was matched: assets written down against equity,
   // liabilities discharged or written off against equity. The residual is what
   // the shareholders are left with, which is approximately nothing.
@@ -488,6 +518,8 @@ export function enterAdministration(
     {
       kind: 'administration',
       cause,
+      // The plain-language reason the row and the report line both state.
+      causeDetail: cause === 'insolvent' ? `${SOLVENCY_NEGATIVE_QUARTERS} quarters of negative cash` : null,
       failedBridges,
       rescuedQuarters,
       lastRevenueUsd: money(lastRevenue),
@@ -512,7 +544,9 @@ export function enterAdministration(
   const because =
     cause === 'failed_rescues'
       ? `after ${failedBridges} failed rescues`
-      : `after ${rescuedQuarters} quarters financed by rescue capital on ${usdLabel(lastRevenue)} of revenue against a ${usdLabel(lastPayroll)} wage bill`;
+      : cause === 'insolvent'
+        ? `after ${SOLVENCY_NEGATIVE_QUARTERS} quarters of negative cash`
+        : `after ${rescuedQuarters} quarters financed by rescue capital on ${usdLabel(lastRevenue)} of revenue against a ${usdLabel(lastPayroll)} wage bill`;
   ctx.log({
     phase: 'financial_resolution',
     text: `${company.name} went into administration ${because}: its products are sunset, ${released} people are on the market, and ${usdLabel(writtenOff)} of obligations were written off. What remains can be bought.`,
@@ -521,6 +555,10 @@ export function enterAdministration(
     tone: 'negative',
     subjectId: company.id,
   });
+  // The row id, so the caller can collect this quarter's wind-ups without a
+  // flag on `Company`: market entry and seat elimination both key off the rows
+  // administration actually emitted, and both are facts about one quarter.
+  return eventId;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -565,6 +603,13 @@ export function resolveDistress(draft: SessionState, ctx: ResolverContext): void
     // nothing left to realise. Its bridges still settle above — that is how its
     // creditors and its cap table stay honest — but it is never wound up twice.
     if (isWoundUp(company)) continue;
+
+    // World 2 has one bankruptcy rule and it is not either of these: a company
+    // dies of two consecutive negative quarter-ends, counted in
+    // `resolveFinancials` off the filed statements. A bot's forced bridge still
+    // settles above — that is its own raise, and it can still fail — but a failed
+    // rescue is no longer a death sentence, and neither is being rescued often.
+    if (isMultiSectorWorld(draft)) continue;
 
     // Both triggers are read for every company, not only for one that had a
     // bridge to settle this quarter: a rescue is sized to last several quarters,

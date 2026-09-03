@@ -123,8 +123,9 @@ former is simulation.
 ### 3.2 Chief of Staff
 
 The Chief of Staff answers questions, gives advice and translates instructions.
-`mode` on the output says which of the three this reply is — `answer`, `plan`,
-`act` — and only the last two carry actions.
+`mode` on the output says which this reply is — `answer`, `plan`, `act`, or
+`research` when it needs to go and look something up first. Only `plan` and
+`act` carry actions.
 
 - **Input:** `ChiefOfStaffInputSchema` — the player's message, the route they
   asked from, a **typed dossier** (`ChiefOfStaffDossierSchema`), the compact
@@ -139,9 +140,11 @@ The Chief of Staff answers questions, gives advice and translates instructions.
   draft) and `unsupportedRequests`, said plainly rather than silently dropped.
 
 **The dossier** carries finances with the last eight filed `FinancialQuarter`s,
-product lines, people, board and ownership, markets, capital, research,
-government, the ten public-record items that name this company, what is waiting
-on the founder — and `availableActions`. That last section is produced by
+product lines, people, board and ownership, markets (including `newEntrants`:
+companies founded since last quarter, which is how the role learns about a rival
+that did not exist a quarter ago), capital, research, government, the ten
+public-record items that name this company, what is waiting on the founder — and
+`availableActions`. That last section is produced by
 `availableActionsFor` in `@frontier/simulation`, which **probes the engine's own
 validator** once per action type: an entry says whether the action would be
 accepted today, the validator's own sentence when it would not, whether it
@@ -156,11 +159,61 @@ eight exchanges and up to six standing preferences, each stamped with the
 quarter it came from. That is what survives the restarts and compactions that
 take a transcript.
 
+**Sourcing: `research` mode and the lookup catalogue.** The dossier is one
+company, and some of what a founder asks is about the *market*: "can I buy a
+small data centre", "who could we acquire", "what could we borrow". Those are not
+in the dossier and the role must not guess at them. So there is a fourth mode.
+
+On a turn that arrives **without** findings the role may answer `mode:
+"research"` with a `lookups` array of at most `MAX_LOOKUPS_PER_TURN` (4)
+requests from a fixed catalogue, a one-line `reply` saying what it is going to
+check, and no actions. The **caller** runs them — `runLookups(session,
+companyId, requests)` in `@frontier/simulation`, the only place state is read —
+and posts the same message again, on the same conversation key, with `findings`
+attached. That second turn must answer in `answer`, `plan` or `act`.
+
+| Kind | Answers |
+|---|---|
+| `compute_market` | What we hold; what *N* units cost owned, reserved and on cloud; every named seller with price, spare capacity, region and utilisation; the cash balance after buying them outright and the solvency line |
+| `acquisition_targets` | Active companies with a public position under a `{sector, region, maxValueUsd, keyword}` filter, each with an indicative price, the cash left afterwards and the exact `acquire_company` intent the validator accepts |
+| `debt_headroom` | Whether an issue is available, the headroom, the indicative coupon, what last quarter's operating income would service, and the desks with open sheets |
+| `government_programmes` | Procurement this seat can see, with requirements scored met and unmet |
+| `hiring_market` | Fill rate, and the quarterly and annual cost of one hire by role and band, from `quarterlyHireCostUsd` |
+| `own_position` | Cash, burn, runway, the solvency clock and the last four filed quarters |
+
+Every figure in a result is a whole number of dollars or units; every row carries
+the ids the model may name; most rows carry the exact `ActionIntent` the
+validator would accept, so the model quotes an action rather than composing one.
+A result carries at most `MAX_LOOKUP_ROWS` (12) rows and no string over 200
+characters.
+
+**The loop is two turns and cannot become three.** The composer tells the model
+that research mode is closed on a turn carrying findings; `enforceResearchPolicy`
+in the gateway rewrites a second `research` reply into an `answer` and drops its
+lookups; and the client does not loop either. Each turn is a Claude Code
+subprocess on the operator's own machine, so a loop that can spin is one that
+will.
+
+**Affordability is never a gate.** Since solvency landed, cash notes an
+instruction rather than refusing one, so every priced row states where the
+balance lands and what the solvency clock reads, and the role is required to
+repeat both.
+
 **Offline.** With no transport the route does not answer null. `offlineChiefOfStaff`
 answers cash, runway, burn, best and worst product, who is circling us, what
 needs deciding and what is possible, by arithmetic over the same dossier, and
-interprets nothing into an action. Answering is safe without a model;
-translating an instruction into a binding proposal is not.
+composes no action of its own.
+
+It runs the **same two-turn loop**: `sourcingRequestsFor` matches the message
+against a keyword table ("data centre", "acquire", "borrow", "government",
+"hire"), returns `mode: "research"` with the lookups, and reads the findings back
+on the second turn. The actions it attaches are taken **verbatim from the rows**,
+which the engine built from the validator's own helpers — quoting the engine, not
+guessing at the founder. `requiresConfirmation` stays true on every one of them.
+With no model configured at all, "buy a small data centre" still comes back with
+the sellers, the price, the units, the cash afterwards and a `buy_accelerators`
+action to approve. Answering is safe without a model; translating an instruction
+into a binding proposal is not.
 
 `requiresConfirmation` is advisory only. The binding rule is the fourteen types
 in `CONFIRMATION_REQUIRED_ACTIONS`, checked by the engine: `raise_round`,

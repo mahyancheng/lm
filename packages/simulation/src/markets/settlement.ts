@@ -169,9 +169,13 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
       const float = capTable.holdings.filter((holding) => holding.securityId === security.id && holding.holderKind === 'public_float');
       const available = float.reduce((sum, holding) => sum + holding.shares, 0);
       const buyer = state.companies.find((company) => company.id === holderId) ?? null;
-      const cash = buyer === null ? Number.POSITIVE_INFINITY : buyer.financials.cash;
       const absorbable = Math.floor(absorbableShares(state, security.instrumentId, quarter, issued));
       const convex = isMultiSectorWorld(state);
+      // From world 2 cash does not bound an order. The validator has already
+      // accepted the purchase whole and told the buyer where the balance lands;
+      // an execution that quietly shrank it to the balance would make that a lie.
+      // The float, the absorbable volume and the limit price still bind.
+      const cash = buyer === null || convex ? Number.POSITIVE_INFINITY : buyer.financials.cash;
 
       // World 1 pays the quote flat. From world 2 the last shares of a float cost
       // more than the first — buying the whole of it costs twice the quote — and
@@ -274,7 +278,9 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
       }
 
       if (buyer !== null) {
-        buyer.financials.cash = round(Math.max(0, buyer.financials.cash - consideration), 2);
+        // Signed from world 2: the consideration is paid in full, overdraft or not,
+        // or the investments line would rise by more than the cash line fell.
+        buyer.financials.cash = round(convex ? buyer.financials.cash - consideration : Math.max(0, buyer.financials.cash - consideration), 2);
         buyer.balanceSheet.assets.cash = buyer.financials.cash;
         buyer.balanceSheet.assets.investments = round(buyer.balanceSheet.assets.investments + consideration, 2);
       }
@@ -360,6 +366,11 @@ export function runSettlement(state: SessionState, quarter: number): TradeSettle
       // The realised gain or loss lands in equity, so assets - liabilities still
       // equals equity after the trade.
       seller.balanceSheet.equity = round(seller.balanceSheet.equity + (proceeds - carrying), 2);
+      // ...and is remembered, because once the position is gone nothing else in
+      // state says the sale ever happened. World 2 only, so world 1 grows no key.
+      if (isMultiSectorWorld(state)) {
+        seller.realisedInvestmentGainsUsd = round((seller.realisedInvestmentGainsUsd ?? 0) + (proceeds - carrying), 2);
+      }
     }
 
     capTable.lastUpdatedQuarter = quarter;

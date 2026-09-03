@@ -87,9 +87,13 @@ describe('filed financial statements', () => {
         expect(history, `${company.id} filed no statements`).toBeDefined();
         if (history === undefined) continue;
 
-        // BOUND: forty-five quarters, forty statements, oldest dropped.
-        expect(history.length).toBe(FINANCIAL_HISTORY_QUARTERS);
-        expect(history[0]?.quarter).toBe(quarters - FINANCIAL_HISTORY_QUARTERS);
+        // BOUND: forty-five quarters, forty statements, oldest dropped — and a
+        // company founded mid-session (market entry replaces a wind-up) files
+        // from the quarter after its founding, so it has a shorter series
+        // rather than a series with holes in it.
+        const first = Math.max(company.foundedQuarter + 1, quarters - FINANCIAL_HISTORY_QUARTERS);
+        expect(history.length).toBe(quarters - first);
+        expect(history[0]?.quarter).toBe(first);
         expect(history[history.length - 1]?.quarter).toBe(quarters - 1);
 
         // Ascending, one per quarter, no duplicates.

@@ -116,6 +116,16 @@ export interface SaveFile {
   /** Advisory only; never trusted on load. */
   readonly savedQuarter: number;
   /**
+   * The quarter this seat was wound up, or null while it is still playing.
+   *
+   * Advisory display metadata, exactly like `savedAtIso`: the authority is the
+   * replayed session's `SessionPlayer.eliminatedQuarter`, and this exists so a
+   * save picker can mark a run ended without replaying forty quarters to find
+   * out. A file written before this field existed reads as null, which is what
+   * a save that never ended actually is.
+   */
+  readonly endedQuarter: number | null;
+  /**
    * Actions queued but not yet resolved, so a tab discarded mid-turn loses
    * nothing. Re-validated against the replayed session on load, never trusted.
    */
@@ -286,6 +296,10 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
       log,
       checkpoint,
       savedQuarter,
+      endedQuarter:
+        typeof parsed.endedQuarter === 'number' && Number.isInteger(parsed.endedQuarter) && parsed.endedQuarter >= 0
+          ? parsed.endedQuarter
+          : null,
       // The queue and the timestamp arrive with v4. A v1–v3 file has neither.
       queue: parseQueue(parsed.queue),
       savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
@@ -327,6 +341,8 @@ export interface SaveFileSummary {
   /** Which world this file holds. Null only when it is absent or unreadable. */
   readonly worldVersion: WorldVersion | null;
   readonly savedAtIso: string | null;
+  /** Quarter the run ended in, or null while the seat is still playing. */
+  readonly endedQuarter: number | null;
 }
 
 /** Nothing stored. Every field but `status` is null. */
@@ -340,6 +356,7 @@ export const ABSENT_SAVE_SUMMARY: SaveFileSummary = {
   founderName: null,
   worldVersion: null,
   savedAtIso: null,
+  endedQuarter: null,
 };
 
 export function summariseSaveValue(value: unknown): SaveFileSummary {
@@ -365,6 +382,10 @@ export function summariseSaveValue(value: unknown): SaveFileSummary {
     founderName: setup?.founderName ?? null,
     worldVersion: worldVersionOf(setup, parsed.worldVersion),
     savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
+    endedQuarter:
+      typeof parsed.endedQuarter === 'number' && Number.isInteger(parsed.endedQuarter) && parsed.endedQuarter >= 0
+        ? parsed.endedQuarter
+        : null,
   };
 }
 
@@ -416,6 +437,7 @@ export function saveFileBody(file: SaveFile): string {
     `,"log":${log}` +
     `,"checkpoint":${checkpoint}` +
     `,"savedQuarter":${JSON.stringify(file.savedQuarter)}` +
+    `,"endedQuarter":${JSON.stringify(file.endedQuarter)}` +
     `,"queue":${JSON.stringify(file.queue)}`
   );
 }
@@ -484,6 +506,9 @@ export function buildSaveFile(input: {
     log: input.log,
     checkpoint,
     savedQuarter: input.session.quarter,
+    // Read off the seat, so a picker can say "ended" without a replay. Demo mode
+    // seats one player, so the first eliminated seat is the seat.
+    endedQuarter: input.session.players.find((player) => player.eliminatedQuarter != null)?.eliminatedQuarter ?? null,
     queue: input.queue,
     savedAtIso: (input.now ?? (() => new Date().toISOString()))(),
   };

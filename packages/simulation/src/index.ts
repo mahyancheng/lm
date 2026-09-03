@@ -58,6 +58,31 @@ export * from './boards';
 export * from './relationships';
 export * from './social';
 export * from './targetPaths';
+export { runLookups, reservableUnitsFor } from './lookups';
+export {
+  PORTFOLIO_ACTIONS,
+  PORTFOLIO_HISTORY_QUARTERS,
+  PORTFOLIO_RECONCILIATION_TOLERANCE_USD,
+  PORTFOLIO_ROW_KINDS,
+  founderPortfolioOf,
+  perSharePriceOf,
+  portfolioOf,
+} from './portfolio';
+export type {
+  FounderHoldingRow,
+  FounderPortfolio,
+  Portfolio,
+  PortfolioAction,
+  PortfolioFundRow,
+  PortfolioReconciliation,
+  PortfolioRowKind,
+  PortfolioShortRow,
+  PortfolioStakeRow,
+  PortfolioSubsidiaryRow,
+  PortfolioTotals,
+  PortfolioValuePoint,
+  PriceBasis,
+} from './portfolio';
 
 /**
  * Four subsystems each define an identical `companyById(draft, id)` lookup.

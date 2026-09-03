@@ -20,6 +20,11 @@ import {
   ChiefOfStaffMemorySchema,
   CosAvailableActionSchema,
   EMPTY_CHIEF_OF_STAFF_MEMORY,
+  LOOKUP_KINDS,
+  LookupRequestSchema,
+  LookupResultSchema,
+  MAX_LOOKUPS_PER_TURN,
+  MAX_LOOKUP_ROWS,
   requiresExplicitConfirmation,
 } from '../src/index';
 
@@ -144,6 +149,21 @@ describe('the dossier', () => {
   });
 });
 
+/** The minimum a Chief of Staff input needs, shared by the blocks below. */
+const inputBase = {
+  sessionId: 'sess_1',
+  quarter: 0,
+  playerId: 'ply_1',
+  companyId: 'cmp_1',
+  playerMessage: 'How are we doing?',
+  companyBriefing: 'Cash $4m.',
+  worldBriefing: 'Compute tight.',
+  currentBudgets: [],
+  openDecisions: [],
+  conversationHistory: [],
+  autoExecuteEnabled: false,
+};
+
 describe('the input', () => {
   const base = {
     sessionId: 'sess_1',
@@ -184,10 +204,32 @@ describe('the interpretation', () => {
     requiresConfirmation: true,
     confidence: 0.8,
     unsupportedRequests: [],
+    // Required, not optional: this schema is handed to structured outputs, where
+    // every key must be emitted. Empty is how a reply says it needs no sourcing.
+    lookups: [],
   };
 
-  it('parses in each of the three modes', () => {
+  it('parses in every mode', () => {
     for (const mode of COS_MODES) expect(ChiefOfStaffInterpretationSchema.safeParse({ ...base, mode }).success).toBe(true);
+  });
+
+  it('carries the lookups a research turn asks for, and refuses a fifth', () => {
+    const request = { kind: 'own_position' as const };
+    expect(
+      ChiefOfStaffInterpretationSchema.safeParse({
+        ...base,
+        mode: 'research',
+        lookups: [{ kind: 'compute_market', units: 500 }, request],
+      }).success,
+    ).toBe(true);
+    expect(
+      ChiefOfStaffInterpretationSchema.safeParse({ ...base, mode: 'research', lookups: [request, request, request, request, request] }).success,
+    ).toBe(false);
+  });
+
+  it('demands the lookups key even when there is nothing to look up', () => {
+    const { lookups: _lookups, ...withoutLookups } = base;
+    expect(ChiefOfStaffInterpretationSchema.safeParse(withoutLookups).success).toBe(false);
   });
 
   it('demands a reply: the founder always gets words back', () => {
@@ -279,3 +321,145 @@ function filedQuarter() {
     },
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/*  The lookup catalogue                                                       */
+/* -------------------------------------------------------------------------- */
+
+describe('the lookup catalogue', () => {
+  it('names six kinds and bounds a turn to four of them', () => {
+    expect([...LOOKUP_KINDS]).toEqual([
+      'compute_market',
+      'acquisition_targets',
+      'debt_headroom',
+      'government_programmes',
+      'hiring_market',
+      'own_position',
+    ]);
+    expect(MAX_LOOKUPS_PER_TURN).toBe(4);
+    expect(MAX_LOOKUP_ROWS).toBe(12);
+  });
+
+  it('round-trips every request kind', () => {
+    const requests = [
+      { kind: 'compute_market', units: 500 },
+      { kind: 'acquisition_targets', sector: 'cloud_infrastructure', region: 'north_america', maxValueUsd: 400_000_000, keyword: 'basalt' },
+      { kind: 'debt_headroom' },
+      { kind: 'government_programmes' },
+      { kind: 'hiring_market', role: 'researchers' },
+      { kind: 'own_position' },
+    ];
+    for (const request of requests) {
+      const parsed = LookupRequestSchema.safeParse(request);
+      expect(parsed.success, JSON.stringify(request)).toBe(true);
+      if (parsed.success) expect(parsed.data).toEqual(request);
+    }
+    expect(LOOKUP_KINDS.every((kind) => requests.some((request) => request.kind === kind))).toBe(true);
+  });
+
+  it('refuses a kind the engine has no answer for', () => {
+    expect(LookupRequestSchema.safeParse({ kind: 'rival_private_state' }).success).toBe(false);
+  });
+
+  it('round-trips a compute-market result, ids and action intact', () => {
+    const result = {
+      kind: 'compute_market' as const,
+      summary: 'Tessellate will sell 8000 accelerators.',
+      units: 500,
+      ownedUnits: 1_200,
+      reservedUnits: 400,
+      cloudUnits: 90,
+      heldUnits: 1_690,
+      ownedQuarterlyCostUsd: 1_400_000,
+      reservedQuarterlyCostUsd: 1_300_000,
+      cloudQuarterlyCostUsd: 1_900_000,
+      purchaseCostUsd: 21_000_000,
+      cashUsd: 4_000_000,
+      cashAfterPurchaseUsd: -17_000_000,
+      solvencyLine: '1 more quarter below zero and the company is wound up.',
+      sellers: [
+        {
+          companyId: 'cmp_tessellate',
+          name: 'Tessellate Fabrication',
+          offering: 'accelerators' as const,
+          sectorId: 'semiconductors',
+          region: 'east_asia',
+          unitPriceUsd: 42_000,
+          sellableUnits: 8_000,
+          quarterlyCostPerUnitUsd: 2_310,
+          energyFactorPct: 96,
+          utilisationPct: 71,
+          intent: { type: 'buy_accelerators' as const, units: 500, maxPricePerUnitUsd: 46_200, sellerCompanyId: 'cmp_tessellate' },
+        },
+      ],
+    };
+    const parsed = LookupResultSchema.safeParse(result);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual(result);
+  });
+
+  it('lets a cash figure go negative, because cash never refuses an answer', () => {
+    const parsed = LookupResultSchema.safeParse({
+      kind: 'own_position',
+      summary: 'Overdrawn.',
+      cashUsd: -9_000_000,
+      quarterlyBurnUsd: -2_000_000,
+      runwayQuarters: 0,
+      negativeCashQuarters: 1,
+      solvencyQuartersAllowed: 2,
+      statements: [],
+    });
+    expect(parsed.success && parsed.data.kind === 'own_position' && parsed.data.cashUsd).toBe(-9_000_000);
+  });
+
+  it('bounds a result to twelve rows', () => {
+    const row = {
+      companyId: 'cmp_a',
+      name: 'A',
+      offering: 'cloud' as const,
+      sectorId: 'cloud_infrastructure',
+      region: 'north_america',
+      unitPriceUsd: 3_600,
+      sellableUnits: 10,
+      quarterlyCostPerUnitUsd: 3_600,
+      energyFactorPct: 100,
+      utilisationPct: 50,
+      intent: null,
+    };
+    const base = {
+      kind: 'compute_market' as const,
+      summary: 'x',
+      units: 1,
+      ownedUnits: 0,
+      reservedUnits: 0,
+      cloudUnits: 0,
+      heldUnits: 0,
+      ownedQuarterlyCostUsd: 0,
+      reservedQuarterlyCostUsd: 0,
+      cloudQuarterlyCostUsd: 0,
+      purchaseCostUsd: 0,
+      cashUsd: 0,
+      cashAfterPurchaseUsd: 0,
+      solvencyLine: '',
+    };
+    expect(LookupResultSchema.safeParse({ ...base, sellers: Array.from({ length: MAX_LOOKUP_ROWS }, () => row) }).success).toBe(true);
+    expect(LookupResultSchema.safeParse({ ...base, sellers: Array.from({ length: MAX_LOOKUP_ROWS + 1 }, () => row) }).success).toBe(false);
+  });
+
+  it('carries findings on the input, bounded to one round', () => {
+    const finding = {
+      kind: 'own_position' as const,
+      summary: 'x',
+      cashUsd: 1,
+      quarterlyBurnUsd: 0,
+      runwayQuarters: 1,
+      negativeCashQuarters: 0,
+      solvencyQuartersAllowed: 2,
+      statements: [],
+    };
+    expect(ChiefOfStaffInputSchema.safeParse({ ...inputBase, findings: [finding] }).success).toBe(true);
+    expect(
+      ChiefOfStaffInputSchema.safeParse({ ...inputBase, findings: Array.from({ length: MAX_LOOKUPS_PER_TURN + 1 }, () => finding) }).success,
+    ).toBe(false);
+  });
+});

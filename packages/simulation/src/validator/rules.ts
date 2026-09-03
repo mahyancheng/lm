@@ -1,7 +1,7 @@
 /**
  * @frontier/simulation — validator/rules.ts
  *
- * One rule per action type. All thirty-seven of them, in the order
+ * One rule per action type. All forty-one of them, in the order
  * `ACTION_TYPES` declares them.
  *
  * The table is a `Record<ActionType, Rule>`, so the compiler refuses to build
@@ -34,7 +34,10 @@ import type {
 } from '@frontier/contracts';
 import { ANTITRUST_EXPOSURE_WEIGHTS, DIVIDEND_MAX_PAYOUT_PCT, TOLL_FLOOR_SHARE } from '@frontier/contracts';
 import { maxTollForCompany } from '../economy/prices';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
+import { solvencyCommitmentNote } from '../companies/solvency';
+import { resolveCloudSeller, resolveComputeSeller } from '../companies/sellers';
 import {
   COMP_BAND_MULTIPLIER,
   CLOUD_UNIT_COST_USD_PER_QUARTER,
@@ -119,12 +122,40 @@ export function reservableUnits(draft: SessionState): number {
 }
 
 /**
+ * Whether cash is advisory rather than binding.
+ *
+ * The owner's rule, from world version 2 on: an instruction is never refused or
+ * shrunk for want of cash. The founder is free to overdraw; two quarter-ends
+ * below zero and the company is wound up. World 1 keeps the clamps it has always
+ * had, byte for byte.
+ */
+const solvencyWorld = (ctx: RuleContext): boolean => isMultiSectorWorld(ctx.draft);
+
+/**
+ * Take the cash and say where it lands.
+ *
+ * The reservation still happens — the batch budget is how a second action in the
+ * same submission sees what the first committed, and how the previews and the
+ * ledger know what was promised — but the verdict carries a note, not a
+ * rejection and not a clamp. `insufficient_cash` stays on the note as an
+ * advisory code so the interface can colour it.
+ */
+function commitCashWithNote<T extends ActionIntent>(ctx: RuleContext, verdict: Verdict<T>, amountUsd: number): void {
+  const from = ctx.budget.uncommittedCash(ctx.company);
+  verdict.note('insufficient_cash', solvencyCommitmentNote(from, from - amountUsd, money));
+  ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, amountUsd));
+}
+
+/**
  * Reserve `amountUsd` against the company's uncommitted cash, clamping the
  * action down to what is left when it asks for more. Returns what was reserved.
  *
  * The reservation is staged rather than applied: an action that is later
  * transformed into a board proposal spends nothing this quarter, so its
  * reservations must be discardable.
+ *
+ * From world version 2 nothing is clamped here: the full amount is reserved and
+ * the shortfall becomes a note about the solvency clock.
  */
 function affordable<T extends ActionIntent>(
   ctx: RuleContext,
@@ -136,6 +167,10 @@ function affordable<T extends ActionIntent>(
   const available = ctx.budget.availableCash(ctx.company);
   if (amountUsd <= available) {
     ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, amountUsd));
+    return amountUsd;
+  }
+  if (solvencyWorld(ctx)) {
+    commitCashWithNote(ctx, verdict, amountUsd);
     return amountUsd;
   }
   if (available <= 0) {
@@ -217,6 +252,74 @@ const startResearchProject: Rule<'start_research_project'> = (intent, verdict, c
   ctx.reservations.push(() => {
     ctx.budget.commitStaff(ctx.company.id, 'researchers', assigned);
     ctx.budget.commitCompute(ctx.company.id, compute);
+  });
+};
+
+/**
+ * Re-resource a running programme.
+ *
+ * The bounds are the ones a programme starts under, with one difference that
+ * matters: the programme hands back what it already holds before free capacity
+ * is counted. Without that, raising a programme from four researchers to ten
+ * would be measured against a pool the programme's own four had already been
+ * taken out of, and every repair would be clamped back to where it started.
+ */
+const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict, ctx) => {
+  const project = ctx.draft.researchProjects.find((p) => p.id === intent.projectId);
+  if (project === undefined) {
+    verdict.reject('unknown_target', `No research programme "${intent.projectId}" exists.`);
+    return;
+  }
+  if (project.companyId !== ctx.company.id) {
+    verdict.reject('not_controller_of_company', `That programme belongs to another company, not ${ctx.company.name}.`);
+    return;
+  }
+  if (project.status !== 'active' && project.status !== 'paused') {
+    verdict.reject('requirement_not_met', `The programme is ${project.status} and can no longer be re-resourced.`);
+    return;
+  }
+  const freeResearchers = Math.max(
+    0,
+    ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id) + project.talentAllocated,
+  );
+  if (intent.researchersAssigned > freeResearchers) {
+    verdict.clamp(
+      (draft) => {
+        draft.researchersAssigned = freeResearchers;
+      },
+      'insufficient_headcount',
+      `Researchers reduced from ${intent.researchersAssigned} to ${freeResearchers}: the rest are on other programmes.`,
+    );
+  }
+
+  const freeCompute = Math.max(
+    0,
+    researchComputeHeadroom(ctx.draft, ctx.company) - ctx.budget.committedCompute(ctx.company.id) + project.computeAllocated,
+  );
+  if (intent.computeUnits > freeCompute) {
+    verdict.clamp(
+      (draft) => {
+        draft.computeUnits = freeCompute;
+      },
+      'insufficient_compute',
+      `Compute reduced from ${intent.computeUnits} to ${freeCompute} accelerator-equivalents: the rest is committed elsewhere.`,
+    );
+  }
+
+  // Only the increase is a new call on cash: the programme was already going to
+  // draw what it draws today.
+  const extra = Math.max(0, intent.budgetUsd - project.budgetQuarterly);
+  if (extra > 0) {
+    affordable(ctx, verdict, extra, 'The increase in programme budget', (draft, allowed) => {
+      draft.budgetUsd = project.budgetQuarterly + allowed;
+    });
+  }
+
+  const assigned = verdict.current.researchersAssigned;
+  const compute = verdict.current.computeUnits;
+  ctx.reservations.push(() => {
+    ctx.budget.commitStaff(ctx.company.id, 'researchers', Math.max(0, assigned - project.talentAllocated));
+    ctx.budget.commitCompute(ctx.company.id, Math.max(0, compute - project.computeAllocated));
   });
 };
 
@@ -341,6 +444,10 @@ const setMarketingBudget: Rule<'set_marketing_budget'> = (intent, verdict, ctx) 
 
   const total = [...merged.values()].reduce((running, allocation) => running + allocation.budgetUsd, 0);
   const available = ctx.budget.availableCash(ctx.company);
+  if (total > available && solvencyWorld(ctx)) {
+    commitCashWithNote(ctx, verdict, total);
+    return;
+  }
   if (total > available) {
     const scale = available <= 0 ? 0 : available / total;
     verdict.clamp(
@@ -376,6 +483,12 @@ const hire: Rule<'hire'> = (intent, verdict, ctx) => {
   const available = ctx.budget.availableCash(ctx.company);
   const affordableCount = perHire <= 0 ? intent.count : Math.floor(available / perHire);
 
+  if (affordableCount < intent.count && solvencyWorld(ctx)) {
+    // The requisition opens in full; the wage bill is the founder's problem and
+    // the solvency clock is where it becomes one.
+    commitCashWithNote(ctx, verdict, intent.count * perHire);
+    return;
+  }
   if (affordableCount <= 0) {
     verdict.reject(
       'insufficient_cash',
@@ -416,6 +529,15 @@ const layoff: Rule<'layoff'> = (intent, verdict, ctx) => {
 
   const perHead = quarterlyHireCostUsd(ctx.draft, intent.role, 'market') * intent.severanceQuartersOfPay;
   const available = ctx.budget.availableCash(ctx.company);
+  if (perHead > 0 && count * perHead > available && solvencyWorld(ctx)) {
+    // A company short of cash is exactly the company that needs to cut. Refusing
+    // the severance for want of cash would trap it in the payroll it is trying
+    // to escape, so the reduction runs whole and the note states the landing.
+    const staffed = count;
+    commitCashWithNote(ctx, verdict, count * perHead);
+    ctx.reservations.push(() => ctx.budget.commitStaff(ctx.company.id, intent.role, staffed));
+    return;
+  }
   if (perHead > 0 && count * perHead > available) {
     const affordableCount = Math.floor(available / perHead);
     if (affordableCount <= 0) {
@@ -461,6 +583,10 @@ const poachExecutive: Rule<'poach_executive'> = (intent, verdict, ctx) => {
   const base = quarterlyHireCostUsd(ctx.draft, 'execs', 'market');
   const offer = base * (1 + intent.compPremiumPct);
   const available = ctx.budget.availableCash(ctx.company);
+  if (offer > available && solvencyWorld(ctx)) {
+    commitCashWithNote(ctx, verdict, offer);
+    return;
+  }
   if (offer > available) {
     if (base > available) {
       verdict.reject('insufficient_cash', `A senior offer costs at least ${money(base)} a quarter and ${money(available)} is uncommitted.`);
@@ -504,7 +630,29 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
     verdict.reject('illegal_value', 'A reservation must be for at least one accelerator-equivalent.');
     return;
   }
-  const marketCap = reservableUnits(ctx.draft);
+  // Whose capacity. Null resolves to the cheapest infrastructure company with
+  // room; a named provider that is not selling falls through to the same one,
+  // and the clamp says so rather than quietly changing counterparty. Always null
+  // in world version 1, which reserves from the index.
+  const named = intent.providerCompanyId ?? null;
+  const provider = resolveComputeSeller(ctx.draft, 'reservation', named, ctx.company.id, intent.units);
+  // A substitution the founder did not ask for is a clamp: they named somebody
+  // and are getting somebody else. Leaving the choice open is not — the market
+  // resolves it the same way at resolution, and a clamp for that would mark
+  // every ordinary reservation as reduced.
+  if (provider !== null && named !== null && provider.company.id !== named) {
+    verdict.clamp(
+      (draft) => {
+        draft.providerCompanyId = provider.company.id;
+      },
+      'unknown_target',
+      `${named} has no capacity to reserve; reserving from ${provider.company.name} at ${money(provider.unitPriceUsd)} per unit per quarter instead.`,
+    );
+  }
+
+  // Two ceilings, and the tighter one binds: what the market as a whole could
+  // free, and what this one counterparty is holding spare.
+  const marketCap = provider === null ? reservableUnits(ctx.draft) : Math.min(reservableUnits(ctx.draft), provider.sellableUnits);
   let units = intent.units;
   if (units > marketCap) {
     units = marketCap;
@@ -513,15 +661,22 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
         draft.units = marketCap;
       },
       'insufficient_compute',
-      `Reservation cut from ${intent.units} to ${marketCap} units: at an accelerator supply of ${ctx.draft.world.compute.acceleratorSupply.toFixed(
-        2,
-      )} that is what the market can free.`,
+      provider === null || provider.sellableUnits > reservableUnits(ctx.draft)
+        ? `Reservation cut from ${intent.units} to ${marketCap} units: at an accelerator supply of ${ctx.draft.world.compute.acceleratorSupply.toFixed(
+            2,
+          )} that is what the market can free.`
+        : `Reservation cut from ${intent.units} to ${marketCap} units: that is what ${provider.company.name} holds beyond its own use.`,
     );
   }
 
-  const unitCost = RESERVED_UNIT_COST_USD_PER_QUARTER * ctx.draft.world.compute.reservedPrice;
+  const unitCost = provider === null ? RESERVED_UNIT_COST_USD_PER_QUARTER * ctx.draft.world.compute.reservedPrice : provider.unitPriceUsd;
   const available = ctx.budget.availableCash(ctx.company);
   const firstQuarterCost = units * unitCost;
+  if (firstQuarterCost > available && solvencyWorld(ctx)) {
+    // Supply still binds — the clamp above stands — but the price does not.
+    commitCashWithNote(ctx, verdict, firstQuarterCost);
+    return;
+  }
   if (firstQuarterCost > available) {
     const affordableUnits = unitCost <= 0 ? units : Math.floor(available / unitCost);
     if (affordableUnits <= 0) {
@@ -542,21 +697,104 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
 };
 
 const buyCloudCapacity: Rule<'buy_cloud_capacity'> = (intent, verdict, ctx) => {
-  if (intent.providerCompanyId !== null) {
-    const provider = findCompany(ctx.draft, intent.providerCompanyId);
-    if (provider === null || !provider.isActive) {
+  const seller = resolveCloudSeller(ctx.draft, intent.providerCompanyId, ctx.company.id, intent.quarterlySpendUsd);
+  if (seller === null) {
+    // World 1, or a world with nobody left renting: the old behaviour, which is
+    // to fall back to the index rather than to refuse.
+    if (intent.providerCompanyId !== null) {
+      const named = findCompany(ctx.draft, intent.providerCompanyId);
+      if (named === null || !named.isActive) {
+        verdict.clamp(
+          (draft) => {
+            draft.providerCompanyId = null;
+          },
+          'unknown_target',
+          `No active provider "${intent.providerCompanyId}"; buying at market instead.`,
+        );
+      }
+    }
+  } else {
+    if (intent.providerCompanyId !== null && intent.providerCompanyId !== seller.company.id) {
       verdict.clamp(
         (draft) => {
-          draft.providerCompanyId = null;
+          draft.providerCompanyId = seller.company.id;
         },
         'unknown_target',
-        `No active provider "${intent.providerCompanyId}"; buying at market instead.`,
+        `${intent.providerCompanyId} has no capacity to sell; buying from ${seller.company.name} at ${money(seller.unitPriceUsd)} per unit per quarter instead.`,
+      );
+    }
+    // A provider can only sell what it is not using itself, and cloud is bought
+    // in dollars, so the capacity ceiling arrives as a spending ceiling.
+    const ceiling = Math.round(seller.sellableUnits * seller.unitPriceUsd);
+    if (intent.quarterlySpendUsd > ceiling) {
+      verdict.clamp(
+        (draft) => {
+          draft.quarterlySpendUsd = ceiling;
+        },
+        'insufficient_compute',
+        `Cloud spend cut from ${money(intent.quarterlySpendUsd)} to ${money(ceiling)} a quarter: that buys ${seller.sellableUnits} units, which is everything ${seller.company.name} holds beyond its own use.`,
       );
     }
   }
-  affordable(ctx, verdict, intent.quarterlySpendUsd, 'Cloud spend', (draft, allowed) => {
+  affordable(ctx, verdict, verdict.current.quarterlySpendUsd, 'Cloud spend', (draft, allowed) => {
     draft.quarterlySpendUsd = allowed;
   });
+};
+
+/**
+ * Buy accelerators outright.
+ *
+ * World version 2 only: world 1 has no manufacturers to buy from, and inventing
+ * a seller for it would move the frozen world. Everything else is the ordinary
+ * shape — reject what is impossible, clamp to what the seller can actually ship,
+ * and *note* the cash rather than refusing it, because from world 2 an
+ * instruction is never refused for want of money.
+ *
+ * The price limit is deliberately not checked here. What a seller is asking is
+ * a fact of the quarter the order clears in, not of the quarter it is written
+ * in, so an order above the limit fails at resolution and says so, exactly as a
+ * reservation does.
+ */
+const buyAccelerators: Rule<'buy_accelerators'> = (intent, verdict, ctx) => {
+  if (!solvencyWorld(ctx)) {
+    verdict.reject('requirement_not_met', 'Buying accelerators outright is not available in this world.');
+    return;
+  }
+  if (intent.units <= 0) {
+    verdict.reject('illegal_value', 'An order must be for at least one accelerator.');
+    return;
+  }
+  const seller = resolveComputeSeller(ctx.draft, 'accelerators', intent.sellerCompanyId, ctx.company.id, intent.units);
+  if (seller === null) {
+    verdict.reject('unknown_target', 'No manufacturer has accelerators to sell this quarter.');
+    return;
+  }
+  if (intent.sellerCompanyId !== null && seller.company.id !== intent.sellerCompanyId) {
+    verdict.clamp(
+      (draft) => {
+        draft.sellerCompanyId = seller.company.id;
+      },
+      'unknown_target',
+      `${intent.sellerCompanyId} is not selling accelerators this quarter; the order goes to ${seller.company.name} at ${money(seller.unitPriceUsd)} a unit.`,
+    );
+  }
+
+  let units = intent.units;
+  if (units > seller.sellableUnits) {
+    units = seller.sellableUnits;
+    verdict.clamp(
+      (draft) => {
+        draft.units = seller.sellableUnits;
+      },
+      'insufficient_compute',
+      `Order cut from ${intent.units} to ${seller.sellableUnits} accelerators: that is what ${seller.company.name} can ship this quarter.`,
+    );
+  }
+
+  const cost = units * seller.unitPriceUsd;
+  const available = ctx.budget.availableCash(ctx.company);
+  if (cost > available) commitCashWithNote(ctx, verdict, cost);
+  else ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, cost));
 };
 
 const allocateCompute: Rule<'allocate_compute'> = (_intent, verdict, ctx) => {
@@ -766,6 +1004,11 @@ const buyShares: Rule<'buy_shares'> = (intent, verdict, ctx) => {
 
   const cost = wanted * intent.maxPricePerShareUsd;
   const cash = ctx.budget.availableCash(ctx.company);
+  if (cost > cash && solvencyWorld(ctx)) {
+    // The float still binds — the clamp above stands — but the balance does not.
+    commitCashWithNote(ctx, verdict, cost);
+    return;
+  }
   if (cost > cash) {
     const affordableShares = Math.floor(cash / intent.maxPricePerShareUsd);
     if (affordableShares <= 0) {
@@ -848,6 +1091,10 @@ const acquireCompany: Rule<'acquire_company'> = (intent, verdict, ctx) => {
 
   const cashNeeded = intent.offerValueUsd * cashPct;
   const available = ctx.budget.availableCash(ctx.company);
+  if (cashNeeded > available && solvencyWorld(ctx)) {
+    commitCashWithNote(ctx, verdict, cashNeeded);
+    return;
+  }
   if (cashNeeded > available) {
     verdict.reject(
       'insufficient_cash',
@@ -1293,6 +1540,7 @@ const requestIntroduction: Rule<'request_introduction'> = (intent, verdict, ctx)
 export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   set_research_budget: setResearchBudget,
   start_research_project: startResearchProject,
+  adjust_research_project: adjustResearchProject,
   propose_innovation: proposeInnovation,
   publish_research: publishResearch,
   set_product_price: setProductPrice,
@@ -1330,6 +1578,7 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   accept_deal: acceptDeal,
   reject_deal: rejectDeal,
   request_introduction: requestIntroduction,
+  buy_accelerators: buyAccelerators,
 };
 
 /**

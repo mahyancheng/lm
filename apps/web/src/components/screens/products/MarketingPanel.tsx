@@ -16,7 +16,7 @@ import type { ActionValidationResult, Company, ProductSegment, SubmittedAction }
 import { PRODUCT_SEGMENTS } from '@frontier/contracts';
 import { marketingPlan } from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
-import { BarChart, Icon, Panel, SliderField, Tag, ValidationBanner, roundStep } from '@/components/ui';
+import { BarChart, CashAfter, Icon, Panel, SliderField, Tag, ValidationBanner, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { SEGMENT_LABEL } from './labels';
 
@@ -35,7 +35,10 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
   const plan = useMemo(() => marketingPlan(company, queued), [company, queued]);
-  const cashBound = Math.max(company.financials.cash, 100_000);
+  // The range is drawn from cash but not capped by it: a marketing budget is no
+  // longer scaled down to the balance, so an overdrawn company still gets a
+  // usable slider and the preview below states the consequence.
+  const cashBound = Math.max(company.financials.cash, 2_000_000);
 
   const allocations = useMemo(
     () =>
@@ -109,9 +112,8 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
           </button>
         </div>
 
-        {/* One slider per segment, all bounded by the same uncommitted cash
-            the validator scales the total against. A segment slid to zero is
-            an explicit zero, exactly as a typed 0 was. */}
+        {/* One slider per segment, all on the same range. A segment slid to zero
+            is an explicit zero, exactly as a typed 0 was. */}
         <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
           {PRODUCT_SEGMENTS.map((segment) => (
             <SliderField
@@ -127,6 +129,12 @@ export function MarketingPanel({ company, queued }: MarketingPanelProps): React.
             />
           ))}
         </div>
+
+        {total > 0 ? (
+          <div className="mt-2.5">
+            <CashAfter company={company} spendUsd={total} note="Spent in the product phase this quarter." />
+          </div>
+        ) : null}
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
           <div className="min-w-0 flex-1 text-[12px] text-ink-dim">

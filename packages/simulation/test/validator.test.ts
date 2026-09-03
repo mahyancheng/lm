@@ -424,11 +424,11 @@ describe('people', () => {
 
 describe('compute', () => {
   it('accepts a reservation the market can free and the company can pay for', () => {
-    expect(run(act({ type: 'reserve_compute', units: 100, quarters: 4, maxPricePerUnitUsd: 4_000 })).status).toBe('accepted');
+    expect(run(act({ type: 'reserve_compute', units: 100, quarters: 4, maxPricePerUnitUsd: 4_000, providerCompanyId: null })).status).toBe('accepted');
   });
 
   it('clamps a reservation by market supply and then by cash', () => {
-    const result = run(act({ type: 'reserve_compute', units: 500_000, quarters: 4, maxPricePerUnitUsd: 4_000 }));
+    const result = run(act({ type: 'reserve_compute', units: 500_000, quarters: 4, maxPricePerUnitUsd: 4_000, providerCompanyId: null }));
     expect(result.status).toBe('clamped');
     expect(codes(result)).toContain('insufficient_compute');
     expect(codes(result)).toContain('insufficient_cash');

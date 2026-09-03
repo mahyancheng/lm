@@ -1,24 +1,46 @@
 'use client';
 
 /**
- * One node of the Frontier Map, opened.
+ * One node of the Frontier Map, opened — and answering four questions.
  *
- * The reading this drawer exists to give is the gap between two numbers: what
- * the world rates this at, and what you rate it at. A node the world prices at
- * 0.31 and you price at 0.68 is where a research thesis lives, and the two
- * meters sit one above the other so that gap is unmissable.
+ * **What it unlocks. What it takes. Who else is close. What the risk is.** In
+ * that order, in plain words, in whole numbers. Everything else the node carries
+ * — novelty, plausibility, visibility, the arrival window, the raw confidence
+ * figures — sits behind "Details", because none of it changes what a founder
+ * does next.
  *
- * The start-project ticket underneath is validated live. Researchers are the
- * usual binding constraint, so the validator's clamp — "the rest are on other
- * programmes" — is shown before the action is queued, not after.
+ * There is **one control**: effort. Light, Standard and All-in are engine-owned
+ * presets (`effortIntent`) built from the node's own requirement and the
+ * company's free capacity, so the Standard preset is inside the validator's
+ * bounds by construction and is never clamped. "Adjust" opens the three sliders
+ * for a founder who wants them; the validator's verdict shows live either way,
+ * because the validator is the truth and the presets are only a good default.
+ *
+ * Nothing on this screen computes an economic number. Quarters, cost, risk and
+ * the shortfall all come from `programmeForecast` / `runningForecast`.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import type { ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
-import { PUBLICATION_MODES, quarterLabel } from '@frontier/contracts';
-import { projectRequirements, researchComputeHeadroom } from '@frontier/simulation';
+import type { ActionIntent, ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
+import { quarterLabel } from '@frontier/contracts';
+import {
+  RESEARCH_EFFORTS,
+  effortPlan,
+  programmeForecast,
+  projectRequirements,
+  publicVerdict,
+  repairPlan,
+  researchCapacity,
+  rivalProgress,
+  runningForecast,
+  setbackRiskBand,
+  unmetDependencies,
+  type ProgrammePlan,
+  type ResearchEffort,
+} from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import {
+  CashAfter,
   Drawer,
   KeyValueGrid,
   Meter,
@@ -32,7 +54,22 @@ import {
 } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
-import { tracksOf, trackForNode } from './tracks';
+import {
+  BOTTLENECK_LABEL,
+  EFFORT_BLURB,
+  EFFORT_LABEL,
+  NODE_STATE_LABEL,
+  RISK_LABEL,
+  RISK_TONE,
+  classifyNode,
+  quartersLabel,
+  readableArea,
+  riskLine,
+  rivalsLine,
+  shortfallLine,
+  unlockLines,
+  worldThinksLine,
+} from './nodeState';
 
 export interface NodeDrawerProps {
   readonly session: SessionState;
@@ -44,273 +81,398 @@ export interface NodeDrawerProps {
   readonly onSelect: (nodeId: string) => void;
 }
 
-const PUBLICATION_LABEL: Readonly<Record<PublicationMode, string>> = {
-  paper: 'Paper — reputation, and the method',
-  open_weights: 'Open weights — a governance matter',
-  product_demonstration: 'Product demonstration',
-  closed_briefing: 'Closed briefing — government and investors',
-  leak: 'Leak',
-};
+/** The three ways to make a result public, as plain labels with one consequence each. */
+const ANNOUNCE_MODES: readonly { readonly mode: PublicationMode; readonly label: string; readonly consequence: string }[] = [
+  { mode: 'paper', label: 'Publish a paper', consequence: 'Researchers and developers think better of you. Rivals get the method.' },
+  { mode: 'product_demonstration', label: 'Show it in a product', consequence: 'Customers and investors see it work. The method stays yours.' },
+  { mode: 'closed_briefing', label: 'Brief government and investors privately', consequence: 'Reaches the people who award contracts and money. The public learns nothing.' },
+];
 
 export function NodeDrawer({ session, graph, company, node, projects, onClose, onSelect }: NodeDrawerProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
-  const [budget, setBudget] = useState('500000');
-  const [computeUnits, setComputeUnits] = useState('0');
-  const [researchers, setResearchers] = useState('1');
+  const [effort, setEffort] = useState<ResearchEffort>('standard');
+  const [adjusting, setAdjusting] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [custom, setCustom] = useState<ProgrammePlan | null>(null);
   const [secret, setSecret] = useState(true);
   const [startResult, setStartResult] = useState<ActionValidationResult | null>(null);
+  const [fixResult, setFixResult] = useState<ActionValidationResult | null>(null);
   const [publishMode, setPublishMode] = useState<PublicationMode>('paper');
   const [publishResult, setPublishResult] = useState<ActionValidationResult | null>(null);
 
   const titles = useMemo(() => new Map(graph.nodes.map((entry) => [entry.id, entry.title])), [graph.nodes]);
+  const companyNames = useMemo(() => new Map(session.companies.map((entry) => [entry.id, entry.name])), [session.companies]);
 
-  // The lane this node sits in. Shown only when the graph has more than one,
-  // because a single-lane world would put the same badge on every card.
-  const tracks = useMemo(() => tracksOf(graph), [graph]);
-  const track = node === null ? null : trackForNode(tracks, node.id);
-  const showTrack = tracks.length > 1 && track !== null;
-
-  const existing = node === null ? null : (projects.find((project) => project.targetNodeId === node.id) ?? null);
-  const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
-
-  /* --- ticket bounds ------------------------------------------------------ */
-  // The bounds are the validator's own figures, so the sliders never offer
-  // what the engine would clamp away: compute headroom counts what the company
-  // holds (cloud included from world version 2) less running programmes, and
-  // free researchers are those not already on one.
-  const requirements = node === null ? null : projectRequirements(session, node);
-  const computeHeadroom = researchComputeHeadroom(session, company);
-  const researchersOnProgrammes = projects
-    .filter((project) => project.status === 'active' || project.status === 'paused')
-    .reduce((total, project) => total + project.talentAllocated, 0);
-  const freeResearchers = Math.max(0, company.employees.researchers - researchersOnProgrammes);
-
-  // A programme opens resourced to run: the node's own requirement, capped by
-  // what is free. Zero compute was the old default, and a programme started at
-  // zero compute stalls at the floor for its whole life.
+  const existing = node === null ? null : (projects.find((project) => project.targetNodeId === node.id && (project.status === 'active' || project.status === 'paused')) ?? null);
   const nodeId = node?.id ?? null;
-  const wantedCompute = requirements === null ? 0 : Math.min(computeHeadroom, requirements.computeUnits);
-  const wantedResearchers = requirements === null ? 0 : Math.min(freeResearchers, requirements.researchers);
+
+  /* --- everything the engine says about this node -------------------------- */
+  const capacity = useMemo(() => researchCapacity(session, company), [session, company]);
+  const requirement = useMemo(() => (node === null ? null : projectRequirements(session, node)), [session, node]);
+  const missing = useMemo(
+    () => (node === null ? [] : unmetDependencies(session, node, company.id).map((id) => titles.get(id) ?? id)),
+    [session, node, company.id, titles],
+  );
+  const running = useMemo(
+    () => (node === null || existing === null ? null : runningForecast(session, existing, node)),
+    [session, existing, node],
+  );
+  const rivals = useMemo(
+    () =>
+      node === null
+        ? []
+        : rivalProgress(session, node.id, company.id).map((entry) => ({
+            name: companyNames.get(entry.companyId) ?? entry.companyId,
+            progressPct: entry.progress * 100,
+          })),
+    [session, node, company.id, companyNames],
+  );
+
+  const achievedByName = node === null || node.achievedByCompanyId === null ? null : (companyNames.get(node.achievedByCompanyId) ?? node.achievedByCompanyId);
+  const achievedByYou =
+    node !== null &&
+    (node.achievedByCompanyId === company.id || projects.some((project) => project.targetNodeId === node.id && project.status === 'succeeded'));
+  const state = classifyNode({
+    achievedByName: achievedByYou ? null : achievedByName,
+    achievedByYou,
+    missingTitles: missing,
+    running: running === null ? null : { progressPct: running.progress * 100, quartersLeft: running.quartersLeft },
+  });
+
+  /* --- the plan the effort control produces ------------------------------- */
+  const presetPlan = useMemo(
+    () => (node === null ? null : effortPlan(session, node, effort, capacity)),
+    [session, node, effort, capacity],
+  );
+  const plan = custom ?? presetPlan;
+  const forecast = useMemo(
+    () => (node === null || plan === null ? null : programmeForecast(session, company, node, plan)),
+    [session, company, node, plan],
+  );
+
+  // A new node resets the control to Standard and drops any hand-set figures:
+  // a plan built for one technology means nothing against another.
   useEffect(() => {
     if (nodeId === null) return;
-    setComputeUnits(String(wantedCompute));
-    setResearchers(String(wantedResearchers));
-    // Reseed only when the node changes; a founder's own edits must survive a
-    // re-render of the same node.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setEffort('standard');
+    setCustom(null);
+    setAdjusting(false);
+    setDetailsOpen(false);
+    setStartResult(null);
+    setFixResult(null);
   }, [nodeId]);
 
-  const budgetValue = Math.max(0, Number.parseFloat(budget) || 0);
-  const computeValue = Math.max(0, Math.round(Number.parseFloat(computeUnits) || 0));
-  const researcherValue = Math.max(0, Math.round(Number.parseFloat(researchers) || 0));
-  const budgetMax = Math.max(company.financials.cash, budgetValue, 250_000);
-  const computeMax = Math.max(computeHeadroom, computeValue, 1);
-  const researcherMax = Math.max(freeResearchers, researcherValue, 1);
-
-  const startIntent =
-    node === null
+  const startIntent: ActionIntent | null =
+    node === null || plan === null
       ? null
       : {
-          type: 'start_research_project' as const,
+          type: 'start_research_project',
           targetNodeId: node.id,
-          budgetUsd: Math.max(0, Number.parseFloat(budget) || 0),
-          computeUnits: Math.max(0, Math.round(Number.parseFloat(computeUnits) || 0)),
-          researchersAssigned: Math.max(0, Math.round(Number.parseFloat(researchers) || 0)),
+          budgetUsd: plan.budgetUsd,
+          computeUnits: plan.computeUnits,
+          researchersAssigned: plan.researchersAssigned,
           secret,
         };
-
   const startPreview = startIntent === null ? null : validateIntent(startIntent);
 
-  const owns =
-    node !== null &&
-    (node.achievedByCompanyId === company.id ||
-      projects.some((project) => project.targetNodeId === node.id && project.status === 'succeeded'));
+  const repair = useMemo(
+    () => (node === null || existing === null ? null : repairPlan(session, company, existing, node)),
+    [session, company, existing, node],
+  );
+
+  function setPlanField(field: keyof ProgrammePlan, value: number): void {
+    if (plan === null) return;
+    setCustom({ ...plan, [field]: Math.max(0, Math.round(value)) });
+  }
 
   function startProject(): void {
     if (startIntent === null) return;
-    const entry = queueAction(startIntent);
-    setStartResult(entry.validation);
+    setStartResult(queueAction(startIntent).validation);
   }
 
-  function publish(): void {
+  function applyFix(): void {
+    if (existing === null || repair === null) return;
+    setFixResult(
+      queueAction({
+        type: 'adjust_research_project',
+        projectId: existing.id,
+        budgetUsd: repair.budgetUsd,
+        computeUnits: repair.computeUnits,
+        researchersAssigned: repair.researchersAssigned,
+      }).validation,
+    );
+  }
+
+  function announce(): void {
     if (node === null) return;
-    const entry = queueAction({ type: 'publish_research', nodeId: node.id, mode: publishMode, rationale: 'Published from the Frontier Map.' });
-    setPublishResult(entry.validation);
+    setPublishResult(
+      queueAction({ type: 'publish_research', nodeId: node.id, mode: publishMode, rationale: 'Announced from the Frontier Map.' }).validation,
+    );
   }
 
   function close(): void {
     setStartResult(null);
+    setFixResult(null);
     setPublishResult(null);
     onClose();
   }
 
   const style = node === null ? null : STATE_STYLE[node.status];
+  const riskBand = forecast === null ? null : setbackRiskBand(forecast.setbackRisk);
+  const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
+
+  const dependentTitles = useMemo(() => {
+    if (node === null) return [];
+    return graph.nodes.filter((entry) => entry.dependencies.includes(node.id)).map((entry) => entry.title);
+  }, [graph.nodes, node]);
+
+  const unlockTitles = useMemo(() => {
+    if (node === null) return [];
+    const ids = new Set(node.possibleUnlocks);
+    for (const edge of graph.edges) {
+      if (edge.from === node.id && (edge.kind === 'unlocks' || edge.kind === 'informs')) ids.add(edge.to);
+    }
+    return [...ids].map((id) => titles.get(id) ?? id);
+  }, [graph.edges, node, titles]);
 
   return (
-    <Drawer
-      open={node !== null}
-      onClose={close}
-      title={node?.title ?? ''}
-      subtitle={node === null || style === null ? undefined : `${style.label} · ${VISIBILITY_LABEL[node.visibility]}`}
-      width={540}
-    >
+    <Drawer open={node !== null} onClose={close} title={node?.title ?? ''} subtitle={state.line} width={540}>
       {node === null || style === null ? null : (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center gap-1.5">
-            {showTrack && track !== null ? <SectorBadge sector={track.sector} /> : null}
-            <Tag tone={style.tone} dot>
-              {style.label}
+            <Tag tone={state.kind === 'done' ? 'gain' : state.kind === 'running' ? 'brand' : state.kind === 'available' ? 'info' : 'neutral'} dot>
+              {NODE_STATE_LABEL[state.kind]}
             </Tag>
-            <Tag tone={node.visibility === 'public' ? 'neutral' : 'warn'}>{VISIBILITY_LABEL[node.visibility]}</Tag>
-            {node.achievedByCompanyId === null ? null : (
-              <Tag tone="gain">Achieved {node.achievedQuarter === null ? '' : quarterLabel(session.startYear, node.achievedQuarter)}</Tag>
-            )}
-            {node.originalProposerId === null ? null : <Tag tone="brand">Invented in session</Tag>}
+            {node.sector === undefined ? null : <SectorBadge sector={node.sector} />}
+            {node.originalProposerId === null ? null : <Tag tone="brand">Invented in this game</Tag>}
+            {node.achievedQuarter === null ? null : <Tag tone="gain">{quarterLabel(session.startYear, node.achievedQuarter)}</Tag>}
           </div>
 
-          <p className="text-[12px] leading-relaxed text-ink-dim">{node.summary}</p>
-          <p className="text-[10px] text-ink-faint">{style.blurb}</p>
+          <p className="text-[12.5px] leading-relaxed text-ink-dim">{node.summary}</p>
 
+          {/* --- 1. what it unlocks ------------------------------------------ */}
           <div>
-            <SectionHeading rule>Confidence</SectionHeading>
-            <div className="mt-2 space-y-3">
-              <Meter value={node.publicConfidence * 100} label="What the world believes" />
-              {ownConfidence === undefined ? (
-                <p className="text-[10px] text-ink-faint">
-                  {company.name} holds no private view on this node. The public figure is the only one you have.
-                </p>
-              ) : (
-                <>
-                  <Meter value={ownConfidence * 100} label={`What ${company.name} believes`} tone="brand" benchmark={node.publicConfidence * 100} benchmarkLabel="Public" />
-                  <p className="text-[10px] text-ink-faint">
-                    {ownConfidence > node.publicConfidence
-                      ? `You are ${Math.round((ownConfidence - node.publicConfidence) * 100)} points ahead of the consensus. That gap is the edge a research bet is made on.`
-                      : ownConfidence < node.publicConfidence
-                        ? `You are ${Math.round((node.publicConfidence - ownConfidence) * 100)} points behind the consensus. The market is pricing something you do not believe.`
-                        : 'Your view and the market’s are the same. There is no informational edge here.'}
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <SectionHeading rule>Programme shape</SectionHeading>
-            <div className="mt-2">
-              <KeyValueGrid
-                columns={2}
-                items={[
-                  { label: 'Arrival window', value: `${node.estimatedWindow[0]}–${node.estimatedWindow[1]}` },
-                  { label: 'Compute intensity', value: formatPct(node.computeIntensity) },
-                  {
-                    label: 'Compute wanted',
-                    value: `${formatCount(requirements?.computeUnits ?? 0)} units`,
-                    hint: `${formatCount(computeHeadroom)} free across owned, reserved and cloud`,
-                  },
-                  {
-                    label: 'Researchers wanted',
-                    value: formatCount(requirements?.researchers ?? 0),
-                    hint: `${formatCount(freeResearchers)} not on another programme`,
-                  },
-                  { label: 'Cost estimate (low)', value: formatMoney(node.researchCostRange[0]) },
-                  { label: 'Cost estimate (high)', value: formatMoney(node.researchCostRange[1]) },
-                  { label: 'Novelty', value: formatPct(node.novelty), hint: 'Distance from what the world already believes' },
-                  { label: 'Plausibility', value: formatPct(node.plausibility), hint: 'Coherence with physics, economics and the frontier' },
-                ]}
-              />
-            </div>
-          </div>
-
-          <div>
-            <SectionHeading rule>Capability required</SectionHeading>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {node.talentRequirements.length === 0 ? (
-                <span className="text-[11px] text-ink-faint">No specific capability area is named.</span>
-              ) : (
-                node.talentRequirements.map((area) => {
-                  const strength = company.techCapabilities[area] ?? 0;
+            <SectionHeading rule>What it gets you</SectionHeading>
+            <ul className="mt-2 space-y-1.5">
+              {unlockLines({ capabilityAreas: node.talentRequirements, unlockTitles, dependentTitles }).map((line) => (
+                <li key={line} className="text-[12px] leading-relaxed text-ink-dim">
+                  {line}
+                </li>
+              ))}
+            </ul>
+            {unlockTitles.length === 0 && dependentTitles.length === 0 ? null : (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {[...new Set([...unlockTitles, ...dependentTitles])].slice(0, 6).map((title) => {
+                  const target = graph.nodes.find((entry) => entry.title === title);
                   return (
-                    <Tag key={area} tone={strength >= 0.5 ? 'gain' : strength >= 0.25 ? 'warn' : 'loss'} title={`Your strength: ${formatPct(strength)}`}>
-                      {area.replace(/_/g, ' ')} · {formatPct(strength)}
-                    </Tag>
+                    <button
+                      key={title}
+                      type="button"
+                      className="btn btn-sm tap-target sm:min-h-0"
+                      onClick={() => (target === undefined ? undefined : onSelect(target.id))}
+                    >
+                      {title}
+                    </button>
                   );
-                })
-              )}
-            </div>
+                })}
+              </div>
+            )}
           </div>
 
-          {node.dependencies.length === 0 && node.possibleUnlocks.length === 0 ? null : (
+          {/* --- 2. what it takes -------------------------------------------- */}
+          {state.kind === 'done' ? null : (
             <div>
-              <SectionHeading rule>Position on the map</SectionHeading>
-              <div className="mt-2 space-y-2">
-                {node.dependencies.length === 0 ? null : (
-                  <div>
-                    <div className="label-caps-faint mb-1">Depends on</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {node.dependencies.map((id) => (
-                        <button key={id} type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => onSelect(id)}>
-                          {titles.get(id) ?? id}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {node.possibleUnlocks.length === 0 ? null : (
-                  <div>
-                    <div className="label-caps-faint mb-1">Would make credible</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {node.possibleUnlocks.map((id) => (
-                        <button key={id} type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => onSelect(id)}>
-                          {titles.get(id) ?? id}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              <SectionHeading rule>What it takes</SectionHeading>
+              {missing.length > 0 ? (
+                <p className="mt-1.5 text-[12px] leading-relaxed tone-warn">
+                  Locked until you have {missing.join(', ')}. You can still start a programme; it will be held at the line until then.
+                </p>
+              ) : null}
+              <div className="mt-2">
+                <KeyValueGrid
+                  columns={2}
+                  items={[
+                    { label: 'Time at this effort', value: forecast === null ? '—' : quartersLabel(forecast.expectedQuarters) },
+                    { label: 'Cost each quarter', value: forecast === null ? '—' : formatMoney(forecast.quarterlyCostUsd) },
+                    { label: 'Total cash', value: forecast === null ? '—' : formatMoney(forecast.totalCostUsd) },
+                    {
+                      label: 'Researchers',
+                      value: formatCount(plan?.researchersAssigned ?? 0),
+                      hint: `${formatCount(requirement?.researchers ?? 0)} is what it wants; ${formatCount(capacity.researchers)} free`,
+                    },
+                    {
+                      label: 'Compute units',
+                      value: formatCount(plan?.computeUnits ?? 0),
+                      hint: `${formatCount(requirement?.computeUnits ?? 0)} is what it wants; ${formatCount(capacity.computeUnits)} free`,
+                    },
+                    {
+                      label: 'Setback risk',
+                      value: riskBand === null ? '—' : RISK_LABEL[riskBand],
+                      tone: riskBand === null ? undefined : RISK_TONE[riskBand],
+                    },
+                  ]}
+                />
               </div>
             </div>
           )}
 
-          {existing === null ? (
-            <div>
-              <SectionHeading rule>Start a programme</SectionHeading>
-              {/* Bounds are the validator's, not the form's: cash caps the
-                  budget, free capacity (owned, reserved and, from world
-                  version 2, cloud) caps compute, free researchers cap the
-                  headcount, and the validator's own verdict shows live below. */}
-              <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
-                <SliderField
-                  label="Budget / quarter"
-                  value={budgetValue}
-                  onChange={(next) => setBudget(String(next))}
-                  min={0}
-                  max={budgetMax}
-                  step={roundStep(budgetMax)}
-                  format={formatMoney}
-                  chips
-                />
-                <SliderField
-                  label="Compute units"
-                  value={computeValue}
-                  onChange={(next) => setComputeUnits(String(next))}
-                  min={0}
-                  max={computeMax}
-                  step={roundStep(computeMax)}
-                  format={formatCount}
-                />
-                <SliderField
-                  label="Researchers"
-                  value={researcherValue}
-                  onChange={(next) => setResearchers(String(next))}
-                  min={0}
-                  max={researcherMax}
-                  step={1}
-                  format={formatCount}
-                />
-              </div>
+          {/* --- 3. who else is close ---------------------------------------- */}
+          <div>
+            <SectionHeading rule>Who else is close</SectionHeading>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-ink-dim">{worldThinksLine(publicVerdict(node.publicConfidence))}.</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink-dim">{rivalsLine(rivals)}</p>
+            {ownConfidence === undefined || Math.abs(ownConfidence - node.publicConfidence) < 0.05 ? null : (
+              <p className="mt-1 text-[11.5px] leading-relaxed tone-brand">
+                You rate it {Math.round(Math.abs(ownConfidence - node.publicConfidence) * 100)} points{' '}
+                {ownConfidence > node.publicConfidence ? 'higher' : 'lower'} than the market does. That gap is the edge a research bet is made on.
+              </p>
+            )}
+          </div>
 
-              {/* The label is the target: a finger gets the whole 44px row,
-                  the box stays a box. */}
+          {/* --- 4. risk ----------------------------------------------------- */}
+          {forecast === null || riskBand === null || state.kind === 'done' ? null : (
+            <div>
+              <SectionHeading rule>Risk</SectionHeading>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-ink-dim">{riskLine(riskBand, forecast.setbackRisk)}</p>
+              {forecast.bottleneck === null ? (
+                <p className="mt-1 text-[11.5px] leading-relaxed tone-gain">This plan gives the work everything it asks for.</p>
+              ) : (
+                <p className="mt-1 text-[11.5px] leading-relaxed tone-warn">{shortfallLine(forecast.shortfall)}</p>
+              )}
+            </div>
+          )}
+
+          {/* --- the programme, running or not ------------------------------- */}
+          {existing !== null && running !== null ? (
+            <div>
+              <SectionHeading rule>Your programme</SectionHeading>
+              <div className="mt-2 space-y-2.5">
+                <ProgressBar
+                  label="Progress"
+                  value={running.progress}
+                  tone={running.setbacks > 0 ? 'warn' : 'brand'}
+                  valueLabel={`${Math.round(running.progress * 100)}% · ${running.quartersLeft} quarter${running.quartersLeft === 1 ? '' : 's'} left`}
+                />
+                <KeyValueGrid
+                  columns={2}
+                  items={[
+                    { label: 'Quarters run', value: formatCount(running.quartersElapsed) },
+                    { label: 'Spent so far', value: formatMoney(running.spentUsd) },
+                    { label: 'Cost each quarter', value: formatMoney(running.quarterlyCostUsd) },
+                    { label: 'Setbacks', value: formatCount(running.setbacks), tone: running.setbacks > 0 ? 'warn' : undefined },
+                  ]}
+                />
+                {running.bottleneck === null ? (
+                  <p className="text-[12px] leading-relaxed tone-gain">Running at full speed: it has everything the work asks for.</p>
+                ) : (
+                  <div className="raised-surface space-y-2 px-3 py-2.5">
+                    <p className="text-[12.5px] leading-relaxed tone-warn">{shortfallLine(running.shortfall)}</p>
+                    {repair === null ? null : (
+                      <>
+                        <p className="text-[11px] leading-relaxed text-ink-faint">
+                          Fix sets it to {formatCount(repair.researchersAssigned)} researchers and {formatCount(repair.computeUnits)} compute units —
+                          what this technology asks for, as far as you have it free.
+                        </p>
+                        <button type="button" className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={applyFix}>
+                          Fix the shortage of {BOTTLENECK_LABEL[running.bottleneck]}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+                {existing.isSecret ? <Tag tone="warn" dot>Secret programme</Tag> : <Tag tone="neutral" dot>Publicly known</Tag>}
+                {fixResult === null ? null : <ValidationBanner result={fixResult} />}
+              </div>
+            </div>
+          ) : state.kind === 'done' ? null : (
+            <div>
+              <SectionHeading rule>Start it</SectionHeading>
+
+              {/* One control: how hard you go at it. */}
+              <div className="mt-2 grid grid-cols-3 gap-1.5">
+                {RESEARCH_EFFORTS.map((option) => {
+                  const active = effort === option && custom === null;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => {
+                        setEffort(option);
+                        setCustom(null);
+                      }}
+                      className={`raised-surface tap-target flex flex-col items-start gap-0.5 px-2.5 py-2 text-left transition-colors hover:border-hair-strong ${
+                        active ? 'border-brand/40 bg-brand-wash' : ''
+                      }`}
+                      aria-pressed={active}
+                    >
+                      <span className="text-[12.5px] font-semibold text-ink">{EFFORT_LABEL[option]}</span>
+                      <span className="text-[10px] leading-snug text-ink-faint">{EFFORT_BLURB[option]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {custom === null ? null : (
+                <p className="mt-1.5 text-[11px] text-ink-faint">Figures set by hand. Pick an effort above to go back to a preset.</p>
+              )}
+
+              {plan === null || forecast === null ? null : (
+                <div className="mt-2.5 space-y-2">
+                  <KeyValueGrid
+                    columns={3}
+                    items={[
+                      { label: 'Budget / quarter', value: formatMoney(plan.budgetUsd) },
+                      { label: 'Compute', value: `${formatCount(plan.computeUnits)} units` },
+                      { label: 'Researchers', value: formatCount(plan.researchersAssigned) },
+                    ]}
+                  />
+                  <p className="text-[12px] leading-relaxed text-ink-dim">
+                    About {quartersLabel(forecast.expectedQuarters)}, {formatMoney(forecast.totalCostUsd)} of cash in total, {RISK_LABEL[setbackRiskBand(forecast.setbackRisk)].toLowerCase()} risk.
+                  </p>
+                  <CashAfter company={company} spendUsd={plan.budgetUsd} note="Charged every quarter the programme runs." />
+                </div>
+              )}
+
+              {/* The three sliders, for a founder who wants them. */}
+              <details
+                className="mt-2.5"
+                open={adjusting}
+                onToggle={(event) => setAdjusting((event.target as HTMLDetailsElement).open)}
+              >
+                <summary className="tap-target cursor-pointer list-none text-[12px] font-medium text-ink-dim sm:min-h-0">Adjust the figures</summary>
+                {plan === null ? null : (
+                  <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
+                    <SliderField
+                      label="Budget / quarter"
+                      value={plan.budgetUsd}
+                      onChange={(next) => setPlanField('budgetUsd', next)}
+                      min={0}
+                      max={Math.max(company.financials.cash, plan.budgetUsd, 1_000_000)}
+                      step={roundStep(Math.max(company.financials.cash, plan.budgetUsd, 1_000_000))}
+                      format={formatMoney}
+                      chips
+                    />
+                    <SliderField
+                      label="Compute units"
+                      value={plan.computeUnits}
+                      onChange={(next) => setPlanField('computeUnits', next)}
+                      min={0}
+                      max={Math.max(capacity.computeUnits, plan.computeUnits, 1)}
+                      step={roundStep(Math.max(capacity.computeUnits, plan.computeUnits, 1))}
+                      format={formatCount}
+                    />
+                    <SliderField
+                      label="Researchers"
+                      value={plan.researchersAssigned}
+                      onChange={(next) => setPlanField('researchersAssigned', next)}
+                      min={0}
+                      max={Math.max(capacity.researchers, plan.researchersAssigned, 1)}
+                      step={1}
+                      format={formatCount}
+                    />
+                  </div>
+                )}
+              </details>
+
               <label className="tap-target mt-2.5 flex cursor-pointer items-start gap-2.5 py-1 sm:min-h-0 sm:py-0">
                 <input
                   type="checkbox"
@@ -318,86 +480,112 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                   onChange={(event) => setSecret(event.target.checked)}
                   className="mt-1 size-5 shrink-0 accent-[color:var(--color-brand-strong)] sm:mt-0.5 sm:size-4"
                 />
-                <span className="text-[13px] text-ink-dim sm:text-[11px]">
-                  Keep the programme secret.
-                  <span className="block text-[11px] leading-relaxed text-ink-faint sm:text-[10px]">
-                    A secret setback stays out of the share price unless it leaks; a secret success surprises the market.
+                <span className="text-[13px] text-ink-dim sm:text-[12px]">
+                  Keep it secret.
+                  <span className="block text-[11px] leading-relaxed text-ink-faint">
+                    Rivals cannot see the programme exists, and a setback stays out of the share price.
                   </span>
                 </span>
               </label>
 
               <div className="mt-2.5 flex justify-end">
                 <button type="button" className="btn btn-primary btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={startProject}>
-                  Queue programme
+                  Start the programme
                 </button>
               </div>
 
-              {startResult === null && startPreview !== null ? (
-                <div className="mt-2">
-                  <ValidationBanner result={startPreview} compact />
-                </div>
-              ) : null}
-              {startResult === null ? null : (
-                <div className="mt-2">
-                  <ValidationBanner result={startResult} />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <SectionHeading rule>Your programme</SectionHeading>
-              <div className="mt-2 space-y-2.5">
-                <ProgressBar
-                  label="Progress to demonstration"
-                  value={existing.progress}
-                  tone="brand"
-                  valueLabel={`${formatPct(existing.progress)} · ${existing.quartersElapsed}/${existing.expectedQuarters} quarters`}
-                />
-                <Meter value={existing.internalConfidence * 100} label="Internal confidence" tone="info" />
-                <KeyValueGrid
-                  columns={2}
-                  items={[
-                    { label: 'Budget', value: `${formatMoney(existing.budgetQuarterly)} / quarter` },
-                    { label: 'Compute', value: `${existing.computeAllocated} units` },
-                    { label: 'Researchers', value: existing.talentAllocated.toString() },
-                    { label: 'Spent to date', value: formatMoney(existing.cumulativeSpendUsd) },
-                    { label: 'Setbacks', value: existing.setbacks.toString(), tone: existing.setbacks > 0 ? 'warn' : undefined },
-                    { label: 'Status', value: existing.status, mono: false },
-                  ]}
-                />
-                {existing.isSecret ? <Tag tone="warn" dot>Secret programme</Tag> : <Tag tone="neutral" dot>Publicly known</Tag>}
-              </div>
+              {startResult === null && startPreview !== null ? <div className="mt-2"><ValidationBanner result={startPreview} compact /></div> : null}
+              {startResult === null ? null : <div className="mt-2"><ValidationBanner result={startResult} /></div>}
             </div>
           )}
 
-          {!owns ? null : (
+          {/* --- announce ---------------------------------------------------- */}
+          {!achievedByYou ? null : (
             <div>
-              <SectionHeading rule>Publish</SectionHeading>
-              <p className="mt-1.5 text-[10px] text-ink-faint">
-                Publication buys reputation and hands rivals the method. An open-weights release is a governance matter and goes to the board.
-              </p>
-              <div className="mt-2 flex flex-wrap items-end gap-2">
-                <label className="min-w-0 flex-1">
-                  <span className="label-caps-faint mb-1 block">Mode</span>
-                  <select className="field tap-target sm:min-h-0" value={publishMode} onChange={(event) => setPublishMode(event.target.value as PublicationMode)}>
-                    {PUBLICATION_MODES.filter((mode) => mode !== 'leak').map((mode) => (
-                      <option key={mode} value={mode}>
-                        {PUBLICATION_LABEL[mode]}
-                      </option>
+              <SectionHeading rule>Announce it</SectionHeading>
+              <div className="mt-2 space-y-1.5">
+                {ANNOUNCE_MODES.map((option) => (
+                  <label
+                    key={option.mode}
+                    className={`tap-target raised-surface flex cursor-pointer items-start gap-2.5 px-3 py-2 sm:min-h-0 ${
+                      publishMode === option.mode ? 'border-brand/40 bg-brand-wash' : ''
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="announce-mode"
+                      checked={publishMode === option.mode}
+                      onChange={() => setPublishMode(option.mode)}
+                      className="mt-1 size-4 shrink-0 accent-[color:var(--color-brand-strong)]"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-[12.5px] font-medium text-ink">{option.label}</span>
+                      <span className="block text-[11px] leading-relaxed text-ink-faint">{option.consequence}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-2 flex justify-end">
+                <button type="button" className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={announce}>
+                  Announce
+                </button>
+              </div>
+              {publishResult === null ? null : <div className="mt-2"><ValidationBanner result={publishResult} /></div>}
+            </div>
+          )}
+
+          {/* --- details ----------------------------------------------------- */}
+          <details className="border-t border-hair pt-3" open={detailsOpen} onToggle={(event) => setDetailsOpen((event.target as HTMLDetailsElement).open)}>
+            <summary className="tap-target cursor-pointer list-none text-[12px] font-medium text-ink-dim sm:min-h-0">Details</summary>
+            <div className="mt-2 space-y-3">
+              <Meter value={node.publicConfidence * 100} label="What the world believes" />
+              {ownConfidence === undefined ? null : (
+                <Meter value={ownConfidence * 100} label={`What ${company.name} believes`} tone="brand" benchmark={node.publicConfidence * 100} benchmarkLabel="Public" />
+              )}
+              <KeyValueGrid
+                columns={2}
+                items={[
+                  { label: 'Epistemic state', value: style.label },
+                  { label: 'Visibility', value: VISIBILITY_LABEL[node.visibility] },
+                  { label: 'Expected arrival', value: `${node.estimatedWindow[0]}–${node.estimatedWindow[1]}` },
+                  { label: 'Compute intensity', value: formatPct(node.computeIntensity) },
+                  { label: 'Novelty', value: formatPct(node.novelty), hint: 'Distance from what the world already believes' },
+                  { label: 'Plausibility', value: formatPct(node.plausibility), hint: 'Coherence with physics, economics and the frontier' },
+                  { label: 'Cost estimate (low)', value: formatMoney(node.researchCostRange[0]) },
+                  { label: 'Cost estimate (high)', value: formatMoney(node.researchCostRange[1]) },
+                ]}
+              />
+              <div>
+                <div className="label-caps-faint mb-1">Capability areas, and your strength in them</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {node.talentRequirements.length === 0 ? (
+                    <span className="text-[11px] text-ink-faint">No specific area is named.</span>
+                  ) : (
+                    node.talentRequirements.map((area) => {
+                      const strength = company.techCapabilities[area] ?? 0;
+                      return (
+                        <Tag key={area} tone={strength >= 0.5 ? 'gain' : strength >= 0.25 ? 'warn' : 'loss'}>
+                          {readableArea(area)} · {formatPct(strength)}
+                        </Tag>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+              {node.dependencies.length === 0 ? null : (
+                <div>
+                  <div className="label-caps-faint mb-1">Depends on</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {node.dependencies.map((id) => (
+                      <button key={id} type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={() => onSelect(id)}>
+                        {titles.get(id) ?? id}
+                      </button>
                     ))}
-                  </select>
-                </label>
-                <button type="button" className="btn btn-sm tap-target sm:min-h-0" onClick={publish}>
-                  Queue publication
-                </button>
-              </div>
-              {publishResult === null ? null : (
-                <div className="mt-2">
-                  <ValidationBanner result={publishResult} />
+                  </div>
                 </div>
               )}
             </div>
-          )}
+          </details>
         </div>
       )}
     </Drawer>

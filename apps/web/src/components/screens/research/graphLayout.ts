@@ -28,10 +28,12 @@
  *     channels between columns and the node-free rows the dummy slots hold.
  *
  * `UI_SYSTEM.md` §4 remains the encoding contract, with one deliberate change:
- * the node fill no longer carries public confidence. Nine pastel fills plus
- * nine coloured borders was the noise the map was drowning in. The epistemic
- * state now rides a left accent bar and a state dot on a calm white card, and
- * confidence is the one bar along the bottom.
+ * a card carries exactly one encoding. Nine pastel fills, nine coloured borders
+ * and a height that grew with compute intensity was the noise the map was
+ * drowning in. A card is now a calm white box with a left accent bar in the
+ * colour of one of four states — locked, available, in progress, done — a line
+ * saying which, and a bar only where a bar means something: a running
+ * programme's progress.
  */
 
 import type { TechEdge, TechEpistemicState, TechGraph, TechNode, TechVisibility } from '@frontier/contracts';
@@ -119,11 +121,16 @@ export function depthsOf(nodes: readonly TechNode[], edges: readonly TechEdge[])
   return depth;
 }
 
-/** Node height from compute intensity: a hungry programme is a bigger box. */
-export function heightOf(node: TechNode): number {
-  return Math.round(
-    MIN_NODE_HEIGHT + (MAX_NODE_HEIGHT - MIN_NODE_HEIGHT) * Math.max(0, Math.min(1, node.computeIntensity)),
-  );
+/**
+ * Every card is the same height.
+ *
+ * It used to grow with compute intensity, which meant size was a fourth
+ * encoding on a card that now carries exactly one: which of the four states the
+ * technology is in. A card holds two lines of title and one line of state, and
+ * that is a fixed amount of room.
+ */
+export function heightOf(_node: TechNode): number {
+  return MAX_NODE_HEIGHT;
 }
 
 /* -------------------------------------------------------------------------- */

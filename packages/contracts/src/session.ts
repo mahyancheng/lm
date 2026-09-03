@@ -554,6 +554,11 @@ export const SessionPlayerSchema = z
     autoExecuteRoutine: z.boolean().describe('Whether low-risk interpreted instructions may execute without an explicit confirmation.'),
     hasSubmittedThisQuarter: z.boolean().describe('Whether they have locked their instructions for the current quarter. Resolution waits for every active player or for the planning window to close.'),
     isActive: z.boolean(),
+    eliminatedQuarter: QuarterIndexSchema.nullable()
+      .optional()
+      .describe(
+        'Quarter this seat\'s company went into administration, or absent/null while it is still playing. World version 2 only: the validator refuses every instruction from a seat that carries one, and the shell shows the verdict instead of the game. Optional so a world-1 save parses byte-identically.',
+      ),
   })
   .describe('One seat at the table.');
 export type SessionPlayer = z.infer<typeof SessionPlayerSchema>;
@@ -761,6 +766,9 @@ export const PlayerViewSchema = z
       .default(null)
       .describe('The quarter\'s itemised economic attribution, already redacted to this seat: sector ladders and tolls are public, stacks and exposure are the seat\'s own.'),
     alerts: z.array(z.string()).describe('Command Centre alert lines for the open quarter.'),
+    eliminatedQuarter: QuarterIndexSchema.nullable()
+      .default(null)
+      .describe('Quarter this seat was wound up, or null while it is playing. The shell renders the verdict screen rather than the game when it is set.'),
   })
   .describe('The redacted projection sent to one client. Information boundaries are enforced here and again by row-level policy.');
 export type PlayerView = z.infer<typeof PlayerViewSchema>;

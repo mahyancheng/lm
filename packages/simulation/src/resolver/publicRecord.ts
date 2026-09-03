@@ -40,7 +40,7 @@ import type {
   WorldEvent,
 } from '@frontier/contracts';
 import { comparePublicRecordItems } from '@frontier/contracts';
-import { formatDelta, formatPct } from '@frontier/shared';
+import { formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import { audienceFor, isEventVisibleTo, type PlayerAudience } from './projection';
 
 /* -------------------------------------------------------------------------- */
@@ -233,7 +233,7 @@ function fromDisclosure(session: SessionState, disclosure: PublicDisclosure, aud
     weight: clampUnit(disclosure.credibility * (disclosure.kind === 'press_release' ? 0.7 : 0.9)),
     links: { causalParentId: null, sourceEventId: null, sourcePostIds: [], replyToPostId: null },
     ledgerEventIds: ledgerFor(ledger, disclosure.id, ['disclosureId']),
-    whyItMatters: disclosureConsequence(disclosure, audience),
+    whyItMatters: disclosureConsequence(session, disclosure, audience),
     network: null,
     intent: null,
     reach: typeof disclosure.metrics.reach === 'number' ? disclosure.metrics.reach : null,
@@ -378,8 +378,27 @@ function storyConsequence(story: MediaStory, audience: PlayerAudience): string |
 }
 
 /** A disclosure about you moves what the market believes, which moves the price. */
-function disclosureConsequence(disclosure: PublicDisclosure, audience: PlayerAudience): string | null {
-  if (disclosure.companyId === null || !audience.companyIds.has(disclosure.companyId)) return null;
+function disclosureConsequence(session: SessionState, disclosure: PublicDisclosure, audience: PlayerAudience): string | null {
+  if (disclosure.companyId === null) return null;
+
+  // A founding is the one disclosure about somebody else that can matter to this
+  // seat, and only when the newcomer is actually next door: same sector, same
+  // region. A new company on the other side of the world is not your problem, so
+  // the line is null rather than a nudge that means nothing.
+  const seedCapital = disclosure.metrics['seedCapital'];
+  if (typeof seedCapital === 'number') {
+    const entrant = session.companies.find((company) => company.id === disclosure.companyId) ?? null;
+    if (entrant === null) return null;
+    const nextDoor = [...audience.companyIds].some((id) => {
+      const own = session.companies.find((company) => company.id === id);
+      return own !== undefined && own.sector === entrant.sector && own.region === entrant.region;
+    });
+    return nextDoor
+      ? clip(`a new ${entrant.sector.replace(/_/g, ' ')} rival in your region, founded on ${formatMoney(seedCapital)}`, 160)
+      : null;
+  }
+
+  if (!audience.companyIds.has(disclosure.companyId)) return null;
 
   // A capital entity's disclosure is an act, not a report, so it gets a line
   // that names the act rather than the format. Read off the metrics the engine

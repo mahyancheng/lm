@@ -697,6 +697,7 @@ export default function LandingPage(): React.JSX.Element {
                                     savedQuarter: row.savedQuarter,
                                     savedAtIso: row.savedAtIso,
                                     difficulty: row.source === 'local' ? (slots[slot - 1]?.difficulty ?? null) : null,
+                                    endedQuarter: row.source === 'local' ? (slots[slot - 1]?.endedQuarter ?? null) : null,
                                   })}
                                 </p>
                               </div>

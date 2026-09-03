@@ -29,7 +29,7 @@ import {
   dividendReputationBonus,
   dividendUsd,
 } from '@frontier/contracts';
-import { lastQuarterNetIncomeUsd } from '@frontier/simulation';
+import { lastQuarterNetIncomeUsd, negativeCashQuarters, solvencyLine } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { ConfirmDialog, Icon, NowAfter, SliderField, Tag, ValidationBanner, cx } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
@@ -51,6 +51,7 @@ export function DividendTicket({ company, paid, issuedShares }: DividendTicketPr
 
   const basis = useMemo(() => lastQuarterNetIncomeUsd(company), [company]);
   const cash = company.financials.cash;
+  const negativeQuarters = negativeCashQuarters(company);
 
   const intent = useMemo<ActionIntent>(() => ({ type: 'set_dividend_policy', payoutPct }), [payoutPct]);
   const preCheck = useMemo(() => validateIntent(intent), [validateIntent, intent]);
@@ -113,11 +114,19 @@ export function DividendTicket({ company, paid, issuedShares }: DividendTicketPr
                   after: `+${dividendReputationBonus(Math.round(shown))}`,
                   tone: 'gain',
                 },
+                {
+                  key: 'cash',
+                  label: 'Cash',
+                  now: formatMoney(cash),
+                  after: formatMoney(cash - after.paidUsd),
+                  tone: cash - after.paidUsd < 0 ? 'loss' : undefined,
+                },
               ]}
               note={
-                after.cappedByCash
+                solvencyLine(negativeQuarters, cash - after.paidUsd) ??
+                (after.cappedByCash
                   ? `Capped at ${formatPct(DIVIDEND_CASH_CAP_SHARE)} of the ${formatMoney(cash)} on hand — the policy asks for more than the cash allows.`
-                  : `Settled next quarter on this quarter's result of ${formatMoney(basis)}, and never more than ${formatPct(DIVIDEND_CASH_CAP_SHARE)} of cash.`
+                  : `Settled next quarter on this quarter's result of ${formatMoney(basis)}, and never more than ${formatPct(DIVIDEND_CASH_CAP_SHARE)} of cash.`)
               }
             />
           );

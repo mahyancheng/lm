@@ -64,7 +64,7 @@ export {
   sectorRevenueMultiple,
 } from './fundamentalValue';
 export type { FundamentalValue } from './fundamentalValue';
-export { FUNDAMENTAL_ANCHOR_WEIGHT } from './valuation';
+export { FUNDAMENTAL_ANCHOR_WEIGHT, INFRASTRUCTURE_ARCHETYPES } from './valuation';
 export { runSettlement, DISCLOSURE_THRESHOLD_PCT } from './settlement';
 export type { TradeSettlement } from './settlement';
 

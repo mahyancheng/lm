@@ -89,12 +89,17 @@ import {
   PPE_DEPRECIATION_PER_QUARTER,
   RECEIVABLE_SHARE,
   RESERVED_UNIT_COST_USD_PER_QUARTER,
+  OVERDRAFT_SPREAD,
   RUNWAY_CAP_QUARTERS,
   RUNWAY_WARNING_QUARTERS,
   SEGMENT_SUPPORT_COST_SHARE,
+  SOLVENCY_NEGATIVE_QUARTERS,
   TAX_RATE,
 } from './balance';
-import { resolveDistress } from './distress';
+import { enterAdministration, isWoundUp, resolveDistress } from './distress';
+import { closeEliminatedSeats, resolveMarketEntry, type AdministrationRow } from './entrants';
+import { counterpartyRevenueByCompany } from './counterparty';
+import { negativeCashQuarters, overdraftChargeUsd } from './solvency';
 import { appendFinancialQuarter } from './history';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
@@ -141,9 +146,17 @@ export function computeCost(draft: SessionState, company: Company): ComputeCostB
   const world = draft.world;
   const compute = company.compute;
   const ownedDepreciation = company.balanceSheet.assets.ppe * PPE_DEPRECIATION_PER_QUARTER;
-  const reserved = compute.reservedAccelerators * RESERVED_UNIT_COST_USD_PER_QUARTER * world.compute.reservedPrice;
+  // The counterparty's factor rides on top of the world index for capacity that
+  // was reserved or rented from a named company. Absent — every world-1 company,
+  // and anything bought at the index — it is exactly 1.
+  const reservedFactor = Math.max(0.1, compute.reservationProviderFactor ?? 1);
+  const cloudFactor = Math.max(0.1, compute.cloudProviderFactor ?? 1);
+  const reserved = compute.reservedAccelerators * RESERVED_UNIT_COST_USD_PER_QUARTER * world.compute.reservedPrice * reservedFactor;
   const cloud = compute.cloudSpendQuarterly * world.compute.spotPrice;
-  const cloudUnits = ratio(compute.cloudSpendQuarterly, CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, world.compute.spotPrice));
+  const cloudUnits = ratio(
+    compute.cloudSpendQuarterly,
+    CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, world.compute.spotPrice) * cloudFactor,
+  );
   const units = compute.ownedAccelerators + compute.reservedAccelerators + cloudUnits;
   // Electricity is the one input whose price is genuinely local: the world index
   // sets the trend, the company's region sets what it actually pays. The regional
@@ -211,8 +224,24 @@ function projectBudgetUsd(draft: SessionState, companyId: string): number {
   return total;
 }
 
+/**
+ * The margin a company sells compute to another company at.
+ *
+ * Its own realised gross margin last quarter, which is the only honest answer:
+ * an infrastructure operator running at 30% does not suddenly make 90% because
+ * the customer is a rival. A company with no filed revenue yet falls back to
+ * `COUNTERPARTY_DEFAULT_MARGIN`.
+ */
+export const COUNTERPARTY_DEFAULT_MARGIN = 0.45;
+
+export function counterpartyMarginOf(company: Company): number {
+  const f = company.financials;
+  if (f.revenueQuarterly <= 0) return COUNTERPARTY_DEFAULT_MARGIN;
+  return clamp((f.revenueQuarterly - f.cogs) / f.revenueQuarterly, 0, 0.95);
+}
+
 /** Register the distress haircut the market phase will price next quarter. */
-function registerDistressHaircut(draft: SessionState, ctx: ResolverContext, companyId: string): void {
+function registerDistressHaircut(draft: SessionState, ctx: ResolverContext, companyId: string, reason: string): void {
   const id = makeId('mod', draft.sessionId, ctx.quarter, 'distress', companyId);
   if (draft.activeModifiers.some((m) => m.id === id)) return;
   const modifier: ActiveModifier = {
@@ -226,7 +255,7 @@ function registerDistressHaircut(draft: SessionState, ctx: ResolverContext, comp
     remainingQuarters: DISTRESS_HAIRCUT_QUARTERS,
     appliedAtQuarter: ctx.quarter,
     originEventId: null,
-    reason: 'The company could not settle its obligations in cash and is being financed by its suppliers.',
+    reason,
     elapsedQuarters: 0,
     effectiveValue: -DISTRESS_VALUATION_HAIRCUT,
     lastAppliedQuarter: null,
@@ -292,10 +321,18 @@ export function resolveFinancials(
   // neutral or empty in world version 1.
   const economy = sectorEconomy(draft);
   const multiSector = isMultiSectorWorld(draft);
+  // What every company owes another company for compute this quarter, keyed by
+  // the *seller*. Built before the loop because the loop is in company order and
+  // a seller may be reached before its buyer: a credit computed inside the loop
+  // would land on half the sellers and miss the rest. Empty in world version 1,
+  // which has no counterparties.
+  const counterparty = counterpartyRevenueByCompany(draft);
   const logistics = multiSector ? regionLogistics(draft) : null;
   const accords = activeAccords(draft);
   const priceStacks: CompanyModifierStack[] = [];
   const costStacks: CompanyModifierStack[] = [];
+  // Companies wound up by the solvency clock inside this loop, in company order.
+  const windUps: AdministrationRow[] = [];
 
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
@@ -323,6 +360,15 @@ export function resolveFinancials(
     }
     const grossRevenue = productRevenue + contractRevenue;
 
+    /* --- what other companies paid us for compute -------------------------- */
+    // The buyer's side of this is already billed by `computeCost` out of its own
+    // holdings, so nothing is charged twice: this is only the seller's half of
+    // the same dollar arriving. It is recognised at the seller's own realised
+    // margin, taken from the quarter it last filed, so a thin-margin operator
+    // does not book infrastructure revenue as pure profit.
+    const interCompanyRevenue = counterparty.get(company.id) ?? 0;
+    const interCompanyCogs = interCompanyRevenue * (1 - counterpartyMarginOf(company));
+
     /* --- the seller side of the goods chain -------------------------------- */
     // Only the part of a sector's output sold to the other five sectors is
     // repriced by the chain; what goes to end customers was already priced by
@@ -340,7 +386,7 @@ export function resolveFinancials(
     const upliftScale = rawTotalUplift === 0 ? 0 : tradeUplift / rawTotalUplift;
     const sectorUpliftUsd = signedMoney(rawSectorUplift * upliftScale);
     const accordUpliftUsd = signedMoney(tradeUplift - sectorUpliftUsd);
-    const revenue = grossRevenue + tradeUplift;
+    const revenue = grossRevenue + tradeUplift + interCompanyRevenue;
 
     /* --- cost ------------------------------------------------------------- */
     const compute = computeCost(draft, company);
@@ -367,7 +413,7 @@ export function resolveFinancials(
     // scaling depreciation would invent property.
     const tollPct = logistics === null ? 0 : tollPaidPct(draft, company, logistics);
     const tollAdjustment = (tollPct / 100) * cashCogsBeforeSector;
-    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment + tollAdjustment;
+    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
 
     // Payroll and marketing were staged by the talent and product phases. The
     // fallbacks below only bite when this phase is run in isolation.
@@ -379,7 +425,14 @@ export function resolveFinancials(
     const rdSpend = Math.max(projectBudgets, envelope) + trainingCompute;
 
     const debtRate = (draft.world.macro.policyRate + draft.world.macro.creditSpreads + DEBT_RISK_PREMIUM) / 4;
-    const interestExpense = sheet.liabilities.debt * debtRate;
+    // An overdrawn balance is an unsecured loan nobody agreed to make. It is
+    // priced off the opening overdraft — the quarter's own spending has not been
+    // financed yet when the charge is struck — and booked as interest, so it
+    // flows through net income and is explained to the double-entry gate by the
+    // `interestUsd` figure the cost row already carries. Zero in world 1, where
+    // cash never closes below zero.
+    const overdraftCharge = multiSector ? overdraftChargeUsd(sheet.assets.cash, draft.world.macro.policyRate) : 0;
+    const interestExpense = sheet.liabilities.debt * debtRate + overdraftCharge;
 
     const grossProfit = revenue - cogs;
     const operatingExpenses = payroll + marketing + rdSpend;
@@ -412,16 +465,28 @@ export function resolveFinancials(
     const cogsCashPaid = openingPayables + cogsCash - closingPayablesBase;
 
     const debtRepayment = Math.min(sheet.liabilities.debt, sheet.liabilities.debt * DEBT_AMORTISATION_PER_QUARTER);
-    const cashOut = cogsCashPaid + payroll + marketing + rdCash + interestExpense + tax + debtRepayment;
+    // Accelerators bought outright: staged by the compute phase, settled here,
+    // because this is the only phase that moves cash. Cash falls and property,
+    // plant and equipment rises by the same figure, so equity does not move and
+    // the double-entry gate below sees a matched pair.
+    const purchases = company.compute.pendingAcceleratorPurchases ?? [];
+    const capex = money(purchases.reduce((total, purchase) => total + purchase.totalUsd, 0));
+    const cashOut = cogsCashPaid + payroll + marketing + rdCash + interestExpense + tax + debtRepayment + capex;
     const unfloored = openingCash + collections - cashOut;
-    const shortfall = unfloored < 0 ? -unfloored : 0;
-    const closingCash = Math.max(0, unfloored);
+    // World 1 floors cash at zero and finances the gap through its suppliers.
+    // World 2 does not: the balance goes where the arithmetic puts it, the
+    // overdraft above is what it costs, and two consecutive quarters below zero
+    // is what ends the company. Nothing is dumped into payables, so the payables
+    // line means trade credit again rather than "the shortfall".
+    const shortfall = multiSector ? 0 : unfloored < 0 ? -unfloored : 0;
+    const closingCash = multiSector ? signedMoney(unfloored) : Math.max(0, unfloored);
     const closingPayables = closingPayablesBase + shortfall;
 
     /* --- roll the balance sheet forward ----------------------------------- */
-    sheet.assets.cash = money(closingCash);
+    sheet.assets.cash = multiSector ? signedMoney(closingCash) : money(closingCash);
     sheet.assets.receivables = money(closingReceivables);
-    sheet.assets.ppe = money(Math.max(0, sheet.assets.ppe - depreciation));
+    sheet.assets.ppe = money(Math.max(0, sheet.assets.ppe - depreciation) + capex);
+    if (purchases.length > 0) company.compute.pendingAcceleratorPurchases = [];
     sheet.liabilities.payables = money(closingPayables);
     sheet.liabilities.deferredRevenue = money(Math.max(0, openingDeferred - deferredRelease));
     sheet.liabilities.debt = money(Math.max(0, sheet.liabilities.debt - debtRepayment));
@@ -451,9 +516,6 @@ export function resolveFinancials(
     const quarterlyBurn = signedMoney(sheet.assets.cash - openingCash);
     const workingCapitalMove =
       sheet.assets.receivables - openingReceivables - (sheet.liabilities.payables - openingPayables) - (sheet.liabilities.deferredRevenue - openingDeferred);
-    // Capital expenditure is booked by the phase that incurs it, which moves
-    // cash into property, plant and equipment directly; this phase adds none.
-    const capex = 0;
     const freeCashFlow = signedMoney(netIncome + depreciation - capex - workingCapitalMove);
 
     let backlog = 0;
@@ -510,6 +572,9 @@ export function resolveFinancials(
         tradeSharePct: Math.round(tradeShare * 100),
         accordBonusPct,
         upliftCapUsd: money(upliftCap),
+        // Stated only when it happened, so a world-1 payload is the payload it
+        // has always been and its ledger hashes are unchanged.
+        ...(interCompanyRevenue > 0 ? { interCompanyRevenueUsd: money(interCompanyRevenue), interCompanyCogsUsd: money(interCompanyCogs) } : {}),
       },
       company.isPublic ? 'public' : 'company',
     );
@@ -659,11 +724,43 @@ export function resolveFinancials(
 
     // Distress is decided before the cash event is written, so the ledger row
     // carries the consequence as well as the cause.
+    //
+    // World 2 counts the clock instead: the statement for this quarter has just
+    // been filed, so `negativeCashQuarters` already includes the close below.
+    const overdrawn = multiSector && sheet.assets.cash < 0;
+    const negativeQuarters = multiSector ? negativeCashQuarters(company) : 0;
     let bridgeRound: FundingRound | null = null;
     if (shortfall > 0) {
       company.posture = 'survival';
-      registerDistressHaircut(draft, ctx, company.id);
+      registerDistressHaircut(draft, ctx, company.id, 'The company could not settle its obligations in cash and is being financed by its suppliers.');
       bridgeRound = queueBridgeRound(draft, ctx, company, shortfall);
+    } else if (overdrawn) {
+      company.posture = 'survival';
+      registerDistressHaircut(draft, ctx, company.id, 'The company closed the quarter with a negative cash balance.');
+      // ASYMMETRY, deliberate: a player-controlled company is never bridged. The
+      // founder raises, borrows, sells or cuts — or the clock runs out. A bot has
+      // nobody to make that call, so its own raise is queued for it, and it can
+      // still fail on appetite like any other round.
+      if (company.controllerPlayerId === null) bridgeRound = queueBridgeRound(draft, ctx, company, -sheet.assets.cash);
+    }
+
+    if (overdraftCharge > 0) {
+      // A staging row: `kind` keeps it out of the gate's reconstruction, which
+      // already has this charge inside the profit and loss's `interestUsd`.
+      emitEvent(
+        draft,
+        ctx,
+        'cost_recognised',
+        company.id,
+        null,
+        {
+          kind: 'overdraft_interest',
+          chargeUsd: money(overdraftCharge),
+          overdraftUsd: money(Math.max(0, -openingCash)),
+          annualRatePct: Math.round((draft.world.macro.policyRate + OVERDRAFT_SPREAD) * 10_000) / 100,
+        },
+        'company',
+      );
     }
 
     const cashEventId = emitEvent(
@@ -673,16 +770,25 @@ export function resolveFinancials(
       company.id,
       null,
       {
-        openingCashUsd: money(openingCash),
+        openingCashUsd: multiSector ? signedMoney(openingCash) : money(openingCash),
         closingCashUsd: sheet.assets.cash,
         quarterlyBurnUsd: quarterlyBurn,
         debtRepaidUsd: money(debtRepayment),
         runwayQuarters: runway,
         insolvent: shortfall > 0,
         unfundedShortfallUsd: money(shortfall),
-        distressHaircut: shortfall > 0 ? DISTRESS_VALUATION_HAIRCUT : 0,
+        distressHaircut: shortfall > 0 || overdrawn ? DISTRESS_VALUATION_HAIRCUT : 0,
         forcedBridgeRoundId: bridgeRound === null ? null : bridgeRound.id,
         forcedBridgeAmountUsd: bridgeRound === null ? 0 : bridgeRound.amount,
+        // World-2 keys only: a version-1 row must hash to what it always did.
+        ...(multiSector
+          ? {
+              overdrawn,
+              negativeCashQuarters: negativeQuarters,
+              overdraftChargeUsd: money(overdraftCharge),
+              solvencyQuartersAllowed: SOLVENCY_NEGATIVE_QUARTERS,
+            }
+          : {}),
       },
       company.isPublic ? 'public' : 'company',
     );
@@ -697,6 +803,34 @@ export function resolveFinancials(
     });
 
     /* --- distress and warnings --------------------------------------------- */
+    if (overdrawn && negativeQuarters < SOLVENCY_NEGATIVE_QUARTERS) {
+      // One quarter below zero is a warning, not a verdict. The row is what the
+      // projection's alerts and the Command Centre's solvency figure read.
+      const warningEventId = emitEvent(
+        draft,
+        ctx,
+        'information_revealed',
+        company.id,
+        null,
+        {
+          kind: 'solvency_warning',
+          closingCashUsd: sheet.assets.cash,
+          negativeCashQuarters: negativeQuarters,
+          solvencyQuartersAllowed: SOLVENCY_NEGATIVE_QUARTERS,
+          overdraftChargeUsd: money(overdraftCharge),
+        },
+        company.isPublic ? 'public' : 'company',
+      );
+      ctx.log({
+        phase: 'financial_resolution',
+        text: `${company.name} closed the quarter ${usdLabel(sheet.assets.cash)} in cash; one more quarter below zero and ${company.name} is wound up.`,
+        deltaLabel: `${negativeQuarters}/${SOLVENCY_NEGATIVE_QUARTERS}`,
+        refEventIds: [warningEventId, cashEventId],
+        tone: 'warning',
+        subjectId: company.id,
+      });
+    }
+
     if (shortfall > 0) {
       ctx.log({
         phase: 'financial_resolution',
@@ -717,9 +851,27 @@ export function resolveFinancials(
       });
     }
 
+    // THE world-2 bankruptcy rule, and the only one: two consecutive quarter-ends
+    // below zero, for a player-controlled company and a bot alike. The wind-up
+    // happens in the quarter the second close lands, so the report that tells the
+    // player they went under is the report for the quarter they went under in.
+    if (multiSector && negativeQuarters >= SOLVENCY_NEGATIVE_QUARTERS && !isWoundUp(company)) {
+      // The row the wind-up wrote, kept for the two things that follow the
+      // quarter's deaths: a new company founded into the gap, and a player's
+      // seat closed. Both are facts about this quarter, so neither is a flag on
+      // `Company` that would have to be cleared next quarter.
+      windUps.push({ companyId: company.id, eventId: enterAdministration(draft, ctx, company, 'insolvent') });
+    }
+
     /* --- invariant --------------------------------------------------------- */
+    // Recomputed off the sheet rather than reused from the roll-forward above: a
+    // wind-up between the two rewrites every line, and a check that reported the
+    // pre-administration figures would be checking a sheet that no longer exists.
+    const finalAssets =
+      sheet.assets.cash + sheet.assets.ppe + sheet.assets.goodwill + sheet.assets.investments + sheet.assets.receivables;
+    const finalLiabilities = sheet.liabilities.debt + sheet.liabilities.payables + sheet.liabilities.deferredRevenue;
     const reconciles = balanceSheetReconciles(sheet) && openingReconciles;
-    const discrepancy = signedMoney(closingAssets - closingLiabilities - sheet.equity);
+    const discrepancy = signedMoney(finalAssets - finalLiabilities - sheet.equity);
     balanceChecks.push({ companyId: company.id, quarter: ctx.quarter, reconciles, discrepancyUsd: discrepancy });
     const checkEventId = emitEvent(
       draft,
@@ -730,8 +882,8 @@ export function resolveFinancials(
       {
         reconciles,
         discrepancyUsd: discrepancy,
-        assetsUsd: money(closingAssets),
-        liabilitiesUsd: money(closingLiabilities),
+        assetsUsd: multiSector ? signedMoney(finalAssets) : money(closingAssets),
+        liabilitiesUsd: multiSector ? money(finalLiabilities) : money(closingLiabilities),
         equityUsd: sheet.equity,
         openingResidualUsd: signedMoney(openingResidual),
       },
@@ -748,6 +900,13 @@ export function resolveFinancials(
       });
     }
   }
+
+  // After the distress step has run for the quarter, and after the loop rather
+  // than inside it: `activeCompanies` was read once at the top, so a company
+  // founded here is not walked by the loop that founded it, and its first
+  // resolved quarter is the next one.
+  closeEliminatedSeats(draft, ctx, windUps);
+  resolveMarketEntry(draft, ctx, windUps);
 
   if (multiSector && draft.economyReport !== undefined && draft.economyReport !== null) {
     draft.economyReport = { ...draft.economyReport, priceStacks, costStacks };

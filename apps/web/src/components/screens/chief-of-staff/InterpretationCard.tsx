@@ -28,6 +28,7 @@ import type { TranscriptEntry } from './transcript';
 export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   set_research_budget: '/research',
   start_research_project: '/research',
+  adjust_research_project: '/research',
   propose_innovation: '/research',
   publish_research: '/research',
   set_product_price: '/products',
@@ -41,6 +42,7 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   appoint_executive: '/people',
   reserve_compute: '/company',
   buy_cloud_capacity: '/company',
+  buy_accelerators: '/company',
   allocate_compute: '/company',
   raise_round: '/capital',
   issue_debt: '/capital',

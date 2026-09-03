@@ -25,6 +25,7 @@ import type {
   CosApproach,
   CosAvailableAction,
   CosFeedItem,
+  CosNewEntrant,
   CosPerson,
   CosProductLine,
   CosRival,
@@ -117,6 +118,35 @@ function rivalsOf(session: SessionState, company: Company): CosRival[] {
       marketCapUsd: rival.isPublic ? marketCapOf(session, rival.id) : null,
       enterpriseReputation: rival.reputation.enterprise,
     }));
+}
+
+/**
+ * Companies founded since last quarter.
+ *
+ * Market entry replaces a wound-up company with a new one in the same sector,
+ * and a founder who does not hear about it finds out when the newcomer takes a
+ * customer. Everything here is public: a founding is announced, and the cheque
+ * is stated in the announcement.
+ */
+function newEntrantsOf(session: SessionState, company: Company): CosNewEntrant[] {
+  const since = session.quarter - 1;
+  return session.companies
+    .filter((entry) => entry.isActive && entry.id !== company.id && entry.foundedQuarter >= since && entry.foundedQuarter > 0)
+    .slice(0, 4)
+    .map((entrant) => {
+      const round = session.fundingRounds.find((entry) => entry.companyId === entrant.id && entry.stage === 'seed');
+      const disclosure = session.disclosures.find((entry) => entry.companyId === entrant.id && typeof entry.metrics['seedCapital'] === 'number');
+      return {
+        companyId: entrant.id,
+        name: entrant.name,
+        sectorId: entrant.sectorId,
+        region: entrant.region,
+        foundedQuarter: entrant.foundedQuarter,
+        seedCapitalUsd: round?.amount ?? (disclosure?.metrics['seedCapital'] ?? 0),
+        inYourRegion: entrant.region === company.region && entrant.sector === company.sector,
+        replacesName: null,
+      };
+    });
 }
 
 /** Open approaches: term sheets and deals awaiting an answer, and activist letters. */
@@ -282,6 +312,7 @@ export function buildChiefOfStaffDossier(session: SessionState, ledger: readonly
       sectorPriceIndex: session.sectorPrices?.[company.sector] ?? null,
       sectorShortage: session.sectorShortages?.[company.sector] ?? null,
       rivals: rivalsOf(session, company),
+      newEntrants: newEntrantsOf(session, company),
     },
 
     capital: {

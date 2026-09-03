@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
+import { founderPortfolioOf } from '@frontier/simulation';
 import {
+  PLAYER_ID,
   createSequenceAllocator,
   createSession,
   getEngine,
@@ -51,6 +53,23 @@ describe('demo store surfaces', () => {
     expect(buildAlerts(outcome.nextState)).toBeInstanceOf(Array);
   });
 
+  it('reads one net worth, not two', () => {
+    // The status bar, the leaderboard and the Portfolio screen must agree: the
+    // store's figure and the projection's are the same arithmetic, and before
+    // the first resolution the projection is what answers — where the old
+    // fallback reported personal cash and silently omitted the founder's equity.
+    const fresh = createSession();
+    const projected = founderPortfolioOf(fresh, PLAYER_ID);
+    expect(founderNetWorth(fresh)).toBe(projected.netWorthUsd);
+    expect(projected.netWorthUsd).toBe(projected.cashUsd + projected.holdingsValueUsd);
+    expect(projected.holdings.some((row) => row.isOwnCompany)).toBe(true);
+
+    const resolved = getEngine().resolver.resolveQuarter(fresh, [], null, []).nextState;
+    const board = resolved.leaderboards.find((entry) => entry.board === 'founder_wealth');
+    const row = board?.entries.find((entry) => entry.subjectId === founderPortfolioOf(resolved, PLAYER_ID).characterId);
+    expect(Math.round(row?.value ?? 0)).toBe(founderPortfolioOf(resolved, PLAYER_ID).netWorthUsd);
+  });
+
   it('board matters clamp into a board proposal', () => {
     const engine = getEngine();
     const s = createSession();
@@ -74,6 +93,7 @@ describe('demo store surfaces', () => {
       autoExecuteRoutine: false,
       setup: null,
       worldVersion: 1,
+      endedQuarter: null,
       log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }],
       checkpoint: null,
       savedQuarter: 1,

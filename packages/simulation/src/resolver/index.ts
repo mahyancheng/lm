@@ -65,7 +65,14 @@ import { ResolutionRecorder } from './ledger';
 import { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
 import { collectActions, pendingOfType, reviewActions } from './actions';
 import type { NpcBundleInput } from './actions';
-import { applyIntroductionRequests, ensureBoardProposals, ensureGovernmentBids, ensureResearchProjects, ensureSocialPosts } from './routing';
+import {
+  applyIntroductionRequests,
+  applyResearchAdjustments,
+  ensureBoardProposals,
+  ensureGovernmentBids,
+  ensureResearchProjects,
+  ensureSocialPosts,
+} from './routing';
 import { resolveCapital } from './capital';
 import { resolveDisclosures } from './disclosure';
 import { rebuildLeaderboards } from './leaderboards';
@@ -80,6 +87,7 @@ export {
   ensureBoardProposals,
   ensureGovernmentBids,
   ensureResearchProjects,
+  applyResearchAdjustments,
   ensureSocialPosts,
   routeDeals,
   applyIntroductionRequests,
@@ -270,6 +278,9 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
 
           case 'research_resolution': {
             ensureResearchProjects(draft, ctx);
+            // Re-resourcing lands before the quarter is advanced, so the fix a
+            // founder made this quarter is the resourcing this quarter runs on.
+            applyResearchAdjustments(draft, ctx);
             subsystems.research.advanceProjects(draft, ctx);
             subsystems.research.achieveNodes(draft, ctx);
             subsystems.research.updateTechConfidence(draft, ctx);

@@ -28,6 +28,7 @@ import type {
 } from '@frontier/contracts';
 import { DEFAULT_QUORUM_RULE, makeId } from '@frontier/contracts';
 import { labelFor, pendingOfType } from './actions';
+import { plannedProgrammeQuarters } from '../research/forecast';
 
 /* -------------------------------------------------------------------------- */
 /*  Board proposals                                                            */
@@ -128,10 +129,10 @@ export function ensureResearchProjects(draft: SessionState, ctx: ResolverContext
     );
     if (already) continue;
 
-    const [lowCost, highCost] = node.researchCostRange;
-    const expectedCost = (lowCost + highCost) / 2;
-    const quarterlyDraw = Math.max(1, intent.budgetUsd);
-    const expectedQuarters = Math.max(2, Math.min(24, Math.round(expectedCost / quarterlyDraw)));
+    // One definition of the schedule, shared with the Frontier Map's forecast:
+    // a preview cannot promise a different number of quarters from the
+    // programme it opens.
+    const expectedQuarters = plannedProgrammeQuarters(node, intent.budgetUsd);
 
     const project: ResearchProject = {
       id,
@@ -185,6 +186,88 @@ export function ensureResearchProjects(draft: SessionState, ctx: ResolverContext
   }
 
   return created;
+}
+
+/**
+ * Apply every `adjust_research_project` to the programme it names.
+ *
+ * A running programme's allocation was previously unchangeable: a founder told
+ * "short of compute: 300 of 600 units" had no instruction that could answer it,
+ * short of abandoning the programme. This is that instruction. It runs before
+ * `advanceProjects`, so the quarter the change is made is already resourced the
+ * new way — which is what a player who fixes a shortfall expects.
+ *
+ * Secrecy is not touched here: it is set when the programme opens and changing
+ * it would move a private fact into public view without a publication.
+ */
+export function applyResearchAdjustments(draft: SessionState, ctx: ResolverContext): ResearchProject[] {
+  const changed: ResearchProject[] = [];
+
+  for (const { action, intent } of pendingOfType(draft, 'adjust_research_project')) {
+    const project = draft.researchProjects.find((candidate) => candidate.id === intent.projectId);
+    if (project === undefined || project.companyId !== action.actorCompanyId) continue;
+    if (project.status !== 'active' && project.status !== 'paused') continue;
+
+    const node = draft.techGraph.nodes.find((candidate) => candidate.id === project.targetNodeId);
+    const company = draft.companies.find((candidate) => candidate.id === project.companyId);
+    const before = {
+      budgetQuarterly: project.budgetQuarterly,
+      computeAllocated: project.computeAllocated,
+      talentAllocated: project.talentAllocated,
+    };
+    project.budgetQuarterly = Math.max(0, intent.budgetUsd);
+    project.computeAllocated = Math.max(0, Math.round(intent.computeUnits));
+    project.talentAllocated = Math.max(0, Math.round(intent.researchersAssigned));
+    if (
+      project.budgetQuarterly === before.budgetQuarterly &&
+      project.computeAllocated === before.computeAllocated &&
+      project.talentAllocated === before.talentAllocated
+    ) {
+      continue;
+    }
+    changed.push(project);
+
+    const eventId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'research_progress',
+      actorId: project.companyId,
+      targetId: project.targetNodeId,
+      payload: {
+        projectId: project.id,
+        reallocated: true,
+        budgetBeforeUsd: before.budgetQuarterly,
+        budgetQuarterly: project.budgetQuarterly,
+        computeBefore: before.computeAllocated,
+        computeAllocated: project.computeAllocated,
+        researchersBefore: before.talentAllocated,
+        talentAllocated: project.talentAllocated,
+        secret: project.isSecret,
+      },
+      // A secret programme's resourcing is a private fact, exactly as its
+      // progress is.
+      visibility: project.isSecret ? 'private' : 'company',
+    });
+
+    if (!project.isSecret) {
+      const title = node?.title ?? project.targetNodeId;
+      const peopleDelta = project.talentAllocated - before.talentAllocated;
+      const computeDelta = project.computeAllocated - before.computeAllocated;
+      const parts: string[] = [];
+      if (peopleDelta !== 0) parts.push(`${peopleDelta > 0 ? 'added' : 'took off'} ${Math.abs(peopleDelta)} researcher${Math.abs(peopleDelta) === 1 ? '' : 's'}`);
+      if (computeDelta !== 0) parts.push(`${computeDelta > 0 ? 'added' : 'freed'} ${Math.abs(computeDelta)} accelerators`);
+      ctx.log({
+        phase: 'research_resolution',
+        text: `${company?.name ?? project.companyId} re-resourced the programme against ${title}: ${parts.length === 0 ? 'a change of budget' : parts.join(' and ')}.`,
+        deltaLabel: `${project.talentAllocated} researchers`,
+        refEventIds: [eventId],
+        tone: 'neutral',
+        subjectId: project.companyId,
+      });
+    }
+  }
+
+  return changed;
 }
 
 /* -------------------------------------------------------------------------- */

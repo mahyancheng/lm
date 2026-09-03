@@ -1,7 +1,7 @@
 /**
  * Navigation configuration — data, not markup.
  *
- * The twenty screens of the game, grouped the way a founder thinks about
+ * The twenty-one screens of the game, grouped the way a founder thinks about
  * them: what you operate, where the frontier is, how capital moves, what the
  * world is saying, and the controls that end a quarter.
  *
@@ -85,6 +85,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     items: [
       { href: '/markets', label: 'Markets', icon: 'chart', glyph: 'MK', blurb: 'In-world exchange, ownership, reference tape.' },
       { href: '/capital', label: 'Capital', icon: 'coins', glyph: 'CA', blurb: 'Funding, debt, treasury, cap table, runway.' },
+      // Everything owned outside the company itself — subsidiaries, stakes,
+      // shorts, funds — in one place rather than a slice on each of the three
+      // screens around it. The investments line on Financials links here.
+      { href: '/portfolio', label: 'Portfolio', icon: 'portfolio', glyph: 'PF', blurb: 'Subsidiaries, stakes, shorts and funds held outside the company.' },
       // The institutions: venture, buyout, hedge and sovereign capital as
       // actors with cash, a clock and a thesis. It sits beside Markets and
       // Capital because it is the other side of both — who is on your register

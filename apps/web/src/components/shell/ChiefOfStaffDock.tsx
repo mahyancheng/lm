@@ -31,6 +31,7 @@ import { AiLabel, Drawer, Icon, Tag, cx } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
 import { quickPromptsFor, screenLabelFor } from '@/components/screens/chief-of-staff/quickPrompts';
+import { sourcingLabel } from '@/components/screens/chief-of-staff/findings';
 import { useChiefOfStaff } from '@/components/screens/chief-of-staff/useChiefOfStaff';
 import { openSettings } from './settingsBus';
 import { useLlm, usePlayerCharacter, usePlayerCompany, useQueuedActions, useResolving, useSession } from '@/lib/game';
@@ -154,7 +155,9 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
                 <span className="animate-pulse-soft size-1.5 rounded-pill bg-brand" />
                 <span className="animate-pulse-soft stagger-2 size-1.5 rounded-pill bg-brand" />
                 <span className="animate-pulse-soft stagger-4 size-1.5 rounded-pill bg-brand" />
-                <span className="ml-1 text-[11px] text-ink-faint">Reading it against your briefing…</span>
+                <span className="ml-1 text-[11px] text-ink-faint">
+                  {thread.sourcing === null ? 'Reading it against your briefing…' : `Sourcing… (${sourcingLabel(thread.sourcing)})`}
+                </span>
               </div>
             ) : null}
 

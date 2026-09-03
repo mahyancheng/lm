@@ -42,6 +42,7 @@ import type {
 import { ActionIntentSchema, makeId, requiresExplicitConfirmation } from '@frontier/contracts';
 import { BatchBudget, Verdict, findCompany, shareholderStake, type ValidationActor } from './context';
 import { applyTypeRules, type RuleContext } from './rules';
+import { isEliminated } from '../companies/entrants';
 import { authorisedByBoard, boardMatterFor, toBoardProposalIntent } from './boardMatters';
 
 export { BatchBudget, Verdict, canReach, researchComputeHeadroom, shareholderStake, type ValidationActor, type ReachDecision } from './context';
@@ -187,6 +188,17 @@ export function validateAction(
   if (!company.isActive) {
     verdict.reject('requirement_not_met', `${company.name} is no longer an operating company.`);
     return verdict.toResult(actionId);
+  }
+  // A seat whose company was wound up is out of the game. The husk stays on the
+  // register and can still be bought — by somebody else. Nothing this seat
+  // submits is executed again, in any capacity.
+  if (actor.playerId !== null) {
+    const seat = draft.players.find((player) => player.playerId === actor.playerId) ?? null;
+    if (seat !== null && isEliminated(seat)) {
+      const seatCompany = findCompany(draft, seat.companyId);
+      verdict.reject('requirement_not_met', `${seatCompany?.name ?? seat.companyId} is in administration; the seat is closed.`);
+      return verdict.toResult(actionId);
+    }
   }
   let shareholderCapacity = false;
   if (actor.playerId !== null && company.controllerPlayerId !== actor.playerId) {

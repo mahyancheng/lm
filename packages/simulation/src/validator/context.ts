@@ -68,6 +68,19 @@ export class BatchBudget {
     return Math.max(0, company.financials.cash - (this.cash.get(company.id) ?? 0));
   }
 
+  /**
+   * The same figure unfloored, so it can be negative.
+   *
+   * `availableCash` answers "how much of this can you pay for", which is the
+   * world-1 clamp. This answers "where does the balance stand", which is what a
+   * world-2 note has to state: from world version 2 cash never refuses an
+   * instruction, and a player told their balance was zero when it is minus nine
+   * million has been told nothing.
+   */
+  uncommittedCash(company: Company): number {
+    return company.financials.cash - (this.cash.get(company.id) ?? 0);
+  }
+
   spendCash(companyId: string, amountUsd: number): void {
     if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
     this.cash.set(companyId, (this.cash.get(companyId) ?? 0) + amountUsd);

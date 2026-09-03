@@ -25,13 +25,29 @@ import type {
   SessionState,
   ValuationAnchor,
 } from '@frontier/contracts';
-import { balanceSheetReconciles, ownershipThresholdFor, type OwnershipThreshold } from '@frontier/contracts';
+import { balanceSheetReconciles, ownershipThresholdFor, quarterLabel, type OwnershipThreshold } from '@frontier/contracts';
 import { formatCount as groupCount, formatMoney, formatPct, formatScore } from '@frontier/shared';
-import { latestQuote, quotesFor } from '@/lib/game';
+import { isNewEntrant, perSharePriceOf } from '@frontier/simulation';
+import { quotesFor } from '@/lib/game';
 
 /* -------------------------------------------------------------------------- */
 /*  Small text helpers                                                         */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * The badge a company founded mid-session wears for its first four quarters, or
+ * null for everybody else.
+ *
+ * The window is the engine's (`NEW_ENTRANT_QUARTERS`), not the screen's: market
+ * entry decides who is new and for how long, and this only spells it. A rival
+ * whose `foundedQuarter` is redacted away carries no badge rather than a guess.
+ */
+export function newEntrantLabel(company: Pick<Partial<Company>, 'foundedQuarter'>, quarter: number, startYear: number): string | null {
+  const founded = company.foundedQuarter;
+  if (founded === undefined) return null;
+  if (!isNewEntrant({ foundedQuarter: founded }, quarter)) return null;
+  return `New · ${quarterLabel(startYear, founded)}`;
+}
 
 /** `enterprise_ai` becomes `Enterprise ai`. Renders an id; never invents a fact. */
 export function humanise(value: string): string {
@@ -298,18 +314,14 @@ export interface PerSharePrice {
 /**
  * Price per share: the last traded price when the company is listed, the
  * fundamental anchor's per-share value when it is not.
+ *
+ * Delegated to the engine, which is where the portfolio projection reads it
+ * from. Two copies of "what is one share worth" is exactly the kind of second
+ * computation a screen must not own: they would agree until the day the anchor
+ * fallback changed in one of them.
  */
 export function perSharePrice(session: SessionState, companyId: string): PerSharePrice {
-  const company = session.companies.find((entry) => entry.id === companyId) ?? null;
-  if (company !== null && company.instrumentId !== null) {
-    const quote = latestQuote(session, company.instrumentId);
-    if (quote !== null && quote.price > 0) return { value: quote.price, basis: 'quote' };
-  }
-  const anchor = session.valuationAnchors.find((entry) => entry.companyId === companyId) ?? null;
-  if (anchor !== null && anchor.perShareValueUsd !== null && anchor.perShareValueUsd > 0) {
-    return { value: anchor.perShareValueUsd, basis: 'anchor' };
-  }
-  return { value: 0, basis: 'none' };
+  return perSharePriceOf(session, companyId);
 }
 
 /** The valuation anchor for a company, or null. */

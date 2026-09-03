@@ -16,9 +16,17 @@
 import { useMemo, useState } from 'react';
 import type { ActionValidationResult, Company, CompBand, SessionState, StaffRole } from '@frontier/contracts';
 import { COMP_BANDS, STAFF_ROLES } from '@frontier/contracts';
-import { HIRING_CASH_COVER_QUARTERS, fillRate, offerCompUsd, quarterlyHireCostUsd, requiredCompUsd } from '@frontier/simulation';
+import {
+  HIRING_CASH_COVER_QUARTERS,
+  fillRate,
+  negativeCashQuarters,
+  offerCompUsd,
+  quarterlyHireCostUsd,
+  requiredCompUsd,
+  solvencyLine,
+} from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, Icon, Panel, ProgressBar, SliderField, Tag, ValidationBanner } from '@/components/ui';
+import { CashAfter, ConfirmDialog, Icon, Panel, ProgressBar, SliderField, Tag, ValidationBanner } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { BAND_BLURB, BAND_LABEL, ROLE_BLURB, ROLE_LABEL, headcountOf } from './labels';
 
@@ -50,12 +58,19 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
   }
 
-  /** Slider ceiling: what the hire rule's cash cover could fund (capped at
-      100 so a notch stays one person) or the whole team on a reduction. */
+  /**
+   * Slider ceiling: what the hire rule's cash cover could fund (capped at 100 so
+   * a notch stays one person) or the whole team on a reduction.
+   *
+   * Cash is a suggestion here, not a bound. From world version 2 a requisition
+   * is never refused or shrunk for want of it, so the range never collapses on
+   * an overdrawn company — the preview under the slider is what tells the
+   * founder where the balance lands.
+   */
   function countBound(perQuarterUsd: number, role: StaffRole): number {
     const perHire = perQuarterUsd * HIRING_CASH_COVER_QUARTERS;
-    const affordable = perHire <= 0 ? 100 : Math.floor(company.financials.cash / perHire);
-    return Math.max(Math.min(affordable, 100), company.employees[role], countFor(role), 10);
+    const affordable = perHire <= 0 ? 100 : Math.floor(Math.max(0, company.financials.cash) / perHire);
+    return Math.max(Math.min(affordable, 100), company.employees[role], countFor(role), 25);
   }
 
   function hire(role: StaffRole): void {
@@ -167,11 +182,16 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                 </div>
 
                 {count > 0 ? (
-                  <p className="mt-2 text-[11px] text-ink-faint">
-                    {count} hire{count === 1 ? '' : 's'} reserves{' '}
-                    <span className="figure text-ink-dim">{formatMoney(cashNeeded)}</span> of uncommitted cash —{' '}
-                    {HIRING_CASH_COVER_QUARTERS} quarters of cover per requisition.
-                  </p>
+                  <>
+                    <p className="mt-2 text-[11px] text-ink-faint">
+                      {count} hire{count === 1 ? '' : 's'} reserves{' '}
+                      <span className="figure text-ink-dim">{formatMoney(cashNeeded)}</span> of cash —{' '}
+                      {HIRING_CASH_COVER_QUARTERS} quarters of cover per requisition.
+                    </p>
+                    <div className="mt-2">
+                      <CashAfter company={company} spendUsd={cashNeeded} note="Reserved against this quarter, then paid as payroll." />
+                    </div>
+                  </>
                 ) : null}
 
                 {/* The ticket sits at the foot of the card it acts on: the
@@ -264,6 +284,14 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                 { label: 'Share of the company', value: formatPct(pending.sharePct), emphasis: pending.sharePct >= 0.15 },
                 { label: 'Severance', value: `${pending.severanceQuartersOfPay} quarters of pay` },
                 { label: 'Cash cost', value: formatMoney(pending.cashUsd), emphasis: true },
+                {
+                  label: 'Cash after',
+                  value: formatMoney(company.financials.cash - pending.cashUsd),
+                  emphasis: company.financials.cash - pending.cashUsd < 0,
+                },
+                ...(solvencyLine(negativeCashQuarters(company), company.financials.cash - pending.cashUsd) === null
+                  ? []
+                  : [{ label: 'Solvency', value: solvencyLine(negativeCashQuarters(company), company.financials.cash - pending.cashUsd) ?? '', emphasis: true }]),
                 {
                   label: 'Governance',
                   value: pending.sharePct >= 0.15 ? 'Above 15% — becomes a board matter' : 'Management decision',

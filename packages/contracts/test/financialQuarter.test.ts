@@ -95,8 +95,21 @@ describe('FinancialQuarterSchema', () => {
 
   it('rejects a negative figure on a field that cannot be negative', () => {
     const bad = statement();
-    expect(() => FinancialQuarterSchema.parse({ ...bad, balance: { ...bad.balance, cashUsd: -1 } })).toThrow();
     expect(() => FinancialQuarterSchema.parse({ ...bad, income: { ...bad.income, cogsUsd: -1 } })).toThrow();
+    expect(() => FinancialQuarterSchema.parse({ ...bad, balance: { ...bad.balance, receivablesUsd: -1 } })).toThrow();
+  });
+
+  it('accepts a closing cash balance below zero: an overdrawn company files accounts too', () => {
+    // The solvency rule of world version 2 is that cash may go negative and the
+    // clock, not a floor, ends the company. The filed statement has to be able
+    // to say so, or `negativeCashQuarters` would have nothing to count.
+    const base = statement();
+    const overdrawn = {
+      ...base,
+      balance: { ...base.balance, cashUsd: -2_000_000, totalAssetsUsd: base.balance.totalAssetsUsd - base.balance.cashUsd - 2_000_000 },
+      cashFlow: { ...base.cashFlow, endingCashUsd: -2_000_000 },
+    };
+    expect(FinancialQuarterSchema.safeParse(overdrawn).success).toBe(true);
   });
 
   it('allows a signed figure where a loss is real: equity, net income and the chain adjustment', () => {

@@ -22,6 +22,7 @@ import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import { Drawer, EmptyState, KeyValueGrid, Meter, SectorRegionBadges, Tag, cx, type Tone } from '@/components/ui';
 import { usePlayerView, useSession } from '@/lib/game';
+import { newEntrantLabel } from '@/components/screens/reporting/util';
 import { DISTRICT_BY_ID, type DistrictId } from './geography';
 import {
   districtReadings,
@@ -95,6 +96,7 @@ function CompanyBody({ companyId }: { readonly companyId: string }): React.JSX.E
   const quotes = instrumentId === null ? [] : view.quotes.filter((quote) => quote.instrumentId === instrumentId);
   const last = quotes.length === 0 ? null : quotes.reduce((best, quote) => (quote.quarter > best.quarter ? quote : best));
   const listed = company.isPublic === true;
+  const newEntrant = newEntrantLabel(company, view.quarter, view.startYear);
   const financials = company.financials ?? null;
   const reputation = company.reputation ?? null;
 
@@ -106,6 +108,8 @@ function CompanyBody({ companyId }: { readonly companyId: string }): React.JSX.E
         </Tag>
         <Tag tone={listed ? 'info' : 'neutral'}>{listed ? `Listed · ${company.ticker ?? '—'}` : 'Privately held'}</Tag>
         {company.tier === undefined ? null : <Tag>{humaniseToken(company.tier)}</Tag>}
+        {/* Founded mid-session, into the gap a wound-up company left. */}
+        {newEntrant === null ? null : <Tag tone="gain">{newEntrant}</Tag>}
       </div>
 
       {/* What it does and where it is: both on the public register, so both on

@@ -417,6 +417,8 @@ export default function MarketsPage(): React.JSX.Element {
           <span className="mt-0.5 flex flex-wrap items-center gap-1">
             <SectorBadge sector={row.sector} />
             <RegionBadge region={row.region} />
+            {/* Founded mid-session into a gap a wound-up company left. */}
+            {row.newLabel === null ? null : <Tag tone="gain">{row.newLabel}</Tag>}
           </span>
         </span>
       ),

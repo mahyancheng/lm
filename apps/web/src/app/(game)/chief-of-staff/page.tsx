@@ -25,6 +25,7 @@ import { AiLabel, Drawer, Icon, KeyValueGrid, PageHeader, Panel, SectionHeading,
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { ROUTE_OF_ACTION } from '@/components/screens/chief-of-staff/InterpretationCard';
 import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
+import { sourcingLabel } from '@/components/screens/chief-of-staff/findings';
 import { useChiefOfStaff } from '@/components/screens/chief-of-staff/useChiefOfStaff';
 import { openSettings } from '@/components/shell/settingsBus';
 import {
@@ -348,7 +349,11 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
                   <span className="animate-pulse-soft size-1.5 rounded-pill bg-brand" />
                   <span className="animate-pulse-soft stagger-2 size-1.5 rounded-pill bg-brand" />
                   <span className="animate-pulse-soft stagger-4 size-1.5 rounded-pill bg-brand" />
-                  <span className="ml-1 text-[11px] text-ink-faint">Reading it against your briefing and the world…</span>
+                  <span className="ml-1 text-[11px] text-ink-faint">
+                    {thread.sourcing === null
+                      ? 'Reading it against your briefing and the world…'
+                      : `Sourcing… (${sourcingLabel(thread.sourcing)})`}
+                  </span>
                 </div>
               </SpeechCard>
             </div>

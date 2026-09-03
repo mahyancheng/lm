@@ -35,6 +35,39 @@ export { achieveNodes, dependencySatisfied, unmetDependencies } from './nodes';
 export { updateTechConfidence } from './confidence';
 export { integrateInnovationProposal, assessPlausibility, assessCostUsd, reachableCapitalUsd } from './innovation';
 export { publicTechGraph, techGraphForCompany, publicResearchProjects, researchProjectsForCompany, isNodePublic } from './projection';
+export {
+  BOTTLENECK_NOUN,
+  BOTTLENECK_TOLERANCE,
+  EFFORT_MULTIPLE,
+  MAX_FORECAST_QUARTERS,
+  RESEARCH_EFFORTS,
+  SETBACK_RISK_BANDS,
+  STANDARD_PROGRAMME_QUARTERS,
+  bottleneckOf,
+  effortIntent,
+  effortPlan,
+  plannedProgrammeQuarters,
+  programmeForecast,
+  publicVerdict,
+  repairPlan,
+  researchCapacity,
+  researchersOnProgrammes,
+  quartersAtPace,
+  rivalProgress,
+  runningForecast,
+  setbackRiskBand,
+  spendAgainstEstimate,
+} from './forecast';
+export type {
+  ForecastFactors,
+  ProgrammeForecast,
+  ProgrammePlan,
+  ResearchBottleneck,
+  ResearchCapacity,
+  ResearchEffort,
+  ResearchShortfall,
+  RunningForecast,
+} from './forecast';
 export * from './balance';
 
 /**

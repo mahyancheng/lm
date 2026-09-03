@@ -136,6 +136,23 @@ export const EmployeeBaseSchema = z
   .describe('The people inside the company. Headcount by role, what they cost, how they feel and how fast they are leaving.');
 export type EmployeeBase = z.infer<typeof EmployeeBaseSchema>;
 
+/**
+ * One accelerator order accepted this quarter and not yet paid for.
+ *
+ * Staged by the compute phase and consumed by the financial phase, which is the
+ * only phase permitted to move cash. Written only from world version 2, and
+ * always empty on a committed state: the financial phase clears it.
+ */
+export const AcceleratorPurchaseSchema = z
+  .object({
+    sellerCompanyId: z.string().nullable().describe('The manufacturer the units were bought from, or null when no seller could be resolved.'),
+    units: intCount('Accelerators bought.'),
+    unitPriceUsd: usd('Price cleared per unit.'),
+    totalUsd: usd('Cash the financial phase will move into property, plant and equipment.'),
+  })
+  .describe('An accepted accelerator purchase awaiting settlement in the financial phase.');
+export type AcceleratorPurchase = z.infer<typeof AcceleratorPurchaseSchema>;
+
 export const ComputeHoldingsSchema = z
   .object({
     ownedAccelerators: intCount('Accelerators the company owns outright. Depreciating capital, immune to spot price swings.'),
@@ -144,8 +161,26 @@ export const ComputeHoldingsSchema = z
     cloudSpendQuarterly: usd('Quarterly spend on on-demand cloud capacity, in dollars. Flexible but exposed to spot price.'),
     computeUtilisation: unitInterval('Fraction of held capacity actually in use. Sustained low utilisation is wasted capital; sustained high utilisation blocks new training runs.'),
     trainingAllocation: unitInterval('Share of total capacity directed at training rather than serving. Inference gets the remainder.'),
+    /*
+     * Counterparties. Appended and optional, so a company recorded before
+     * compute had sellers still parses and world version 1 — which has no
+     * sellers — carries none of them and hashes exactly as it did.
+     *
+     * The factor rather than the price is stored so the charge still tracks the
+     * world's spot and reserved indices: what the counterparty fixes is the
+     * premium or discount its region and its own load produce, not the market.
+     */
+    cloudProviderCompanyId: z.string().nullable().optional().describe('The company selling this on-demand capacity, or null when it was bought at the index.'),
+    cloudProviderFactor: z.number().min(0.1).max(3).optional().describe('That provider\'s price multiplier on the spot index, from its region and utilisation. Absent means 1.'),
+    reservationProviderCompanyId: z.string().nullable().optional().describe('The company whose capacity is reserved, or null when it was reserved at the index.'),
+    reservationProviderFactor: z.number().min(0.1).max(3).optional().describe('That provider\'s price multiplier on the reserved index. Absent means 1.'),
+    pendingAcceleratorPurchases: z
+      .array(AcceleratorPurchaseSchema)
+      .max(8)
+      .optional()
+      .describe('Purchases accepted this quarter and awaiting settlement. Staged by the compute phase, cleared by the financial phase, so a committed state never carries any.'),
   })
-  .describe('Compute the company controls, how it was procured and how it is allocated.');
+  .describe('Compute the company controls, who it was procured from, and how it is allocated.');
 export type ComputeHoldings = z.infer<typeof ComputeHoldingsSchema>;
 
 export const OfficeSchema = z
@@ -173,7 +208,9 @@ export const FinancialsSchema = z
     rdSpend: usd('Research and development spend this quarter, excluding compute booked to capex.'),
     capex: usd('Capital expenditure this quarter, principally owned accelerators and datacentre build.'),
     interestExpense: usd('Interest paid on outstanding debt this quarter.'),
-    cash: usd('Cash and equivalents at the end of the quarter. Reaching zero triggers emergency financing or restructuring.'),
+    cash: signedUsd(
+      'Cash and equivalents at the end of the quarter. May be negative: from world version 2 a company overdraws rather than having its instructions refused, is charged an overdraft rate on the balance, and is wound up after SOLVENCY_NEGATIVE_QUARTERS consecutive quarters below zero.',
+    ),
     debt: usd('Total interest-bearing debt outstanding.'),
     quarterlyBurn: signedUsd('Net cash movement this quarter. Negative means the company consumed cash; positive means it generated cash.'),
     deferredRevenue: usd('Contracted revenue billed but not yet recognised, principally from government contracts.'),
@@ -186,7 +223,7 @@ export const BalanceSheetSchema = z
   .object({
     assets: z
       .object({
-        cash: usd('Cash and equivalents.'),
+        cash: signedUsd('Cash and equivalents. Negative when the company is overdrawn; the solvency clock, not a floor, is what ends the company.'),
         ppe: usd('Property, plant and equipment, net of depreciation. Principally accelerators and datacentre build.'),
         goodwill: usd('Goodwill recognised on acquisitions.'),
         investments: usd('Holdings in other companies\' securities, at carrying value.'),
@@ -278,11 +315,14 @@ export type FinancialIncomeStatement = z.infer<typeof FinancialIncomeStatementSc
 
 export const FinancialBalanceSheetSchema = z
   .object({
-    cashUsd: usd('Cash and equivalents at the close.'),
+    cashUsd: signedUsd('Cash and equivalents at the close. Negative for an overdrawn company.'),
     receivablesUsd: usd('Invoiced and not yet collected.'),
     computeAssetsUsd: usd('Property, plant and equipment net of depreciation — principally accelerators and datacentre build.'),
     otherAssetsUsd: usd('Goodwill and investments carried at book value.'),
-    totalAssetsUsd: usd('INVARIANT: cash + receivables + computeAssets + otherAssets.'),
+    investmentsUsd: usd(
+      'The investments half of otherAssets: holdings in other companies\' securities at carrying value, which is cost. A part of otherAssetsUsd, never an addition to it, so the total-assets identity is untouched. Optional because it postdates the statement: absent on a statement filed before the line was split out, and absent is "not stated", never zero.',
+    ).optional(),
+    totalAssetsUsd: signedUsd('INVARIANT: cash + receivables + computeAssets + otherAssets. Signed because cash is.'),
     debtUsd: usd('Interest-bearing debt outstanding.'),
     deferredRevenueUsd: usd('Collected for work not yet delivered.'),
     otherLiabilitiesUsd: usd('Payables, including unpaid compute bills.'),
@@ -294,12 +334,12 @@ export type FinancialBalanceSheet = z.infer<typeof FinancialBalanceSheetSchema>;
 
 export const FinancialCashFlowSchema = z
   .object({
-    openingCashUsd: usd('Cash carried into the financial phase.'),
+    openingCashUsd: signedUsd('Cash carried into the financial phase. Negative when the previous quarter closed overdrawn.'),
     operatingUsd: signedUsd('Cash generated by operations: collections less everything the quarter paid out other than debt principal and capital expenditure.'),
     investingUsd: signedUsd('Cash spent on capital assets. Negative when the company bought compute.'),
     financingUsd: signedUsd('Debt principal repaid, negative, plus anything drawn.'),
     netChangeUsd: signedUsd('INVARIANT: operating + investing + financing = netChange = endingCash - openingCash.'),
-    endingCashUsd: usd('Cash at the close of the quarter.'),
+    endingCashUsd: signedUsd('Cash at the close of the quarter. Negative for an overdrawn company. INVARIANT: endingCash = balance.cashUsd.'),
   })
   .describe('The cash-flow statement for one closed quarter. Reconciles to the cash line of the balance sheet by construction.');
 export type FinancialCashFlow = z.infer<typeof FinancialCashFlowSchema>;
@@ -527,6 +567,32 @@ export type TechCapabilities = z.infer<typeof TechCapabilitiesSchema>;
 /*  Company                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * What an acquirer paid, kept on the company that was bought.
+ *
+ * An absorbed target is emptied into its acquirer: cash, staff, products and
+ * balance sheet all move, and the husk keeps only its name, its sector and this
+ * row. Without it the portfolio could state that a subsidiary exists but never
+ * what it cost, because `sim_event`s are an append-only ledger outside session
+ * state and a save carries none of them.
+ *
+ * Written by the capital phase in world version 2 only, so a world-version-1
+ * company never grows the key and that frozen world keeps hashing to the value
+ * it has always hashed to.
+ */
+export const AcquisitionRecordSchema = z
+  .object({
+    acquirerCompanyId: z.string().min(1).describe('The company that bought this one.'),
+    quarter: QuarterIndexSchema.describe('Quarter the acquisition completed.'),
+    priceUsd: usd('Total offer value, cash and stock together. The cost basis of the subsidiary.'),
+    cashUsd: usd('The cash half of the consideration.'),
+    stockUsd: usd('The stock half of the consideration, at the acquirer\'s price on the day.'),
+    goodwillUsd: usd('Goodwill the acquirer recognised: what it paid over the net assets it took on. Zero on a bargain purchase.'),
+  })
+  .describe('The consideration paid for one company, recorded on the company that was bought.');
+export type AcquisitionRecord = z.infer<typeof AcquisitionRecordSchema>;
+
+
 export const CompanySchema = z
   .object({
     // --- identity ---
@@ -609,6 +675,14 @@ export const CompanySchema = z
       .max(8)
       .optional()
       .describe('Quarters in which this company completed an acquisition, pruned to the antitrust window. Bounded history: the full record lives in the ledger.'),
+    realisedInvestmentGainsUsd: signedUsd(
+      'Cumulative gain or loss realised on selling stakes in other companies: proceeds less the carrying value that left the investments line, added up over the life of the company. Signed. The gain itself is already in equity the quarter it happens; this is the memory of it, because nothing else in state remembers a sale after the position is gone. World version 2 only.',
+    ).optional(),
+    acquisition: AcquisitionRecordSchema.nullable()
+      .optional()
+      .describe(
+        'What was paid for this company when it was absorbed, written on the company that was bought. Absent for a company nobody has bought. The ledger row is the record of the event; this is the durable residue of it, because the ledger is not part of session state and the portfolio has to state a cost basis quarters later.',
+      ),
 
     // --- strategy (drives NPC behaviour and describes player companies) ---
     posture: CompanyPostureSchema,

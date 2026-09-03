@@ -128,7 +128,7 @@ export function achieveNodes(draft: SessionState, ctx: ResolverContext): void {
       if (!project.isSecret) {
         ctx.log({
           phase: 'research_resolution',
-          text: `${node.title} is complete but cannot be demonstrated until ${unmet.length} prerequisite${unmet.length === 1 ? '' : 's'} ${unmet.length === 1 ? 'is' : 'are'} in place.`,
+          text: `${node.title} is finished but cannot be shown until ${unmet.length} thing${unmet.length === 1 ? '' : 's'} it depends on ${unmet.length === 1 ? 'is' : 'are'} done.`,
           deltaLabel: 'blocked',
           refEventIds: [eventId],
           tone: 'warning',
@@ -207,7 +207,7 @@ export function achieveNodes(draft: SessionState, ctx: ResolverContext): void {
     const familyId = raiseAchievementHazard(draft, node, eventId);
     ctx.log({
       phase: 'research_resolution',
-      text: `${company?.name ?? project.companyId} demonstrated ${node.title} after ${project.quartersElapsed} quarters${unlocks.length > 0 ? `, making ${unlocks.length} further path${unlocks.length === 1 ? '' : 's'} credible` : ''}.`,
+      text: `${company?.name ?? project.companyId} demonstrated ${node.title} after ${project.quartersElapsed} quarters${unlocks.length > 0 ? `, which opens up ${unlocks.length} further technolog${unlocks.length === 1 ? 'y' : 'ies'}` : ''}.`,
       deltaLabel: 'achieved',
       refEventIds: [eventId],
       tone: 'positive',

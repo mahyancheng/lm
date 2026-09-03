@@ -51,6 +51,20 @@ const memoryStore = processSingleton('llm.chiefOfStaffMemory', () => createInMem
  * founder say "never dilute below 25%" once in year two and be held to it in
  * year six, through restarts and compactions that take the transcript.
  *
+ * ## Sourcing takes two POSTs, and only two
+ *
+ * A founder who asks "can I buy a small data centre" gets an answer the dossier
+ * does not contain, so the role may reply once with `mode: "research"` and a
+ * list of lookups. The **client** runs those against its own canonical state and
+ * posts the same message again with `findings` attached, on the same
+ * conversation key, and the second reply is the answer.
+ *
+ * The bound is enforced twice, in the two places it can be: the composer tells
+ * the model that research mode is closed on a turn carrying findings, and
+ * `enforceInterpretationPolicy` rewrites a third-round request into an answer
+ * before it ever reaches the client. A loop that can spin is a loop that will,
+ * and each turn here is a Claude Code subprocess on the owner's own machine.
+ *
  * With no transport this does **not** answer null. It runs the deterministic
  * offline responder over the same typed dossier, which answers the common
  * questions — cash, runway, burn, best and worst product, who is circling us,
@@ -77,10 +91,12 @@ export async function POST(request: Request): Promise<Response> {
   if (!transportAvailable()) {
     const memory = await memoryStore.get(key);
     const output = offlineChiefOfStaff({ ...input, memory });
-    await memoryStore.set(
-      key,
-      rememberExchange(memory, { quarter: input.quarter, founderSaid: input.playerMessage, chiefReplied: output.reply }),
-    );
+    if (output.mode !== 'research') {
+      await memoryStore.set(
+        key,
+        rememberExchange(memory, { quarter: input.quarter, founderSaid: input.playerMessage, chiefReplied: output.reply }),
+      );
+    }
     return finish(ok(output, true, 'transport_none'));
   }
 
@@ -100,7 +116,12 @@ export async function POST(request: Request): Promise<Response> {
       // Record the exchange whether the model answered or the deterministic
       // fallback did: a thread the founder can see is a thread the assistant
       // should remember, and the fallback's own reply is a real answer.
-      if (result.output !== null) {
+      //
+      // A `research` turn is not an answer. "Checking the compute market" is the
+      // role clearing its throat, and writing it into a memory that survives the
+      // whole campaign would fill the founder's history with throat-clearing.
+      // The second turn of the same message is the one that gets remembered.
+      if (result.output !== null && result.output.mode !== 'research') {
         await memoryStore.set(
           key,
           rememberExchange(memory, {

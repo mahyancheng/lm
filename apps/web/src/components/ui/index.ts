@@ -75,6 +75,9 @@ export type { SliderFieldProps } from './SliderField';
 
 export { NowAfter } from './NowAfter';
 export type { NowAfterProps, NowAfterRow } from './NowAfter';
+
+export { CashAfter, cashAfterOf } from './CashAfter';
+export type { CashAfterProps } from './CashAfter';
 export { chipStops, openCeiling, roundStep, snapToStep } from './sliderMath';
 export type { ChipStop } from './sliderMath';
 
@@ -100,7 +103,7 @@ export {
 } from './sector';
 export type { RegionBadgeProps, RegionReading, SectorBadgeProps } from './sector';
 
-export { ValidationBanner, labelOfStatus, toneOfStatus } from './ValidationBanner';
+export { ADVISORY_CODES, ValidationBanner, hasAdvisory, labelOfStatus, toneOfStatus } from './ValidationBanner';
 export type { ValidationBannerProps } from './ValidationBanner';
 
 export { ActionQueueTray } from './ActionQueueTray';

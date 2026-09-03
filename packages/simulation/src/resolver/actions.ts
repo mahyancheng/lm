@@ -338,6 +338,8 @@ export function labelFor(intent: ActionIntent): string {
       return `A sale of ${intent.securityId}`;
     case 'reserve_compute':
       return `A reservation of ${intent.units} accelerators`;
+    case 'buy_accelerators':
+      return `A purchase of ${intent.units} accelerators${intent.sellerCompanyId === null ? '' : ` from ${intent.sellerCompanyId}`}`;
     case 'start_research_project':
       return `A programme against ${intent.targetNodeId}`;
     case 'submit_board_proposal':

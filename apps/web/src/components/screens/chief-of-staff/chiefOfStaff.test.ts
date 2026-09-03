@@ -113,6 +113,7 @@ function interpretation(overrides: Partial<ChiefOfStaffInterpretation> = {}): Ch
     requiresConfirmation: true,
     confidence: 0.9,
     unsupportedRequests: [],
+    lookups: [],
     ...overrides,
   };
 }

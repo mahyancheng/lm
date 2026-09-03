@@ -54,6 +54,7 @@ export type { NewGameOptions, SequenceAllocator } from './engine';
 
 export {
   buildAlerts,
+  eliminatedQuarterOf,
   founderNetWorth,
   latestQuote,
   leaderboardOf,

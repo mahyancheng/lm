@@ -183,6 +183,21 @@ resilience and S session objectives. The weights live in
 `FOUNDER_INDEX_WEIGHTS` as data, not in frontend logic, so they remain a
 balancing variable. See [MULTIPLAYER.md](./MULTIPLAYER.md).
 
+### 4.1 There is one way to lose
+
+Success is plural; failure is not. From world version 2 a company that closes two
+consecutive quarters with negative cash is wound up, and if it was the player's
+company the seat is closed for good — the shell shows a verdict screen with the
+run's length, its cause, its final standing on every board and the last eight
+quarters of revenue and cash, and the only button founds a new company. The save
+survives, marked ended, and can be loaded to read the verdict.
+
+The industry does not pause for it. Every wind-up, the player's included, is a
+gap somebody else fills: a new company is founded into the dead company's sector,
+backed by whichever fund still has the dry powder, and it competes from the next
+quarter like anyone else. Failing is expensive and it is not the end of the
+world's story — only of yours in it.
+
 ## 5. Being CEO and owning the company are separate states
 
 This is the single most important structural decision in the design.
@@ -263,15 +278,82 @@ claims the designers already know the future.
 > The **Frontier Map** represents what the current inhabitants of this
 > particular simulated world believe the technological future might look like.
 
-It is probabilistic, contested and mutable. Nodes carry an epistemic state
-(`established`, `emerging`, `forecast`, `speculative`, `company_thesis`,
-`secret`, `discredited`, `achieved`, `dead_end`), a public confidence, a private
-per-company confidence, an estimated arrival window and a cost range that is an
-*estimate*, not the truth. World events move beliefs; the rendered graph
-rearranges. Players can propose technologies the seed graph never contained, and
-an accepted `InnovationProposal` becomes a real node credited to its inventor
-for the rest of the session. See [LLM_CONTRACTS.md](./LLM_CONTRACTS.md) and
-[UI_SYSTEM.md](./UI_SYSTEM.md).
+It is probabilistic, contested and mutable. World events move beliefs and the
+rendered graph rearranges. Players can propose technologies the seed graph never
+contained, and an accepted `InnovationProposal` becomes a real node credited to
+its inventor for the rest of the session.
+
+### 7.1 Four states, four questions
+
+A node used to show a founder nine things at once — epistemic state, public and
+private confidence, novelty, plausibility, a cost range, compute intensity,
+capability tags with percentages, visibility and an arrival window — and answer
+none of the questions they actually had. The map now shows **four states and
+nothing else**:
+
+| State | What the tile says |
+|---|---|
+| **Locked** | What is missing, in one line: *"Needs Sparse Expert Reasoning"* |
+| **Available** | Nothing is in the way |
+| **In progress** | How far and how long: *"44% done · 5q left"* |
+| **Done** | Who demonstrated it |
+
+Opening a node answers **four questions, in this order**:
+
+1. **What it gets you.** The capability areas reaching it raises, the
+   technologies it makes credible and the ones it unblocks. A node that opens
+   nothing mechanical says so, and says what it does move: standing, and the
+   valuation that follows it.
+2. **What it takes.** Quarters, cost per quarter, total cash, researchers and
+   compute units — every figure from `programmeForecast`, none recomputed by
+   the screen.
+3. **Who else is close.** The world's confidence as three words — *likely*,
+   *unclear*, *doubtful* — and the rivals whose programmes are public. A secret
+   programme is absent here, not redacted.
+4. **The risk.** The per-quarter setback probability as low, medium or high,
+   with the whole percent behind it, and one sentence naming what is short.
+
+The epistemic state, the raw confidences, the novelty, the plausibility and the
+arrival window all still exist and all still drive the simulation. They sit
+behind **Details**, because none of them changes what a founder does next.
+
+### 7.2 One control: effort
+
+A programme used to need three sliders and a checkbox. It now needs one choice.
+
+| Effort | What it asks for | Cost per quarter |
+|---|---|---|
+| **Light** | Half the node's requirement | Half |
+| **Standard** | Exactly what the node asks for, capped by what is free | The cost midpoint over eight quarters |
+| **All-in** | One and a half times the requirement, capped by what is free | Half again |
+
+The presets are engine-owned (`effortPlan` / `effortIntent`) and built from the
+validator's own bounds — free compute headroom and unassigned researchers — so
+**the Standard preset is never clamped**. Under it the screen states the three
+figures and the forecast live; **Adjust** opens the three sliders for a founder
+who wants them, and the validator's verdict shows either way, because the
+validator is the truth and a preset is only a good default.
+
+Secrecy is one toggle with one line of consequence. Publication is one
+**Announce** action with three plain choices — publish a paper, show it in a
+product, brief government and investors privately — each with its consequence
+stated on the label.
+
+### 7.3 A running programme
+
+A programme under way shows how far it has come, how many quarters are left at
+the pace it is actually being given, what it has spent, and — when it is slow —
+**one sentence** naming the shortage: *"Short of compute: 300 of 600 units."*
+Next to that sentence is a **Fix** button, which pre-fills an
+`adjust_research_project` with the node's own requirement capped by what is now
+free. Re-resourcing lands before the quarter advances, so the fix a founder made
+this quarter is the resourcing this quarter runs on.
+
+Setbacks and successes are reported in the quarter report in the same words:
+*"Setback on Sparse Expert Reasoning: 16% of the progress so far was lost and
+the programme slipped a quarter; it was short of compute."*
+
+See [LLM_CONTRACTS.md](./LLM_CONTRACTS.md) and [UI_SYSTEM.md](./UI_SYSTEM.md).
 
 ## 8. First playable
 
@@ -321,7 +403,7 @@ moderation.
 
 ## 9. Target screen map
 
-Eighteen screens. Every one is specified in [UI_SYSTEM.md](./UI_SYSTEM.md).
+Twenty-one screens. Every one is specified in [UI_SYSTEM.md](./UI_SYSTEM.md).
 
 | # | Screen | Purpose |
 |---:|---|---|
@@ -343,6 +425,9 @@ Eighteen screens. Every one is specified in [UI_SYSTEM.md](./UI_SYSTEM.md).
 | 16 | **Chief of Staff** | Conversational control interface |
 | 17 | **End Quarter** | Review actions and lock submission |
 | 18 | **Quarter Resolution** | Explain exactly what changed and why |
+| 19 | **Sector** | The six-sector chain, goods prices, market share, freight tolls |
+| 20 | **The Street** | Funds, their dry powder, their offers and their short books |
+| 21 | **Portfolio** | Subsidiaries, stakes, shorts and funds held outside the company |
 
 Visually the game must not look like a chatbot with a business theme. The LLM is
 infrastructure behind a serious strategy interface. The aesthetic target is:

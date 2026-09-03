@@ -19,6 +19,7 @@ import type {
   ActionIntent,
   ActionValidationResult,
   BoardProposalKind,
+  Company,
   DealConfidentiality,
   DealObligation,
   DealPartyKind,
@@ -26,7 +27,7 @@ import type {
 } from '@frontier/contracts';
 import { BOARD_PROPOSAL_KINDS, VOTE_STANCES, quarterLabel } from '@frontier/contracts';
 import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
-import { ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
+import { CashAfter, ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { AccordFields, type AccordContext } from './AccordFields';
 import {
@@ -57,7 +58,8 @@ export interface DealBuilderProps {
   readonly quarter: number;
   readonly startYear: number;
   /** Uncommitted cash, so a cash obligation can be read against it. */
-  readonly availableCashUsd: number;
+  /** The proposing company: the builder reads its cash and its solvency clock. */
+  readonly company: Company;
   /**
    * What a price accord needs to know about the sector it would cover.
    *
@@ -79,7 +81,7 @@ export function DealBuilder({
   quarter,
   accord,
   startYear,
-  availableCashUsd,
+  company,
 }: DealBuilderProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
 
@@ -271,15 +273,11 @@ export function DealBuilder({
       </label>
 
       {cashOut > 0 ? (
-        <p
-          className={cx(
-            'rounded-card border px-3.5 py-2.5 text-[11px]',
-            cashOut > availableCashUsd ? 'border-loss/25 bg-loss-wash text-loss' : 'border-hair bg-raised text-ink-dim',
-          )}
-        >
-          You are committing {formatMoney(cashOut)} of cash against {formatMoney(availableCashUsd)} on hand — payable in the capital phase
-          after acceptance, not now.
-        </p>
+        <CashAfter
+          company={company}
+          spendUsd={cashOut}
+          note={`Committing ${formatMoney(cashOut)} of cash — payable in the capital phase after acceptance, not now.`}
+        />
       ) : null}
 
       <ValidationBanner result={result} />

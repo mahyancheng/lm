@@ -27,7 +27,7 @@
  */
 
 import { z } from 'zod';
-import { QuarterIndexSchema, unitInterval } from './ids';
+import { QuarterIndexSchema, intCount, signedUsd, unitInterval, usd } from './ids';
 import { WorldVariableReadingSchema } from './world';
 import { ImpactBudgetSchema } from './modifiers';
 import { GmEventProposalSchema, GmProposalBatchSchema } from './events';
@@ -37,7 +37,7 @@ import { ConditionalCommitmentSchema } from './governance';
 import { CharacterSchema, MemoryDraftSchema, MemorySchema, RelationshipSchema } from './people';
 import { InnovationProposalSchema } from './tech';
 import { NetworkArchetypeSchema, PostIntentSchema, SocialPostDraftSchema } from './social';
-import { CompanyPostureSchema, FinancialQuarterSchema, ProductSegmentSchema } from './company';
+import { CompBandSchema, CompanyPostureSchema, FinancialQuarterSchema, ProductSegmentSchema, StaffRoleSchema } from './company';
 
 /* -------------------------------------------------------------------------- */
 /*  Roles                                                                      */
@@ -247,6 +247,20 @@ export const CosRivalSchema = z
   .describe('A rival as this seat may see it: public information only.');
 export type CosRival = z.infer<typeof CosRivalSchema>;
 
+export const CosNewEntrantSchema = z
+  .object({
+    companyId: z.string().min(1),
+    name: z.string().min(1).max(80),
+    sectorId: z.string().min(1),
+    region: z.string().min(1).max(40),
+    foundedQuarter: QuarterIndexSchema,
+    seedCapitalUsd: z.number().describe('The founding cheque, which is public: a founding is announced.'),
+    inYourRegion: z.boolean().describe('Whether the newcomer set up where this company competes.'),
+    replacesName: z.string().max(80).nullable().describe('The company whose failure left the gap, or null when it is not on the public record.'),
+  })
+  .describe('A company founded since last quarter, into the gap a wound-up company left.');
+export type CosNewEntrant = z.infer<typeof CosNewEntrantSchema>;
+
 export const CosMarketsSchema = z
   .object({
     isPublic: z.boolean(),
@@ -260,6 +274,11 @@ export const CosMarketsSchema = z
     sectorPriceIndex: z.number().nullable().describe('Goods price index for the sector, or null in a world that does not price goods.'),
     sectorShortage: z.number().nullable().describe('Shortage counter for the sector, or null in a world that does not price goods.'),
     rivals: z.array(CosRivalSchema).max(24),
+    newEntrants: z
+      .array(CosNewEntrantSchema)
+      .max(4)
+      .default([])
+      .describe('Companies founded since last quarter. A newcomer in your sector and region is a competitor you did not have.'),
   })
   .describe('What the market thinks, of the company and of the sector it trades in.');
 export type CosMarkets = z.infer<typeof CosMarketsSchema>;
@@ -427,6 +446,275 @@ export const ChiefOfStaffDossierSchema = z
   );
 export type ChiefOfStaffDossier = z.infer<typeof ChiefOfStaffDossierSchema>;
 
+/* -------------------------------------------------------------------------- */
+/*  The lookup catalogue                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the Chief of Staff may go and look up before it answers.
+ *
+ * The dossier is a snapshot of the founder's own company. "Buy a small data
+ * centre" is not answerable from a snapshot: it needs the market — who sells
+ * capacity, at what price, with how much to spare, and what the purchase does to
+ * the balance. So the role gets one bounded round of sourcing.
+ *
+ * Three rules make that safe:
+ *
+ * - **The model asks; the client answers.** A `LookupRequest` names a question
+ *   from a fixed catalogue. It is run by `runLookups` in `@frontier/simulation`
+ *   against canonical state, on the client that holds it, and the answers come
+ *   back as data. The model never reads state and never queries anything.
+ * - **One round.** At most `MAX_LOOKUPS_PER_TURN` requests, at most
+ *   `MAX_LOOKUP_ROWS` rows per result, and a second research turn is refused.
+ *   A loop that can spin is a loop that will, on somebody else's subscription.
+ * - **Every figure is whole and every row names its ids.** A row the model can
+ *   quote is a row the founder can approve: each carries the identifiers the
+ *   action would name, and several carry the exact intent the validator accepts.
+ *
+ * Since the solvency stage, "can we afford it" is not a gate. Rows say what the
+ * cash balance would be afterwards and what the solvency clock reads; the role
+ * is required to repeat both honestly rather than to refuse.
+ */
+
+/** Requests one turn may carry. */
+export const MAX_LOOKUPS_PER_TURN = 4;
+/** Rows one result may carry. */
+export const MAX_LOOKUP_ROWS = 12;
+/** Characters any free-text field of a lookup may carry. */
+export const LOOKUP_TEXT_MAX = 200;
+
+export const LOOKUP_KINDS = [
+  'compute_market',
+  'acquisition_targets',
+  'debt_headroom',
+  'government_programmes',
+  'hiring_market',
+  'own_position',
+] as const;
+export type LookupKind = (typeof LOOKUP_KINDS)[number];
+
+export const LookupKindSchema = z.enum(LOOKUP_KINDS).describe('One question from the catalogue, named rather than carried.');
+
+const lookupText = (description: string) => z.string().max(LOOKUP_TEXT_MAX).describe(description);
+
+/* --- requests ------------------------------------------------------------- */
+
+export const LookupRequestSchema = z
+  .discriminatedUnion('kind', [
+    z
+      .object({
+        kind: z.literal('compute_market'),
+        units: intCount('How many accelerator-equivalents the founder is asking about. The three quarterly costs are quoted for this many. Use 0 when they named no size.'),
+      })
+      .describe('Who sells compute, at what price, with what to spare, and what N units cost owned against reserved against cloud.'),
+
+    z
+      .object({
+        kind: z.literal('acquisition_targets'),
+        sector: lookupText('Sector to restrict to, or "" for any.'),
+        region: lookupText('Region to restrict to, or "" for any.'),
+        maxValueUsd: usd('Ceiling on the indicative price. 0 means no ceiling.'),
+        keyword: lookupText('Word to match against company names, or "" for any.'),
+      })
+      .describe('Companies with a public position that this company could bid for, with an indicative price and the cash left afterwards.'),
+
+    z
+      .object({ kind: z.literal('debt_headroom') })
+      .describe('What could be borrowed, at what indicative coupon, what last quarter\'s operating income would service, and who has an open sheet.'),
+
+    z
+      .object({ kind: z.literal('government_programmes') })
+      .describe('Procurement this seat can see, with the requirements met and unmet.'),
+
+    z
+      .object({
+        kind: z.literal('hiring_market'),
+        role: StaffRoleSchema.nullable().describe('One role, or null for every role.'),
+      })
+      .describe('Fill rate, the quarterly cost of one hire by role and band, and what is already open.'),
+
+    z
+      .object({ kind: z.literal('own_position') })
+      .describe('Cash, runway, burn, the solvency clock and the last four filed quarters.'),
+  ])
+  .describe('One question the Chief of Staff wants answered from canonical state before it replies.');
+export type LookupRequest = z.infer<typeof LookupRequestSchema>;
+
+/* --- shared rows ---------------------------------------------------------- */
+
+export const COMPUTE_OFFERINGS = ['accelerators', 'reservation', 'cloud'] as const;
+export const ComputeOfferingSchema = z
+  .enum(COMPUTE_OFFERINGS)
+  .describe('What a seller is selling: accelerators bought outright, capacity reserved by the quarter, or on-demand cloud.');
+export type ComputeOffering = z.infer<typeof ComputeOfferingSchema>;
+
+export const ComputeSellerRowSchema = z
+  .object({
+    companyId: z.string().min(1).describe('The seller. Name it verbatim in the action.'),
+    name: lookupText('The seller\'s name, for the founder.'),
+    offering: ComputeOfferingSchema,
+    sectorId: lookupText('The seller\'s sector.'),
+    region: lookupText('Where the capacity sits. Energy is priced locally, which is most of why sellers differ.'),
+    unitPriceUsd: usd('Price of one unit: the purchase price for accelerators, the price per unit per quarter for a reservation or cloud.'),
+    sellableUnits: intCount('Units this seller could sell this quarter, beyond what it needs itself. The validator clamps to exactly this.'),
+    quarterlyCostPerUnitUsd: usd('What one unit costs per quarter once held: depreciation for an owned accelerator, rent for a reservation or cloud unit.'),
+    energyFactorPct: intCount('The seller\'s regional energy cost as a percentage of the world index. 100 is the index itself.'),
+    utilisationPct: intCount('How hard the seller is already working its own fleet, as a percentage.'),
+    intent: ActionIntentSchema.nullable().describe('The action that buys from this seller at the size asked about, exactly as the validator would accept it, or null when nothing legal fits.'),
+  })
+  .describe('One named counterparty selling compute, with the price its own region and utilisation produce.');
+export type ComputeSellerRow = z.infer<typeof ComputeSellerRowSchema>;
+
+export const AcquisitionTargetRowSchema = z
+  .object({
+    companyId: z.string().min(1),
+    name: lookupText('The company\'s name.'),
+    sectorId: lookupText('Its sector.'),
+    region: lookupText('Its region.'),
+    listed: z.boolean().describe('Whether it is publicly traded. A listed company has a quote; a private one has an anchor.'),
+    ticker: lookupText('Its ticker, or "" when private.'),
+    lastPublicRevenueUsd: signedUsd('Last revenue it disclosed publicly. 0 when it has disclosed none.'),
+    headcountBand: lookupText('Headcount as a band, e.g. "50-200". Exact headcount is not public.'),
+    ownedAccelerators: intCount('Accelerators it owns, as far as the public record shows.'),
+    indicativePriceUsd: usd('What an offer would plausibly have to clear, from the quote or the valuation anchor.'),
+    cashAfterUsd: signedUsd('Where this company\'s cash balance lands if that price is paid. May be negative: cash does not refuse an instruction.'),
+    solvencyLine: lookupText('The solvency clock after the deal, or "" when the balance stays at or above zero.'),
+    intent: ActionIntentSchema.describe('The exact acquire_company intent the validator would accept for this target.'),
+  })
+  .describe('One company that could be bought, priced, with the consequence for the balance stated.');
+export type AcquisitionTargetRow = z.infer<typeof AcquisitionTargetRowSchema>;
+
+export const CapitalDeskRowSchema = z
+  .object({
+    entityId: z.string().min(1),
+    name: lookupText('The desk\'s name.'),
+    kind: lookupText('What kind of desk it is: a venture fund, a buyout firm, a lender.'),
+    dryPowderUsd: usd('Uncommitted capital it holds.'),
+    holdsStakePct: intCount('How much of this company it already holds, as a percentage.'),
+    thesis: lookupText('What it says it is looking for.'),
+  })
+  .describe('One capital desk with an open sheet.');
+export type CapitalDeskRow = z.infer<typeof CapitalDeskRowSchema>;
+
+export const ProgrammeRowSchema = z
+  .object({
+    opportunityId: z.string().min(1),
+    programme: lookupText('The programme\'s name.'),
+    agencyName: lookupText('The agency running it.'),
+    maxValueUsd: usd('The ceiling on the award.'),
+    closeQuarter: QuarterIndexSchema.describe('Quarter bidding closes.'),
+    requirementsMet: z.array(lookupText('A requirement this company already meets.')).max(8),
+    requirementsUnmet: z.array(lookupText('A requirement this company does not meet.')).max(8),
+    intent: ActionIntentSchema.nullable().describe('A bid the validator would accept, or null when a requirement blocks it.'),
+  })
+  .describe('One open procurement opportunity, with the requirements scored against this company.');
+export type ProgrammeRow = z.infer<typeof ProgrammeRowSchema>;
+
+export const HiringRowSchema = z
+  .object({
+    role: StaffRoleSchema,
+    band: CompBandSchema,
+    quarterlyCostUsd: usd('Fully loaded cost of one hire in this role at this band, per quarter.'),
+    annualCostUsd: usd('The same figure over four quarters.'),
+    intent: ActionIntentSchema.nullable().describe('A hire the validator would accept at this role and band, or null.'),
+  })
+  .describe('What one person in one role at one band costs.');
+export type HiringRow = z.infer<typeof HiringRowSchema>;
+
+export const StatementRowSchema = z
+  .object({
+    quarter: QuarterIndexSchema,
+    revenueUsd: signedUsd('Revenue that quarter.'),
+    netIncomeUsd: signedUsd('Net income that quarter.'),
+    cashUsd: signedUsd('Closing cash that quarter. May be negative.'),
+    headcount: intCount('Headcount at the close.'),
+  })
+  .describe('One filed quarter, as the company filed it.');
+export type StatementRow = z.infer<typeof StatementRowSchema>;
+
+/* --- results -------------------------------------------------------------- */
+
+export const LookupResultSchema = z
+  .discriminatedUnion('kind', [
+    z
+      .object({
+        kind: z.literal('compute_market'),
+        summary: lookupText('One sentence stating the finding.'),
+        units: intCount('The size the three costs below are quoted for.'),
+        ownedUnits: intCount('Accelerators this company owns today.'),
+        reservedUnits: intCount('Accelerator-equivalents it holds under reservation today.'),
+        cloudUnits: intCount('Accelerator-equivalents its cloud spend buys today.'),
+        heldUnits: intCount('Everything it holds today.'),
+        ownedQuarterlyCostUsd: usd('What owning `units` accelerators costs per quarter: depreciation and energy, no rent.'),
+        reservedQuarterlyCostUsd: usd('What reserving `units` accelerator-equivalents costs per quarter.'),
+        cloudQuarterlyCostUsd: usd('What buying `units` accelerator-equivalents of cloud costs per quarter.'),
+        purchaseCostUsd: usd('Cash to buy `units` accelerators outright at the cheapest seller.'),
+        cashUsd: signedUsd('Cash on hand now.'),
+        cashAfterPurchaseUsd: signedUsd('Where cash lands if that purchase is made. May be negative.'),
+        solvencyLine: lookupText('The solvency clock after that purchase, or "" when the balance stays at or above zero.'),
+        sellers: z.array(ComputeSellerRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('The compute market: what we hold, what N units cost three ways, and every named seller with capacity.'),
+
+    z
+      .object({
+        kind: z.literal('acquisition_targets'),
+        summary: lookupText('One sentence stating the finding.'),
+        cashUsd: signedUsd('Cash on hand now.'),
+        rows: z.array(AcquisitionTargetRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Companies this company could bid for under the filter asked about.'),
+
+    z
+      .object({
+        kind: z.literal('debt_headroom'),
+        summary: lookupText('One sentence stating the finding.'),
+        available: z.boolean().describe('Whether the validator would accept an issue at all today.'),
+        reason: lookupText('Why not, in the validator\'s own words, or "" when it would.'),
+        headroomUsd: usd('The most that could be issued.'),
+        indicativeCouponPct: intCount('Indicative annual coupon as a whole percentage, from the world\'s capital markets.'),
+        servisableUsd: usd('What last quarter\'s operating income would service at that coupon.'),
+        lastOperatingIncomeUsd: signedUsd('Last quarter\'s operating income.'),
+        desks: z.array(CapitalDeskRowSchema).max(MAX_LOOKUP_ROWS),
+        intent: ActionIntentSchema.nullable().describe('An issue at the headroom the validator would accept, or null.'),
+      })
+      .describe('What this company could borrow, and from whom.'),
+
+    z
+      .object({
+        kind: z.literal('government_programmes'),
+        summary: lookupText('One sentence stating the finding.'),
+        pastPerformance: intCount('Past-performance score out of 100.'),
+        rows: z.array(ProgrammeRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Procurement open to this seat.'),
+
+    z
+      .object({
+        kind: z.literal('hiring_market'),
+        summary: lookupText('One sentence stating the finding.'),
+        fillRatePct: intCount('Share of an opened role the market would fill this quarter, as a percentage.'),
+        openRoles: intCount('Roles already open and unfilled.'),
+        rows: z.array(HiringRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('What hiring costs and how much of it the market would actually fill.'),
+
+    z
+      .object({
+        kind: z.literal('own_position'),
+        summary: lookupText('One sentence stating the finding.'),
+        cashUsd: signedUsd('Cash on hand.'),
+        quarterlyBurnUsd: signedUsd('Net cash movement per quarter. Negative is cash leaving.'),
+        runwayQuarters: intCount('Quarters of runway at that rate.'),
+        negativeCashQuarters: intCount('Consecutive filed quarters closed below zero.'),
+        solvencyQuartersAllowed: intCount('How many such quarters end the company.'),
+        statements: z.array(StatementRowSchema).max(4),
+      })
+      .describe('The company\'s own position, from the filed statements.'),
+  ])
+  .describe('The answer to one lookup, read off canonical state by the engine. Every figure is a whole number of dollars or units.');
+export type LookupResult = z.infer<typeof LookupResultSchema>;
+
 /* --- memory --------------------------------------------------------------- */
 
 /** Exchanges the server-side memory keeps for one Chief of Staff thread. */
@@ -479,6 +767,18 @@ export const ChiefOfStaffInputSchema = z
     screen: z.string().max(80).optional().describe('Route the founder asked from, e.g. "/capital". Absent when asked from the dedicated screen.'),
     dossier: ChiefOfStaffDossierSchema.optional().describe('The typed state. Absent only for a caller that predates it, which then relies on the prose fields alone.'),
     memory: ChiefOfStaffMemorySchema.optional().describe('The compact server-side memory of this thread, injected by the route. Absent on the first turn.'),
+    /**
+     * The answers to the lookups the previous turn asked for.
+     *
+     * Present only on the second turn of a sourcing round, and its presence is
+     * what forbids a third: a composer handed findings tells the model that
+     * research mode is closed, and the route refuses another round outright.
+     */
+    findings: z
+      .array(LookupResultSchema)
+      .max(MAX_LOOKUPS_PER_TURN)
+      .optional()
+      .describe('What the requested lookups returned, run against canonical state by the client. Absent on the first turn of a message.'),
     companyBriefing: z.string().describe('Prose summary of the company: cash, runway, headcount, products, compute, current budgets and commitments. Filled from the dossier when there is one.'),
     worldBriefing: z.string().describe('Prose summary of world conditions relevant to this company.'),
     currentBudgets: z.array(z.object({ label: z.string(), amountUsd: z.number() })).describe('Current spend lines, so "keep total burn roughly unchanged" can be honoured arithmetically.'),
@@ -491,11 +791,12 @@ export type ChiefOfStaffInput = z.infer<typeof ChiefOfStaffInputSchema>;
 
 /* --- output --------------------------------------------------------------- */
 
-export const COS_MODES = ['answer', 'plan', 'act'] as const;
+// Appended, never inserted: COS_MODES backs a zod enum and a stored transcript.
+export const COS_MODES = ['answer', 'plan', 'act', 'research'] as const;
 export const CosModeSchema = z
   .enum(COS_MODES)
   .describe(
-    '"answer" — the founder asked a question and wants words back; interpretedInstructions is empty. "plan" — a course of action is proposed for discussion, with the actions attached. "act" — the founder gave an instruction and these are the typed actions that carry it out.',
+    '"answer" — the founder asked a question and wants words back; interpretedInstructions is empty. "plan" — a course of action is proposed for discussion, with the actions attached. "act" — the founder gave an instruction and these are the typed actions that carry it out. "research" — you cannot answer from the dossier alone and are asking for lookups first; `lookups` carries them, `interpretedInstructions` MUST be empty, and this mode is available only on a turn that arrived without findings.',
   );
 export type CosMode = z.infer<typeof CosModeSchema>;
 
@@ -527,6 +828,16 @@ export const ChiefOfStaffInterpretationSchema = z
       .describe('True whenever any interpreted action is in the always-confirm set, or whenever your confidence is low. When in doubt, true.'),
     confidence: unitInterval('How confident you are that this matches what the player meant. Below 0.7 the interface presents it as a draft rather than a ready submission.'),
     unsupportedRequests: z.array(z.string().max(240)).max(5).describe('Things the player asked for that the game has no action for, or that this company cannot do today, said plainly rather than silently dropped.'),
+    /**
+     * Only meaningful in `research` mode, and empty in every other. Required
+     * rather than optional because this schema is handed to structured outputs,
+     * where every key must be emitted; an empty array is how a reply that needs
+     * no sourcing says so.
+     */
+    lookups: z
+      .array(LookupRequestSchema)
+      .max(MAX_LOOKUPS_PER_TURN)
+      .describe('Questions to run against canonical state before answering. Read only in `research` mode, at most four, and never on a turn that already carried findings. Empty in every other mode.'),
   })
   .describe(
     'The Chief of Staff\'s answer to one message. It is a proposal: the player approves or edits it, and only then is anything submitted.',

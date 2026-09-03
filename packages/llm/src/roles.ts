@@ -294,7 +294,9 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           sessionKey: conversationKey,
           ...scope,
           fallback: () => ({ output: fallbackChiefOfStaff(input), declineReason: null }),
-          postProcess: enforceInterpretationPolicy,
+          // A turn that already carries findings has had its one round of
+          // sourcing, so the policy closes research mode on it.
+          postProcess: (interpretation) => enforceInterpretationPolicy(interpretation, input.findings !== undefined),
         });
       },
     },

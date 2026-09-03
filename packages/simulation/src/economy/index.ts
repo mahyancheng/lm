@@ -361,7 +361,10 @@ export function createEconomySubsystem(): EconomySubsystemImpl {
 
     const fine = antitrustFineUsd(company.balanceSheet.assets.cash, company.fundamentals.revenueTtmUsd);
     if (fine > 0) {
-      company.balanceSheet.assets.cash = round(Math.max(0, company.balanceSheet.assets.cash - fine), 2);
+      // Signed: the fine is the figure the row declares, so the cash line falls by
+      // exactly it. Flooring would move equity further than cash and the closing
+      // sheet would not reconcile. This path is world-2 only.
+      company.balanceSheet.assets.cash = round(company.balanceSheet.assets.cash - fine, 2);
       company.financials.cash = company.balanceSheet.assets.cash;
       company.balanceSheet.equity = round(company.balanceSheet.equity - fine, 2);
     }

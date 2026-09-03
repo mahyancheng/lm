@@ -48,7 +48,7 @@ describe('role wiring', () => {
         case 'npc_strategist':
           return VALID_NPC_BUNDLE;
         case 'chief_of_staff':
-          return { interpretedInstructions: [], summary: 'Nothing has been submitted yet.', questions: [], requiresConfirmation: false, confidence: 0.9, unsupportedRequests: [] };
+          return { interpretedInstructions: [], summary: 'Nothing has been submitted yet.', questions: [], requiresConfirmation: false, confidence: 0.9, unsupportedRequests: [], lookups: [] };
         case 'character_dialogue':
           return VALID_CHARACTER_REPLY;
         case 'innovation_interpreter':
@@ -114,6 +114,7 @@ describe('role wiring', () => {
       requiresConfirmation: false,
       confidence: 0.92,
       unsupportedRequests: [],
+      lookups: [],
     }));
     const roles = createLlmRoles(transport, ROLES_OPTIONS);
     const result = await roles.chiefOfStaff.interpret(chiefOfStaffInput(), 'cos:demo');

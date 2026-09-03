@@ -301,7 +301,7 @@ export default function CapitalPage(): React.JSX.Element {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel iconName="coins" iconTone="brand" title="Financing tickets" subtitle="Every one of these is a board matter and requires an explicit confirmation.">
-          <CapitalTickets fullyDilutedShares={table.fullyDilutedShares} cash={company.financials.cash} pricePerShare={price.value} />
+          <CapitalTickets fullyDilutedShares={table.fullyDilutedShares} company={company} pricePerShare={price.value} />
         </Panel>
 
         <Panel

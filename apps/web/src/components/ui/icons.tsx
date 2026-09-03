@@ -59,6 +59,7 @@ export const ICON_NAMES = [
   'network',
   'trophy',
   'briefcase',
+  'portfolio',
   'stamp',
   'newspaper',
   // groups
@@ -329,6 +330,16 @@ const SHAPES: Readonly<Record<IconName, React.JSX.Element>> = {
       <path d="M6.4 10.4c.7-2.6 2.9-4.2 5.6-4.2s4.9 1.6 5.6 4.2H6.4Z" fill={B} />
       <rect x="2.4" y="9.8" width="19.2" height="11.2" rx="2.6" fill={B} />
       <rect x="9.6" y="13.2" width="4.8" height="3.8" rx="1.4" fill={A} />
+    </>
+  ),
+
+  /** Portfolio: what is owned outside the company, one slice at a time. */
+  portfolio: (
+    <>
+      <circle cx="12" cy="12" r="9.4" fill={B} />
+      {/* the one holding that is bigger than the rest */}
+      <path d="M12 2.6A9.4 9.4 0 0 1 21.4 12H12Z" fill={A} />
+      <circle cx="12" cy="12" r="3" fill={A} />
     </>
   ),
 

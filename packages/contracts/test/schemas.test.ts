@@ -399,7 +399,8 @@ const conditionalCommitment = {
 const actionFixtures: ActionIntent[] = [
   { type: 'set_research_budget', budgetUsd: 42_000_000 },
   { type: 'hire', role: 'engineers', count: 17, compBand: 'above_market' },
-  { type: 'reserve_compute', units: 12_000, quarters: 4, maxPricePerUnitUsd: 2_400 },
+  { type: 'reserve_compute', units: 12_000, quarters: 4, maxPricePerUnitUsd: 2_400, providerCompanyId: null },
+  { type: 'buy_accelerators', units: 240, maxPricePerUnitUsd: 36_000, sellerCompanyId: 'cmp_tessellate' },
   { type: 'buy_shares', securityId: 'sec_nexus_common', targetPct: 0.03, shares: null, maxPricePerShareUsd: 84.5 },
   { type: 'poach_executive', targetCharacterId: 'chr_helix_infra_lead', compPremiumPct: 0.2, approach: 'private' },
   { type: 'propose_innovation', proposal: innovationProposal },
@@ -506,7 +507,7 @@ describe('valid fixtures parse', () => {
       strategySummary: 'Secure compute ahead of the shortage and fund it with a large private round before valuations reset.',
       posture: 'aggressive_growth',
       actions: [
-        { type: 'reserve_compute', units: 45_000, quarters: 4, maxPricePerUnitUsd: 3_100 },
+        { type: 'reserve_compute', units: 45_000, quarters: 4, maxPricePerUnitUsd: 3_100, providerCompanyId: null },
         { type: 'raise_round', stage: 'series_d', targetAmountUsd: 1_200_000_000, maxDilutionPct: 0.16 },
       ],
       rationale: 'Accelerator supply is at 0.44 and falling. Locking capacity now is worth accepting dilution at this valuation.',
@@ -570,9 +571,15 @@ describe('invalid fixtures fail', () => {
     expect(CompanySchema.safeParse(bad).success).toBe(false);
   });
 
-  it('rejects a company with negative cash', () => {
-    const bad = { ...company, financials: { ...company.financials, cash: -1 } };
-    expect(CompanySchema.safeParse(bad).success).toBe(false);
+  it('accepts a company with negative cash, and still refuses negative revenue', () => {
+    // Deliberate widening. From world version 2 an instruction is never refused
+    // for want of cash: the company overdraws, is charged for it, and is wound
+    // up after two consecutive quarters below zero. A schema that refused the
+    // balance would make that state unsaveable.
+    const overdrawn = { ...company, financials: { ...company.financials, cash: -1 } };
+    expect(CompanySchema.safeParse(overdrawn).success).toBe(true);
+    const negativeRevenue = { ...company, financials: { ...company.financials, revenueQuarterly: -1 } };
+    expect(CompanySchema.safeParse(negativeRevenue).success).toBe(false);
   });
 
   it('rejects a session state missing a world domain', () => {

@@ -111,6 +111,16 @@ export const ActionIntentSchema = z
 
     z
       .object({
+        type: z.literal('adjust_research_project'),
+        projectId: z.string().min(1).describe('The running programme to re-resource. Must belong to the acting company and still be active or paused.'),
+        budgetUsd: usd('New cash committed per quarter, excluding compute.'),
+        computeUnits: intCount('New accelerator-equivalents dedicated per quarter.'),
+        researchersAssigned: intCount('New researcher count. The programme hands back what it already holds before the free capacity is counted.'),
+      })
+      .describe('Change what a running research programme is given each quarter. The same bounds apply as when it started; secrecy is fixed at the start and cannot be changed here.'),
+
+    z
+      .object({
         type: z.literal('propose_innovation'),
         proposal: InnovationProposalSchema,
       })
@@ -216,8 +226,17 @@ export const ActionIntentSchema = z
         units: intCount('Accelerator-equivalents to reserve.'),
         quarters: z.number().int().min(1).max(16).describe('Reservation term. Long reservations are insurance against a shortage and dead weight in a glut.'),
         maxPricePerUnitUsd: usd('Highest price per unit per quarter you will accept. The reservation fails rather than clearing above this.'),
+        // Appended, and required-but-nullable rather than optional: every
+        // LLM-facing schema in this file must emit every key, so `null` is how a
+        // reservation says "take the market's choice". From world version 2 the
+        // validator resolves that null to the cheapest infrastructure company
+        // with capacity, and names it back in the clamp.
+        providerCompanyId: z
+          .string()
+          .nullable()
+          .describe('The company whose capacity is being reserved, or null to take the cheapest with room.'),
       })
-      .describe('Reserve accelerator capacity for several quarters at a negotiated price.'),
+      .describe('Reserve accelerator capacity for several quarters at a negotiated price, from a company that holds it.'),
 
     z
       .object({
@@ -227,6 +246,20 @@ export const ActionIntentSchema = z
         commitmentQuarters: z.number().int().min(0).max(12).describe('Quarters committed. Zero is fully flexible and fully exposed to spot price.'),
       })
       .describe('Buy on-demand capacity. Flexible, and hostage to the compute domain of the world state.'),
+
+    z
+      .object({
+        type: z.literal('buy_accelerators'),
+        units: intCount('Accelerators to buy outright and own.'),
+        maxPricePerUnitUsd: usd('Highest price per accelerator you will pay. The order fails at resolution rather than clearing above this.'),
+        sellerCompanyId: z
+          .string()
+          .nullable()
+          .describe('The manufacturer sold from, or null to take the cheapest seller with capacity. Every purchase in this economy has a counterparty: somebody books the revenue.'),
+      })
+      .describe(
+        'Buy accelerators outright from a company that makes them. Owned capacity is capital: it depreciates instead of renting, it is immune to the spot price, and it is paid for in cash the quarter it is bought.',
+      ),
 
     z
       .object({
@@ -460,6 +493,7 @@ export type ActionIntent = z.infer<typeof ActionIntentSchema>;
 export const ACTION_TYPES = [
   'set_research_budget',
   'start_research_project',
+  'adjust_research_project',
   'propose_innovation',
   'publish_research',
   'set_product_price',
@@ -497,6 +531,9 @@ export const ACTION_TYPES = [
   'accept_deal',
   'reject_deal',
   'request_introduction',
+  // Appended, never inserted: ACTION_TYPES backs a zod enum and a saved game
+  // names its actions by string.
+  'buy_accelerators',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -528,6 +565,9 @@ export const CONFIRMATION_REQUIRED_ACTIONS: readonly ActionType[] = [
   'accept_deal',
   'sell_shares',
   'buy_shares',
+  // Owning capacity is a capital commitment, not an operating one: it takes the
+  // cash in the quarter it is bought and it never unwinds.
+  'buy_accelerators',
 ];
 
 /** True when an action may never be auto-executed on the player's behalf. */

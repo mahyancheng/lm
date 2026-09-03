@@ -13,6 +13,10 @@
  * `customersPerUnit` (through `inferenceComputeDemand`). Nothing here is
  * estimated by the interface, and the two demand helpers are shared with the
  * panel so the drawer and the panel can never disagree.
+ *
+ * One control lives here: buying accelerators outright. It belongs beside "how
+ * the fleet was procured" because that is the line it changes, and its own card
+ * states what leaves the balance and what the fleet then costs to carry.
  */
 
 import Link from 'next/link';
@@ -21,6 +25,7 @@ import { quarterLabel } from '@frontier/contracts';
 import { heldComputeUnits, servingComputeUnits } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import { Drawer, Icon, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
+import { BuyAccelerators } from './BuyAccelerators';
 import { inferenceComputeDemand, researchComputeDemand } from './ComputePosition';
 
 /** Accelerator counts, grouped in threes. Same rendering as the panel. */
@@ -103,6 +108,10 @@ export function ComputeDrawer({ open, onClose, session, company, projects }: Com
             />
           </div>
         </div>
+
+        {/* Owning capacity is a decision this screen can actually take, so the
+            control sits with the figures it changes rather than a screen away. */}
+        <BuyAccelerators session={session} company={company} />
 
         <div>
           <SectionHeading rule>Reservation</SectionHeading>

@@ -405,13 +405,19 @@ describe('roster helpers', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('every enum grew at the end', () => {
-  it('appends exactly ten ledger types, all at the end', () => {
+  it('appends exactly ten ledger types, in one contiguous block', () => {
     expect(CAPITAL_EVENT_TYPES).toHaveLength(10);
-    expect(SIM_EVENT_TYPES.slice(-10)).toEqual(CAPITAL_EVENT_TYPES);
-    // The prefix is untouched: the first row of the ledger still means what it
-    // has always meant, and so does the last row written before this landed.
+    // The block stays contiguous and stays after `dividend_paid`. It is no
+    // longer the *tail* of the enum: `accelerators_bought` was appended after it
+    // when compute gained counterparties, and appending is exactly what the
+    // enum's contract permits. What must never happen is an insertion, which
+    // would renumber every row written before it.
+    const start = SIM_EVENT_TYPES.indexOf(CAPITAL_EVENT_TYPES[0] as (typeof SIM_EVENT_TYPES)[number]);
+    expect(start).toBeGreaterThan(0);
+    expect(SIM_EVENT_TYPES.slice(start, start + 10)).toEqual(CAPITAL_EVENT_TYPES);
     expect(SIM_EVENT_TYPES[0]).toBe('quarter_opened');
-    expect(SIM_EVENT_TYPES[SIM_EVENT_TYPES.length - 11]).toBe('dividend_paid');
+    expect(SIM_EVENT_TYPES[start - 1]).toBe('dividend_paid');
+    expect(SIM_EVENT_TYPES.slice(start + 10)).toEqual(['accelerators_bought']);
     expect(new Set(SIM_EVENT_TYPES).size).toBe(SIM_EVENT_TYPES.length);
   });
 

@@ -56,6 +56,8 @@ import {
   RESERVATION_RENEWAL_QUARTERS,
   RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
+import { resolveCloudSeller, resolveComputeSeller, sellerPriceFactor } from './sellers';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { activeCompanies, companyActions, count, emitEvent, intentsOfType, money, unit, usdLabel } from './util';
 
 /** What one reserved accelerator-equivalent costs this quarter, at the world's index. */
@@ -205,7 +207,11 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
 
     /* --- reservations ------------------------------------------------------ */
     for (const { intent } of intentsOfType(actions, 'reserve_compute')) {
-      const unitPrice = reservedUnitPriceUsd(draft);
+      // Capacity has an owner. From world version 2 the reservation is signed
+      // with a named company and priced at that company's own rate; world 1
+      // reserves at the index, exactly as it always did.
+      const seller = resolveComputeSeller(draft, 'reservation', intent.providerCompanyId ?? null, company.id, intent.units);
+      const unitPrice = seller === null ? reservedUnitPriceUsd(draft) : seller.unitPriceUsd;
       if (unitPrice > intent.maxPricePerUnitUsd) {
         const eventId = emitEvent(
           draft,
@@ -219,6 +225,7 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
             quarters: intent.quarters,
             clearingPriceUsd: unitPrice,
             maxPricePerUnitUsd: money(intent.maxPricePerUnitUsd),
+            sellerCompanyId: seller === null ? null : seller.company.id,
           },
           'company',
         );
@@ -235,6 +242,10 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
 
       const before = company.compute.reservedAccelerators;
       company.compute.reservedAccelerators = count(before + intent.units);
+      if (seller !== null) {
+        company.compute.reservationProviderCompanyId = seller.company.id;
+        company.compute.reservationProviderFactor = sellerPriceFactor(draft, seller.company);
+      }
       const expiry = ctx.quarter + intent.quarters;
       company.compute.reservationExpiryQuarter =
         company.compute.reservationExpiryQuarter === null ? expiry : Math.max(company.compute.reservationExpiryQuarter, expiry);
@@ -249,6 +260,7 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
           kind: 'compute_reserved',
           units: intent.units,
           quarters: intent.quarters,
+          sellerCompanyId: seller === null ? null : seller.company.id,
           unitPriceUsd: unitPrice,
           quarterlyCostUsd: money(intent.units * unitPrice),
           reservedBefore: before,
@@ -269,8 +281,13 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
 
     /* --- on-demand cloud ---------------------------------------------------- */
     for (const { intent } of intentsOfType(actions, 'buy_cloud_capacity')) {
+      const seller = resolveCloudSeller(draft, intent.providerCompanyId, company.id, intent.quarterlySpendUsd);
       const before = company.compute.cloudSpendQuarterly;
       company.compute.cloudSpendQuarterly = money(intent.quarterlySpendUsd);
+      if (seller !== null) {
+        company.compute.cloudProviderCompanyId = seller.company.id;
+        company.compute.cloudProviderFactor = sellerPriceFactor(draft, seller.company);
+      }
       const eventId = emitEvent(
         draft,
         ctx,
@@ -281,7 +298,8 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
           kind: 'compute_cloud',
           quarterlySpendUsd: company.compute.cloudSpendQuarterly,
           beforeUsd: money(before),
-          providerCompanyId: intent.providerCompanyId,
+          providerCompanyId: seller === null ? intent.providerCompanyId : seller.company.id,
+          unitPriceUsd: seller === null ? null : seller.unitPriceUsd,
           commitmentQuarters: intent.commitmentQuarters,
           spotPrice: draft.world.compute.spotPrice,
         },
@@ -293,6 +311,83 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
         deltaLabel: usdLabel(company.compute.cloudSpendQuarterly - before),
         refEventIds: [eventId],
         tone: 'neutral',
+        subjectId: company.id,
+      });
+    }
+
+    /* --- accelerators bought outright ---------------------------------------- */
+    // Owned capacity is the one compute purchase that is capital rather than
+    // rent, so the units land here and the *cash* lands in the financial phase:
+    // this phase stages the order, phase eleven pays for it and moves it into
+    // property, plant and equipment. Nothing here touches cash.
+    for (const { intent } of intentsOfType(actions, 'buy_accelerators')) {
+      if (!isMultiSectorWorld(draft)) continue;
+      const seller = resolveComputeSeller(draft, 'accelerators', intent.sellerCompanyId, company.id, intent.units);
+      const units = seller === null ? 0 : Math.min(count(intent.units), seller.sellableUnits);
+      const unitPrice = seller === null ? 0 : seller.unitPriceUsd;
+
+      if (seller === null || units <= 0 || unitPrice > intent.maxPricePerUnitUsd) {
+        const eventId = emitEvent(
+          draft,
+          ctx,
+          'cost_recognised',
+          company.id,
+          seller === null ? null : seller.company.id,
+          {
+            kind: 'accelerator_purchase_failed',
+            units: intent.units,
+            clearingPriceUsd: unitPrice,
+            maxPricePerUnitUsd: money(intent.maxPricePerUnitUsd),
+            sellerCompanyId: seller === null ? null : seller.company.id,
+            reason: seller === null ? 'no_seller' : units <= 0 ? 'no_capacity' : 'above_limit',
+          },
+          'company',
+        );
+        ctx.log({
+          phase: 'product_demand_resolution',
+          text:
+            seller === null
+              ? `${company.name}'s order for ${intent.units} accelerators found no manufacturer with capacity this quarter.`
+              : `${company.name}'s order for ${intent.units} accelerators did not clear: ${seller.company.name} is asking ${usdLabel(unitPrice)} a unit against a limit of ${usdLabel(intent.maxPricePerUnitUsd)}.`,
+          deltaLabel: 'no fill',
+          refEventIds: [eventId],
+          tone: 'warning',
+          subjectId: company.id,
+        });
+        continue;
+      }
+
+      const totalUsd = money(units * unitPrice);
+      const ownedBefore = company.compute.ownedAccelerators;
+      company.compute.ownedAccelerators = count(ownedBefore + units);
+      company.compute.pendingAcceleratorPurchases = [
+        ...(company.compute.pendingAcceleratorPurchases ?? []),
+        { sellerCompanyId: seller.company.id, units, unitPriceUsd: unitPrice, totalUsd },
+      ];
+
+      const eventId = emitEvent(
+        draft,
+        ctx,
+        'accelerators_bought',
+        company.id,
+        seller.company.id,
+        {
+          buyerCompanyId: company.id,
+          sellerCompanyId: seller.company.id,
+          units,
+          unitPriceUsd: unitPrice,
+          totalUsd,
+          ownedBefore,
+          ownedAfter: company.compute.ownedAccelerators,
+        },
+        'company',
+      );
+      ctx.log({
+        phase: 'product_demand_resolution',
+        text: `${company.name} bought ${units} accelerators from ${seller.company.name} at ${usdLabel(unitPrice)} each, ${usdLabel(totalUsd)} of capital, taking the owned fleet to ${company.compute.ownedAccelerators}.`,
+        deltaLabel: `+${units} owned`,
+        refEventIds: [eventId],
+        tone: 'positive',
         subjectId: company.id,
       });
     }

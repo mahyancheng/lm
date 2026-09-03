@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react';
 import type { ObjectiveMetric } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
+import { SOLVENCY_NEGATIVE_QUARTERS, negativeCashQuarters } from '@frontier/simulation';
 import {
   EmptyState,
   Icon,
@@ -115,6 +116,9 @@ export default function CommandCentrePage(): React.JSX.Element {
   const openingCash = company.financials.cash - company.financials.quarterlyBurn;
   const cashDelta = openingCash > 0 ? company.financials.quarterlyBurn / openingCash : null;
   const runway = metrics?.runwayQuarters ?? null;
+  // Derived from the filed statements, never stored: consecutive closed quarters
+  // that ended below zero. Two is the wind-up.
+  const negativeQuarters = negativeCashQuarters(company);
   const headcount = headcountOf(company);
   const seat = session.players.find((player) => player.playerId === view.playerId) ?? null;
 
@@ -187,6 +191,18 @@ export default function CommandCentrePage(): React.JSX.Element {
           tone={company.financials.cash <= 0 ? 'loss' : undefined}
           hint={`Quarterly movement ${formatMoney(company.financials.quarterlyBurn)}`}
           href="/capital"
+        />
+        <StatCard
+          label="Solvency"
+          iconName="warning"
+          value={`${negativeQuarters} of ${SOLVENCY_NEGATIVE_QUARTERS}`}
+          tone={negativeQuarters >= SOLVENCY_NEGATIVE_QUARTERS ? 'loss' : negativeQuarters > 0 ? 'warn' : undefined}
+          hint={
+            negativeQuarters === 0
+              ? `Cash ${formatMoney(company.financials.cash)} — no quarter below zero`
+              : `Cash ${formatMoney(company.financials.cash)} — ${SOLVENCY_NEGATIVE_QUARTERS} quarters below zero and the company is wound up`
+          }
+          href="/financials"
         />
         <StatCard
           label="Runway"

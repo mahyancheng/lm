@@ -30,8 +30,15 @@ export function savedFounderName(setup: Pick<NewGameSetup, 'founderName'> | null
   return setup?.founderName ?? DEFAULT_FOUNDER_NAME;
 }
 
-/** The hero button in one line: whose company, and where it stands. */
-export function continueLabel(file: Pick<SaveFile, 'setup' | 'savedQuarter'>): string {
+/**
+ * The hero button in one line: whose company, and where it stands.
+ *
+ * A run that ended is offered for reading rather than for continuing, because
+ * loading it shows the verdict and nothing else.
+ */
+export function continueLabel(file: Pick<SaveFile, 'setup' | 'savedQuarter'> & { readonly endedQuarter?: number | null }): string {
+  const ended = file.endedQuarter ?? null;
+  if (ended !== null) return `Review ${savedCompanyName(file.setup)} — ended ${quarterLabel(DEMO_START_YEAR, ended)}`;
   return `Continue ${savedCompanyName(file.setup)} — ${quarterLabel(DEMO_START_YEAR, file.savedQuarter)}`;
 }
 
@@ -63,6 +70,13 @@ export interface SavePosition {
   readonly savedQuarter: number | null;
   readonly savedAtIso: string | null;
   readonly difficulty?: SessionDifficulty | null;
+  /**
+   * The quarter the run ended in, when the seat was wound up.
+   *
+   * Optional for the same reason `difficulty` is: the host's envelope indexes a
+   * file rather than re-describing one, so a server row simply does not know.
+   */
+  readonly endedQuarter?: number | null;
 }
 
 /**
@@ -72,7 +86,14 @@ export interface SavePosition {
  */
 export function saveDetailLine(summary: SavePosition, now?: () => Date): string {
   const parts: string[] = [];
-  if (summary.savedQuarter !== null) parts.push(quarterLabel(DEMO_START_YEAR, summary.savedQuarter));
+  // An ended run leads with how it ended. The file still loads — the verdict is
+  // worth reading — but where the save sits is no longer the interesting fact.
+  const ended = summary.endedQuarter ?? null;
+  if (ended !== null) {
+    parts.push(`Ended · ${quarterLabel(DEMO_START_YEAR, ended)}`);
+  } else if (summary.savedQuarter !== null) {
+    parts.push(quarterLabel(DEMO_START_YEAR, summary.savedQuarter));
+  }
   if (summary.difficulty !== null && summary.difficulty !== undefined) parts.push(summary.difficulty);
   const saved = shortSavedAt(summary.savedAtIso, now);
   if (saved !== null) parts.push(`saved ${saved}`);

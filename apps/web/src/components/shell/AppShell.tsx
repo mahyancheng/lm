@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { NAV_GROUPS, isGamePath, navGroupFor, navItemFor, navSiblingsFor, primaryHrefOf } from '@/lib/nav';
-import { useGame, useGameActions, useQueuedActions } from '@/lib/game';
+import { PLAYER_ID, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
 import { ActionQueueTray, Icon, cx } from '@/components/ui';
 import { ChiefOfStaffDock } from './ChiefOfStaffDock';
 import { NavRail } from './NavRail';
 import { StatusBar } from './StatusBar';
 import { ResolvingOverlay } from './ResolvingOverlay';
+import { VerdictScreen, verdictOf } from '@/components/screens/verdict';
 
 /**
  * The application shell.
@@ -33,6 +34,9 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
   const { notice } = useGame();
   const { dismissNotice } = useGameActions();
   const queued = useQueuedActions();
+  const session = useSession();
+  const outcome = useOutcome();
+  const founderNetWorthUsd = useFounderNetWorth();
 
   useEffect(() => {
     setNavOpen(false);
@@ -40,6 +44,19 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
 
   if (!isGamePath(pathname)) {
     return <>{children}</>;
+  }
+
+  // The seat is closed: there is nothing left to instruct, so the shell shows
+  // the verdict instead of a rail full of screens that would refuse every
+  // action. The engine decided this, not the screen — `eliminatedQuarter` is set
+  // by the quarter that wound the company up.
+  const verdict = verdictOf(session, {
+    playerId: PLAYER_ID,
+    events: outcome?.events ?? [],
+    founderNetWorthUsd,
+  });
+  if (verdict !== null) {
+    return <VerdictScreen verdict={verdict} startYear={session.startYear} startHref="/" />;
   }
 
   const screen = navItemFor(pathname);

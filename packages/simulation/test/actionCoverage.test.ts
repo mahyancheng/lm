@@ -93,6 +93,29 @@ function stageWorld(): SessionState {
     });
   }
 
+  // A programme already running, so `adjust_research_project` has something to
+  // re-resource. It targets a node no other coverage intent touches.
+  const runningTarget = state.techGraph.nodes[3];
+  if (runningTarget !== undefined) {
+    state.researchProjects.push({
+      id: 'rsp_coverage_player',
+      companyId: DEMO_COMPANIES.player,
+      targetNodeId: runningTarget.id,
+      budgetQuarterly: 1_000_000,
+      computeAllocated: 400,
+      talentAllocated: 6,
+      progress: 0.2,
+      internalConfidence: 0.5,
+      quartersElapsed: 2,
+      expectedQuarters: 8,
+      isSecret: false,
+      status: 'active',
+      cumulativeSpendUsd: 2_000_000,
+      setbacks: 0,
+      startedQuarter: 0,
+    });
+  }
+
   // Something to publish, something to bid on, something to respond to, a deal
   // on the table and a matter before the board.
   const node = state.techGraph.nodes[0];
@@ -184,6 +207,8 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
       return { type, budgetUsd: 2_000_000 };
     case 'start_research_project':
       return { type, targetNodeId: state.techGraph.nodes[1]?.id ?? nodeId, budgetUsd: 1_500_000, computeUnits: 200, researchersAssigned: 8, secret: false };
+    case 'adjust_research_project':
+      return { type, projectId: 'rsp_coverage_player', budgetUsd: 1_500_000, computeUnits: 500, researchersAssigned: 9 };
     case 'propose_innovation':
       return {
         type,
@@ -230,11 +255,16 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
     case 'appoint_executive':
       return { type, characterId: DEMO_CHARACTERS.rowan, executiveRole: 'cfo', annualCompUsd: 900_000 };
     case 'reserve_compute':
-      return { type, units: 2_000, quarters: 6, maxPricePerUnitUsd: 20_000 };
+      return { type, units: 2_000, quarters: 6, maxPricePerUnitUsd: 20_000, providerCompanyId: null };
     case 'buy_cloud_capacity':
       return { type, quarterlySpendUsd: 3_000_000, providerCompanyId: null, commitmentQuarters: 2 };
     case 'allocate_compute':
       return { type, trainingFraction: 0.9 };
+    case 'buy_accelerators':
+      // World 1 has no manufacturers, so this is the one type whose coverage
+      // intent is expected to be refused rather than executed. It is here so the
+      // table stays exhaustive; the world-2 behaviour is tested in sellers.test.ts.
+      return { type, units: 10, maxPricePerUnitUsd: 100_000, sellerCompanyId: null };
     case 'raise_round':
       return { type, stage: 'series_a', targetAmountUsd: 25_000_000, maxDilutionPct: 0.2 };
     case 'issue_debt':
@@ -397,6 +427,13 @@ function substantiveRows(events: readonly SimEvent[]): string[] {
 /*  The table                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Action types world version 1 cannot accept at all. Kept as a named set rather
+ * than as a skip inside the loop so the exclusion is one line to audit and the
+ * assertion below fails the moment it grows silently.
+ */
+const WORLD_2_ONLY_ACTIONS = new Set<ActionType>(['buy_accelerators']);
+
 describe('every accepted action changes something', () => {
   const engine = createDefaultEngine();
   const baseline = engine.resolver.resolveQuarter(stageWorld(), [], null, []);
@@ -408,10 +445,27 @@ describe('every accepted action changes something', () => {
   });
 
   it('covers every action type in the contract', () => {
-    expect(ACTION_TYPES.length).toBe(39);
+    expect(ACTION_TYPES.length).toBe(41);
+    expect([...WORLD_2_ONLY_ACTIONS]).toEqual(['buy_accelerators']);
+  });
+
+  it('refuses the world-2-only actions here rather than silently ignoring them', () => {
+    for (const type of WORLD_2_ONLY_ACTIONS) {
+      const state = stageWorld();
+      const action = submit(state, intentFor(type, state));
+      const outcome = engine.resolver.resolveQuarter(state, [action], null, []);
+      expect(outcome.committed).toBe(true);
+      const verdict = outcome.events.find((event) => event.targetId === action.actionId);
+      expect(`${type}: ${String(verdict?.type)}`).toBe(`${type}: action_rejected`);
+    }
   });
 
   for (const type of ACTION_TYPES) {
+    // World-1 has no manufacturers and no compute sellers, so an action that
+    // exists to name one cannot be accepted here. Its consumption is proved in
+    // `sellers.test.ts`, against a world-2 session, to the same standard: the
+    // quarter commits, no invariant fails, and the world differs afterwards.
+    if (WORLD_2_ONLY_ACTIONS.has(type)) continue;
     it(`${type} is consumed by a phase`, () => {
       const state = stageWorld();
       const action = submit(state, intentFor(type, state));

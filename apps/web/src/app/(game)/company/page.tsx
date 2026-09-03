@@ -33,7 +33,7 @@ import {
   priceStackFor,
   quarterLabel,
 } from '@frontier/contracts';
-import { requiredCompUsd } from '@frontier/simulation';
+import { SOLVENCY_NEGATIVE_QUARTERS, negativeCashQuarters, requiredCompUsd } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@frontier/shared';
 import {
   BarChart,
@@ -119,6 +119,9 @@ export default function CompanyPage(): React.JSX.Element {
 
   const employees = company.employees;
   const headcount = STAFF_ROLES.reduce((total, role) => total + employees[role], 0);
+  // Read off the filed statements, not stored: consecutive closed quarters below
+  // zero. Two of them and the company is wound up.
+  const negativeQuarters = negativeCashQuarters(company);
 
   const roleRows = useMemo<RoleRow[]>(
     () =>
@@ -242,7 +245,7 @@ export default function CompanyPage(): React.JSX.Element {
         <OfficeScene onOpenDrawer={setOpenDrawer} onOpenCharacter={setOpenExecutive} className="rounded-t-none" />
       </Panel>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard label="Headcount" iconName="people" value={headcount} unit="FTE" hint={`${employees.openRoles} roles open`} href="/people" />
         <StatCard
           label="Morale"
@@ -257,6 +260,14 @@ export default function CompanyPage(): React.JSX.Element {
           iconName="coins"
           value={formatMoney(company.financials.payroll)}
           hint={`Average comp ${formatMoney(employees.avgComp)}`}
+          href="/financials"
+        />
+        <StatCard
+          label="Solvency"
+          iconName="warning"
+          value={`${negativeQuarters} of ${SOLVENCY_NEGATIVE_QUARTERS}`}
+          tone={negativeQuarters >= SOLVENCY_NEGATIVE_QUARTERS ? 'loss' : negativeQuarters > 0 ? 'warn' : undefined}
+          hint={`Cash ${formatMoney(company.financials.cash)} · quarters below zero, out of ${SOLVENCY_NEGATIVE_QUARTERS}`}
           href="/financials"
         />
         <StatCard
@@ -482,7 +493,17 @@ export default function CompanyPage(): React.JSX.Element {
         </Panel>
       </div>
 
-      <Panel title="Group structure" iconName="network" subtitle="Subsidiaries and parents, as the public register shows them">
+      <Panel
+        title="Group structure"
+        iconName="network"
+        subtitle="Subsidiaries and parents, as the public register shows them"
+        actions={
+          <Link href="/portfolio" className="btn btn-ghost btn-sm tap-target gap-1.5 sm:min-h-0">
+            <Icon name="portfolio" size={13} accent="current" />
+            What they cost
+          </Link>
+        }
+      >
         {parent === null && subsidiaries.length === 0 ? (
           <EmptyState
             icon="handshake"

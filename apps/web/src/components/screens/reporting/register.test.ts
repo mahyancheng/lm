@@ -159,6 +159,7 @@ describe('the sector roll-up', () => {
         sector: 'logistics',
         region: 'east_asia',
         archetype: null,
+        newLabel: null,
         isPublic: false,
         isOwn: false,
         valueUsd: null,

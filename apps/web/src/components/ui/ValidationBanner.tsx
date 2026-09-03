@@ -17,6 +17,22 @@ export function toneOfStatus(status: ActionValidationResult['status']): Tone {
   return status === 'accepted' ? 'gain' : status === 'clamped' ? 'warn' : 'loss';
 }
 
+/**
+ * Codes that arrive on an *accepted* action as advice rather than refusal.
+ *
+ * From world version 2 cash never rejects or clamps: an instruction that
+ * overdraws the company is accepted whole and carries `insufficient_cash` as a
+ * note saying where the balance lands. That is a warning, not an error, and it
+ * must not read like one — a founder who is told "rejected" and then watches the
+ * action run learns to ignore the banner.
+ */
+export const ADVISORY_CODES: readonly ActionValidationResult['codes'][number][] = ['insufficient_cash'];
+
+/** Whether an accepted result carries an advisory note worth colouring. */
+export function hasAdvisory(result: ActionValidationResult): boolean {
+  return result.status === 'accepted' && result.codes.some((code) => ADVISORY_CODES.includes(code));
+}
+
 /** Human wording for a validation status. */
 export function labelOfStatus(status: ActionValidationResult['status']): string {
   return status === 'accepted' ? 'Accepted' : status === 'clamped' ? 'Clamped' : 'Rejected';
@@ -33,7 +49,8 @@ export function labelOfStatus(status: ActionValidationResult['status']): string 
 export function ValidationBanner({ result, showClamped = true, compact = false, className }: ValidationBannerProps): React.JSX.Element | null {
   if (result === null) return null;
 
-  const tone = toneOfStatus(result.status);
+  const advisory = hasAdvisory(result);
+  const tone = advisory ? 'warn' : toneOfStatus(result.status);
   const boardMatter = result.status === 'clamped' && result.clampedAction?.type === 'submit_board_proposal';
 
   return (
@@ -47,7 +64,7 @@ export function ValidationBanner({ result, showClamped = true, compact = false, 
     >
       <div className="flex flex-wrap items-center gap-2">
         <Tag tone={tone} dot>
-          {boardMatter ? 'Requires board approval' : labelOfStatus(result.status)}
+          {boardMatter ? 'Requires board approval' : advisory ? 'Accepted — watch the cash' : labelOfStatus(result.status)}
         </Tag>
         {result.codes.map((code) => (
           <span key={code} className="figure text-[10px] text-ink-faint">

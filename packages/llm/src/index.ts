@@ -110,15 +110,21 @@ export {
   enforceConfirmationPolicy,
   enforceInterpretationPolicy,
   enforceModePolicy,
+  enforceResearchPolicy,
   renderAvailableAction,
   renderDossier,
+  renderFinding,
 } from './compose/chiefOfStaff';
 export {
   COS_QUESTION_KINDS,
+  actionsFromFindings,
   answerFromDossier,
+  answerFromFinding,
   bestProduct,
   classifyQuestion,
   offlineChiefOfStaff,
+  sourcingRequestsFor,
+  unitsInMessage,
   worstProduct,
   type CosQuestionKind,
 } from './chiefOfStaffOffline';

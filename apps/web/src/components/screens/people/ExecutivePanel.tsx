@@ -36,6 +36,7 @@ import {
   Panel,
   PersonChip,
   SectionHeading,
+  CashAfter,
   SliderField,
   Tag,
   ValidationBanner,
@@ -116,10 +117,13 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
   }
 
   const appointCompValue = Number.parseFloat(appointComp);
+  // Cash sets the shape of the range, not its limit: from world version 2 a
+  // package is never cut down to the balance, so the ceiling stays usable on an
+  // overdrawn company and the preview below says what the first quarter costs.
   const appointCompMax = Math.max(
-    Math.min(company.financials.cash * 4, 20_000_000),
+    Math.min(Math.max(0, company.financials.cash) * 4, 20_000_000),
     Number.isFinite(appointCompValue) ? appointCompValue : 0,
-    1_000_000,
+    2_000_000,
   );
   const appointPreview =
     appointId.length === 0 || !Number.isFinite(appointCompValue)
@@ -296,6 +300,14 @@ export function ExecutivePanel({ session, company, founder, view }: ExecutivePan
             format={formatMoney}
           />
           <span className="mt-1 block text-[11px] text-ink-faint">A year — the first quarter is charged against uncommitted cash.</span>
+          <div className="mt-2">
+            <CashAfter
+              company={company}
+              spendUsd={(Number.isFinite(appointCompValue) ? appointCompValue : 0) / 4}
+              label="Cash after the first quarter"
+              note="One quarter of the package is committed now."
+            />
+          </div>
         </div>
 
         <div className="mt-2.5 flex justify-end">

@@ -416,7 +416,7 @@ export const VALID_NPC_BUNDLE = {
   companyId: NEXUS_ID,
   strategySummary: 'Lock capacity ahead of the squeeze and hold enterprise pricing rather than chase volume.',
   posture: 'aggressive_growth' as const,
-  actions: [{ type: 'reserve_compute' as const, units: 45_000, quarters: 6, maxPricePerUnitUsd: 20_000 }],
+  actions: [{ type: 'reserve_compute' as const, units: 45_000, quarters: 6, maxPricePerUnitUsd: 20_000, providerCompanyId: null }],
   rationale: 'Supply is repricing weekly and our reservation book expires before the shortage is expected to clear.',
 };
 
@@ -563,6 +563,18 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           revenueQuarterlyUsd: 1_400_000_000,
           marketCapUsd: 31_000_000_000,
           enterpriseReputation: 74,
+        },
+      ],
+      newEntrants: [
+        {
+          companyId: 'cmp_everline_research_q3',
+          name: 'Everline Research',
+          sectorId: 'ai',
+          region: 'north_america',
+          foundedQuarter: 3,
+          seedCapitalUsd: 210_000_000,
+          inYourRegion: true,
+          replacesName: null,
         },
       ],
     },

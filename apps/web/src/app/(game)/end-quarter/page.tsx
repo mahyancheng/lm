@@ -27,7 +27,9 @@ import Link from 'next/link';
 import type { ResolutionPhase } from '@frontier/contracts';
 import { RESOLUTION_PHASES, quarterLabel } from '@frontier/contracts';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
+import { SOLVENCY_NEGATIVE_QUARTERS } from '@frontier/simulation';
 import {
+  CashAfter,
   ConfirmDialog,
   EmptyState,
   Icon,
@@ -37,7 +39,9 @@ import {
   StatCard,
   Tag,
   ValidationBanner,
+  cashAfterOf,
   cx,
+  hasAdvisory,
   labelOfStatus,
   toneOfStatus,
 } from '@/components/ui';
@@ -103,6 +107,10 @@ export default function EndQuarterPage(): React.JSX.Element {
   const available = company.financials.cash;
   const committedShare = available <= 0 ? 1 : cash.outflow / available;
   const overCommitted = cash.outflow > available;
+  // Where the balance lands if this submission runs as queued, and what that
+  // costs. Nothing is clamped for cash any more: the engine takes the
+  // commitment and the solvency clock is the consequence.
+  const solvency = cashAfterOf(company, cash.outflow - cash.inflow);
 
   /* --- grouping ------------------------------------------------------------ */
 
@@ -204,9 +212,10 @@ export default function EndQuarterPage(): React.JSX.Element {
               </StickyNote>
             ) : null}
             {overCommitted ? (
-              <StickyNote tone="loss" title="More than you hold">
-                You have committed {formatMoney(cash.outflow)} against {formatMoney(available)} of cash. The validator clamps what it can;
-                what it cannot, the financial phase will.
+              <StickyNote tone={solvency.afterUsd < 0 ? 'loss' : 'warn'} title="More than you hold">
+                You have committed {formatMoney(cash.outflow)} against {formatMoney(available)} of cash. Nothing is refused for that:
+                the quarter closes at {formatMoney(solvency.afterUsd)}
+                {solvency.line === null ? ' and the company stays solvent.' : `. ${solvency.line}`}
               </StickyNote>
             ) : null}
           </div>
@@ -302,7 +311,7 @@ export default function EndQuarterPage(): React.JSX.Element {
                               </p>
                             ) : null}
 
-                            {entry.validation.status === 'accepted' ? null : (
+                            {entry.validation.status === 'accepted' && !hasAdvisory(entry.validation) ? null : (
                               <div className="mt-2">
                                 <ValidationBanner result={entry.validation} />
                               </div>
@@ -331,6 +340,9 @@ export default function EndQuarterPage(): React.JSX.Element {
               valueLabel={`${formatMoney(cash.outflow)} / ${formatMoney(available)}`}
               height={8}
             />
+            <div className="mt-3">
+              <CashAfter company={company} spendUsd={cash.outflow - cash.inflow} label="Cash at the close" note="Cash on hand covers the quarter." />
+            </div>
             {cash.lines.length === 0 ? (
               <p className="mt-3 text-[11px] text-ink-faint">Nothing queued moves cash this quarter.</p>
             ) : (
@@ -531,6 +543,15 @@ export default function EndQuarterPage(): React.JSX.Element {
           { label: 'Instructions', value: String(queue.length) },
           { label: 'Cash committed', value: formatMoney(cash.outflow), emphasis: overCommitted },
           { label: 'Cash sought', value: formatMoney(cash.inflow) },
+          { label: 'Cash at the close', value: formatMoney(solvency.afterUsd), emphasis: solvency.afterUsd < 0 },
+          {
+            label: 'Solvency',
+            value:
+              solvency.line === null
+                ? 'Above zero'
+                : `${solvency.quarters + 1} of ${SOLVENCY_NEGATIVE_QUARTERS} quarters below zero`,
+            emphasis: solvency.afterUsd < 0,
+          },
           { label: 'World and rivals', value: llm.available && settings.useLiveModel ? 'Model-directed' : 'Deterministic' },
         ]}
         requireTyped="RESOLVE"

@@ -11,11 +11,11 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { ActionIntent, ActionValidationResult, FundingStage } from '@frontier/contracts';
+import type { ActionIntent, ActionValidationResult, Company, FundingStage } from '@frontier/contracts';
 import { FUNDING_STAGES } from '@frontier/contracts';
 import { MAX_ROUND_DILUTION_PCT } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
-import { ConfirmDialog, NowAfter, SliderField, TabBar, ValidationBanner, roundStep } from '@/components/ui';
+import { CashAfter, ConfirmDialog, NowAfter, SliderField, TabBar, ValidationBanner, cashAfterOf, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { formatCount, titleise } from '../reporting/util';
 
@@ -30,8 +30,8 @@ const TABS = [
 export interface CapitalTicketsProps {
   /** Fully diluted count before the raise, for the dilution preview. */
   readonly fullyDilutedShares: number;
-  /** Cash on hand, so a buyback budget can be read against it. */
-  readonly cash: number;
+  /** The company itself: the buyback preview reads its cash and its solvency clock. */
+  readonly company: Company;
   /** Last price or anchor per share, used as the buyback default. */
   readonly pricePerShare: number;
 }
@@ -41,7 +41,8 @@ function numberOf(value: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: CapitalTicketsProps): React.JSX.Element {
+export function CapitalTickets({ fullyDilutedShares, company, pricePerShare }: CapitalTicketsProps): React.JSX.Element {
+  const cash = company.financials.cash;
   const { validateIntent, queueAction } = useGameActions();
   const [tab, setTab] = useState<TicketId>('raise');
   const [pending, setPending] = useState<ActionIntent | null>(null);
@@ -101,6 +102,9 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
   const newShares = raiseDilution > 0 && raiseDilution < 1 ? (fullyDilutedShares * raiseDilution) / (1 - raiseDilution) : 0;
   const quarterlyInterest = (numberOf(debtAmount) * (numberOf(maxRate) / 100)) / 4;
   const buybackShares = numberOf(maxPrice) > 0 ? Math.floor(numberOf(budget) / numberOf(maxPrice)) : 0;
+  // Where the buyback leaves the balance, and the solvency clock if that is
+  // below zero. The engine takes the budget whole either way.
+  const solvency = cashAfterOf(company, numberOf(budget));
 
   const dialogTerms =
     tab === 'raise'
@@ -122,7 +126,8 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
             { label: 'Budget', value: formatMoney(numberOf(budget)), emphasis: true },
             { label: 'Price ceiling', value: formatMoney(numberOf(maxPrice)) },
             { label: 'Shares at ceiling', value: formatCount(buybackShares) },
-            { label: 'Cash after', value: formatMoney(cash - numberOf(budget)) },
+            { label: 'Cash after', value: formatMoney(cash - numberOf(budget)), emphasis: cash - numberOf(budget) < 0 },
+            ...(solvency.line === null ? [] : [{ label: 'Solvency', value: solvency.line, emphasis: true }]),
           ];
 
   const dialogTitle = tab === 'raise' ? 'Attempt a private round' : tab === 'debt' ? 'Attempt a debt issue' : 'Repurchase shares';
@@ -270,6 +275,9 @@ export function CapitalTickets({ fullyDilutedShares, cash, pricePerShare }: Capi
               format={formatMoney}
             />
             <span className="mt-1 block text-[10px] text-ink-faint">{formatCount(buybackShares)} shares at the ceiling</span>
+          </div>
+          <div className="sm:col-span-2">
+            <CashAfter company={company} spendUsd={numberOf(budget)} note="Paid out of cash in the capital phase." />
           </div>
         </div>
       ) : null}

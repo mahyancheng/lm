@@ -75,6 +75,16 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
         ],
       };
 
+    case 'adjust_research_project':
+      return {
+        label: 'Re-resource a running programme',
+        terms: [
+          term('Budget a quarter', formatMoney(intent.budgetUsd)),
+          term('Compute', `${intent.computeUnits} accelerators`),
+          term('Researchers', String(intent.researchersAssigned)),
+        ],
+      };
+
     case 'propose_innovation':
       return {
         label: `Propose a new node: ${intent.proposal.title}`,
@@ -171,6 +181,15 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
           term('Quarterly spend', formatMoney(intent.quarterlySpendUsd)),
           term('Provider', intent.providerCompanyId ?? 'At market'),
           term('Commitment', intent.commitmentQuarters === 0 ? 'Fully flexible' : `${intent.commitmentQuarters} quarters`),
+        ],
+      };
+
+    case 'buy_accelerators':
+      return {
+        label: `Buy ${intent.units} accelerators`,
+        terms: [
+          term('Seller', intent.sellerCompanyId ?? 'Cheapest with capacity'),
+          term('Price ceiling', `${formatMoney(intent.maxPricePerUnitUsd)} an accelerator'`.replace("'", '')),
         ],
       };
 
@@ -409,10 +428,12 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
 
   set_research_budget: 'research_resolution',
   start_research_project: 'research_resolution',
+  adjust_research_project: 'research_resolution',
   propose_innovation: 'research_resolution',
   publish_research: 'research_resolution',
   reserve_compute: 'research_resolution',
   buy_cloud_capacity: 'research_resolution',
+  buy_accelerators: 'product_demand_resolution',
   allocate_compute: 'research_resolution',
 
   set_product_price: 'product_demand_resolution',
@@ -500,6 +521,12 @@ export function cashEffectOf(session: SessionState, intent: ActionIntent): CashE
       };
     case 'buy_cloud_capacity':
       return { outflowUsd: intent.quarterlySpendUsd, inflowUsd: 0, note: 'On-demand, this quarter.' };
+    case 'buy_accelerators':
+      return {
+        outflowUsd: intent.units * intent.maxPricePerUnitUsd,
+        inflowUsd: 0,
+        note: 'At your stated ceiling. Capital, paid in the quarter it clears; the seller books it as revenue.',
+      };
     case 'buyback':
       return { outflowUsd: intent.budgetUsd, inflowUsd: 0, note: 'Capital returned rather than invested.' };
     case 'acquire_company':

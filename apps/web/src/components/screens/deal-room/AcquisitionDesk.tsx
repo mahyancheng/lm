@@ -12,10 +12,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import type { ActionIntent, ActionValidationResult, Sector } from '@frontier/contracts';
+import type { ActionIntent, ActionValidationResult, Company, Sector } from '@frontier/contracts';
 import { SECTORS, SECTOR_META } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { ConfirmDialog, KeyValueGrid, SectorBadge, SliderField, Tag, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
+import { CashAfter, ConfirmDialog, KeyValueGrid, SectorBadge, SliderField, Tag, ValidationBanner, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 
 export interface AcquisitionTarget {
@@ -32,11 +32,13 @@ export interface AcquisitionDeskProps {
   readonly targets: readonly AcquisitionTarget[];
   /** Set by the distress radar when the player picks a company off it. */
   readonly preselectedId: string | null;
-  readonly availableCashUsd: number;
+  /** The acquirer: the desk reads its cash and its solvency clock. */
+  readonly company: Company;
   readonly hasBoard: boolean;
 }
 
-export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasBoard }: AcquisitionDeskProps): React.JSX.Element {
+export function AcquisitionDesk({ targets, preselectedId, company, hasBoard }: AcquisitionDeskProps): React.JSX.Element {
+  const availableCashUsd = company.financials.cash;
   const { queueAction, validateIntent } = useGameActions();
 
   const [targetId, setTargetId] = useState(preselectedId ?? targets[0]?.id ?? '');
@@ -178,6 +180,8 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             ]}
           />
 
+          <CashAfter company={company} spendUsd={cashNeeded} note="Payable in the capital phase if the offer is accepted." />
+
           {hasBoard ? (
             <p className="rounded-card border border-warn/25 bg-warn-wash px-3 py-2 text-[13px] leading-relaxed text-warn sm:text-[11px]">
               Your company has a board, so this will be tabled as an acquisition matter rather than executed. Directors negotiate hardest
@@ -206,8 +210,8 @@ export function AcquisitionDesk({ targets, preselectedId, availableCashUsd, hasB
             </button>
             {cashNeeded > availableCashUsd ? (
               <span className="col-span-2 sm:col-span-1">
-                <Tag tone="loss" dot>
-                  Cash component exceeds uncommitted cash
+                <Tag tone="warn" dot>
+                  The offer runs on the overdraft
                 </Tag>
               </span>
             ) : null}

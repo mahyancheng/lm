@@ -29,7 +29,14 @@ import type {
   SessionState,
   WorldEvent,
 } from '@frontier/contracts';
-import { projectEconomyReportForPlayer, researchProjectsForCompany, techGraphForCompany } from '@frontier/simulation';
+import {
+  SOLVENCY_NEGATIVE_QUARTERS,
+  founderPortfolioOf,
+  negativeCashQuarters,
+  projectEconomyReportForPlayer,
+  researchProjectsForCompany,
+  techGraphForCompany,
+} from '@frontier/simulation';
 import { formatMoney, formatQuarterCount } from '@frontier/shared';
 import { PLAYER_ID, playerCharacterOf, playerCompanyOf } from './engine';
 
@@ -129,8 +136,17 @@ export function buildAlerts(session: SessionState): string[] {
   if (metrics !== null && metrics.runwayQuarters < 6) {
     alerts.push(`Runway is ${formatQuarterCount(metrics.runwayQuarters)} at the current burn.`);
   }
+  // The solvency clock, in the words the previews and the Command Centre use.
+  // Two quarter-ends below zero is the whole bankruptcy rule, so the count is
+  // what the alert states — not a general warning that says nothing about how
+  // much time is left.
+  const negativeQuarters = negativeCashQuarters(company);
   if (company.financials.cash < 0) {
-    alerts.push('Cash balance is negative; financing or cuts are required this quarter.');
+    alerts.push(
+      negativeQuarters >= SOLVENCY_NEGATIVE_QUARTERS
+        ? `Cash has been below zero for ${negativeQuarters} quarters; the company is being wound up.`
+        : `Cash is ${formatMoney(company.financials.cash)} — ${negativeQuarters} of ${SOLVENCY_NEGATIVE_QUARTERS} quarters below zero. One more and the company is wound up.`,
+    );
   }
 
   const proposals = session.boardProposals.filter((proposal) => proposal.companyId === company.id && proposal.status === 'tabled');
@@ -226,7 +242,22 @@ export function projectPlayerView(session: SessionState): PlayerView {
     leaderboards: session.leaderboards,
     objectives: session.objectives.filter((objective) => objective.playerId === null || objective.playerId === PLAYER_ID),
     alerts: buildAlerts(session),
+    // The one fact that changes what the shell renders rather than what a screen
+    // says: a seat whose company was wound up sees the verdict, not the game.
+    eliminatedQuarter: eliminatedQuarterOf(session),
   };
+}
+
+/**
+ * The quarter this seat was wound up, or null while it is playing.
+ *
+ * Read off the seat rather than off the company: a husk is still `isActive` so
+ * that somebody can buy it, and "the company has no staff" is not the same
+ * statement as "this player is out of the game".
+ */
+export function eliminatedQuarterOf(session: SessionState): number | null {
+  const seat = session.players.find((player) => player.playerId === PLAYER_ID) ?? null;
+  return seat?.eliminatedQuarter ?? null;
 }
 
 /**
@@ -274,12 +305,19 @@ export function marketCapOf(session: SessionState, companyId: string): number {
   return anchor?.anchorValueUsd ?? 0;
 }
 
-/** The founder's personal net worth, as the leaderboard measures it. */
+/**
+ * The founder's personal net worth, as the leaderboard measures it.
+ *
+ * The board is preferred where it exists because it is the figure the founder is
+ * ranked on; `founderPortfolioOf` is the same arithmetic run over current state,
+ * and it is what answers before the first quarter has resolved — where the old
+ * fallback said "personal cash" and quietly omitted the founder's own equity.
+ */
 export function founderNetWorth(session: SessionState): number {
   const character = playerCharacterOf(session);
   const board = session.leaderboards.find((entry) => entry.board === 'founder_wealth');
   const row = board?.entries.find((entry) => entry.subjectId === character.id);
-  return row?.value ?? character.personalWealthUsd;
+  return row?.value ?? founderPortfolioOf(session, PLAYER_ID).netWorthUsd;
 }
 
 /** One leaderboard by name, or null when the session has not resolved a quarter yet. */

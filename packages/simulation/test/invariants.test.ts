@@ -271,7 +271,7 @@ function chaosFor(state: SessionState, quarter: number): { actions: SubmittedAct
   const actions: SubmittedAction[] = [
     player(0, { type: 'set_research_budget', budgetUsd: 900_000 * (quarter + 1) }),
     player(1, { type: 'hire', role: quarter % 2 === 0 ? 'engineers' : 'researchers', count: 3 + quarter, compBand: 'above_market' }),
-    player(2, { type: 'reserve_compute', units: 200 * (quarter + 1), quarters: 4, maxPricePerUnitUsd: 6_000 }),
+    player(2, { type: 'reserve_compute', units: 200 * (quarter + 1), quarters: 4, maxPricePerUnitUsd: 6_000, providerCompanyId: null }),
     player(3, {
       type: 'set_marketing_budget',
       allocations: [
@@ -329,7 +329,7 @@ function chaosFor(state: SessionState, quarter: number): { actions: SubmittedAct
       actions: [
         { type: 'set_research_budget', budgetUsd: 1_100_000_000 },
         { type: 'hire', role: 'researchers', count: 60, compBand: 'top_of_market' },
-        { type: 'reserve_compute', units: 40_000, quarters: 6, maxPricePerUnitUsd: 5_000 },
+        { type: 'reserve_compute', units: 40_000, quarters: 6, maxPricePerUnitUsd: 5_000, providerCompanyId: null },
         { type: 'give_guidance', metric: 'revenue', value: 2_200_000_000 + quarter * 50_000_000, quarter: quarter + 1 },
       ],
       rationale: 'The board bought a model schedule and the schedule is what has to be defended.',

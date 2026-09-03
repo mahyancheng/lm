@@ -13,14 +13,17 @@
  * public figure. No rival's private conviction reaches this file, so the
  * conviction tick on a node is always the viewer's own.
  *
- * **The drawing rule.** A node is a calm white card. Exactly one thing on it
- * carries the epistemic-state colour — a 4px left accent bar and a matching
- * dot — and exactly one thing carries a number: the public-confidence bar
- * along the bottom, with your own conviction as a tick under it. Edges live at
- * a low opacity and are told apart by form, not colour. The one moment the map
- * uses colour loudly is the moment you point at something: the node under the
- * pointer, its direct neighbours and the edges between them come up to full
- * strength and everything else recedes.
+ * **The drawing rule.** A node is a calm white card carrying **one state and
+ * one line**: Locked (and what is missing), Available, In progress (how far and
+ * how long is left) or Done (and by whom). That state rides a 4px left accent
+ * bar and the line along the bottom, and nothing else on the card carries a
+ * colour or a number — the epistemic state, the confidence figures, the novelty
+ * and the arrival window moved into the card's Details, because none of them
+ * told a founder what to do next. Edges live at a low opacity and are told
+ * apart by form, not colour. The one moment the map uses colour loudly is the
+ * moment you point at something: the node under the pointer, its direct
+ * neighbours and the edges between them come up to full strength and everything
+ * else recedes.
  */
 
 import { useId, useMemo, useState } from 'react';
@@ -28,11 +31,10 @@ import type { TechGraph, TechNode } from '@frontier/contracts';
 import { SECTOR_META } from '@frontier/contracts';
 import { SECTOR_TINT, TONE_VAR, type Tone } from '@/components/ui';
 import { EDGE_STYLE, STATE_STYLE, layoutGraph, wrapTitle, type LaidOutNode } from './graphLayout';
+import { NODE_STATE_TONE, type NodeState } from './nodeState';
 
 export interface FrontierMapProps {
   readonly graph: TechGraph;
-  /** The viewing company, whose own conviction is drawn as the bar's tick. */
-  readonly companyId: string;
   readonly selectedNodeId: string | null;
   readonly onSelect: (nodeId: string) => void;
   /** Nodes whose public confidence moved when the last quarter resolved. */
@@ -48,6 +50,14 @@ export interface FrontierMapProps {
    * and the state dot still carry the state, and nothing else does.
    */
   readonly showSectors?: boolean;
+  /**
+   * The four-state reading of every node, keyed by node id.
+   *
+   * Computed once by the screen from the engine's own functions
+   * (`unmetDependencies`, `runningForecast`) and handed down, so the map draws
+   * a state it was given rather than deriving one of its own.
+   */
+  readonly states: ReadonlyMap<string, NodeState>;
 }
 
 /** The pale tint of a tone. Only `achieved` ever uses one. */
@@ -68,12 +78,12 @@ const TITLE_CHAR_WIDTH = 6.7;
 
 export function FrontierMap({
   graph,
-  companyId,
   selectedNodeId,
   onSelect,
   changedNodeIds,
   highlightIds,
   showSectors = false,
+  states,
 }: FrontierMapProps): React.JSX.Element {
   const markerId = useId().replace(/:/g, '');
   const layout = useMemo(() => layoutGraph(graph), [graph]);
@@ -149,7 +159,7 @@ export function FrontierMap({
             <MapNode
               key={laid.node.id}
               laid={laid}
-              companyId={companyId}
+              state={states.get(laid.node.id) ?? { kind: 'available', line: 'Available', progress: null }}
               showSector={showSectors}
               selected={laid.node.id === selectedNodeId}
               changed={changedNodeIds.has(laid.node.id)}
@@ -176,7 +186,8 @@ export function FrontierMap({
 
 interface MapNodeProps {
   readonly laid: LaidOutNode;
-  readonly companyId: string;
+  /** Which of the four states this node is in, and the line that says so. */
+  readonly state: NodeState;
   /** Draw the sector stripe along the card's top edge. */
   readonly showSector: boolean;
   readonly selected: boolean;
@@ -190,35 +201,37 @@ interface MapNodeProps {
   readonly onRelease: (nodeId: string) => void;
 }
 
-function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onSelect, onFocus, onRelease }: MapNodeProps): React.JSX.Element {
+/** Mean advance of the state line at 8.5px, measured in-browser. */
+const LINE_CHAR_WIDTH = 4.9;
+
+/** Cut a line to what the card can actually hold, with an ellipsis when it bites. */
+export function fitLine(text: string, availablePx: number): string {
+  const max = Math.max(4, Math.floor(availablePx / LINE_CHAR_WIDTH));
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function MapNode({ laid, state, showSector, selected, changed, lit, dim, onSelect, onFocus, onRelease }: MapNodeProps): React.JSX.Element {
   const node: TechNode = laid.node;
   const style = STATE_STYLE[node.status];
-  const colour = TONE_VAR[style.tone];
-  const own = node.confidenceByCompany[companyId];
+  const colour = TONE_VAR[NODE_STATE_TONE[state.kind]];
   const lines = wrapTitle(node.title);
   const { x, y, width, height } = laid;
 
   const badges: readonly { readonly glyph: string; readonly fill: string; readonly key: string }[] = [
-    ...(node.achievedByCompanyId !== null ? [{ glyph: '✓', fill: 'var(--color-gain)', key: 'achieved' }] : []),
     ...(node.originalProposerId !== null ? [{ glyph: '★', fill: 'var(--color-brand)', key: 'proposed' }] : []),
     ...(style.locked ? [{ glyph: '▣', fill: 'var(--color-warn)', key: 'secret' }] : []),
     ...(changed ? [{ glyph: 'Δ', fill: 'var(--color-info)', key: 'moved' }] : []),
   ];
 
   const barX = x + 13;
-  const barY = y + height - 11;
+  const barY = y + height - 16;
   const barWidth = Math.max(40, width - 26 - badges.length * 11);
-  const publicPct = Math.max(0, Math.min(1, node.publicConfidence));
+  // A bar only where a bar means something: a programme's progress. Nothing
+  // else on the card is a quantity.
+  const runningPct = state.kind === 'running' ? state.progress : null;
 
-  const border = selected
-    ? 'var(--color-brand-strong)'
-    : lit
-      ? 'var(--color-brand)'
-      : style.dashed
-        ? 'var(--color-hair-strong)'
-        : 'var(--color-hair)';
+  const border = selected ? 'var(--color-brand-strong)' : lit ? 'var(--color-brand)' : 'var(--color-hair)';
 
-  const ownLabel = own === undefined ? '' : `, your conviction ${Math.round(own * 100)} percent`;
   const sectorLabel = showSector ? `, ${SECTOR_META[node.sector].label} track` : '';
 
   return (
@@ -241,7 +254,7 @@ function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onS
       onBlur={() => onRelease(node.id)}
       role="button"
       tabIndex={0}
-      aria-label={`${node.title}${sectorLabel} — ${style.label}, public confidence ${Math.round(node.publicConfidence * 100)} percent${ownLabel}`}
+      aria-label={`${node.title}${sectorLabel} — ${state.line}`}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -256,16 +269,14 @@ function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onS
         width={width}
         height={height}
         rx={10}
-        fill={style.wash ? TONE_WASH_VAR[style.tone] : 'var(--color-panel)'}
+        fill={state.kind === 'done' ? TONE_WASH_VAR[NODE_STATE_TONE.done] : 'var(--color-panel)'}
         stroke={border}
         strokeWidth={selected ? 2 : lit ? 1.5 : 1}
-        strokeDasharray={style.dashed ? '3.5 2.5' : undefined}
         style={{ transition: EASE }}
       />
 
-      {/* the one place the epistemic colour lives: an accent bar and a dot */}
+      {/* the one place a colour lives: an accent bar in the state's tone */}
       <rect x={x} y={y + 8} width={4} height={height - 16} rx={2} fill={colour} />
-      <circle cx={x + width - 11} cy={y + 12.5} r={3.5} fill={colour} />
 
       {/* The sector, as a stripe along the top edge. A different edge and a
           different shape from the state accent, so the two never read as one
@@ -278,10 +289,12 @@ function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onS
         </text>
       ))}
 
-      {/* A dead end is struck through, line by line — one rule across the whole
-          card would read as a divider rather than as a deletion. The width is
-          estimated from the character count because SVG cannot measure text
-          before it paints, and it is clamped to the card either way. */}
+      {/* A dead end is struck through, line by line. It is the one thing outside
+          the four states that a card still says, because it prevents a real
+          mistake: a dead end is "available" and pointless. One rule across the
+          whole card would read as a divider rather than as a deletion, and the
+          width is estimated from the character count because SVG cannot measure
+          text before it paints. */}
       {style.struck
         ? lines.map((line, index) => (
             <line
@@ -290,22 +303,25 @@ function MapNode({ laid, companyId, showSector, selected, changed, lit, dim, onS
               y1={y + 13 + index * 11}
               x2={Math.min(x + 12 + line.length * TITLE_CHAR_WIDTH, x + width - 20)}
               y2={y + 13 + index * 11}
-              stroke={colour}
+              stroke="var(--color-loss)"
               strokeWidth="1.1"
               opacity="0.9"
             />
           ))
         : null}
 
-      {/* one bar: what the world believes, with your own conviction ticked under it */}
-      <rect x={barX} y={barY} width={barWidth} height={3} rx={1.5} fill="var(--color-hair)" />
-      <rect x={barX} y={barY} width={barWidth * publicPct} height={3} rx={1.5} fill={colour} />
-      {own === undefined ? null : (
-        <path
-          d={`M ${barX + barWidth * Math.max(0, Math.min(1, own))} ${barY + 3.4} l 3.1 4 l -6.2 0 z`}
-          fill="var(--color-brand)"
-        />
+      {/* one bar, and only for a programme that is actually running */}
+      {runningPct === null ? null : (
+        <>
+          <rect x={barX} y={barY} width={barWidth} height={3} rx={1.5} fill="var(--color-hair)" />
+          <rect x={barX} y={barY} width={barWidth * runningPct} height={3} rx={1.5} fill={colour} />
+        </>
       )}
+
+      {/* the one line: which of the four states this is, and what that means */}
+      <text x={x + 13} y={y + height - 6.5} fontSize="8.5" fill={colour} fontWeight={500}>
+        {fitLine(state.line, barWidth)}
+      </text>
 
       {badges.map((badge, index) => (
         <text

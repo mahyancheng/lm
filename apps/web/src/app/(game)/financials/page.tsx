@@ -167,7 +167,19 @@ export default function FinancialsPage(): React.JSX.Element {
     { key: 'cash', label: 'Cash and equivalents', value: formatMoney(company.balanceSheet.assets.cash), indent: true },
     { key: 'ppe', label: 'Property, plant and equipment', value: formatMoney(company.balanceSheet.assets.ppe), indent: true },
     { key: 'goodwill', label: 'Goodwill', value: formatMoney(company.balanceSheet.assets.goodwill), indent: true },
-    { key: 'investments', label: 'Investments', value: formatMoney(company.balanceSheet.assets.investments), indent: true },
+    {
+      key: 'investments',
+      // Carried at cost, and the positions behind it are on their own screen —
+      // this line is a total, and a total is not a portfolio.
+      label: (
+        <Link href="/portfolio" className="hover:text-brand">
+          Investments
+        </Link>
+      ),
+      value: formatMoney(company.balanceSheet.assets.investments),
+      indent: true,
+      hint: 'Stakes and subsidiaries, at cost. The Portfolio screen lists them.',
+    },
     { key: 'receivables', label: 'Receivables', value: formatMoney(company.balanceSheet.assets.receivables), indent: true },
     { key: 'assets', label: 'Total assets', value: formatMoney(sheet.totalAssets), emphasis: true },
     { key: 'debt', label: 'Interest-bearing debt', value: formatMoney(company.balanceSheet.liabilities.debt), indent: true, onClick: () => setSelection('debt') },

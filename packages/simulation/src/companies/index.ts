@@ -50,9 +50,38 @@ export {
   unclampedGrossMargin,
 } from './products';
 export { resolveComputeOrders, reservedUnitPriceUsd } from './compute';
-export { resolveFinancials, computeCost, lastQuarterNetIncomeUsd } from './financials';
+export {
+  ACCELERATOR_SELLER_ARCHETYPES,
+  MANUFACTURING_SECTORS,
+  SELLER_ENERGY_WEIGHT,
+  SELLER_FACTOR_BOUNDS,
+  SELLER_UTILISATION_WEIGHT,
+  acceleratorOutputUnits,
+  acceleratorSupplyFactor,
+  acceleratorUnitPriceUsd,
+  cloudUnitPriceUsd,
+  makesAccelerators,
+  ownComputeNeedUnits,
+  rentsCapacity,
+  reservationUnitPriceUsd,
+  resolveCloudSeller,
+  resolveComputeSeller,
+  sellableCapacityUnits,
+  sellerPriceFactor,
+  sellersFor,
+} from './sellers';
+export type { ComputeSeller } from './sellers';
+export {
+  cloudChargeUsd,
+  counterpartyCharges,
+  counterpartyRevenueByCompany,
+  reservationChargeUsd,
+} from './counterparty';
+export type { CounterpartyCharge } from './counterparty';
+export { resolveFinancials, computeCost, COUNTERPARTY_DEFAULT_MARGIN, counterpartyMarginOf, lastQuarterNetIncomeUsd } from './financials';
 export type { ComputeCostBreakdown } from './financials';
 export { appendFinancialQuarter, financialHistoryOf, financialQuarterOf, recentFinancialQuarters, stampMarketKpis } from './history';
+export { isInsolvent, negativeCashQuarters, overdraftChargeUsd, solvencyCommitmentNote, solvencyLine } from './solvency';
 export type { FinancialQuarterInput } from './history';
 export {
   resolveDistress,
@@ -64,6 +93,22 @@ export {
   isWoundUp,
 } from './distress';
 export type { AdministrationCause } from './distress';
+export {
+  ACTIVE_COMPANY_CAP,
+  ENTRANTS_PER_QUARTER,
+  FOUNDER_NAME_BANK,
+  NAME_BANK,
+  NEW_ENTRANT_QUARTERS,
+  activeNonHuskCount,
+  closeEliminatedSeats,
+  isEliminated,
+  isNewEntrant,
+  leadInvestorFor,
+  regionWeightFor,
+  resolveMarketEntry,
+  seedCapitalUsd,
+} from './entrants';
+export type { AdministrationRow, MarketEntry } from './entrants';
 export { applyNpcDefaults, bidTarget } from './npc';
 export { recomputeMetrics, recomputeAntitrustExposure, recomputeControlStatus } from './metrics';
 export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';

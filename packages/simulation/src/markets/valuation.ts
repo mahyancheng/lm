@@ -56,7 +56,7 @@ const EARLY_STAGE_ANNUAL_USD = 50_000_000;
 /** Annual revenue above which a profitable, slow-growing company is valued on cash. */
 const MATURE_ANNUAL_USD = 500_000_000;
 
-const INFRASTRUCTURE_ARCHETYPES: readonly string[] = ['infrastructure', 'cloud', 'chip_maker'];
+export const INFRASTRUCTURE_ARCHETYPES: readonly string[] = ['infrastructure', 'cloud', 'chip_maker'];
 
 /** The named numbers behind a method, kept so the Markets screen can show the working. */
 type AnchorInputs = Record<string, number>;

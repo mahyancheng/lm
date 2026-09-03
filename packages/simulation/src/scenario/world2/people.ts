@@ -75,7 +75,7 @@ export const W2_FUND_PRINCIPALS: Readonly<Record<string, string>> = {
 /*  Seeds                                                                      */
 /* -------------------------------------------------------------------------- */
 
-type Traits = readonly [number, number, number, number, number];
+export type Traits = readonly [number, number, number, number, number];
 
 interface FounderSeed {
   readonly companyId: string;
@@ -694,7 +694,15 @@ const CAST_SEEDS: readonly CastSeed[] = [
 /*  Builders                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function character(
+/**
+ * One `Character`, from the five stable traits outward.
+ *
+ * Exported because the runtime founders `companies/entrants.ts` mints when a
+ * new company is founded mid-session must be built by exactly this function: a
+ * founder assembled twice, in two shapes, is how the two halves of the cast
+ * drift apart.
+ */
+export function buildV2Character(
   id: string,
   name: string,
   role: Character['role'],
@@ -735,7 +743,7 @@ export function buildV2Characters(playerName: string, playerCompanyName: string)
   const founders = FOUNDER_SEEDS.map((seed) => {
     const company = companyById.get(seed.companyId);
     if (company === undefined) throw new Error(`world 2 founder seed names an unknown company: ${seed.companyId}`);
-    return character(
+    return buildV2Character(
       company.ceoCharacterId,
       seed.name,
       'founder_ceo',
@@ -752,10 +760,10 @@ export function buildV2Characters(playerName: string, playerCompanyName: string)
   });
 
   const cast = CAST_SEEDS.map((seed) =>
-    character(seed.id, seed.name, seed.role, null, seed.title, seed.traits, seed.connection, seed.wealth, seed.boards, seed.following, seed.beliefs, false),
+    buildV2Character(seed.id, seed.name, seed.role, null, seed.title, seed.traits, seed.connection, seed.wealth, seed.boards, seed.following, seed.beliefs, false),
   );
 
-  const player = character(
+  const player = buildV2Character(
     W2_PLAYER_CHARACTER_ID,
     playerName,
     'founder_ceo',

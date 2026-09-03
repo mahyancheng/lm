@@ -304,7 +304,7 @@ export default function DealRoomPage(): React.JSX.Element {
             products={products}
             quarter={session.quarter}
             startYear={session.startYear}
-            availableCashUsd={company.financials.cash}
+            company={company}
             accord={accord}
           />
         </Panel>
@@ -317,7 +317,7 @@ export default function DealRoomPage(): React.JSX.Element {
             <AcquisitionDesk
               targets={targets}
               preselectedId={radarPick}
-              availableCashUsd={company.financials.cash}
+              company={company}
               hasBoard={company.boardId !== null}
             />
           </Panel>

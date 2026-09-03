@@ -22,11 +22,35 @@
  * `S_{t+1} = F(S_t, actions, modifiers, seed)`, so anything it produces has to
  * be reproducible from the recorded inputs alone.
  *
- * It never produces an `ActionIntent`. Answering is safe without a model;
- * translating an instruction into a binding proposal is not.
+ * It never *composes* an `ActionIntent`. Answering is safe without a model;
+ * translating an instruction into a binding proposal is not. What it may do,
+ * since the sourcing stage, is hand back an action the **engine** built: a
+ * findings row from `runLookups` carries the exact intent the validator accepts,
+ * and passing that through is quoting the engine rather than guessing at the
+ * founder's intent. `requiresConfirmation` stays true on every one of them.
+ *
+ * ## Sourcing without a model
+ *
+ * The same two-turn loop the model uses runs here. A message that asks about the
+ * market — "buy a small data centre", "who could we acquire", "can we borrow" —
+ * is matched against a keyword table, answered with `mode: 'research'` and a
+ * list of lookups, and comes back with `findings` attached, which this module
+ * then reads out. With no model at all, "buy a small data centre" still returns
+ * the sellers, the price, the units, the cash afterwards and an action to
+ * approve.
  */
 
-import type { ChiefOfStaffDossier, ChiefOfStaffInput, ChiefOfStaffInterpretation, CosProductLine } from '@frontier/contracts';
+import type {
+  ActionIntent,
+  ChiefOfStaffDossier,
+  ChiefOfStaffInput,
+  ChiefOfStaffInterpretation,
+  CosProductLine,
+  LookupKind,
+  LookupRequest,
+  LookupResult,
+} from '@frontier/contracts';
+import { MAX_LOOKUPS_PER_TURN } from '@frontier/contracts';
 import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
 import { truncate } from './compose/render';
 
@@ -80,6 +104,202 @@ export function classifyQuestion(message: string): CosQuestionKind {
     }
   }
   return 'unclassified';
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sourcing: which lookups a message asks for                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Phrasings that mean "go and look at the market", in precedence order.
+ *
+ * A keyword table is a blunt instrument and it is the right one here for the
+ * same reason `PATTERNS` is: it is inspectable, it is deterministic, and it only
+ * ever runs when there is no model to do better. The first match wins, and
+ * `own_position` is appended to it rather than matched on its own — every one of
+ * these questions is really "and what does that do to us".
+ */
+const SOURCING_PATTERNS: readonly (readonly [LookupKind, readonly string[]])[] = [
+  [
+    'compute_market',
+    ['data center', 'data centre', 'datacenter', 'datacentre', 'accelerator', 'gpu', 'buy compute', 'more compute', 'cloud capacity', 'server', 'chips'],
+  ],
+  ['acquisition_targets', ['acquire', 'acquisition', 'buy a company', 'buy out', 'takeover', 'take over', 'merge with', 'm&a', 'target list']],
+  ['debt_headroom', ['borrow', 'debt', 'a loan', 'credit line', 'leverage', 'refinance']],
+  ['government_programmes', ['government', 'procurement', 'agency', 'tender', 'public contract', 'bid on']],
+  ['hiring_market', ['hire', 'hiring', 'recruit', 'headcount cost', 'what does an engineer cost', 'salaries', 'salary']],
+];
+
+/** A number written in the message, e.g. "buy 500 accelerators". 0 when none. */
+export function unitsInMessage(message: string): number {
+  const match = /(\d[\d,]*)/.exec(message.replace(/[$£€]\s?\d[\d,]*/g, ''));
+  if (match === null) return 0;
+  const value = Number(match[1]?.replace(/,/g, '') ?? '0');
+  return Number.isFinite(value) && value > 0 && value < 1_000_000 ? Math.round(value) : 0;
+}
+
+/** One market request, with the parameters its kind carries. */
+function marketRequest(kind: LookupKind, message: string): LookupRequest | null {
+  switch (kind) {
+    case 'compute_market':
+      return { kind, units: unitsInMessage(message) };
+    case 'acquisition_targets':
+      return { kind, sector: '', region: '', maxValueUsd: 0, keyword: '' };
+    case 'hiring_market':
+      return { kind, role: null };
+    case 'debt_headroom':
+      return { kind: 'debt_headroom' };
+    case 'government_programmes':
+      return { kind: 'government_programmes' };
+    // `own_position` is always appended and is never the market half.
+    case 'own_position':
+      return null;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * The lookups a message asks for, or an empty list when it asks for none.
+ *
+ * Bounded to `MAX_LOOKUPS_PER_TURN` by construction: at most one market kind
+ * plus the company's own position.
+ */
+export function sourcingRequestsFor(message: string): LookupRequest[] {
+  const text = message.toLowerCase();
+  for (const [kind, needles] of SOURCING_PATTERNS) {
+    if (!needles.some((needle) => text.includes(needle))) continue;
+    const market = marketRequest(kind, message);
+    if (market === null) continue;
+    const requests: LookupRequest[] = [market, { kind: 'own_position' }];
+    return requests.slice(0, MAX_LOOKUPS_PER_TURN);
+  }
+  return [];
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sourcing: reading the findings back                                        */
+/* -------------------------------------------------------------------------- */
+
+const pctWhole = (value: number): string => `${Math.round(value)}%`;
+
+/** One finding as the sentences a founder reads. Every figure comes off the row. */
+export function answerFromFinding(finding: LookupResult): string {
+  switch (finding.kind) {
+    case 'compute_market': {
+      const buy = finding.sellers.filter((seller) => seller.offering === 'accelerators');
+      const rent = finding.sellers.filter((seller) => seller.offering !== 'accelerators');
+      if (buy.length === 0 && rent.length === 0) return 'Nobody is selling compute this quarter.';
+      const first = buy[0];
+      const lines: string[] = [];
+      if (first !== undefined) {
+        lines.push(
+          `${first.name} will sell ${formatCount(first.sellableUnits)} accelerators at ${formatMoney(first.unitPriceUsd)} each. ${formatCount(
+            finding.units,
+          )} of them is ${formatMoney(finding.purchaseCostUsd)}, which takes cash from ${formatMoney(finding.cashUsd)} to ${formatMoney(
+            finding.cashAfterPurchaseUsd,
+          )}.${finding.solvencyLine === '' ? '' : ` ${finding.solvencyLine}`}`,
+        );
+      }
+      lines.push(
+        `Owned, that is ${formatMoney(finding.ownedQuarterlyCostUsd)} a quarter to run. Reserved it would be ${formatMoney(
+          finding.reservedQuarterlyCostUsd,
+        )} a quarter and on cloud ${formatMoney(finding.cloudQuarterlyCostUsd)} a quarter, with no capital down.`,
+      );
+      if (rent.length > 0) {
+        lines.push(
+          `Renting instead: ${rent
+            .slice(0, 3)
+            .map((seller) => `${seller.name} at ${formatMoney(seller.unitPriceUsd)} a unit (${formatCount(seller.sellableUnits)} spare)`)
+            .join('; ')}.`,
+        );
+      }
+      return lines.join(' ');
+    }
+
+    case 'acquisition_targets': {
+      if (finding.rows.length === 0) return 'No active company matches that description.';
+      return `${finding.rows.length} could be approached. ${finding.rows
+        .slice(0, 3)
+        .map(
+          (row) =>
+            `${row.name} (${row.sectorId}, ${row.region}, ${row.headcountBand} people) at about ${formatMoney(row.indicativePriceUsd)}, leaving ${formatMoney(
+              row.cashAfterUsd,
+            )}`,
+        )
+        .join('; ')}.`;
+    }
+
+    case 'debt_headroom':
+      return finding.available
+        ? `We could raise about ${formatMoney(finding.headroomUsd)} of debt at an indicative ${pctWhole(
+            finding.indicativeCouponPct,
+          )} coupon. Last quarter's operating income was ${formatMoney(finding.lastOperatingIncomeUsd)}.`
+        : `No debt is available: ${finding.reason}`;
+
+    case 'government_programmes':
+      return finding.rows.length === 0
+        ? 'Nothing we can see is still accepting bids.'
+        : `${finding.rows.length} open: ${finding.rows
+            .slice(0, 3)
+            .map((row) => `${row.programme} up to ${formatMoney(row.maxValueUsd)}, closing quarter ${row.closeQuarter}`)
+            .join('; ')}.`;
+
+    case 'hiring_market':
+      return `The market fills about ${pctWhole(finding.fillRatePct)} of an opened role a quarter. ${finding.rows
+        .slice(0, 3)
+        .map((row) => `${row.role} at ${row.band.replace(/_/g, ' ')} costs ${formatMoney(row.quarterlyCostUsd)} a quarter`)
+        .join('; ')}.`;
+
+    case 'own_position':
+      return `Cash is ${formatMoney(finding.cashUsd)}, moving ${formatMoney(finding.quarterlyBurnUsd)} a quarter — ${formatQuarterCount(
+        finding.runwayQuarters,
+      )} of runway. ${finding.negativeCashQuarters} of the ${finding.solvencyQuartersAllowed} quarters that end the company have closed below zero.`;
+
+    default: {
+      const exhaustive: never = finding;
+      return String((exhaustive as { kind?: string }).kind ?? '');
+    }
+  }
+}
+
+/**
+ * The actions a set of findings puts on the table, taken verbatim from the rows.
+ *
+ * Nothing is composed here. Each intent was built by `runLookups` inside the
+ * engine from the same helpers the validator enforces, so what the founder is
+ * offered is what the validator would accept.
+ */
+export function actionsFromFindings(findings: readonly LookupResult[]): ActionIntent[] {
+  const out: ActionIntent[] = [];
+  for (const finding of findings) {
+    if (out.length >= 3) break;
+    switch (finding.kind) {
+      case 'compute_market': {
+        const row = finding.sellers.find((seller) => seller.offering === 'accelerators' && seller.intent !== null) ?? finding.sellers[0];
+        if (row?.intent != null) out.push(row.intent);
+        break;
+      }
+      case 'acquisition_targets': {
+        const row = finding.rows[0];
+        if (row !== undefined) out.push(row.intent);
+        break;
+      }
+      case 'debt_headroom':
+        if (finding.intent !== null) out.push(finding.intent);
+        break;
+      case 'hiring_market': {
+        const row = finding.rows.find((entry) => entry.intent !== null);
+        if (row?.intent != null) out.push(row.intent);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -255,6 +475,48 @@ export function answerFromDossier(kind: CosQuestionKind, dossier: ChiefOfStaffDo
 export function offlineChiefOfStaff(input: ChiefOfStaffInput): ChiefOfStaffInterpretation {
   const echoed = truncate(input.playerMessage.trim(), 400);
   const dossier = input.dossier ?? null;
+
+  /* --- turn two: the findings came back ---------------------------------- */
+  const findings = input.findings ?? [];
+  if (findings.length > 0) {
+    const body = findings.map(answerFromFinding).join(' ');
+    const actions = actionsFromFindings(findings);
+    return {
+      // `plan` rather than `act`: these are options with actions attached, and
+      // the founder decides. Never `act` — nothing here read their intent.
+      mode: actions.length === 0 ? 'answer' : 'plan',
+      reply: truncate(`${body} This is read straight off the market rather than reasoned about; no model is reachable this quarter.`, 2000),
+      interpretedInstructions: actions,
+      summary: truncate(
+        `Sourced from the market without a model. ${
+          actions.length === 0 ? 'Nothing is ready to approve.' : `${actions.length} action${actions.length === 1 ? '' : 's'} are ready for you to approve, each naming its counterparty.`
+        } Nothing has been submitted.`,
+        1200,
+      ),
+      questions: [],
+      requiresConfirmation: true,
+      confidence: 0,
+      unsupportedRequests: [],
+      lookups: [],
+    };
+  }
+
+  /* --- turn one: does this need the market? ------------------------------ */
+  const lookups = sourcingRequestsFor(input.playerMessage);
+  if (lookups.length > 0) {
+    return {
+      mode: 'research',
+      reply: truncate(`Checking ${lookups.map((request) => request.kind.replace(/_/g, ' ')).join(' and ')}.`, 2000),
+      interpretedInstructions: [],
+      summary: truncate('Going to look this up against the real market before answering. Nothing has been submitted.', 1200),
+      questions: [],
+      requiresConfirmation: true,
+      confidence: 0,
+      unsupportedRequests: [],
+      lookups,
+    };
+  }
+
   const kind = classifyQuestion(input.playerMessage);
   const answer = dossier === null ? null : answerFromDossier(kind, dossier);
 
@@ -275,6 +537,7 @@ export function offlineChiefOfStaff(input: ChiefOfStaffInput): ChiefOfStaffInter
       requiresConfirmation: true,
       confidence: 0,
       unsupportedRequests: [],
+      lookups: [],
     };
   }
 
@@ -293,5 +556,6 @@ export function offlineChiefOfStaff(input: ChiefOfStaffInput): ChiefOfStaffInter
     // draft rather than as advice a model stood behind.
     confidence: 0,
     unsupportedRequests: [],
+    lookups: [],
   };
 }

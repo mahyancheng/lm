@@ -242,6 +242,26 @@ MARKET BELIEF                      MarketBelief (topic: 'model_delay')
 Probability of delay: 26%          probability = 0.26
 ```
 
+### The forecast is engine-owned
+
+A programme's schedule, cost and risk are one function, not two. `advanceProjects`
+moves a programme by `resourcingFactors × noise` and rolls a setback against
+`setbackProbability`; `programmeForecast(draft, company, node, plan)` calls
+**those same two functions** on the figures an intent carries and returns the
+quarters, the cost, the risk, the three factors and the bottleneck. The Frontier
+Map renders that result and derives nothing of its own, so a preview cannot
+disagree with the programme it creates. `plannedProgrammeQuarters` is the same
+shared definition for the schedule a programme opens on, called by both
+`programmeForecast` and `resolver/routing.ts`.
+
+`runningForecast` is the same reading for a programme already under way: progress,
+quarters left at the pace it is actually being given, spend to date, and the one
+shortfall — funding, compute or talent — that is holding it up, stated in the
+unit the player set. `adjust_research_project` is the instruction that answers
+it; the validator hands the programme its own allocation back before counting
+what is free, and the resolver applies it before `advanceProjects` so the fix
+takes effect in the quarter it was made.
+
 That opens the door to earnings surprises, leaks, rumours, analyst research,
 short theses, whistleblowers, credibility and investor-relations gameplay.
 `PublicDisclosure.isTruthful` is the mechanism that punishes a misleading denial
@@ -367,6 +387,75 @@ Two further structural invariants are asserted continuously rather than at
 commit: `ReturnDecomposition` components must sum to `total` within 1e-9, and
 every `ResolutionLine` must reference at least one committed ledger event.
 Nothing on the Quarter Resolution screen is narrative invention.
+
+## 9.1 Solvency, and what the validator is for
+
+The validator exists to keep an instruction inside the shape the engine can
+execute — not to protect the player from a bad decision. From **world version 2**
+that distinction is enforced rather than described:
+
+| Reason | World 1 | World 2 |
+|---|---|---|
+| Cash | reject or clamp | **note**, action runs whole |
+| Compute supply, headcount, float, authorised shares | clamp | clamp |
+| Unknown target, illegal value, lockup, board matter | reject / transform | reject / transform |
+
+A cash note reads *"Takes cash from $X to -$Y; 2 quarters below zero and the
+company is wound up."* and carries `insufficient_cash` as an **advisory** code.
+The batch budget still reserves the full commitment, so two actions in one
+submission cannot pretend to spend the same dollar and every preview sees the
+running balance.
+
+The consequence lives in `financial_resolution` instead. Cash closes unfloored,
+an overdraft is charged as interest at the policy rate plus `OVERDRAFT_SPREAD`,
+and a company that closes below zero at `SOLVENCY_NEGATIVE_QUARTERS` (2)
+consecutive quarter-ends enters administration with the cause `insolvent` — the
+same rule for the player's company and for every bot. A player-controlled company
+is never force-bridged; a bot still gets its own rescue round, which can fail.
+The count is `negativeCashQuarters(company)`, derived from the filed statements
+and never stored. See [ECONOMY.md §5.1](./ECONOMY.md#51-solvency).
+
+`financial_integrity` is unchanged and is what proves this is not a hole: the
+overdraft is inside the quarter's stated interest, the wind-up states its own
+equity movement, and a negative balance sheet still has to reconcile.
+
+### Market entry
+
+A wind-up leaves a gap, and in world version 2 something fills it. Immediately
+after the distress step, `resolveMarketEntry` founds **one new company per
+company wound up this quarter**, bounded by `ENTRANTS_PER_QUARTER` (2) and
+refused entirely once active non-husk companies reach `ACTIVE_COMPANY_CAP` (40).
+Without it a forty-quarter session thins out until a sector has nobody in it and
+gates everything downstream of it to `SUPPLY_GATE_FLOOR`.
+
+The entrant takes the dead company's **sector** — that is the gap — and draws
+everything else from `ctx.rng` and from state: a region weighted by
+`regionMeta().capitalDepth` times `regionSectorAffinity()`, an archetype from the
+sector's pool, a name from a bank of sixty-six that never repeats inside a
+session, a founder built by the same factory the scenario's founders are, and a
+seed cheque sized from the sector, the region's capital depth and
+`world.capitalMarkets.ventureLiquidity`. A venture entity with the dry powder
+leads the round and holds the stake; otherwise the founder holds it all.
+
+It is assembled by the scenario's own factories (`buildV2Company`,
+`buildV2CapTable`, `buildV2Anchor`, `buildV2Metrics`), so its shares reconcile,
+its balance sheet closes and every per-company table carries its row before any
+gate reads it. It is **private at birth** — no instrument, no quote — and the
+founding writes one public `information_revealed` row (`kind:
+"company_founded"`), a `funding_round_closed` row declaring the fund's
+`dryPowderDeltaUsd`, and a `press_release` disclosure so the founding reaches the
+news feed as a story. Everything comes off one stream forked from the financial
+phase's own, so replay is byte-identical.
+
+### Elimination
+
+When the company a player directs enters administration the seat is closed:
+`SessionPlayer.eliminatedQuarter` is set to that quarter, and from then on the
+validator rejects every instruction from that seat with `requirement_not_met`
+("… is in administration; the seat is closed"). The market does not care who
+died — an entrant spawns for the player's slot exactly as it does for a bot's,
+and the husk stays purchasable. The web shell renders a full-screen verdict
+instead of the game, and the save is marked ended rather than deleted.
 
 ## 10. Failure modes
 

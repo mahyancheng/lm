@@ -413,7 +413,9 @@ function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
     const issued = shareClass?.issuedShares ?? 0;
     if (table === null || security === null || issued <= 0) continue;
 
-    company.balanceSheet.assets.cash = round(Math.max(0, cash - dividend), 2);
+    // The payout is already capped against cash by `dividendUsd`, so this only
+    // stops an overdrawn company's balance being quietly reset to zero.
+    company.balanceSheet.assets.cash = round(cash - dividend, 2);
     company.financials.cash = company.balanceSheet.assets.cash;
     company.balanceSheet.equity = round(company.balanceSheet.equity - dividend, 2);
     company.reputation.investor = clamp(company.reputation.investor + dividendReputationBonus(payoutPct), 0, 100);
@@ -435,6 +437,10 @@ function resolveDividends(draft: SessionState, ctx: ResolverContext): void {
       const amount = round(holding.shares * perShare, 2);
       if (amount <= 0) continue;
       distributed += amount;
+      // Banked on the position itself, for every holder kind including the
+      // float: income already received, which is why it sits beside the cost
+      // basis rather than reducing it. World 2 only, because this phase is.
+      holding.dividendsReceivedUsd = round((holding.dividendsReceivedUsd ?? 0) + amount, 2);
       if (holding.holderKind === 'company') {
         const holder = findCompany(draft, holding.holderId);
         if (holder === null) continue;
@@ -1165,6 +1171,17 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
     // phase, and never written at all in a single-sector world.
     if (isMultiSectorWorld(draft)) {
       acquirer.recentAcquisitionQuarters = [...(acquirer.recentAcquisitionQuarters ?? []), draft.quarter].slice(-8);
+      // The durable residue of the ledger row emitted below. A save carries no
+      // `sim_event`s, so without this the portfolio could name a subsidiary
+      // quarters later but never say what it cost.
+      target.acquisition = {
+        acquirerCompanyId: acquirer.id,
+        quarter: draft.quarter,
+        priceUsd: round(intent.offerValueUsd, 2),
+        cashUsd: round(cashComponent, 2),
+        stockUsd: round(stockComponent, 2),
+        goodwillUsd: round(goodwill, 2),
+      };
     }
 
     /* --- extinguish the target -------------------------------------------- */

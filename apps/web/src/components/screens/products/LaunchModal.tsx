@@ -14,7 +14,7 @@ import type { ActionIntent, ActionValidationResult, ProductSegment } from '@fron
 import { PRODUCT_SEGMENTS } from '@frontier/contracts';
 import { SEGMENT_REFERENCE_PRICE_USD } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
-import { Modal, SliderField, ValidationBanner, roundStep } from '@/components/ui';
+import { CashAfter, Modal, SliderField, ValidationBanner, roundStep } from '@/components/ui';
 import { useGameActions, usePlayerCompany } from '@/lib/game';
 import { SEGMENT_BLURB, SEGMENT_LABEL, SEGMENT_UNIT } from './labels';
 
@@ -57,7 +57,9 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
   // before that, so it is the whole range a launch price argument lives in.
   const priceMax = Math.max(SEGMENT_REFERENCE_PRICE_USD[segment] * 4, priceValue, 10);
   const marketingValue = Math.max(0, Number.parseFloat(marketing) || 0);
-  const marketingMax = Math.max(company.financials.cash, marketingValue, 100_000);
+  // Not a cap: launch marketing is never cut back to the balance any more, so the
+  // range stays usable on an overdrawn company and the preview says what it costs.
+  const marketingMax = Math.max(company.financials.cash, marketingValue, 1_000_000);
 
   function submit(): void {
     if (intent === null) return;
@@ -158,6 +160,9 @@ export function LaunchModal({ open, onClose }: LaunchModalProps): React.JSX.Elem
             chips
           />
           <span className="mt-1 block text-[10px] text-ink-faint">One-off spend, charged against this quarter&apos;s uncommitted cash.</span>
+          <div className="mt-2">
+            <CashAfter company={company} spendUsd={marketingValue} note="Charged in the quarter the product ships." />
+          </div>
         </div>
 
         <p className="text-[11px] text-ink-dim">

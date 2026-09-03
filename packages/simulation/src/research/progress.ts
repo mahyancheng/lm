@@ -48,6 +48,7 @@ import {
   WORLD2_PROJECT_RESEARCHERS,
 } from './balance';
 import { isMultiSectorWorld } from '../economy/sectors';
+import { BOTTLENECK_NOUN, bottleneckOf, quartersAtPace } from './reading';
 import { capabilityCoverage, clamp, emitEvent, findCompany, findNode, money, projectVisibility, ratio, unit, usdLabel } from './util';
 
 /** What a programme against one node wants each quarter to run at full speed. */
@@ -185,10 +186,15 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
         visibility,
       );
       if (!project.isSecret) {
+        // Plain words: what was lost, and the one thing that made it likelier.
+        const lostPct = Math.round((before - project.progress) * 100);
+        const short = bottleneckOf(factors);
         ctx.log({
           phase: 'research_resolution',
-          text: `A run against ${node.title} disappointed; the programme slipped a quarter and internal confidence fell to ${(project.internalConfidence * 100).toFixed(0)}%.`,
-          deltaLabel: `${((project.progress - before) * 100).toFixed(1)}pp`,
+          text: `Setback on ${node.title}: ${lostPct}% of the progress so far was lost and the programme slipped a quarter${
+            short === null ? '' : `; it was short of ${BOTTLENECK_NOUN[short]}`
+          }.`,
+          deltaLabel: `-${lostPct}%`,
           refEventIds: [eventId],
           tone: 'negative',
           subjectId: project.companyId,
@@ -218,10 +224,17 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
         visibility,
       );
       if (!project.isSecret && project.progress - before >= 0.01) {
+        // What it is now, how long the rest takes at this pace, and the one
+        // thing slowing it — the same three figures the Frontier Map shows.
+        const donePct = Math.round(project.progress * 100);
+        const left = quartersAtPace(1 - project.progress, plannedRate, factors.funding * factors.compute * factors.talent);
+        const short = bottleneckOf(factors);
         ctx.log({
           phase: 'research_resolution',
-          text: `${node.title} advanced to ${(project.progress * 100).toFixed(0)}% on ${usdLabel(project.budgetQuarterly)} and ${project.talentAllocated} researchers.`,
-          deltaLabel: `+${((project.progress - before) * 100).toFixed(1)}pp`,
+          text: `${node.title} is ${donePct}% done, about ${left} quarter${left === 1 ? '' : 's'} left at this pace${
+            short === null ? '' : `; it is short of ${BOTTLENECK_NOUN[short]}`
+          }.`,
+          deltaLabel: `+${Math.round((project.progress - before) * 100)}%`,
           refEventIds: [eventId],
           tone: 'positive',
           subjectId: project.companyId,
@@ -235,7 +248,7 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
         const overrun = ratio(project.cumulativeSpendUsd - high, high);
         ctx.log({
           phase: 'research_resolution',
-          text: `${node.title} has now consumed ${usdLabel(project.cumulativeSpendUsd)}, ${(overrun * 100).toFixed(0)}% above the high estimate for the programme.`,
+          text: `${node.title} has cost ${usdLabel(project.cumulativeSpendUsd)} so far, ${Math.round(overrun * 100)}% more than the highest estimate for it.`,
           deltaLabel: `+${(overrun * 100).toFixed(0)}%`,
           refEventIds: [eventId],
           tone: 'warning',
@@ -270,7 +283,7 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
       if (!project.isSecret) {
         ctx.log({
           phase: 'research_resolution',
-          text: `The programme against ${node.title} was abandoned after ${project.setbacks} failed runs.`,
+          text: `The programme against ${node.title} was given up after ${project.setbacks} failed runs.`,
           deltaLabel: 'abandoned',
           refEventIds: [eventId],
           tone: 'negative',

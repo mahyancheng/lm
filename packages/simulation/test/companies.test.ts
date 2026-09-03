@@ -1219,8 +1219,7 @@ describe('the compute pillar', () => {
         type: 'reserve_compute',
         units: 12_000,
         quarters: 6,
-        maxPricePerUnitUsd: 10_000,
-      }),
+        maxPricePerUnitUsd: 10_000, providerCompanyId: null }),
     );
     const { events } = runQuarter(state, START_QUARTER, '424242');
     const after = company(state, 'cmp_nexus').compute;
@@ -1242,8 +1241,7 @@ describe('the compute pillar', () => {
         type: 'reserve_compute',
         units: 5_000,
         quarters: 4,
-        maxPricePerUnitUsd: 1,
-      }),
+        maxPricePerUnitUsd: 1, providerCompanyId: null }),
     );
     const { events } = runQuarter(state, START_QUARTER, '424242');
     expect(company(state, 'cmp_nexus').compute.reservedAccelerators).toBe(before);
@@ -1373,8 +1371,7 @@ describe('the compute pillar', () => {
         type: 'reserve_compute',
         units: 10_000,
         quarters: 4,
-        maxPricePerUnitUsd: 10_000,
-      }),
+        maxPricePerUnitUsd: 10_000, providerCompanyId: null }),
     );
     runQuarter(renewing, START_QUARTER + 1, '424242');
     expect(company(renewing, 'cmp_nexus').compute.reservedAccelerators).toBe(held + 10_000);

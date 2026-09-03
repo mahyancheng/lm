@@ -12,8 +12,8 @@
  * unvalidated one is not even that.
  */
 
-import type { ChiefOfStaffInterpretation } from '@frontier/contracts';
-import { ChiefOfStaffInterpretationSchema } from '@frontier/contracts';
+import type { ChiefOfStaffInterpretation, LookupResult } from '@frontier/contracts';
+import { ChiefOfStaffInterpretationSchema, LookupResultSchema } from '@frontier/contracts';
 
 export interface TranscriptEntry {
   /** Deterministic within a session: quarter and position, never a clock. */
@@ -24,6 +24,14 @@ export interface TranscriptEntry {
   readonly interpretation: ChiefOfStaffInterpretation;
   /** True when no model answered and the deterministic echo is being shown. */
   readonly fallback: boolean;
+  /**
+   * What the assistant went and looked up before answering, if it did.
+   *
+   * Produced by `runLookups` inside the engine against the session the tab
+   * holds, so these are canonical figures rather than anything a model said.
+   * Empty on a turn that needed no sourcing.
+   */
+  readonly findings?: readonly LookupResult[];
 }
 
 const memory = new Map<string, TranscriptEntry[]>();
@@ -129,6 +137,7 @@ export function echoFallback(message: string): ChiefOfStaffInterpretation {
     requiresConfirmation: true,
     confidence: 0,
     unsupportedRequests: [],
+    lookups: [],
   };
 }
 
@@ -142,6 +151,7 @@ interface StoredEntry {
   readonly message?: unknown;
   readonly interpretation?: unknown;
   readonly fallback?: unknown;
+  readonly findings?: unknown;
 }
 
 function hydrate(sessionId: string): TranscriptEntry[] {
@@ -156,12 +166,21 @@ function hydrate(sessionId: string): TranscriptEntry[] {
       if (typeof candidate.id !== 'string' || typeof candidate.message !== 'string' || typeof candidate.quarter !== 'number') continue;
       const interpretation = ChiefOfStaffInterpretationSchema.safeParse(candidate.interpretation);
       if (!interpretation.success) continue;
+      // Findings are re-parsed like the interpretation: a stored result is a
+      // stored model-adjacent payload, and an unvalidated one is not data.
+      const findings = Array.isArray(candidate.findings)
+        ? candidate.findings.flatMap((row) => {
+            const finding = LookupResultSchema.safeParse(row);
+            return finding.success ? [finding.data] : [];
+          })
+        : [];
       out.push({
         id: candidate.id,
         quarter: candidate.quarter,
         message: candidate.message,
         interpretation: interpretation.data,
         fallback: candidate.fallback === true,
+        ...(findings.length > 0 ? { findings } : {}),
       });
     }
     return out;

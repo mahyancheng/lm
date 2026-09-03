@@ -19,9 +19,10 @@
 import { useMemo, useState } from 'react';
 import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
 import { SECTORS, quarterLabel } from '@frontier/contracts';
-import { heldComputeUnits, researchEnvelopeUsd } from '@frontier/simulation';
+import { heldComputeUnits, researchEnvelopeUsd, runningForecast, unmetDependencies } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
 import {
+  CashAfter,
   DataTable,
   DeltaBadge,
   EmptyState,
@@ -43,8 +44,17 @@ import {
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
 import { InnovationPanel } from '@/components/screens/research/InnovationPanel';
 import { NodeDrawer } from '@/components/screens/research/NodeDrawer';
-import { EDGE_STYLE, STATE_STYLE } from '@/components/screens/research/graphLayout';
+import { EDGE_STYLE } from '@/components/screens/research/graphLayout';
 import { nodeIdsInSector, tracksOf } from '@/components/screens/research/tracks';
+import {
+  BOTTLENECK_LABEL,
+  NODE_STATE_LABEL,
+  NODE_STATE_TONE,
+  classifyNode,
+  shortfallLine,
+  type NodeState,
+  type NodeStateKind,
+} from '@/components/screens/research/nodeState';
 import {
   useGameActions,
   useOutcome,
@@ -55,7 +65,7 @@ import {
   visibleResearchProjects,
 } from '@/lib/game';
 
-type MapFilter = 'all' | 'edge' | 'mine' | 'moved';
+type MapFilter = 'all' | 'available' | 'mine' | 'moved';
 
 interface ConfidenceMove {
   readonly nodeId: string;
@@ -80,6 +90,7 @@ export default function ResearchPage(): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [inventing, setInventing] = useState(false);
   const [filter, setFilter] = useState<MapFilter>('all');
   const [trackSector, setTrackSector] = useState<Sector | null>(null);
   const [budgetText, setBudgetText] = useState('');
@@ -133,14 +144,45 @@ export default function ResearchPage(): React.JSX.Element {
 
   const changedNodeIds = useMemo(() => new Set(moves.map((move) => move.nodeId)), [moves]);
 
-  /* --- filters ------------------------------------------------------------ */
-  const edgeNodes = useMemo(
-    () =>
-      graph.nodes.filter((node) => {
-        const own = node.confidenceByCompany[company.id];
-        return own !== undefined && Math.abs(own - node.publicConfidence) >= 0.05;
-      }),
-    [graph.nodes, company.id],
+  /* --- the four states, taken off the engine ------------------------------
+      Every figure here is the engine's: `unmetDependencies` says what is
+      missing, `runningForecast` says how far a programme has come and how long
+      is left. The screen chooses words, never numbers. */
+  const nodeStates = useMemo(() => {
+    const running = new Map(
+      ownProjects
+        .filter((project) => project.status === 'active' || project.status === 'paused')
+        .map((project) => [project.targetNodeId, project]),
+    );
+    const succeeded = new Set(ownProjects.filter((project) => project.status === 'succeeded').map((project) => project.targetNodeId));
+    const out = new Map<string, NodeState>();
+    for (const node of graph.nodes) {
+      const project = running.get(node.id) ?? null;
+      const reading = project === null ? null : runningForecast(session, project, node);
+      const achievedByYou = node.achievedByCompanyId === company.id || succeeded.has(node.id);
+      out.set(
+        node.id,
+        classifyNode({
+          achievedByName:
+            achievedByYou || node.achievedByCompanyId === null ? null : (rivalNames.get(node.achievedByCompanyId) ?? node.achievedByCompanyId),
+          achievedByYou,
+          missingTitles: unmetDependencies(session, node, company.id).map((id) => nodeTitles.get(id) ?? id),
+          running: reading === null ? null : { progressPct: reading.progress * 100, quartersLeft: reading.quartersLeft },
+        }),
+      );
+    }
+    return out;
+  }, [graph.nodes, ownProjects, session, company.id, rivalNames, nodeTitles]);
+
+  const stateCounts = useMemo(() => {
+    const out: Record<NodeStateKind, number> = { locked: 0, available: 0, running: 0, done: 0 };
+    for (const state of nodeStates.values()) out[state.kind] += 1;
+    return out;
+  }, [nodeStates]);
+
+  const availableIds = useMemo(
+    () => new Set([...nodeStates].filter(([, state]) => state.kind === 'available').map(([id]) => id)),
+    [nodeStates],
   );
 
   /* --- sector tracks ------------------------------------------------------
@@ -165,15 +207,15 @@ export default function ResearchPage(): React.JSX.Element {
     const byFilter =
       filter === 'all'
         ? null
-        : filter === 'edge'
-          ? new Set(edgeNodes.map((node) => node.id))
+        : filter === 'available'
+          ? availableIds
           : filter === 'moved'
             ? changedNodeIds
             : new Set(ownProjects.map((project) => project.targetNodeId));
     if (bySector === null) return byFilter;
     if (byFilter === null) return bySector;
     return new Set([...bySector].filter((id) => byFilter.has(id)));
-  }, [filter, edgeNodes, changedNodeIds, ownProjects, trackSector, tracks]);
+  }, [filter, availableIds, changedNodeIds, ownProjects, trackSector, tracks]);
 
   const selectedNode: TechNode | null = selectedId === null ? null : (graph.nodes.find((node) => node.id === selectedId) ?? null);
 
@@ -202,6 +244,18 @@ export default function ResearchPage(): React.JSX.Element {
     const entry = queueAction({ type: 'allocate_compute', trainingFraction: trainingSplit });
     setSplitResult(entry.validation);
   }
+
+  /** One engine reading per running programme, so the table quotes rather than derives. */
+  const ownReadings = useMemo(() => {
+    const out = new Map<string, ReturnType<typeof runningForecast>>();
+    for (const project of ownProjects) {
+      if (project.status !== 'active' && project.status !== 'paused') continue;
+      const node = graph.nodes.find((entry) => entry.id === project.targetNodeId);
+      if (node === undefined) continue;
+      out.set(project.id, runningForecast(session, project, node));
+    }
+    return out;
+  }, [ownProjects, graph.nodes, session]);
 
   const ownColumns: readonly Column<ResearchProject>[] = [
     {
@@ -233,30 +287,41 @@ export default function ResearchPage(): React.JSX.Element {
       sortValue: (row) => row.progress,
     },
     {
-      key: 'confidence',
-      header: 'Internal confidence',
+      key: 'left',
+      header: 'Left',
       align: 'right',
-      render: (row) => formatPct(row.internalConfidence),
+      render: (row) => {
+        const reading = ownReadings.get(row.id);
+        return reading === undefined ? '—' : `${reading.quartersLeft}q`;
+      },
       sortable: true,
-      sortValue: (row) => row.internalConfidence,
+      sortValue: (row) => ownReadings.get(row.id)?.quartersLeft ?? 0,
     },
     {
-      key: 'budget',
-      header: 'Budget',
-      align: 'right',
-      hideOnMobile: true,
-      render: (row) => formatMoney(row.budgetQuarterly),
+      key: 'holding',
+      header: 'Holding it up',
+      render: (row) => {
+        const reading = ownReadings.get(row.id);
+        if (reading === undefined || reading.bottleneck === null) {
+          return <span className="text-[11px] tone-gain">Nothing — it has what it needs</span>;
+        }
+        return (
+          <span className="text-[11px] tone-warn" title={shortfallLine(reading.shortfall) ?? undefined}>
+            Short of {BOTTLENECK_LABEL[reading.bottleneck]}
+          </span>
+        );
+      },
       sortable: true,
-      sortValue: (row) => row.budgetQuarterly,
+      sortValue: (row) => ownReadings.get(row.id)?.bottleneck ?? '',
     },
     {
-      key: 'compute',
-      header: 'Compute',
+      key: 'spend',
+      header: 'Spent',
       align: 'right',
       hideOnMobile: true,
-      render: (row) => row.computeAllocated,
+      render: (row) => formatMoney(row.cumulativeSpendUsd),
       sortable: true,
-      sortValue: (row) => row.computeAllocated,
+      sortValue: (row) => row.cumulativeSpendUsd,
     },
     {
       key: 'people',
@@ -266,14 +331,6 @@ export default function ResearchPage(): React.JSX.Element {
       render: (row) => row.talentAllocated,
       sortable: true,
       sortValue: (row) => row.talentAllocated,
-    },
-    {
-      key: 'clock',
-      header: 'Quarters',
-      align: 'right',
-      render: (row) => `${row.quartersElapsed}/${row.expectedQuarters}`,
-      sortable: true,
-      sortValue: (row) => row.expectedQuarters - row.quartersElapsed,
     },
   ];
 
@@ -355,11 +412,11 @@ export default function ResearchPage(): React.JSX.Element {
         />
         <StatCard
           iconName="compass"
-          label="Your edge"
-          value={edgeNodes.length}
-          unit="nodes"
-          hint="Where your confidence differs from the market's"
-          onClick={() => setFilter('edge')}
+          label="Ready to start"
+          value={stateCounts.available}
+          unit="available"
+          hint={`${stateCounts.locked} still locked, ${stateCounts.done} done`}
+          onClick={() => setFilter('available')}
         />
       </div>
 
@@ -367,7 +424,7 @@ export default function ResearchPage(): React.JSX.Element {
         iconName="network"
         iconTone="brand"
         title="The map"
-        subtitle="Layered by dependency depth and ordered to minimise crossings, so it reads left to right. The same graph always lays out the same way. Point at a node to light its dependencies."
+        subtitle="Every technology is in one of four states: locked, available, in progress or done. Tap one to see what it gets you, what it takes and how long."
         actions={
           <TabBar
             className="[&>button]:min-h-11 sm:[&>button]:min-h-0"
@@ -377,7 +434,7 @@ export default function ResearchPage(): React.JSX.Element {
             onChange={(id) => setFilter(id as MapFilter)}
             tabs={[
               { id: 'all', label: 'All' },
-              { id: 'edge', label: 'Your edge', badge: edgeNodes.length },
+              { id: 'available', label: 'Available', badge: stateCounts.available },
               { id: 'mine', label: 'Your programmes', badge: ownProjects.length },
               { id: 'moved', label: 'Moved', badge: moves.length, disabled: moves.length === 0 },
             ]}
@@ -401,7 +458,7 @@ export default function ResearchPage(): React.JSX.Element {
         ) : (
           <FrontierMap
             graph={graph}
-            companyId={company.id}
+            states={nodeStates}
             selectedNodeId={selectedId}
             onSelect={setSelectedId}
             changedNodeIds={changedNodeIds}
@@ -434,11 +491,11 @@ export default function ResearchPage(): React.JSX.Element {
         )}
 
         <div className="mt-3 border-t border-hair pt-3">
-          <div className="label-caps mb-2">Epistemic state</div>
+          <div className="label-caps mb-2">The four states</div>
           <div className="flex flex-wrap gap-1.5">
-            {Object.entries(STATE_STYLE).map(([state, style]) => (
-              <Tag key={state} tone={style.tone} dot title={style.blurb}>
-                {style.label}
+            {(['locked', 'available', 'running', 'done'] as const).map((kind) => (
+              <Tag key={kind} tone={NODE_STATE_TONE[kind]} dot>
+                {NODE_STATE_LABEL[kind]} · {stateCounts[kind]}
               </Tag>
             ))}
           </div>
@@ -449,14 +506,34 @@ export default function ResearchPage(): React.JSX.Element {
               </span>
             ))}
             <span>
-              <span className="text-ink-dim">Accent bar and dot</span> — epistemic state. <span className="text-ink-dim">Bar</span> — public
-              confidence, with <span className="text-ink-dim">▲</span> your own conviction. <span className="text-ink-dim">Size</span> — compute
-              intensity. <span className="text-ink-dim">✓</span> demonstrated, <span className="text-ink-dim">★</span> invented in session,{' '}
-              <span className="text-ink-dim">▣</span> secret, <span className="text-ink-dim">Δ</span> moved last quarter.
+              <span className="text-ink-dim">★</span> invented in this game, <span className="text-ink-dim">▣</span> secret,{' '}
+              <span className="text-ink-dim">Δ</span> the world changed its mind about it last quarter.
             </span>
           </div>
         </div>
+
+        {/* Inventing a technology is the rarest thing a founder does on this
+            screen, so it sits at the end of the map behind one button rather
+            than as a permanent panel competing with the programmes. */}
+        <div className="mt-3 border-t border-hair pt-3">
+          <button
+            type="button"
+            className="btn btn-sm tap-target w-full sm:w-auto sm:min-h-0"
+            onClick={() => setInventing((open) => !open)}
+            aria-expanded={inventing}
+          >
+            {inventing ? 'Close' : 'Propose something that is not on the map'}
+          </button>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+            Nothing on the map is the whole future. A proposal the rules engine accepts becomes a real technology on this
+            map, credited to you for the rest of the game.
+          </p>
+        </div>
       </Panel>
+
+      {!inventing ? null : (
+        <InnovationPanel session={session} company={company} graph={graph} researchEnvelopeUsd={envelope} computeUnits={Math.round(held)} />
+      )}
 
       {moves.length === 0 ? null : (
         <Panel iconName="gauge" iconTone="info" title="Belief moved" subtitle="What the last resolved quarter did to the map">
@@ -578,6 +655,9 @@ export default function ResearchPage(): React.JSX.Element {
               format={formatMoney}
               chips
             />
+            <div className="mt-2">
+              <CashAfter company={company} spendUsd={budgetValue} note="Booked as research spend when the quarter resolves." />
+            </div>
             <div className="mt-2 flex justify-end">
               <button
                 type="button"
@@ -627,7 +707,7 @@ export default function ResearchPage(): React.JSX.Element {
         </Panel>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4">
         <Panel iconName="globe" title="Published rival programmes" subtitle="A secret programme is absent here, not redacted" flush>
           <DataTable
             columns={rivalColumns}
@@ -649,8 +729,6 @@ export default function ResearchPage(): React.JSX.Element {
             }
           />
         </Panel>
-
-        <InnovationPanel session={session} company={company} graph={graph} researchEnvelopeUsd={envelope} computeUnits={Math.round(held)} />
       </div>
 
       <NodeDrawer

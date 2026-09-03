@@ -132,6 +132,8 @@ export const SIM_EVENT_TYPES = [
   'activist_campaign_closed',
   'takeover_defence_raised',
   'capital_entity_marked',
+  // Compute bought outright from another company. Appended, never inserted.
+  'accelerators_bought',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');

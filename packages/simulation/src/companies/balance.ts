@@ -213,6 +213,41 @@ export const ENERGY_USD_PER_ACCELERATOR_QUARTER = 420;
 /** Quarterly depreciation rate applied to property, plant and equipment. */
 export const PPE_DEPRECIATION_PER_QUARTER = 0.055;
 
+/* --- owning capacity ------------------------------------------------------ */
+
+/**
+ * List price of one accelerator bought outright, at a spot index of 1.0, a
+ * neutral supply and a seller with no regional premium.
+ *
+ * Chosen against the rent. Reserving costs
+ * `RESERVED_UNIT_COST_USD_PER_QUARTER` = $2,100 a quarter forever; buying costs
+ * this once and then only depreciation and energy. At $32,000 the cash outlay
+ * is paid back against the reserved rate in about fifteen quarters — a little
+ * under four years — after which owned capacity is free of rent, and the P&L
+ * charge is lighter from the first quarter (declining-balance depreciation at
+ * `PPE_DEPRECIATION_PER_QUARTER` opens at $1,760 against $2,100 of rent).
+ *
+ * That is the whole trade the founder is being asked to make: cash now and an
+ * asset that ages, against a rent that never stops but never breaks the bank.
+ * Moving this number moves that trade, so it is stated here rather than folded
+ * into the price function.
+ */
+export const ACCELERATOR_UNIT_PRICE_USD = 32_000;
+/**
+ * How much of the list price moves with the spot index rather than being
+ * contracted. Half: a fab's order book is priced in advance, and half of what a
+ * buyer pays is this quarter's market.
+ */
+export const ACCELERATOR_SPOT_SHARE = 0.5;
+/**
+ * Share of a manufacturer's property, plant and equipment that becomes sellable
+ * output in one quarter, valued at list. A fab with $1bn of plant ships about
+ * `ACCELERATOR_FAB_OUTPUT_SHARE × $1bn` of accelerators a quarter.
+ */
+export const ACCELERATOR_FAB_OUTPUT_SHARE = 0.08;
+/** The fewest units a manufacturer with any plant at all can offer in a quarter. */
+export const MIN_ACCELERATOR_OUTPUT_UNITS = 4;
+
 /* -------------------------------------------------------------------------- */
 /*  People                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -402,6 +437,28 @@ export const CHRONIC_DISTRESS_QUARTERS = 6;
  * business having a bad year is financed rather than wound up.
  */
 export const CHRONIC_DISTRESS_REVENUE_FLOOR = 0.35;
+/**
+ * Consecutive quarter-ends below zero after which a company is wound up.
+ *
+ * The whole bankruptcy rule of world version 2, and it applies to the player's
+ * company and to every bot identically. Nothing in the validator refuses an
+ * instruction for want of cash any more, so this is the only place a company
+ * can die of money: overdraw once and you are warned, overdraw twice running
+ * and the company is in administration.
+ */
+export const SOLVENCY_NEGATIVE_QUARTERS = 2;
+
+/**
+ * Annual spread over the policy rate charged on an overdrawn balance.
+ *
+ * The price of the freedom above. A negative balance is an unsecured loan
+ * nobody agreed to make, so it is charged at the policy rate plus this, on the
+ * opening overdraft, in the quarter it is owed — booked as interest expense so
+ * it flows through net income and the double-entry gate like any other
+ * borrowing cost.
+ */
+export const OVERDRAFT_SPREAD = 0.06;
+
 /** Share of book value the estate of a wound-up company realises. */
 export const ADMINISTRATION_ASSET_RECOVERY = 0.35;
 /**

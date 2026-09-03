@@ -120,6 +120,88 @@ Letting a reservation lapse into a shortage is a classic way to lose a session.
 `computeUtilisation` punishes both directions: sustained low utilisation is
 wasted capital, sustained high utilisation blocks new training runs.
 
+### 4.1 Every purchase has a counterparty (world version 2)
+
+Compute used to be bought from a price index: money left the buyer and arrived
+nowhere. From world version 2 it is bought from a **named company**, out of
+capacity that company actually holds, at a price its own region and its own load
+produce. World 1 is untouched — it has no sellers at all, and its ledger and its
+frozen hash are unchanged.
+
+| Offering | Sold by | Bound on what they can sell |
+|---|---|---|
+| `cloud` | infrastructure, cloud and chip companies | held capacity beyond their own serving need |
+| `reservation` | the same companies | the same capacity |
+| `accelerators` | manufacturers: `chip_maker`, or the `semiconductors` sector | a quarter of fab output, from their plant at list price |
+
+Sellers are **derived, never stored**: `sellersFor(draft, offering, buyer)` reads
+who is active, what they hold and what they are using, and sorts cheapest first
+with ties broken by id. `resolveComputeSeller` honours a named counterparty when
+it still has something to sell and otherwise takes the cheapest company that
+could fill the order whole — so the validator, the resolver and the interface all
+name the same company.
+
+**Price.** A seller's quote is the world index times a per-seller factor:
+
+```text
+sellerFactor = clamp(1 + 0.5 × (regionalEnergyIndex/100 − 1)
+                       + 0.3 × (utilisation − 0.5),  0.7, 1.5)
+
+cloudUnitPrice       = CLOUD_UNIT_COST_USD_PER_QUARTER    × spotPrice     × sellerFactor
+reservationUnitPrice = RESERVED_UNIT_COST_USD_PER_QUARTER × reservedPrice × sellerFactor
+acceleratorPrice     = ACCELERATOR_UNIT_PRICE_USD
+                     × (0.5 + 0.5 × spotPrice)                  // half contracted, half market
+                     × clamp(1.5 − mean(acceleratorSupply, fabCapacity), 0.6, 1.5)
+                     × sellerFactor
+```
+
+Energy because a datacentre's marginal cost is electricity and electricity is the
+one input priced locally; utilisation because a seller with a full fleet is
+selling the last of it. The chosen factor is stored on the buyer's
+`ComputeHoldings` (`cloudProviderFactor`, `reservationProviderFactor`) so the
+recurring charge keeps tracking the world's indices while the counterparty's own
+premium stays fixed until the order is rewritten.
+
+### 4.2 Owning capacity: `buy_accelerators`
+
+`buy_accelerators { units, maxPricePerUnitUsd, sellerCompanyId }` buys
+accelerators outright. `ACCELERATOR_UNIT_PRICE_USD` is $32,000, chosen against
+the rent: reserving costs $2,100 a quarter forever, so the cash is paid back in
+about fifteen quarters and the P&L charge is lighter from the first quarter
+(declining-balance depreciation opens at $1,760 against $2,100 of rent).
+
+- **Validator.** Refused in world 1 (`requirement_not_met`). Refused for zero
+  units. Clamped to the seller's shippable units. Cash is *noted*, never
+  clamped — the note states where the balance lands and the solvency clock.
+- **Resolution, phase 10.** `ownedAccelerators += units`, and a sim event
+  `accelerators_bought {buyerCompanyId, sellerCompanyId, units, unitPriceUsd,
+  totalUsd, ownedBefore, ownedAfter}`. A clearing price above the buyer's
+  ceiling fails instead, with a `cost_recognised` row of kind
+  `accelerator_purchase_failed`.
+- **Cash, phase 11.** The compute phase stages the order on
+  `pendingAcceleratorPurchases`; the financial phase — the only phase that moves
+  cash — pays for it: cash down, property/plant/equipment up by the same figure,
+  `financials.capex` set to the total, and the investing line of the filed
+  `FinancialQuarter` carrying it. Equity does not move, so the double-entry gate
+  sees a matched pair.
+
+### 4.3 The seller's side
+
+`counterpartyCharges(draft)` restates, per quarter, exactly what `computeCost`
+has already billed each buyer — reserved units at the reserved index times the
+provider's factor, cloud spend at the spot index — plus each staged accelerator
+purchase, and attributes it to the **seller**. The financial phase adds that to
+the seller's revenue and books COGS against it at the seller's own realised
+margin from the quarter it last filed (`counterpartyMarginOf`, defaulting to 45%
+for a company with no filed revenue). The buyer's books are untouched by this: it
+has already been charged once, and charging it twice is the failure mode the
+whole arrangement is built to avoid.
+
+A seller that has since been wound up is skipped rather than credited: a balance
+sheet that no longer exists cannot recognise revenue, and the buyer's cost stands
+either way. NPC purchases go through the same validator and the same resolution,
+so rivals buy from rivals on identical terms.
+
 ## 5. Financial statements
 
 `Financials` is the quarterly P&L and cash position; every figure is for the
@@ -139,13 +221,108 @@ revenueQuarterly        product revenue + recognised contract milestones
 = freeCashFlow
 ```
 
-`quarterlyBurn` is the signed net cash movement. Reaching zero cash triggers
-emergency financing or restructuring — not instant death, but a `bridge` round
-that signals distress, or a `restructuring` board proposal.
+`quarterlyBurn` is the signed net cash movement.
+
+In **world version 1**, cash is floored at zero: the unfunded shortfall is
+pushed into `payables`, the company is "financed by its suppliers", and a
+`bridge` round is forced.
+
+From **world version 2** cash is signed and the floor is gone — see
+[§5.1 Solvency](#51-solvency).
 
 `deferredRevenue` (billed, not yet recognised) and `backlogUsd` (contracted, not
 yet billed) exist principally for government work: an award creates backlog
 before it creates revenue.
+
+### 5.1 Solvency
+
+Two rules, and they are the owner's words:
+
+> You should not reject or clamp a user decision because of cash available.
+>
+> Bankruptcy is counted when a player — including bots — has a negative cash
+> balance for two straight quarters.
+
+World version 2 implements exactly that and world 1 is untouched.
+
+**Cash never refuses an instruction.** Every `insufficient_cash` site in
+`validator/rules.ts` still *reserves* the commitment in the batch budget — the
+previews, the next action in the same submission and the ledger all need to know
+what was promised — but instead of rejecting or clamping it records a note:
+
+```text
+Takes cash from $4m to -$9.2m; 2 quarters below zero and the company is wound up.
+```
+
+The note carries `insufficient_cash` as an **advisory** code, so the interface
+colours it as a warning. Reasons that are not about cash — supply, headcount, an
+unknown target, a value out of bounds, a board matter — reject and clamp exactly
+as before.
+
+**The overdraft charge.** A negative balance is an unsecured loan nobody agreed
+to make, so it is priced:
+
+```text
+overdraftCharge = max(0, -openingCash) × (world.macro.policyRate + OVERDRAFT_SPREAD) / 4
+```
+
+`OVERDRAFT_SPREAD` is 6% a year over the policy rate. The charge is struck on
+the **opening** overdraft — the quarter's own spending has not been financed yet
+— and booked as `interestExpense`, so it flows through net income, through the
+double-entry roll-forward and through `financial_integrity`, which reads it
+inside the `interestUsd` figure on the quarter's `cost_recognised` row. A
+separate `cost_recognised` staging row (`kind: 'overdraft_interest'`) states the
+charge on its own for the ledger drawer; being kinded, it is not counted twice.
+
+**The clock.** `negativeCashQuarters(company)` counts consecutive closed quarters
+with `balance.cashUsd < 0` from the tail of `financialHistory`. It is derived,
+never stored: there is no counter to drift away from the accounts, and a save
+restored from any quarter recomputes the same figure.
+
+- After the **first** negative close: an `information_revealed`
+  (`kind: 'solvency_warning'`) row, a report line — *"one more quarter below zero
+  and X is wound up"* — and an alert on the Command Centre. Posture becomes
+  `survival`.
+- After the **second** consecutive negative close
+  (`SOLVENCY_NEGATIVE_QUARTERS = 2`): `enterAdministration` with the cause
+  `insolvent`. The row and the report line say *"two quarters of negative cash"*.
+  This is the whole bankruptcy rule of world 2, for the player's company and for
+  every bot; the world-1 routes (`failed_rescues`, `chronic_distress`) are not
+  reached at all.
+
+**The bridge asymmetry.** A company whose `controllerPlayerId` is not null is
+**never** force-bridged: the founder raises, borrows, sells or cuts, or the clock
+runs out. An NPC company still gets `queueBridgeRound` when its cash closes
+negative — that bridge is the bot's own raise, and it can still fail on investor
+appetite.
+
+**Estate arithmetic.** A wind-up realises the estate at
+`ADMINISTRATION_ASSET_RECOVERY` and pays creditors in order out of what it
+raises. An overdrawn estate can be worth less than nothing, so it pays nobody and
+every obligation is written off; the equity movement the administration row
+declares is still exactly `writtenOff - impairment`, which is what keeps
+`financial_integrity` satisfied through a wind-up.
+
+### Market entry, and the seat that closes
+
+**A failure is a gap and the money finds somebody else.** In the same phase,
+immediately after the distress step, one new company is founded for every company
+wound up this quarter — at most `ENTRANTS_PER_QUARTER` (2), and none at all once
+active non-husk companies reach `ACTIVE_COMPANY_CAP` (40). The entrant takes the
+dead company's sector; its region, archetype, name, founder and seed cheque are
+drawn from `ctx.rng` and from state, the cheque sized off the sector, the
+region's capital depth and `world.capitalMarkets.ventureLiquidity`. A venture
+entity with the dry powder leads the round and takes the stake, which is the same
+accounting a term sheet does: `dryPowderUsd` moves, and the
+`funding_round_closed` row declares the movement so `capital_integrity` can
+reconstruct it.
+
+**A bankrupt player is out.** When the company a player directs is wound up,
+`SessionPlayer.eliminatedQuarter` is set and the validator refuses every later
+instruction from that seat. Nothing else changes: the husk stays purchasable, and
+an entrant is founded into the player's slot exactly as into a bot's.
+
+See [SIMULATION.md §9.1](./SIMULATION.md#91-solvency-and-what-the-validator-is-for).
 
 ### Balance sheet invariant
 
@@ -338,7 +515,76 @@ Cash and shares must reconcile before commit. An acquisition that would break
 either the balance-sheet or the ownership invariant is rejected at validation,
 not repaired afterwards.
 
-## 12. Balance-sheet and economy invariants
+## 12. The portfolio
+
+Everything a company owns outside itself, read by one projection:
+`portfolioOf(session, companyId)` in `@frontier/simulation`. It is pure, it
+computes no new economics, and it is what the Portfolio screen renders. There is
+no second reading of these figures anywhere in the app.
+
+**The four kinds of row.**
+
+| Kind | What it is | Where it comes from |
+|---|---|---|
+| Subsidiary | A company bought outright (`absorbed`), or one held past `CONTROL_DECISIVE_PCT` and still filing (`controlled`) | `Company.parentCompanyId` and `Company.acquisition` for the first; the register for the second |
+| Stake | A minority position in another company's security | `CapTable.holdings` where `holderId` is this company |
+| Short | An open cash-settled exposure | `SessionState.shortPositions` where `entityId` is this company |
+| Fund | A partner's position in a `CapitalEntity` | `CapitalEntity.partnerCharacterIds`; a company is nobody's limited partner, so this is a founder row only |
+
+**The valuation basis, stated because it is not obvious.** The engine carries
+investments **at cost**: `runSettlement` adds the consideration to
+`balanceSheet.assets.investments` on a purchase and removes the pro-rata carrying
+value on a sale. So the portfolio reports two different figures side by side and
+never conflates them:
+
+- **cost** — the holding's `costBasisUsd`, or the acquisition record's
+  `priceUsd`. This is what reconciles to the balance sheet.
+- **value** — shares multiplied by the quote when the company is listed, by the
+  fundamental anchor's per-share value when it is not. The row says which
+  (`priceBasis`).
+
+**Reconciliation.** `portfolio.reconciliation` states
+`investmentsLineUsd`, the `stakesCostUsd` attributed to listed rows, and the
+`unattributedUsd` remainder. The check is an inequality, not an equality:
+attributed cost may never exceed the line, and the remainder is explained rather
+than hidden. A remainder is normal and has exactly two causes — a world-2 seed
+that opens with an investments balance no cap-table position backs, and an
+acquirer that absorbs its target's whole investments line without inheriting a
+single holding.
+
+**An absorbed subsidiary is worth zero on this list.** Its cash, plant, staff,
+products and revenue moved to the parent in the quarter it was bought, so they
+are already inside the parent's own figures. Counting the husk again would
+double-count the parent. The row carries what it cost and what goodwill it
+created, and says so.
+
+**Durable residue, because the ledger is not state.** `sim_event`s are an
+append-only ledger outside `SessionState`, and a save carries none of them. Three
+optional, world-2-only fields keep what the portfolio would otherwise have to
+invent quarters later:
+
+| Field | On | Written by |
+|---|---|---|
+| `Company.acquisition` | The company that was bought | `capital_resolution` |
+| `Holding.dividendsReceivedUsd` | The position paid | `capital_resolution` |
+| `Company.realisedInvestmentGainsUsd` | The seller | `runSettlement` |
+
+Each is `.optional()` and is never written in world version 1, so that frozen
+world grows no key and keeps hashing to the value it has always hashed to.
+
+**History.** The carrying line over the last eight filed quarters is derived from
+`financialHistory[].balance.investmentsUsd` — the investments half of other
+assets, restated on the filed statement rather than stored a second time. World 1
+files no statements, so it has no history to show.
+
+**The founder.** `founderPortfolioOf(session, playerId)` does the same for a
+person, their own company's shares included. It values every row at
+`enterpriseValue / issuedShares`, which is what `founderWealthOf` uses, so
+`netWorthUsd` is exactly the figure the founder-wealth leaderboard ranks. It is
+deliberately *not* the exchange quote: a net worth that disagreed with the board
+it is ranked on would be the second computation this projection exists to remove.
+
+## 13. Balance-sheet and economy invariants
 
 | Invariant | Where enforced |
 |---|---|

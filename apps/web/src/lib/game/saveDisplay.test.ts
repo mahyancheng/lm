@@ -42,6 +42,7 @@ function summary(partial: Partial<SlotSummary>): SlotSummary {
     founderName: 'Rae Fontaine',
     worldVersion: 1,
     savedAtIso: '2027-03-02T09:30:00.000Z',
+    endedQuarter: null,
     ...partial,
   };
 }

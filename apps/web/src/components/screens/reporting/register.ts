@@ -24,7 +24,7 @@
 import type { PlayerView, Region, Sector, SessionState } from '@frontier/contracts';
 import { SECTORS } from '@frontier/contracts';
 import { regionOf, sectorOf } from '@/components/ui';
-import { allVisibleCompanies, anchorOf } from './util';
+import { allVisibleCompanies, anchorOf, newEntrantLabel } from './util';
 import { latestQuote } from '@/lib/game';
 
 /** Where a row's headline valuation came from. Never a guess at a private one. */
@@ -49,6 +49,8 @@ export interface RegisterRow {
   readonly sharesOutstanding: number | null;
   /** Value over trailing revenue, where both exist and revenue is positive. */
   readonly revenueMultiple: number | null;
+  /** "New · 2029 Q2" for the first four quarters of a mid-session founding, else null. */
+  readonly newLabel: string | null;
 }
 
 /**
@@ -94,6 +96,7 @@ export function registerRows(session: SessionState, view: PlayerView): readonly 
       archetype: company.archetype ?? null,
       isPublic,
       isOwn,
+      newLabel: newEntrantLabel(company, view.quarter, view.startYear),
       valueUsd,
       valueBasis,
       revenueTtmUsd: revenue,

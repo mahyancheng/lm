@@ -94,6 +94,9 @@ export const HoldingSchema = z
     acquiredQuarter: QuarterIndexSchema.describe('Quarter the position was first opened.'),
     lockupUntilQuarter: QuarterIndexSchema.nullable().describe('Quarter before which the position cannot be sold, or null when unrestricted. Applied after an IPO or a stock-funded acquisition.'),
     isDisclosed: z.boolean().describe('True once the position has crossed a disclosure threshold and become public knowledge. An undisclosed accumulation is one of the game\'s sharpest weapons.'),
+    dividendsReceivedUsd: usd(
+      'Cumulative dividends this position has been paid, never reset and never reduced by a sale. It is income already banked, so it belongs beside the cost basis rather than inside it: a position can be under water on price and still ahead on cash. Optional because only world version 2 pays dividends at all; absent means "this world pays none", never zero received.',
+    ).optional(),
   })
   .describe('One ownership position in one security.');
 export type Holding = z.infer<typeof HoldingSchema>;

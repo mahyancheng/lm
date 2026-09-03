@@ -13,6 +13,7 @@
 import type {
   Company,
   ChiefOfStaffInput,
+  LookupResult,
   NpcStrategistInput,
   SessionState,
   SimEvent,
@@ -333,7 +334,16 @@ export function buildChiefOfStaffInput(
   session: SessionState,
   playerMessage: string,
   conversationHistory: readonly { role: 'player' | 'chief_of_staff'; text: string }[],
-  options: { readonly screen?: string; readonly ledger?: readonly SimEvent[] } = {},
+  options: {
+    readonly screen?: string;
+    readonly ledger?: readonly SimEvent[];
+    /**
+     * The answers to the lookups the previous turn asked for, run by the client
+     * through `runLookups`. Present only on the second turn of one message, and
+     * its presence is what closes research mode for that turn.
+     */
+    readonly findings?: readonly LookupResult[];
+  } = {},
 ): ChiefOfStaffInput {
   const company = playerCompanyOf(session);
   const seat = session.players.find((player) => player.playerId === PLAYER_ID) ?? null;
@@ -345,6 +355,7 @@ export function buildChiefOfStaffInput(
     companyId: company.id,
     playerMessage,
     ...(options.screen === undefined ? {} : { screen: options.screen.slice(0, 80) }),
+    ...(options.findings === undefined ? {} : { findings: [...options.findings] }),
     dossier,
     companyBriefing: companyBriefing(session, company),
     worldBriefing: worldBriefing(session),

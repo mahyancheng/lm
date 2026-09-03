@@ -23,6 +23,7 @@ import { z } from 'zod';
 import {
   CharacterUtteranceContextSchema,
   ChiefOfStaffInputSchema,
+  MAX_LOOKUPS_PER_TURN,
   InnovationInterpreterInputSchema,
   NpcStrategistInputSchema,
   ResolutionReportSchema,
@@ -98,6 +99,11 @@ const L = LLM_INPUT_LIMITS;
 
 export const BoundedChiefOfStaffInputSchema = ChiefOfStaffInputSchema.superRefine((value, ctx) => {
   chars(ctx, ['playerMessage'], value.playerMessage, L.message);
+  // Findings are produced by `runLookups` inside the engine, so their shape is
+  // already bounded by the contract. What is bounded here is the *count*: one
+  // round of sourcing, and a request carrying more than a round's worth has
+  // either been assembled by hand or is trying to make one prompt out of four.
+  if (value.findings !== undefined) entries(ctx, ['findings'], value.findings, MAX_LOOKUPS_PER_TURN);
   chars(ctx, ['companyBriefing'], value.companyBriefing, L.briefing);
   chars(ctx, ['worldBriefing'], value.worldBriefing, L.briefing);
   stringEntries(ctx, ['openDecisions'], value.openDecisions, L.listEntries, L.listText);

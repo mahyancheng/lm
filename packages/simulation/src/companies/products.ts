@@ -122,11 +122,21 @@ export function segmentDemand(draft: SessionState, sectorId: string, segment: Pr
 /*  Serving capacity                                                           */
 /* -------------------------------------------------------------------------- */
 
-/** Total accelerator-equivalents the company controls this quarter. */
+/**
+ * Total accelerator-equivalents the company controls this quarter.
+ *
+ * A dollar of cloud spend buys fewer units from a dear provider than from a
+ * cheap one, which is what makes choosing a counterparty worth doing: the
+ * provider's own factor — its region's electricity and how hard its fleet is
+ * already working — divides into the spend alongside the world's spot index.
+ * Absent, as it always is in world version 1 and on capacity bought at the
+ * index, the factor is exactly 1 and this is the arithmetic it always was.
+ */
 export function heldComputeUnits(draft: SessionState, company: Company): number {
   const compute = company.compute;
   const spot = draft.world.compute.spotPrice;
-  const cloudUnits = ratio(compute.cloudSpendQuarterly, CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, spot));
+  const providerFactor = Math.max(0.1, compute.cloudProviderFactor ?? 1);
+  const cloudUnits = ratio(compute.cloudSpendQuarterly, CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, spot) * providerFactor);
   return compute.ownedAccelerators + compute.reservedAccelerators + cloudUnits;
 }
 

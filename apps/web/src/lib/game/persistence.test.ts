@@ -111,6 +111,7 @@ function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'
     log,
     checkpoint,
     savedQuarter: (log[log.length - 1]?.quarter ?? -1) + 1,
+    endedQuarter: null,
     queue: [],
     savedAtIso: null,
   };
@@ -715,6 +716,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
       log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')], socialTexts: [] }],
       checkpoint: { quarter: 0, state: start },
       savedQuarter: 1,
+      endedQuarter: null,
       queue: [action],
       savedAtIso,
     };

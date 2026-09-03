@@ -50,11 +50,12 @@ describe('the icon set', () => {
 describe('every navigation entry names a mark that exists', () => {
   const names = new Set(declaredNames());
 
-  // Twenty since Wave 4: The Street is the institutional layer — venture,
-  // buyout, hedge and sovereign capital as actors — and it sits in Capital
-  // beside the exchange and the cap table it is the other side of.
-  it('covers all twenty screens', () => {
-    expect(NAV_ITEMS).toHaveLength(20);
+  // Twenty-one: The Street added the institutional layer in Wave 4, and
+  // Portfolio added the other side of the player's own register — what the
+  // company owns outside itself. Both sit in Capital, beside the exchange and
+  // the cap table they are the counterpart of.
+  it('covers all twenty-one screens', () => {
+    expect(NAV_ITEMS).toHaveLength(21);
     for (const item of NAV_ITEMS) {
       expect(names.has(item.icon), `${item.href} asks for the "${item.icon}" mark`).toBe(true);
     }
@@ -92,7 +93,7 @@ describe('the phone tab bar', () => {
 
 describe('the sub-tab strip', () => {
   it('offers the siblings of the screen you are on', () => {
-    expect(navSiblingsFor('/markets').map((item) => item.href)).toEqual(['/markets', '/capital', '/street', '/boardroom']);
+    expect(navSiblingsFor('/markets').map((item) => item.href)).toEqual(['/markets', '/capital', '/portfolio', '/street', '/boardroom']);
     expect(navSiblingsFor('/company').map((item) => item.href)).toEqual([
       '/command-centre',
       '/company',

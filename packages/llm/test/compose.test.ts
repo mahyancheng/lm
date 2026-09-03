@@ -178,6 +178,7 @@ describe('confirmation policy', () => {
     requiresConfirmation: false,
     confidence: 0.9,
     unsupportedRequests: [],
+    lookups: [],
   };
 
   it('leaves a routine interpretation alone', () => {

@@ -327,3 +327,19 @@ Untouched, as instructed: port 8110, demo mode, `LLM_MAX_CONCURRENCY=1`,
 tailnet-only, the in-app setup-secret credential flow. Still unverified by
 anyone: a real quarter with live AI under `docker stats` — needs the owner's
 subscription connected first.
+
+
+---
+
+## 8. No unlock secret on the tailnet
+
+The owner asked for the setup secret to go. The gate already had the switch:
+`LLM_TOKEN_SETUP=local` (read in `apps/web/src/app/api/llm/_runtime.ts`,
+`isLocalConnection`) declares every connection trusted, which is the truth of
+a tailnet-only host, so Settings → AI offers Connect with Claude with no
+secret. `.env.example` and the README carry it now. **On the Pi:** add
+`LLM_TOKEN_SETUP=local` to `deploy/pi/.env`, then recreate the container
+(`docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d` —
+an env change needs a recreate, not a restart). `LLM_SETUP_SECRET` may be
+deleted from the file; `LLM_KEY_SECRET` must stay (it seals the credential
+on the volume). Not for any host the public can reach.

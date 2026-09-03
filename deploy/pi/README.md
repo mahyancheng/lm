@@ -25,7 +25,7 @@ concurrency bound, the port — is a promise to those other tenants.
 | Layout on the Pi | a git checkout at `/home/ycmah/frontier-capital`; compose files, `update.sh` and `.env` live in its `deploy/pi/` |
 | Server-side state | one named volume, `claude-home` → `/home/node/.claude` |
 | Game saves | **in the player's browser**, not on the server — see below |
-| Credentials | none in the image, none in the repository; pasted in through Settings → AI |
+| Credentials | none in the image, none in the repository; connected through Settings → AI (no unlock secret on the tailnet: `LLM_TOKEN_SETUP=local`) and sealed to the volume |
 
 ---
 
@@ -43,7 +43,7 @@ git clone --depth 1 --branch claude/opus5-agents-vercel-supabase-kz1ehf \
   https://github.com/mahyancheng/lm /home/ycmah/frontier-capital
 cd /home/ycmah/frontier-capital/deploy/pi
 cp .env.example .env && chmod 600 .env
-$EDITOR .env          # LLM_SETUP_SECRET and LLM_KEY_SECRET; the other names as in the example
+$EDITOR .env          # LLM_KEY_SECRET (long, random); keep LLM_TOKEN_SETUP=local; the rest as in the example
 ```
 
 `.env` lives **beside the compose file** (`deploy/pi/.env`): compose resolves
@@ -76,10 +76,14 @@ not mean a credential has been accepted yet — that is step 4.
 ### 4. Connect the AI
 
 Open `http://<pi>:8110` on the tailnet. The **Set up AI** button in the
-masthead (or **Settings → AI · Claude** inside the game) asks for the setup
-secret — `LLM_SETUP_SECRET` from `.env` — and then offers **Connect with
-Claude**. The token it issues is sealed to the `claude-home` volume under
+masthead (or **Settings → AI · Claude** inside the game) offers **Connect with
+Claude** directly — no unlock secret, because `LLM_TOKEN_SETUP=local` in
+`.env` tells the gate that everything reaching a tailnet-only host is the
+household. The token it issues is sealed to the `claude-home` volume under
 `LLM_KEY_SECRET` and restored on every boot, so this is done once.
+
+(`LLM_SETUP_SECRET` is the gate for a host the public can reach; it is ignored
+while `LLM_TOKEN_SETUP=local` is set, and may be left empty here.)
 
 ### Alternative: build on a Mac and ship by hand
 

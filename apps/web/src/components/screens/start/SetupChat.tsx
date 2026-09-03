@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { NewGameSetup, SetupProposal } from '@frontier/contracts';
+import { missingSetupSlots, type NewGameSetup, type SetupProposal, type SetupSlot } from '@frontier/contracts';
 import { AiLabel, Icon, Tag } from '@/components/ui';
 import { isIconName } from '@/components/ui/icons';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
@@ -72,10 +72,21 @@ export interface SetupChatProps {
 
 const OPENING: SetupMessage = { id: 'm0', speaker: 'chief_of_staff', text: SETUP_OPENING };
 
+/** How the start button names what is still missing. */
+const SLOT_WORDS: Readonly<Record<SetupSlot, string>> = {
+  companyName: 'a company name',
+  founderName: 'your name',
+  sector: 'a sector',
+  region: 'a region',
+  backgroundId: 'an opening',
+};
+
 export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatProps): React.JSX.Element {
   const [messages, setMessages] = useState<readonly SetupMessage[]>([OPENING]);
   const [proposal, setProposal] = useState<SetupProposal>(EMPTY_SETUP_PROPOSAL);
   const [draft, setDraft] = useState('');
+  /** The dedicated name field's text: a name never depends on the sentence parser catching it. */
+  const [nameDraft, setNameDraft] = useState('');
   const [sending, setSending] = useState(false);
   const transcript = useRef<HTMLDivElement | null>(null);
 
@@ -84,6 +95,13 @@ export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatPr
   const understood = setupUnderstood(proposal);
   const setup = useMemo(() => setupFromProposal(proposal), [proposal]);
   const uncertain = setup !== null && proposal.confidence < SETUP_CONFIRM_BELOW;
+  // Region and background fall back to the sector's defaults, so only three
+  // things stand between the founder and the door. The button below is always
+  // on screen; this is what its caption says is still missing.
+  const REQUIRED: readonly SetupSlot[] = ['companyName', 'founderName', 'sector'];
+  const stillNeeded = missingSetupSlots(proposal).filter((entry) => REQUIRED.includes(entry));
+  const nameSlot: SetupSlot | null = slot === 'companyName' || slot === 'founderName' ? slot : null;
+  const defaulted = setup !== null && (proposal.region === null || proposal.backgroundId === null);
 
   // The newest turn, not the whole panel: scrolling the page on a phone every
   // time a chip is tapped would take the chips themselves off screen.
@@ -152,6 +170,14 @@ export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatPr
 
     respond(text, before, after);
     setSending(false);
+  }
+
+  /** The name field commits straight into the slot — no parsing, no model. */
+  function useName(): void {
+    const value = nameDraft.trim().slice(0, SETUP_NAME_MAX);
+    if (value.length === 0 || nameSlot === null || busy || sending) return;
+    setNameDraft('');
+    respond(value, proposal, applySetupChoice(proposal, nameSlot, value));
   }
 
   function found(): void {
@@ -232,6 +258,42 @@ export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatPr
         </div>
       ) : null}
 
+      {/* --- a name, typed straight in --------------------------------------- */}
+      {nameSlot !== null ? (
+        <div className="flex flex-col gap-1.5">
+          <label className="label-caps-faint" htmlFor="setup-name-field">
+            {nameSlot === 'companyName' ? 'Company name' : 'Your name'}
+          </label>
+          <div className="flex items-end gap-2">
+            <input
+              id="setup-name-field"
+              className="field min-h-11 min-w-0 flex-1"
+              value={nameDraft}
+              maxLength={SETUP_NAME_MAX}
+              placeholder={nameSlot === 'companyName' ? 'e.g. Kestrel Dynamics' : 'e.g. Rae Fontaine'}
+              autoComplete="off"
+              disabled={busy || sending}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  useName();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-primary tap-target press-pop shrink-0"
+              disabled={busy || sending || nameDraft.trim().length === 0}
+              onClick={useName}
+            >
+              <Icon name="check" size={16} accent="inherit" />
+              Use it
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* --- the chips for the open question -------------------------------- */}
       {chips.length > 0 ? (
         <ul className="grid gap-2 sm:grid-cols-2">
@@ -254,26 +316,41 @@ export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatPr
         </ul>
       ) : null}
 
-      {/* --- ready to found -------------------------------------------------- */}
-      {setup !== null ? (
-        <div className="animate-rise rounded-card border border-brand bg-brand-wash p-3">
-          <p className="text-[12.5px] leading-relaxed text-ink">{setupSummaryLine(proposal)}</p>
-          {uncertain ? (
-            <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">
-              I am not certain I read all of that correctly — check the chips above before we open the doors.
-            </p>
-          ) : null}
-          <button
-            type="button"
-            className="icon-knockout-brand btn btn-primary tap-target press-pop mt-2.5 w-full"
-            onClick={found}
-            disabled={busy}
-          >
-            <Icon name="plus" size={16} accent="inherit" />
-            {`Found ${setup.companyName} — 2027 Q1`}
-          </button>
-        </div>
-      ) : null}
+      {/* --- the start button: always on screen ------------------------------ */}
+      <div className={setup === null ? 'rounded-card border border-hair bg-raised p-3' : 'animate-rise rounded-card border border-brand bg-brand-wash p-3'}>
+        {setup === null ? (
+          <p className="text-[12px] leading-relaxed text-ink-dim">
+            Still need{' '}
+            <span className="font-semibold text-ink">
+              {stillNeeded.map((entry) => SLOT_WORDS[entry]).join(', ')}
+            </span>
+            . Region and opening take the sector&rsquo;s defaults unless you pick them.
+          </p>
+        ) : (
+          <>
+            <p className="text-[12.5px] leading-relaxed text-ink">{setupSummaryLine(proposal)}</p>
+            {defaulted ? (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">
+                Region and opening are set to the sector&rsquo;s defaults — tap the chips above to change them.
+              </p>
+            ) : null}
+            {uncertain ? (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-dim">
+                I am not certain I read all of that correctly — check the chips above before we open the doors.
+              </p>
+            ) : null}
+          </>
+        )}
+        <button
+          type="button"
+          className="icon-knockout-brand btn btn-primary tap-target press-pop mt-2.5 w-full"
+          onClick={found}
+          disabled={busy || setup === null}
+        >
+          <Icon name="plus" size={16} accent="inherit" />
+          {setup === null ? 'Found the company — 2027 Q1' : `Found ${setup.companyName} — 2027 Q1`}
+        </button>
+      </div>
 
       {/* --- the composer ---------------------------------------------------- */}
       <div className="flex flex-col gap-2 border-t border-hair pt-3">

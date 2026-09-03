@@ -12,6 +12,11 @@
 # Reachable on the tailnet only, at http://<pi>:8110. There is no public URL,
 # no reverse proxy and no TLS in this deployment, by design.
 
+# The project name fixes the volume names (frontier-capital_claude-home, and
+# the saves volume) regardless of which directory compose is run from — run
+# from deploy/pi/ the default would be "pi", orphaning the real volumes.
+name: frontier-capital
+
 services:
   app:
     image: frontier-capital:pi

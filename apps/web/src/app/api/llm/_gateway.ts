@@ -339,13 +339,31 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
             sameSite: 'lax',
             path: '/',
             maxAge: ANONYMOUS_ID_MAX_AGE_SECONDS,
-            secure: process.env.NODE_ENV === 'production',
+            // `Secure` only when this request actually arrived over HTTPS. A
+            // production build served over plain HTTP — the tailnet-only Pi —
+            // would otherwise mint a cookie no browser stores, and every write
+            // route would answer `cookie_required` forever.
+            secure: requestIsHttps(request),
           });
         }
         return response;
       },
     },
   };
+}
+
+/**
+ * Did this request arrive over TLS? The URL's own scheme when Next saw it
+ * directly; the first `x-forwarded-proto` hop when a proxy terminated TLS.
+ */
+export function requestIsHttps(request: Request): boolean {
+  try {
+    if (new URL(request.url).protocol === 'https:') return true;
+  } catch {
+    /* an unparseable URL is not HTTPS */
+  }
+  const forwarded = request.headers.get('x-forwarded-proto');
+  return forwarded !== null && forwarded.split(',')[0]?.trim().toLowerCase() === 'https';
 }
 
 /** The graceful null response every failure path returns. Always HTTP 200. */

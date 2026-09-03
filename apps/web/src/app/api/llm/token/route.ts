@@ -57,8 +57,8 @@
  * the environment variable remains the only durable answer there.
  */
 
-import { admit } from '../_gateway';
-import { clearRuntimeCredential, publicTokenStatus, setRuntimeCredential } from '../_runtime';
+import { admit, chargeSetupSecretAttempt } from '../_gateway';
+import { clearRuntimeCredential, publicTokenStatus, setRuntimeCredential, tokenWriteOriginKey } from '../_runtime';
 import {
   TokenBodySchema,
   describeCredential,
@@ -67,7 +67,10 @@ import {
   json,
   mayReadDescriptor,
   mutationResult,
+  setupSecretFacts,
 } from './_shared';
+
+import { SETUP_SECRET_HEADER } from '@/lib/llm/token';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -84,6 +87,23 @@ export async function GET(request: Request): Promise<Response> {
   const admission = await admit(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
+
+  // A caller who presented a secret and got it wrong has made an unlock
+  // attempt, not a status read: answer 401, and charge the same brute-force
+  // bucket the writes charge so this verb cannot be used to guess. A caller
+  // who presented nothing still gets the public descriptor — the panel needs
+  // it to know which gate to draw.
+  const presented = request.headers.get(SETUP_SECRET_HEADER);
+  if (presented !== null && presented.length > 0) {
+    const facts = setupSecretFacts(request);
+    if (!facts.secretPresented) {
+      const attempt = chargeSetupSecretAttempt(tokenWriteOriginKey(request.headers));
+      if (!attempt.allowed) {
+        return finish(json({ ok: false, reason: 'rate_limited' }, 429, { 'retry-after': String(attempt.retryAfterSeconds) }));
+      }
+      return finish(json({ ok: false, reason: 'setup_secret_required' }, 401));
+    }
+  }
 
   const status = describeCredential(request);
   const disclose = await mayReadDescriptor(request, { principal, mintedPrincipal });

@@ -151,6 +151,25 @@ The package is public, so the pull is anonymous; if it is ever made private
 again, `docker login ghcr.io` once on the Pi with a read-only token
 (`read:packages`).
 
+### How to tell which build the Pi is running
+
+Every image is stamped by CI with the commit it was built from and the moment
+it was built, and three surfaces read the same stamp back so "did it update?"
+never needs guessing: the **start page footer** reads `Build <shortSha> ·
+<date>` (e.g. `Build a09e1f0 · 3 Sep 12:17 UTC`) beside the AI status line, for
+whoever is holding the phone; `curl -s http://localhost:8110/api/version`
+returns `{"sha","shortSha","builtAt"}` for a script; and `update.sh` prints a
+`version:` line next to the image `digest:` line on every run, updated or not.
+`Build dev` anywhere means nothing was ever stamped — only a Mac build without
+`GIT_SHA`/`BUILD_TIME` passed as build-args does that; the CI-built image
+always carries a real sha. **If the timer has not pulled** — the footer is
+stuck on an old sha, or `systemctl list-timers` shows `frontier-update.timer`
+overdue or missing — run `deploy/pi/update.sh` by hand (`cd
+/home/ycmah/frontier-capital && git pull --ff-only && deploy/pi/update.sh`);
+`systemctl list-timers` shows when it last fired and is due next, and
+`systemctl status frontier-update.timer` / `journalctl -u
+frontier-update.service` show why it didn't.
+
 ## Memory
 
 **The compose memory limits do nothing on this Pi today.** Its kernel boots

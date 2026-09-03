@@ -428,3 +428,35 @@ Both devices on the tailnet, both at `http://<pi>:8110`.
 demo mode, `LLM_MAX_CONCURRENCY=1`, `LLM_TOKEN_SETUP=local` and the GHCR update
 path are all as they were; `update.sh` is unmodified and its one-service
 preflight still passes, because `saves` adds a volume and not a service.
+
+
+---
+
+## 10. The build stamp — how to tell which build the Pi is running
+
+The owner asked "did the Pi not update?" and the honest answer was that
+nothing in the running app could say. Added end to end, every surface reading
+the same two values:
+
+| File | Change |
+|---|---|
+| `apps/web/src/lib/version.ts` | new — `buildStamp`, `shortSha`, `formatBuildTime`, `buildStampLine`, `clientBuildStamp` (reads the `NEXT_PUBLIC_` pair, inlined for the browser), `serverBuildStamp` (reads the runtime pair, falling back to the inlined one) |
+| `apps/web/src/lib/version.test.ts` | new — short-sha truncation, UTC date formatting, the `dev` fallback |
+| `apps/web/src/app/api/version/route.ts` | new — `GET /api/version`: `{sha, shortSha, builtAt}`, no auth, never cached |
+| `apps/web/src/app/api/version/route.test.ts` | new |
+| `apps/web/src/app/api/llm/health/route.ts` | `build: {sha, shortSha, builtAt}` added to the existing JSON; `available`, `transportKind` and `model` are unchanged |
+| `apps/web/src/app/page.tsx` | start page footer prints `Build <shortSha> · <date>` beside the AI status line |
+| `apps/web/src/components/shell/SettingsDrawer.tsx` | the same line in Settings → AI |
+| `.github/workflows/pi-image.yml` | mints `GIT_SHA` (`github.sha`, the full commit) and `BUILD_TIME` (an ISO instant taken by the workflow itself, not by anything inside the image — a timestamp minted at runtime would just be the container's start time) and passes both as Docker `build-args` |
+| `deploy/pi/Dockerfile` | `ARG GIT_SHA=dev` / `ARG BUILD_TIME=` declared before the first `FROM` so both stages can pull them in; set as `NEXT_PUBLIC_BUILD_SHA` / `NEXT_PUBLIC_BUILD_TIME` **before** `next build` (the only way the bundler inlines them for the browser), and again as the unprefixed `BUILD_SHA` / `BUILD_TIME` runtime env in the final stage |
+| `deploy/pi/update.sh` | after `/api/llm/health` comes up, curls `/api/version` (parsed with `sed` — the Pi has no `jq`) and prints `version: running build <shortSha> (<builtAt>)` next to the `digest:` line, on both the "already latest" and the "updated" path |
+
+Absent everywhere → `dev`, never blank: a footer with nothing in it is
+indistinguishable from one that broke, and the whole point of the stamp is
+answering "did it update?" without ambiguity. The CI-built image is always
+stamped; only a hand-built Mac image without `--build-arg` set says `dev`.
+
+Read the *How to tell which build the Pi is running* section of `README.md`
+for what a person on the tailnet actually does with this — including what to
+run when `frontier-update.timer` has not fired. Nothing else changed:
+`update.sh`'s one-service preflight and its rollback are exactly as they were.

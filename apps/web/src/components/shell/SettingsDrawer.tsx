@@ -50,6 +50,7 @@ import {
   tokenDraftIssue,
 } from '@/lib/llm/token';
 import { resetLlmHealth } from '@/lib/llm/client';
+import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import type { SettingsSection } from './settingsBus';
 import {
   NO_SERVER_LINE,
@@ -651,6 +652,13 @@ function ClaudeSection({
           instead.
         </p>
       ) : null}
+
+      {/* Which build this page came from. The host pulls a new image on a
+          timer, so this is how anyone tells a restarted container from an
+          updated one; the same stamp is served by /api/version. */}
+      <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
+        {buildStampLine(clientBuildStamp())}. That is the build this page was served from.
+      </p>
     </section>
   );
 }

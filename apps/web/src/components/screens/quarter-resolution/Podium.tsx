@@ -16,6 +16,7 @@
 import Link from 'next/link';
 import { formatPct, formatRankMove } from '@frontier/shared';
 import { Tag, cx } from '@/components/ui';
+import { humanise } from '@/components/screens/reporting/util';
 import { CountUp } from './CountUp';
 import { PodiumFigure } from './Art';
 import { PODIUM_HEIGHTS, podiumOrder } from './theatre';
@@ -56,7 +57,7 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
               href="/leaderboard"
               className="animate-pop-in press-pop flex min-w-0 flex-col items-center gap-1.5 rounded-card focus-visible:outline-2"
               style={reveal ? { animationDelay: `${index * 110}ms` } : undefined}
-              title={`${row.board.replace(/_/g, ' ')} — rank ${row.rank}`}
+              title={`${humanise(row.board)} — rank ${row.rank}`}
             >
               {best ? <PodiumFigure className="animate-bob h-8 w-6" /> : <span className="h-8" aria-hidden="true" />}
 
@@ -89,7 +90,7 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
                     best ? 'text-brand' : 'text-ink-dim',
                   )}
                 >
-                  {row.board.replace(/_/g, ' ')}
+                  {humanise(row.board)}
                 </span>
               </div>
             </Link>
@@ -102,7 +103,7 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
       <p className="mt-2 text-center text-[10px] leading-relaxed text-ink-faint">
         The {top.length === 1 ? 'board' : 'boards'} you sit highest on by percentile, counted from where you were to where you are. Every
         figure is the leaderboard the ledger recomputed —{' '}
-        {top.map((row) => `${row.board.replace(/_/g, ' ')} ${formatPct(row.percentile)}`).join(' · ')}.
+        {top.map((row) => `${humanise(row.board)} ${formatPct(row.percentile)}`).join(' · ')}.
       </p>
     </div>
   );

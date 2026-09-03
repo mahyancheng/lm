@@ -8,9 +8,11 @@
 # the compose merge first — an overlay that adds a service instead of
 # overriding `app` would otherwise "update" a container nobody is routed to
 # and report success — then pulls, restarts the one service, waits for
-# /api/llm/health, and prints the image DIGEST now serving: the tag is the same
-# string before and after an update; the digest is the evidence. Rolls back to
-# the previous image (kept as frontier-capital:rollback) if health does not
+# /api/llm/health, and prints both the image DIGEST now serving and the BUILD
+# the container reports at /api/version: the tag is the same string before and
+# after an update, so the digest is the evidence, and the build stamp is the
+# same one a founder can read in the start page footer from a phone. Rolls back
+# to the previous image (kept as frontier-capital:rollback) if health does not
 # come up. Safe from any SSH app on a phone over the tailnet, or from the
 # systemd timer in the README. Needs nothing from a Mac.
 set -euo pipefail
@@ -34,6 +36,22 @@ printf '%s\n' "$merged" | grep -q "image: ${IMAGE}" || { echo "!! merged config 
 digest_of() { docker image inspect --format '{{index .RepoDigests 0}}' "$1" 2>/dev/null || true; }
 id_of() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
 
+# What the container itself says it is. /api/version needs no auth, is never
+# cached, and carries the same commit and build time the start page footer
+# shows — so this line and the phone agree or something is wrong. Parsed with
+# sed because the Pi has no jq, and an unstamped image answers "dev".
+running_build() {
+  local body short at
+  body="$(curl -fsS -m 5 "http://127.0.0.1:${PORT}/api/version" 2>/dev/null || true)"
+  short="$(printf '%s' "$body" | sed -n 's/.*"shortSha":"\([^"]*\)".*/\1/p')"
+  at="$(printf '%s' "$body" | sed -n 's/.*"builtAt":"\([^"]*\)".*/\1/p')"
+  if [[ -z "$short" ]]; then
+    echo "build unknown — /api/version did not answer"
+  else
+    echo "running build ${short} (${at:-no build time stamped})"
+  fi
+}
+
 running_id="$(docker inspect --format '{{.Image}}' frontier-capital 2>/dev/null || true)"
 if [[ -n "$running_id" ]]; then
   docker tag "$running_id" frontier-capital:rollback
@@ -45,6 +63,7 @@ new_id="$(id_of "${IMAGE}")"
 new_digest="$(digest_of "${IMAGE}")"
 if [[ -n "$running_id" && "$new_id" == "$running_id" ]]; then
   echo "Already on the latest image: ${new_digest:-$new_id}"
+  echo "  version:  $(running_build)"
   exit 0
 fi
 
@@ -60,6 +79,7 @@ for _ in $(seq 1 40); do
     echo "  digest:   ${new_digest:-<none: local image, no registry digest>}"
     echo "  image id: ${new_id}"
     echo "  checkout: ${checkout}"
+    echo "  version:  $(running_build)"
     docker image prune -f >/dev/null 2>&1 || true
     exit 0
   fi

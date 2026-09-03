@@ -27,6 +27,18 @@
 #    — and why the last step of this build actually *runs* the binary. A build
 #    that cannot execute an agent turn should fail here, not on the Pi.
 
+# ## The build stamp
+#
+# `GIT_SHA` and `BUILD_TIME` are supplied by .github/workflows/pi-image.yml —
+# the commit the image was built from, and an ISO instant minted by the
+# workflow rather than by anything in here. They are declared before the first
+# FROM so both stages can pull them into scope with a bare `ARG`, and they
+# default to a value that says so, because a local build of this file is a dev
+# build. Everything downstream — /api/version, /api/llm/health, the start page
+# footer, `deploy/pi/update.sh` — reads exactly these two values.
+ARG GIT_SHA=dev
+ARG BUILD_TIME=
+
 ########################################################################
 #  Build                                                               #
 ########################################################################
@@ -67,7 +79,19 @@ RUN pnpm install --frozen-lockfile
 # runtime. Demo mode does not actually need one — with no Supabase variables
 # set, `isDemoMode()` is already true — but stating it makes the build's intent
 # legible and survives someone later adding a `NEXT_PUBLIC_` read.
-ENV NEXT_PUBLIC_DEMO_MODE=true
+#
+# The build stamp has to be set BEFORE `next build` for the same reason: the
+# footer that answers "which build is this?" runs in a browser, and the only
+# way a browser can know is if the bundler substituted the value. The unprefixed
+# pair is set too, so a `pnpm --filter @frontier/web build` run here reports the
+# same thing a server route would.
+ARG GIT_SHA
+ARG BUILD_TIME
+ENV NEXT_PUBLIC_DEMO_MODE=true \
+    NEXT_PUBLIC_BUILD_SHA=${GIT_SHA} \
+    NEXT_PUBLIC_BUILD_TIME=${BUILD_TIME} \
+    BUILD_SHA=${GIT_SHA} \
+    BUILD_TIME=${BUILD_TIME}
 RUN pnpm --filter @frontier/web build
 
 # Drop to production dependencies. A second install rather than a hand-rolled
@@ -123,6 +147,15 @@ ENV NODE_ENV=production \
     LLM_STATE_DIR=/home/node/.claude/frontier-capital \
     PORT=3000 \
     HOSTNAME=0.0.0.0
+
+# The build stamp again, for the running process rather than for the bundle:
+# `GET /api/version` and `GET /api/llm/health` report these, and
+# `deploy/pi/update.sh` prints them after health comes up. ARGs do not cross
+# stages, hence the second declaration.
+ARG GIT_SHA
+ARG BUILD_TIME
+ENV BUILD_SHA=${GIT_SHA} \
+    BUILD_TIME=${BUILD_TIME}
 
 # `node` (uid 1000) already exists in this image and owns /home/node.
 RUN install -d -o node -g node -m 0700 /home/node/.claude

@@ -5,14 +5,17 @@
  *
  * Every economic mutation in the game creates a `SimEvent`, and every derived
  * number on a reporting screen can open the rows that produced it. This is the
- * component that shows them: the type, the actor, the target and the payload
- * exactly as committed, with the sequence numbers that place them in the
- * ledger.
+ * component that shows them: the actor, the target and the payload exactly as
+ * committed, with the sequence numbers that place them in the ledger.
+ *
+ * The row's machine name (`event.type`) is deliberately absent, here as in the
+ * Quarter Resolution drawer: the drawer's own title says what the player asked
+ * about and the payload carries the detail, so an enum spelt out in words adds
+ * a second, worse name for the same row.
  */
 
 import type { SimEvent } from '@frontier/contracts';
 import { Drawer, EmptyState, Tag, type Tone } from '@/components/ui';
-import { humanise } from './util';
 
 const VISIBILITY_TONE: Readonly<Record<string, Tone>> = {
   public: 'info',
@@ -60,14 +63,11 @@ export function LedgerDrawer({ open, onClose, title, subtitle, events, emptyMess
         <ul className="flex flex-col gap-2">
           {events.map((event) => (
             <li key={event.eventId} className="raised-surface px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[12px] font-medium text-ink">{humanise(event.type)}</span>
-                <span className="flex items-center gap-1.5">
-                  <Tag tone={VISIBILITY_TONE[event.visibility] ?? 'neutral'} dot>
-                    {event.visibility}
-                  </Tag>
-                  <span className="figure text-[10px] text-ink-faint">#{event.sequence}</span>
-                </span>
+              <div className="flex items-center gap-1.5">
+                <Tag tone={VISIBILITY_TONE[event.visibility] ?? 'neutral'} dot>
+                  {event.visibility}
+                </Tag>
+                <span className="figure text-[10px] text-ink-faint">#{event.sequence}</span>
               </div>
 
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-ink-faint">

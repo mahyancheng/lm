@@ -28,6 +28,7 @@ import {
   type SlotSummary,
 } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
+import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { type MergedSlot, mergeSlots } from '@/lib/saves/plan';
 import { saveSync } from '@/lib/saves/sync';
@@ -896,6 +897,10 @@ SUPABASE_SERVICE_ROLE_KEY=`}
               ? `Live model configured (${llm.transportKind}${llm.model === null ? '' : `, ${llm.model}`}). Tap to manage.`
               : 'No model configured — every role falls back deterministically and the game plays in full. Tap to connect Claude.'}
           </button>
+          {/* Which build this is. The host pulls a new image on a timer, so the
+              answer to "did it update?" has to be on the page itself; the same
+              stamp is served by /api/version. */}
+          <span className="text-ink-faint">{buildStampLine(clientBuildStamp())}</span>
         </footer>
       </div>
       <SettingsDrawer open={aiOpen} onClose={() => setAiOpen(false)} focus="ai" />

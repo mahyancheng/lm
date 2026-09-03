@@ -48,10 +48,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The build stamp is minted here, by the workflow, and never by code
+      # inside the image: a timestamp taken during the build would change on
+      # every rebuild of the same commit, and one taken at runtime would just
+      # be the container's start time.
       - id: meta
         run: |
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/frontier-capital" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
@@ -59,6 +64,9 @@ jobs:
           file: deploy/pi/Dockerfile
           platforms: linux/arm64
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.built_at }}
           tags: |
             ${{ steps.meta.outputs.image }}:pi
             ${{ steps.meta.outputs.image }}:pi-${{ steps.meta.outputs.sha }}

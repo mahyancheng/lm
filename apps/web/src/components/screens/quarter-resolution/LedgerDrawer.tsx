@@ -15,6 +15,7 @@
 import type { ResolutionLine, SimEvent } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { Drawer, EmptyState, Tag } from '@/components/ui';
+import { humanise } from '@/components/screens/reporting/util';
 
 export interface LedgerDrawerProps {
   readonly line: ResolutionLine | null;
@@ -42,7 +43,7 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
       open
       onClose={onClose}
       title="What is behind this line"
-      subtitle={`${line.phase.replace(/_/g, ' ')} · ${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
+      subtitle={`${humanise(line.phase)} · ${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
       width={560}
     >
       <div className="flex flex-col gap-4">

@@ -30,6 +30,7 @@ import { NewGameSetupSchema } from '@frontier/contracts';
 import { buildSubmittedAction, createSession } from './engine';
 import { SAVE_KEY, SAVE_VERSION, SLOT_KEYS, buildSaveFile, writeSaveFile } from './persistence';
 import { GameProvider, useGame, useGameActions, type GameStoreActions, type GameStoreState } from './provider';
+import { backupKeyOf } from '../saves/sync';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -345,5 +346,91 @@ describe('manual slots through the store', () => {
     });
     expect(state().notice).toBe('Slot 1 deleted.');
     expect(storedRaw(SLOT_KEYS[0]!)).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Adopting a save from somewhere other than this browser                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `loadSaveFile` is how a copy pulled off the host becomes the game in this
+ * tab. It is tested here, in the provider, because the order is the whole
+ * promise: the copy this browser already had is set aside *before* anything is
+ * written, and a file this build cannot read refuses the operation outright
+ * rather than being written over the one that is there.
+ *
+ * No host and no network appear below. The provider is handed a save file
+ * value, which is exactly what the sync layer hands it.
+ */
+describe('loadSaveFile adopts a save that came from elsewhere', () => {
+  const NORTHWIND = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
+  const SOUTHGATE = NewGameSetupSchema.parse({ companyName: 'Southgate Labs', founderName: 'Ivo Marsh', backgroundId: 'consumer_ai' });
+
+  /**
+   * Found one company, take its save file, then found another over the top.
+   *
+   * One mount throughout: the returned file is a save this browser is no longer
+   * playing, which is exactly the shape of a copy pulled off the host.
+   */
+  async function twoGames(): Promise<{
+    state: () => GameStoreState;
+    actions: () => GameStoreActions;
+    elsewhere: Record<string, unknown>;
+  }> {
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup: NORTHWIND });
+    });
+    await settle(state);
+    const elsewhere = storedJson(SAVE_KEY);
+
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup: SOUTHGATE });
+    });
+    await settle(state);
+    expect(playerCompanyName(state())).toBe('Southgate Labs');
+    return { state, actions, elsewhere };
+  }
+
+  it('replays it, adopts it as the autosave, and keeps the displaced copy', async () => {
+    const { state, actions, elsewhere } = await twoGames();
+
+    let adopted = false;
+    await act(async () => {
+      adopted = await actions().loadSaveFile(elsewhere);
+    });
+    await settle(state);
+
+    expect(adopted).toBe(true);
+    expect(playerCompanyName(state())).toBe('Northwind AI');
+    expect((storedJson(SAVE_KEY).setup as { companyName: string }).companyName).toBe('Northwind AI');
+
+    // Never silently dropped: the game that was here is under the backup key.
+    const kept = JSON.parse(storedRaw(backupKeyOf('autosave')) as string) as Record<string, unknown>;
+    expect((kept.setup as { companyName: string }).companyName).toBe('Southgate Labs');
+  });
+
+  it('mirrors it into the manual slot it came from', async () => {
+    const { state, actions, elsewhere } = await twoGames();
+    await act(async () => {
+      await actions().loadSaveFile(elsewhere, { intoSlot: 2 });
+    });
+    await settle(state);
+
+    expect((storedJson(SLOT_KEYS[1] as string).setup as { companyName: string }).companyName).toBe('Northwind AI');
+  });
+
+  it('refuses a file this build cannot read, and changes nothing', async () => {
+    const { state, actions } = await twoGames();
+    const before = storedRaw(SAVE_KEY);
+
+    let adopted = true;
+    await act(async () => {
+      adopted = await actions().loadSaveFile({ version: 99, log: [] });
+    });
+    expect(adopted).toBe(false);
+    expect(storedRaw(SAVE_KEY)).toBe(before);
+    expect(playerCompanyName(state())).toBe('Southgate Labs');
   });
 });

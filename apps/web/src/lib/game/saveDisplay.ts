@@ -10,7 +10,7 @@
  * "Continue player ventures" are two different companies to a reader.
  */
 
-import { quarterLabel, type NewGameSetup } from '@frontier/contracts';
+import { quarterLabel, type NewGameSetup, type SessionDifficulty } from '@frontier/contracts';
 import type { SaveFile, SlotSummary } from './persistence';
 
 /** The classic world's names, byte for byte as `scenario/demo.ts` seeds them. */
@@ -53,17 +53,35 @@ export function shortSavedAt(iso: string | null, now: () => Date = () => new Dat
 }
 
 /**
- * The second line of a filled slot row: quarter, difficulty and the advisory
- * date, dot-joined from whichever parts the file actually has. Only an `ok`
+ * What a row can say about a save's position, from either side.
+ *
+ * The host's envelope carries the quarter and the stamp but not the difficulty
+ * — it indexes a file, it does not re-describe one — so `difficulty` is
+ * optional here rather than a null a server row has to invent.
+ */
+export interface SavePosition {
+  readonly savedQuarter: number | null;
+  readonly savedAtIso: string | null;
+  readonly difficulty?: SessionDifficulty | null;
+}
+
+/**
+ * The second line of a filled save row: quarter, difficulty and the advisory
+ * date, dot-joined from whichever parts are actually known. Only an `ok`
  * summary earns one; the other statuses carry fixed captions in the UI.
  */
-export function slotDetailLine(summary: SlotSummary, now?: () => Date): string {
+export function saveDetailLine(summary: SavePosition, now?: () => Date): string {
   const parts: string[] = [];
   if (summary.savedQuarter !== null) parts.push(quarterLabel(DEMO_START_YEAR, summary.savedQuarter));
-  if (summary.difficulty !== null) parts.push(summary.difficulty);
+  if (summary.difficulty !== null && summary.difficulty !== undefined) parts.push(summary.difficulty);
   const saved = shortSavedAt(summary.savedAtIso, now);
   if (saved !== null) parts.push(`saved ${saved}`);
   return parts.join(' · ');
+}
+
+/** The same line for a `localStorage` slot summary, which always knows its difficulty. */
+export function slotDetailLine(summary: SlotSummary, now?: () => Date): string {
+  return saveDetailLine(summary, now);
 }
 
 /**

@@ -143,9 +143,11 @@ export {
   DEFAULT_FOUNDER_NAME,
   DEMO_START_YEAR,
   continueLabel,
+  saveDetailLine,
   savedCompanyName,
   savedFounderName,
   shortSavedAt,
   slotDetailLine,
   slotOverwriteLabel,
 } from './saveDisplay';
+export type { SavePosition } from './saveDisplay';

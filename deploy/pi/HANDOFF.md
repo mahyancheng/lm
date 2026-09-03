@@ -343,3 +343,88 @@ secret. `.env.example` and the README carry it now. **On the Pi:** add
 an env change needs a recreate, not a restart). `LLM_SETUP_SECRET` may be
 deleted from the file; `LLM_KEY_SECRET` must stay (it seals the credential
 on the volume). Not for any host the public can reach.
+
+
+---
+
+## 9. Server-side saves — the volume, the one-time command, and the two-device test
+
+Saves now have a second layer: with `SAVE_DIR` set, the app keeps a
+profile-keyed copy on the host so the laptop can pick up the game the phone
+started. **The browser layer is unchanged** — every write still goes to
+`localStorage` first, synchronously, on the path that already worked — and
+there is **no save-format version bump**: the file is still v5 and is stored
+verbatim, so every save already in a browser uploads as it stands.
+
+Read the *Saves* section of `README.md` for the caps, the conflict rule and the
+migration behaviour. What the Mac session has to do is here.
+
+### What must be added on the Pi
+
+`docker-compose.yml` declares a second named volume, `saves`, mounted at
+`/data`, and `.env.example` sets `SAVE_DIR=/data/saves`. Two steps:
+
+1. Add `SAVE_DIR=/data/saves` to `deploy/pi/.env`.
+2. **Run the one-time ownership command**, before or after the first start:
+
+   ```bash
+   docker compose run --rm --user 0 --entrypoint sh app \
+     -c 'install -d -o node -g node -m 0700 /data /data/saves'
+   ```
+
+   Docker creates a **new** named volume's mount point as root, and the
+   container runs as `node` (uid 1000). The Dockerfile is untouched — it has no
+   `/data` to inherit ownership from, which is exactly what its
+   `RUN install -d -o node -g node -m 0700 /home/node/.claude` line does for
+   `claude-home`. The command is idempotent; run it again whenever in doubt.
+
+   An init service was deliberately **not** added: `update.sh` refuses to update
+   when the compose merge yields more than one service, and that guard is part
+   of the GHCR update path. If a zero-touch deploy is wanted later, the two
+   options are a one-line `RUN install -d -o node -g node -m 0700 /data` in
+   `deploy/pi/Dockerfile`, or an init service plus a one-word relaxation of
+   `update.sh`'s preflight. Both were out of scope.
+
+**Until that command is run, nothing breaks.** The store finds the root
+unwritable, `/api/saves/profiles` answers `enabled: false`, and the game behaves
+exactly as it does today — no 500s, no lost saves, and the start page says
+"This host does not keep saves" rather than showing an error.
+
+### The two-device acceptance test
+
+Both devices on the tailnet, both at `http://<pi>:8110`.
+
+1. **Phone.** Start page → *This device* → type a name (e.g. `YC`) → **Use this
+   name**. Found a company, resolve two or three quarters. The chip should read
+   **Synced**.
+2. **Check the disk.**
+   ```bash
+   docker compose exec app ls -la /data/saves/yc
+   # autosave.json, profile.json; a second save adds autosave.prev.json
+   docker compose exec app sh -c 'head -c 300 /data/saves/yc/autosave.json'
+   # {"profile":"yc","slot":"autosave","revision":N,"updatedAtIso":…,"file":{…
+   ```
+   Files `0600`, directories `0700`, owner `node`.
+3. **Laptop.** Start page → *This device* → the profile `YC` should appear under
+   **On the host** → pick it. The *Continue* panel should now show the phone's
+   company with an **On the host** tag; **Resume the game on the host** replays
+   it in the laptop's tab.
+4. **Resolve a quarter on the laptop**, then reload the **phone**. The phone's
+   *Continue* panel should now offer the laptop's later position.
+5. **The conflict rule, deliberately.** Put both devices offline from the Pi
+   (or stop the container), advance the phone by one quarter and the laptop by
+   three, then bring the Pi back and reload both. The laptop's copy must win —
+   more quarters — and the phone must keep its own under a
+   `frontier-saves-backup-autosave` key in `localStorage` rather than losing it.
+   Neither copy disappears. On the host, whatever a write replaced is at
+   `/data/saves/yc/autosave.prev.json`.
+6. **Off is still off.** Remove `SAVE_DIR` from `.env`, recreate the container,
+   reload: the start page reads "This host does not keep saves", both devices
+   keep playing from `localStorage`, and no request fails.
+
+### What is untouched
+
+`claude-home` and `deploy/pi/Dockerfile` — no change of any kind. Port 8110,
+demo mode, `LLM_MAX_CONCURRENCY=1`, `LLM_TOKEN_SETUP=local` and the GHCR update
+path are all as they were; `update.sh` is unmodified and its one-service
+preflight still passes, because `saves` adds a volume and not a service.

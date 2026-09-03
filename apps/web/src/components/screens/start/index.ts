@@ -15,3 +15,6 @@ export type { SetupChatProps } from './SetupChat';
 
 export { AdvancedSetup, DIFFICULTY_BLURB } from './AdvancedSetup';
 export type { AdvancedSetupProps } from './AdvancedSetup';
+
+export { SaveProfiles, migrationLine, slotActionLabel } from './SaveProfiles';
+export type { SaveProfilesProps } from './SaveProfiles';

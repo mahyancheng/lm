@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Drawer, Icon, Tag, cx } from '@/components/ui';
+import { syncStatusLabel, useSaveSync } from '@/lib/saves/useSaveSync';
 import {
   slotOverwriteLabel,
   slotSummaries,
@@ -660,6 +661,9 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
   const llm = useLlm();
   const { loading, progress } = useLoading();
   const { updateSettings, saveGame, saveToSlot, loadGame, deleteSave, exportSave, importSave, refreshLlmHealth } = useGameActions();
+  // Saving is unchanged: it goes to this browser first and always. The sync
+  // layer is what happens afterwards, and this is only where it is reported.
+  const sync = useSaveSync();
 
   const [exported, setExported] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
@@ -741,6 +745,18 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
               Begins the moment you found a company.
             </p>
           ) : null}
+          {sync.status === 'off' || sync.status === 'unknown' ? null : (
+            <p className="flex items-center gap-1.5 px-1 text-[10px] text-ink-dim">
+              <Tag tone={sync.status === 'synced' ? 'gain' : 'warn'} dot>
+                {syncStatusLabel(sync)}
+              </Tag>
+              {sync.status === 'synced'
+                ? `Also on the host as ${sync.displayName ?? sync.profile ?? 'this profile'}.`
+                : sync.status === 'offline'
+                  ? 'The host is not answering. Saving here is unaffected; it syncs when it does.'
+                  : 'Saved here, not yet on the host.'}
+            </p>
+          )}
           {!saveWritable ? (
             <p className="rounded-card border border-warn/25 bg-warn-wash px-3.5 py-2.5 text-[11px] text-warn">
               This session is not being written to disk: the stored save could not be replayed in full, so it is being preserved exactly as
@@ -793,6 +809,9 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
             <p className="px-1 text-[10px] leading-relaxed text-ink-faint">
               A slot is a banked copy of this position. Load one from the landing page — loading replaces the session in this browser,
               autosave included.
+              {sync.enabled && sync.profile !== null
+                ? ' A slot saved here is sent to the host too, so another device can pick it up.'
+                : ''}
             </p>
           </div>
 

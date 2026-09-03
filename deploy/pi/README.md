@@ -23,8 +23,8 @@ concurrency bound, the port — is a promise to those other tenants.
 | Port | `8110` on the host → `3000` in the container |
 | Memory | `mem_limit 1g` / `memswap_limit 2g` are declared but **inert on this kernel** (no memory cgroup controller) — the bound that holds is `LLM_MAX_CONCURRENCY=1` + `NODE_OPTIONS=--max-old-space-size=384`; see *Memory* below |
 | Layout on the Pi | a git checkout at `/home/ycmah/frontier-capital`; compose files, `update.sh` and `.env` live in its `deploy/pi/` |
-| Server-side state | one named volume, `claude-home` → `/home/node/.claude` |
-| Game saves | **in the player's browser**, not on the server — see below |
+| Server-side state | two named volumes: `claude-home` → `/home/node/.claude` (Agent SDK sessions + the sealed credential) and `saves` → `/data` (game saves, `SAVE_DIR=/data/saves`) |
+| Game saves | **on the Pi**, keyed by a profile name the player picks — the browser keeps an offline cache; see *Saves* below |
 | Credentials | none in the image, none in the repository; connected through Settings → AI (no unlock secret on the tailnet: `LLM_TOKEN_SETUP=local`) and sealed to the volume |
 
 ---
@@ -230,19 +230,127 @@ blocked one.
 
 ---
 
+## Saves
+
+Saves work on this host in two layers, and the first one is the one that has
+always been there.
+
+**Layer one: the browser.** In demo mode the simulation runs in the player's
+tab. The autosave and three manual slots are `localStorage` keys on that
+device, written synchronously after every move. This is unchanged, and it is
+still the layer the game actually depends on: the Pi being off, the tailnet
+dropping, or `SAVE_DIR` never being set costs a status chip and nothing else.
+
+**Layer two: this host.** With `SAVE_DIR` set, the app also keeps a copy under
+a **profile** — a name the player types on the start page ("YC"), normalised to
+a slug. It is not an account: no password, no email, nothing to reset. On a
+tailnet-only household host a password would be theatre, and a cookie is
+per-browser by construction, so it could never make the phone and the laptop
+the same game. A name that the laptop can *see in a list and pick* can. Every
+write goes to the browser first and to this host second, debounced and retried,
+never blocking the game.
+
+### Where it lives
+
+- Volume `saves`, mounted at **`/data`**; `SAVE_DIR=/data/saves` in `.env`.
+- Layout: `SAVE_DIR/<profile>/<slot>.json` for slot ∈ `autosave`, `1`, `2`, `3`,
+  plus `<slot>.prev.json` — the version one overwrite ago, kept on **every**
+  write, so a single bad save is always undoable — and `profile.json`.
+- Files are `0600`, directories `0700`, and every write is a temp file plus
+  `rename`, so a crash mid-write leaves the previous file rather than a torn one.
+- `claude-home` is untouched by any of this. Saves are the player's own record
+  and a model cache is disposable; they do not share a volume, and deleting
+  `claude-home` to reclaim space costs no saves.
+
+### Caps
+
+Three, and they are refusals rather than silent evictions:
+
+| Cap | Value | What happens past it |
+|---|---|---|
+| Per save file | **4 MB** | `413 save_too_large`; the save stays in the browser |
+| Slots per profile | **4** (`autosave`, `1`, `2`, `3`) | there is no fifth slot to ask for |
+| Profiles per host | **32** | `507 profile_limit` on the 33rd, with a reason |
+
+A hundred-quarter session with a checkpoint is a few hundred kilobytes, so the
+4 MB ceiling is about an order of magnitude of headroom — enough that no honest
+game is refused, small enough that a broken client cannot fill the card one
+`PUT` at a time.
+
+### The conflict rule
+
+> **A save is never overwritten by an older one. "Older" is decided by
+> `savedQuarter` first, then `savedAtIso`; ties go to the server copy.**
+
+Quarter leads because it is the only monotone fact about a session — it counts
+decisions actually taken — while a timestamp is a clock two devices need not
+agree on, and a phone whose date is a year out would otherwise win every
+reconciliation.
+
+The rule is one function, applied on both sides. The client sends the revision
+it last saw on every write; a mismatch comes back as `409` with the server's
+summary (never the file), and the client reconciles by that same rule before
+re-sending or standing down. **Neither copy is ever dropped**: the loser is kept
+as `<slot>.prev.json` on this host, or under a `frontier-saves-backup-*` key in
+the browser.
+
+### First run on a device (migration)
+
+The first time a browser picks a profile with this host reachable, each of the
+four slots is reconciled:
+
+- the host does not have it → it is **uploaded**;
+- both have it → the conflict rule decides, and if the host's is newer the
+  local copy is set aside under a backup key **before** the host's is adopted;
+- only the host has it → it is adopted here.
+
+Never the reverse: a server save is **never** deleted because a browser lacks
+it, and an older local save is never written over a newer server one. The
+landing page says one line about what the first reconciliation did. The
+reconciliation itself runs on every load and is idempotent, which is also what
+makes an interrupted push heal itself — the browser's copy is then newer, so
+the next load sends it.
+
+### Nothing breaks
+
+**There is no save-format version bump.** The file is still v5, byte for byte;
+the host wraps it in an envelope and stores the file **verbatim**. Every save
+already sitting in a browser's `localStorage` stays readable and is uploaded
+as-is on the first reconciliation. With `SAVE_DIR` unset the routes answer
+`enabled: false` and the game behaves exactly as it did before any of this
+existed.
+
+### Backing it up
+
+```bash
+docker run --rm -v frontier-capital_saves:/data -v "$PWD":/out alpine \
+  tar czf /out/frontier-saves-$(date +%F).tgz -C /data saves
+```
+
+Restore by untarring back into the same volume. The files are plain JSON —
+`cat` one when something looks wrong.
+
+---
+
 ## Where the state actually is
 
-**Game saves are in the browser.** In demo mode the server holds no world at
-all: the simulation runs in the player's tab and the autosave plus three manual
-slots are `localStorage` keys on **that device**. Two consequences that surprise
-people:
+**Game saves are in the browser, and optionally also on this host.** In demo
+mode the server holds no world at all: the simulation runs in the player's tab
+and the autosave plus three manual slots are `localStorage` keys on that device.
+With `SAVE_DIR` set (see *Saves*) a profile-keyed copy is also kept in the
+`saves` volume, which is what lets the laptop pick up the game the phone
+started. Three consequences:
 
-- Opening the game from a different device or browser shows a fresh world. There
-  is no sync, because there is no server-side session to sync with.
-- Redeploying, restarting, or deleting the container loses nothing. Clearing the
-  browser's site data loses everything.
+- With `SAVE_DIR` unset, opening the game from a different device shows a fresh
+  world — there is nothing server-side to sync with. With it set, picking the
+  same profile name on the second device brings the game across.
+- Redeploying, restarting or deleting the **container** loses nothing either
+  way. Deleting the `saves` **volume** loses the host's copies; the browsers
+  still have theirs, and the next load uploads them again.
+- Clearing a browser's site data loses that browser's copies. With server saves
+  on, the host still has them and the next load brings them back.
 
-**The volume holds two things.** `claude-home` is mounted at
+**`claude-home` holds two things**, and no saves. It is mounted at
 `/home/node/.claude` (`CLAUDE_CONFIG_DIR`):
 
 - Claude Code session transcripts, which the Agent SDK writes and which a
@@ -257,8 +365,9 @@ people:
   in Settings deletes the file. Rotating `LLM_KEY_SECRET` makes the file
   unreadable (by design) — connect once more afterwards.
 
-Deleting the volume costs conversational memory and the connection, nothing
-else; threads start again and the player connects again.
+Deleting `claude-home` costs conversational memory and the connection, nothing
+else; threads start again and the player connects again. Saves are in the other
+volume and are unaffected.
 
 ---
 
@@ -282,3 +391,14 @@ second. Never raise `LLM_MAX_CONCURRENCY` to buy speed on this host.
 **`Native CLI binary for linux-arm64 not found` in the logs.** The image was
 built on the wrong platform or with optional dependencies suppressed. The
 build-time gate is supposed to make this impossible; see HANDOFF.md.
+
+**The start page says "This host does not keep saves" although `SAVE_DIR` is
+set.** The directory is not writable by `node` (uid 1000) — the usual cause is a
+fresh named volume, whose mount point Docker creates as root. Run the one-time
+command in the `saves` volume comment in `docker-compose.yml`. Until then the
+game behaves exactly as it did before server saves existed; nothing is lost and
+nothing errors.
+
+**A save will not upload: `save_too_large`.** The file is over the 4 MB cap. It
+is still saved in the browser. Nothing prunes it automatically; export it from
+Settings if it matters.

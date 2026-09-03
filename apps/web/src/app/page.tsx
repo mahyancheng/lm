@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ALL_BACKGROUNDS,
   REGIONS,
@@ -16,9 +16,9 @@ import {
   DEMO_SEED,
   continueLabel,
   inspectSave,
+  saveDetailLine,
   savedCompanyName,
   savedFounderName,
-  slotDetailLine,
   slotSummaries,
   useGame,
   useGameActions,
@@ -29,7 +29,10 @@ import {
 } from '@/lib/game';
 import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
-import { AdvancedSetup, SetupChat } from '@/components/screens/start';
+import { type MergedSlot, mergeSlots } from '@/lib/saves/plan';
+import { saveSync } from '@/lib/saves/sync';
+import { useSaveSync } from '@/lib/saves/useSaveSync';
+import { AdvancedSetup, SaveProfiles, SetupChat } from '@/components/screens/start';
 import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
 import { SettingsDrawer } from '@/components/shell/SettingsDrawer';
 
@@ -224,13 +227,78 @@ const FEATURES: readonly {
 ];
 
 /* -------------------------------------------------------------------------- */
+/*  A save, described                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The Continue panel's facts, drawn the same way whichever side the save came
+ * from.
+ *
+ * The host's envelope indexes a file; it does not re-describe one, so it knows
+ * the company, the founder and the quarter but not the seed or the difficulty.
+ * Those rows are therefore optional rather than nulls a host row has to invent.
+ */
+function SaveFacts({
+  company,
+  founder,
+  quarter,
+  seed,
+  difficulty,
+  tail,
+}: {
+  readonly company: string | null;
+  readonly founder: string | null;
+  readonly quarter: number | null;
+  readonly seed?: number;
+  readonly difficulty?: SessionDifficulty;
+  readonly tail?: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <dl className="space-y-2">
+      <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+        <dt className="label-caps-faint">Company</dt>
+        <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{company ?? savedCompanyName(null)}</dd>
+      </div>
+      <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+        <dt className="label-caps-faint">Founder</dt>
+        <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{founder ?? savedFounderName(null)}</dd>
+      </div>
+      <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+        <dt className="label-caps-faint">Quarter</dt>
+        <dd className="figure text-[12.5px] font-semibold text-ink">{quarter === null ? '—' : quarterLabel(2027, quarter)}</dd>
+      </div>
+      {seed === undefined ? null : (
+        <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
+          <dt className="label-caps-faint">Seed</dt>
+          <dd className="figure text-[12.5px] font-semibold text-ink">{seed}</dd>
+        </div>
+      )}
+      {difficulty === undefined ? (
+        tail === undefined ? null : (
+          <div className="flex items-baseline justify-between gap-2">
+            <dt className="label-caps-faint">Where</dt>
+            <dd>{tail}</dd>
+          </div>
+        )
+      ) : (
+        <div className="flex items-baseline justify-between gap-2">
+          <dt className="label-caps-faint">Difficulty</dt>
+          <dd className="text-[12.5px] font-semibold text-ink capitalize">{difficulty}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
 export default function LandingPage(): React.JSX.Element {
   const router = useRouter();
   const { hydrated, notice } = useGame();
-  const { deleteSlot, dismissNotice, loadFromSlot, loadGame, newGame } = useGameActions();
+  const { deleteSlot, dismissNotice, loadFromSlot, loadGame, loadSaveFile, newGame } = useGameActions();
+  const syncState = useSaveSync();
   const llm = useLlm();
   const { loading, progress } = useLoading();
 
@@ -238,6 +306,15 @@ export default function LandingPage(): React.JSX.Element {
   const [difficulty, setDifficulty] = useState<SessionDifficulty>('standard');
   const [saveState, setSaveState] = useState<SaveInspection | null>(null);
   const [slots, setSlots] = useState<readonly SlotSummary[]>([]);
+  /**
+   * The four slots as both sides hold them, in picker order.
+   *
+   * The row shows — and Load loads — whichever copy is the later position, by
+   * the same rule the host applies: quarter first, then the advisory stamp,
+   * ties to the host. A copy that loses is never deleted; it is only not the
+   * one on the row.
+   */
+  const [merged, setMerged] = useState<readonly MergedSlot[]>([]);
   const [showMultiplayer, setShowMultiplayer] = useState(false);
   const [resuming, setResuming] = useState(false);
   /** The slot a load is in flight for, so only its own button says "Loading…". */
@@ -257,13 +334,20 @@ export default function LandingPage(): React.JSX.Element {
 
   // localStorage does not re-render React, and every slot write, delete and
   // load announces itself through the store's notice — so the notice is also
-  // the signal to re-read what this page shows of storage.
-  useEffect(() => {
-    if (!hydrated) return;
+  // the signal to re-read what this page shows of storage. `syncState` is the
+  // other signal: a probe or a reconciliation changes what the host holds, and
+  // therefore which copy each row is about.
+  const refreshSaves = useCallback((): void => {
     setSaveState(inspectSave());
     setSlots(slotSummaries());
+    setMerged(mergeSlots(saveSync().facts()));
     setConfirmDelete(null);
-  }, [hydrated, notice]);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    refreshSaves();
+  }, [hydrated, notice, refreshSaves, syncState]);
 
   const seed = useMemo(() => {
     const parsed = Number.parseInt(seedText, 10);
@@ -276,6 +360,9 @@ export default function LandingPage(): React.JSX.Element {
     const from = save.checkpoint?.quarter ?? 0;
     return save.log.filter((record) => record.quarter >= from).length;
   }, [save]);
+
+  const autosaveRow = merged[0] ?? null;
+  const manualRows = merged.slice(1);
 
   const supabaseReady = isSupabaseConfigured();
 
@@ -311,15 +398,48 @@ export default function LandingPage(): React.JSX.Element {
     }
   }
 
-  async function loadSlot(slot: number): Promise<void> {
+  /** Resume the host's copy of the autosave: pull it, adopt it here, replay it. */
+  async function continueFromHost(): Promise<void> {
+    setResuming(true);
+    try {
+      const envelope = await saveSync().pull('autosave');
+      if (envelope === null) {
+        // The host went away between the listing and the tap. Nothing was
+        // changed here, and the panel re-reads what is actually true.
+        refreshSaves();
+        return;
+      }
+      const complete = await loadSaveFile(envelope.file);
+      refreshSaves();
+      if (complete) router.push(HOME_ROUTE);
+    } finally {
+      setResuming(false);
+    }
+  }
+
+  /**
+   * Load one slot row — from wherever the merged view says the later copy is.
+   *
+   * A host copy is adopted through `loadSaveFile`, which sets this browser's
+   * copy aside under the sync layer's backup key before writing anything, so a
+   * Load can never be the step that loses the game that was already here.
+   */
+  async function loadSlot(row: MergedSlot): Promise<void> {
+    const slot = row.slotNumber;
+    if (slot === null) return;
     setSlotBusy(slot);
     setConfirmDelete(null);
     try {
-      const complete = await loadFromSlot(slot);
+      let complete: boolean;
+      if (row.source === 'server') {
+        const envelope = await saveSync().pull(row.slot);
+        complete = envelope === null ? false : await loadSaveFile(envelope.file, { intoSlot: slot });
+      } else {
+        complete = await loadFromSlot(slot);
+      }
       // A complete load adopted the slot as the autosave; a refused one changed
       // nothing — either way what this page shows of storage is re-read.
-      setSaveState(inspectSave());
-      setSlots(slotSummaries());
+      refreshSaves();
       // Only a complete load goes straight into the game. A partial one stays
       // here, where the notice says what was preserved and the Continue panel
       // already shows the session that did load.
@@ -338,7 +458,7 @@ export default function LandingPage(): React.JSX.Element {
     }
     setConfirmDelete(null);
     deleteSlot(slot);
-    setSlots(slotSummaries());
+    refreshSaves();
   }
 
   return (
@@ -470,7 +590,9 @@ export default function LandingPage(): React.JSX.Element {
           </Panel>
 
           <div className={cx('flex flex-col gap-4 lg:order-2', save === null ? 'order-2' : 'order-1')}>
-            <Panel title="Continue" iconName="playMark" iconTone={save === null ? 'neutral' : 'brand'}>
+            <SaveProfiles hydrated={hydrated} disabled={busy} onChanged={refreshSaves} />
+
+            <Panel title="Continue" iconName="playMark" iconTone={autosaveRow === null || autosaveRow.source === 'none' ? 'neutral' : 'brand'}>
               {!hydrated ? (
                 <p className="text-[12.5px] text-ink-faint">Checking this browser for a saved session…</p>
               ) : savePreserved ? (
@@ -481,34 +603,49 @@ export default function LandingPage(): React.JSX.Element {
                   A saved session written by a newer build lives in this browser. This build cannot read it, and it is preserved exactly as
                   it is — starting a new company will not touch it, but that game will not be saved.
                 </p>
+              ) : autosaveRow !== null && autosaveRow.source === 'server' ? (
+                // The merged view, and the whole point of the feature: this
+                // browser has nothing, or something older, and the host holds
+                // the later position. Resuming pulls it and replays it here.
+                <>
+                  <SaveFacts
+                    company={autosaveRow.companyName}
+                    founder={autosaveRow.founderName}
+                    quarter={autosaveRow.savedQuarter}
+                    tail={<Tag tone="brand">On the host</Tag>}
+                  />
+                  <button
+                    type="button"
+                    className="icon-knockout-brand btn btn-primary tap-target press-pop mt-3.5 w-full"
+                    onClick={() => void continueFromHost()}
+                    disabled={busy}
+                  >
+                    {resuming || loading ? null : <Icon name="playMark" size={16} accent="inherit" />}
+                    {resuming || loading
+                      ? progress === null
+                        ? 'Replaying…'
+                        : `Replaying quarter ${progress.quarter} — ${progress.completed} of ${progress.total}`
+                      : 'Resume the game on the host'}
+                  </button>
+                  <p className="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
+                    {autosaveRow.onBoth
+                      ? 'This device also holds an older copy of this game. It is kept as a backup here before the newer one is adopted.'
+                      : 'This game was started on another device. Resuming copies it here and keeps playing.'}
+                  </p>
+                </>
               ) : save === null ? (
                 <p className="text-[12.5px] leading-relaxed text-ink-faint">
                   No saved session in this browser. A session saves itself from the moment you found a company, and again after every move.
                 </p>
               ) : (
                 <>
-                  <dl className="space-y-2">
-                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
-                      <dt className="label-caps-faint">Company</dt>
-                      <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{savedCompanyName(save.setup)}</dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
-                      <dt className="label-caps-faint">Founder</dt>
-                      <dd className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{savedFounderName(save.setup)}</dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
-                      <dt className="label-caps-faint">Quarter</dt>
-                      <dd className="figure text-[12.5px] font-semibold text-ink">{quarterLabel(2027, save.savedQuarter)}</dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
-                      <dt className="label-caps-faint">Seed</dt>
-                      <dd className="figure text-[12.5px] font-semibold text-ink">{save.seed}</dd>
-                    </div>
-                    <div className="flex items-baseline justify-between gap-2">
-                      <dt className="label-caps-faint">Difficulty</dt>
-                      <dd className="text-[12.5px] font-semibold text-ink capitalize">{save.difficulty}</dd>
-                    </div>
-                  </dl>
+                  <SaveFacts
+                    company={savedCompanyName(save.setup)}
+                    founder={savedFounderName(save.setup)}
+                    quarter={save.savedQuarter}
+                    seed={save.seed}
+                    difficulty={save.difficulty}
+                  />
                   <button
                     type="button"
                     className="icon-knockout-brand btn btn-primary tap-target press-pop mt-3.5 w-full"
@@ -530,100 +667,118 @@ export default function LandingPage(): React.JSX.Element {
               )}
             </Panel>
 
-            {/* Three manual slots beside the autosave. A slot this build cannot
-                read keeps its row — and loses its Load button — rather than
-                masquerading as empty and inviting an overwrite. */}
-            <Panel title="Saved games" subtitle="Three slots, kept in this browser" iconName="save" iconTone="neutral">
-              {!hydrated || slots.length === 0 ? (
+            {/* Three manual slots beside the autosave, merged across this
+                browser and the host: whichever copy is the later position is the
+                one the row shows and the one Load loads. A slot this build
+                cannot read keeps its row — and loses its Load button — rather
+                than masquerading as empty and inviting an overwrite. */}
+            <Panel
+              title="Saved games"
+              subtitle={syncState.enabled && syncState.profile !== null ? 'Three slots, here and on the host' : 'Three slots, kept in this browser'}
+              iconName="save"
+              iconTone="neutral"
+            >
+              {!hydrated || manualRows.length === 0 ? (
                 <p className="text-[12.5px] text-ink-faint">Checking this browser for saved games…</p>
               ) : (
                 <ul className="flex flex-col gap-2">
-                  {slots.map((slot) => (
-                    <li key={slot.slot} className="rounded-card border border-hair bg-raised p-2.5">
-                      {slot.status === 'ok' ? (
-                        <>
-                          <div className="flex items-center gap-2.5">
-                            <IconChip name="save" tone="brand" size="sm" />
+                  {manualRows.map((row) => {
+                    const slot = row.slotNumber ?? 0;
+                    return (
+                      <li key={row.slot} className="rounded-card border border-hair bg-raised p-2.5">
+                        {row.status === 'ok' ? (
+                          <>
+                            <div className="flex items-center gap-2.5">
+                              <IconChip name="save" tone="brand" size="sm" />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-[12.5px] font-bold text-ink">{row.companyName ?? savedCompanyName(null)}</p>
+                                <p className="truncate text-[10.5px] text-ink-faint">
+                                  {saveDetailLine({
+                                    savedQuarter: row.savedQuarter,
+                                    savedAtIso: row.savedAtIso,
+                                    difficulty: row.source === 'local' ? (slots[slot - 1]?.difficulty ?? null) : null,
+                                  })}
+                                </p>
+                              </div>
+                              {row.source === 'server' ? <Tag tone="brand">On the host</Tag> : null}
+                            </div>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                className="btn tap-target press-pop flex-1"
+                                onClick={() => void loadSlot(row)}
+                                disabled={busy}
+                              >
+                                <Icon name="playMark" size={15} accent="brand" />
+                                {slotBusy === slot ? 'Loading…' : 'Load'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger tap-target press-pop"
+                                onClick={() => removeSlot(slot)}
+                                disabled={busy}
+                              >
+                                {confirmDelete === slot ? 'Tap again to delete' : 'Delete'}
+                              </button>
+                            </div>
+                          </>
+                        ) : row.status === 'unsupported' ? (
+                          <>
+                            <div className="flex items-center gap-2.5">
+                              <IconChip name="warning" tone="warn" size="sm" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[12.5px] font-bold text-ink">Slot {slot} — saved by a newer build</p>
+                                <p className="text-[10.5px] leading-relaxed text-ink-faint">
+                                  Preserved exactly as it is; this build cannot read it, and it is neither sent to the host nor replaced by
+                                  what the host holds.
+                                </p>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-danger tap-target press-pop flex-1"
+                                onClick={() => removeSlot(slot)}
+                                disabled={busy}
+                              >
+                                {confirmDelete === slot ? 'Tap again to delete' : 'Delete'}
+                              </button>
+                            </div>
+                          </>
+                        ) : row.status === 'unreadable' ? (
+                          <>
+                            <div className="flex items-center gap-2.5">
+                              <IconChip name="warning" tone="warn" size="sm" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[12.5px] font-bold text-ink">Slot {slot} — unreadable</p>
+                                <p className="text-[10.5px] leading-relaxed text-ink-faint">
+                                  What is stored here is not a save this build can parse.
+                                </p>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-danger tap-target press-pop flex-1"
+                                onClick={() => removeSlot(slot)}
+                                disabled={busy}
+                              >
+                                {confirmDelete === slot ? 'Tap again to delete' : 'Delete'}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex min-h-11 items-center gap-2.5">
+                            <IconChip name="save" tone="neutral" size="sm" />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[12.5px] font-bold text-ink">{slot.companyName ?? savedCompanyName(null)}</p>
-                              <p className="truncate text-[10.5px] text-ink-faint">{slotDetailLine(slot)}</p>
+                              <p className="text-[12.5px] font-bold text-ink-faint">Slot {slot} — empty</p>
+                              <p className="text-[10.5px] text-ink-faint">Bank a position here from Settings, mid-game.</p>
                             </div>
                           </div>
-                          <div className="mt-2 flex gap-2">
-                            <button
-                              type="button"
-                              className="btn tap-target press-pop flex-1"
-                              onClick={() => void loadSlot(slot.slot)}
-                              disabled={busy}
-                            >
-                              <Icon name="playMark" size={15} accent="brand" />
-                              {slotBusy === slot.slot ? 'Loading…' : 'Load'}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-danger tap-target press-pop"
-                              onClick={() => removeSlot(slot.slot)}
-                              disabled={busy}
-                            >
-                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
-                            </button>
-                          </div>
-                        </>
-                      ) : slot.status === 'unsupported' ? (
-                        <>
-                          <div className="flex items-center gap-2.5">
-                            <IconChip name="warning" tone="warn" size="sm" />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-[12.5px] font-bold text-ink">Slot {slot.slot} — saved by a newer build</p>
-                              <p className="text-[10.5px] leading-relaxed text-ink-faint">
-                                Preserved exactly as it is; this build cannot read it.
-                              </p>
-                            </div>
-                          </div>
-                          <div className="mt-2 flex gap-2">
-                            <button
-                              type="button"
-                              className="btn btn-danger tap-target press-pop flex-1"
-                              onClick={() => removeSlot(slot.slot)}
-                              disabled={busy}
-                            >
-                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
-                            </button>
-                          </div>
-                        </>
-                      ) : slot.status === 'unreadable' ? (
-                        <>
-                          <div className="flex items-center gap-2.5">
-                            <IconChip name="warning" tone="warn" size="sm" />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-[12.5px] font-bold text-ink">Slot {slot.slot} — unreadable</p>
-                              <p className="text-[10.5px] leading-relaxed text-ink-faint">
-                                What is stored here is not a save this build can parse.
-                              </p>
-                            </div>
-                          </div>
-                          <div className="mt-2 flex gap-2">
-                            <button
-                              type="button"
-                              className="btn btn-danger tap-target press-pop flex-1"
-                              onClick={() => removeSlot(slot.slot)}
-                              disabled={busy}
-                            >
-                              {confirmDelete === slot.slot ? 'Tap again to delete' : 'Delete'}
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="flex min-h-11 items-center gap-2.5">
-                          <IconChip name="save" tone="neutral" size="sm" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12.5px] font-bold text-ink-faint">Slot {slot.slot} — empty</p>
-                            <p className="text-[10.5px] text-ink-faint">Bank a position here from Settings, mid-game.</p>
-                          </div>
-                        </div>
-                      )}
-                    </li>
-                  ))}
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
               <p className="mt-2.5 text-[10.5px] leading-relaxed text-ink-faint">

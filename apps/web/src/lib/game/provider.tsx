@@ -92,6 +92,7 @@ import {
   type QuarterRecord,
   type ReplayProgress,
 } from './persistence';
+import { inspectSaveValue } from './saveFile';
 import {
   founderNetWorth,
   leaderboardOf,
@@ -100,6 +101,8 @@ import {
   projectPlayerView,
   quotesFor,
 } from './playerView';
+import { saveSlotOf } from '@/lib/saves/plan';
+import { saveSync } from '@/lib/saves/sync';
 
 /* -------------------------------------------------------------------------- */
 /*  Shapes                                                                     */
@@ -210,6 +213,16 @@ export interface GameStoreActions {
   loadFromSlot(slot: number): Promise<boolean>;
   /** Empty a manual slot. The autosave is untouched. */
   deleteSlot(slot: number): void;
+  /**
+   * Adopt a save that came from somewhere other than this browser's own key —
+   * today, the host — and load it exactly as `loadFromSlot` would.
+   *
+   * `intoSlot` also mirrors it into that manual slot's local key, so the
+   * browser's cache of the slot matches what the host holds. The copy it
+   * displaces is kept under the sync layer's backup key first: adopting must
+   * never be the step that loses a game.
+   */
+  loadSaveFile(file: unknown, options?: { intoSlot?: number }): Promise<boolean>;
   /** The stored save as text, for the player to keep. Null when there is none. */
   exportSave(): string | null;
   /** Adopt a pasted save and load it. False when it will not parse. */
@@ -545,6 +558,20 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     }
   }, []);
 
+  /**
+   * Local first, host second — and only ever after a local write landed.
+   *
+   * Pushing a file this browser failed to store would put a save on the host
+   * that the device it came from does not have, which is the one direction the
+   * conflict rule cannot repair. The call itself is fire-and-forget: the sync
+   * layer debounces, coalesces and retries on its own, and nothing here awaits
+   * it, so a Pi that is off costs a status chip and not a frame.
+   */
+  const pushToServer = useCallback((slot: number | null, file: SaveFile): void => {
+    const name = saveSlotOf(slot);
+    if (name !== null) saveSync().push(name, file);
+  }, []);
+
   /* --- replay the save file, once ------------------------------------------ */
   // An already-inspected file (a slot copied to the autosave key) skips the
   // re-read; everything after that point is identical to a plain load.
@@ -676,6 +703,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       if (writeSaveFile(file)) {
         savedFile.current = file;
         persistedLogLength.current = state.actionLog.length;
+        pushToServer(null, file);
       } else if (!saveHealthWarned.current) {
         // Said once, not per write: a browser that refuses storage refuses it
         // for the whole session, and the player needs the fact, not a drumbeat.
@@ -721,7 +749,21 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     state.settings.difficulty,
     state.settings.seed,
     state.settings.setup,
+    pushToServer,
   ]);
+
+  /* --- ask the host once whether it keeps saves ----------------------------- */
+  useEffect(() => {
+    // Probe only, never reconcile. Reconciliation can *adopt* a save, and
+    // adopting one into a tab that is already playing a different game would
+    // replace the session under the player; the landing page is where nothing
+    // is loaded yet and where it therefore belongs. What the probe buys is that
+    // a player who opened a deep link straight into the game still has their
+    // moves pushed, instead of syncing nothing until they next see the start
+    // page. A push sent with no known revision is a 409 the sync layer
+    // reconciles by the same rule as everything else.
+    void saveSync().probe();
+  }, []);
 
   /* --- flush the pending write before the tab can vanish -------------------- */
   useEffect(() => {
@@ -731,9 +773,14 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     // would have run.
     const flush = (): void => {
       const pending = pendingPersist.current;
-      if (pending === null) return;
-      clearTimeout(pending.timer);
-      pending.write();
+      if (pending !== null) {
+        clearTimeout(pending.timer);
+        pending.write();
+      }
+      // Best effort, and deliberately not awaited: a request started at
+      // `pagehide` often does not finish. It does not need to — the local copy
+      // is then newer than the host's, and the next reconciliation uploads it.
+      void saveSync().flush();
     };
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') flush();
@@ -960,6 +1007,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       savedFile.current = file;
       persistedLogLength.current = 0;
       suppressNextPersist.current = true;
+      pushToServer(null, file);
     } else if (!saveHealthWarned.current) {
       saveHealthWarned.current = true;
       dispatch({
@@ -968,7 +1016,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
           'This browser refused the save write, so progress will not survive closing the tab. Private browsing and blocked site data do this.',
       });
     }
-  }, [sequences, cancelPendingPersist]);
+  }, [sequences, cancelPendingPersist, pushToServer]);
 
   const saveGame = useCallback(() => {
     const current = stateRef.current;
@@ -990,12 +1038,15 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       previous: savedFile.current,
     });
     const wrote = writeSaveFile(file);
-    if (wrote) savedFile.current = file;
+    if (wrote) {
+      savedFile.current = file;
+      pushToServer(null, file);
+    }
     dispatch({
       type: 'notice',
       notice: wrote ? 'Session saved.' : 'The session could not be saved: this browser refused the write and the stored file is unchanged.',
     });
-  }, []);
+  }, [pushToServer]);
 
   const loadGame = useCallback(async (): Promise<boolean> => {
     if (inspectSave().status === 'absent') {
@@ -1011,6 +1062,10 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     cancelPendingPersist();
     clearSaveFile();
     savedFile.current = null;
+    // The host's copy goes too: a delete the player asked for is the one case
+    // where the two sides must agree, or the next reconciliation would helpfully
+    // restore what they just threw away.
+    void saveSync().remove('autosave');
     dispatch({ type: 'notice', notice: 'Saved session deleted.' });
   }, [cancelPendingPersist]);
 
@@ -1044,13 +1099,14 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       previous: savedFile.current,
     });
     const wrote = writeSlotFile(slot, file);
+    if (wrote) pushToServer(slot, file);
     dispatch({
       type: 'notice',
       notice: wrote
         ? `Saved to slot ${slot}.`
         : `Slot ${slot} could not be written: this browser refused the write and the slot is unchanged.`,
     });
-  }, []);
+  }, [pushToServer]);
 
   const loadFromSlot = useCallback(
     async (slot: number): Promise<boolean> => {
@@ -1086,6 +1142,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       if (complete) {
         if (writeSaveFile(inspection.file)) {
           savedFile.current = inspection.file;
+          pushToServer(null, inspection.file);
         } else {
           dispatch({
             type: 'notice',
@@ -1095,11 +1152,61 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       }
       return complete;
     },
+    [runLoad, cancelPendingPersist, pushToServer],
+  );
+
+  /**
+   * Adopt a save from outside this browser's own keys — today, the host's copy
+   * of a slot the picker decided is the later position.
+   *
+   * The order is the point. The local copy is set aside under the sync layer's
+   * backup key *before* anything is written, the replay has to succeed before
+   * the file is adopted as the autosave, and a stored save this build cannot
+   * read still refuses the whole operation rather than being overwritten.
+   */
+  const loadSaveFile = useCallback(
+    async (file: unknown, options: { intoSlot?: number } = {}): Promise<boolean> => {
+      const inspection = inspectSaveValue(file, { defaultSeed: DEMO_SEED });
+      if (inspection.file === null) {
+        dispatch({
+          type: 'notice',
+          notice:
+            inspection.status === 'unsupported'
+              ? `That save was written by a newer build (version ${inspection.version ?? 'unknown'}) and cannot be loaded here.`
+              : 'That save could not be read, so nothing was changed.',
+        });
+        return false;
+      }
+      const stored = storedSaveVersion();
+      if (stored !== null && !SUPPORTED_SAVE_VERSIONS.includes(stored)) {
+        dispatch({
+          type: 'notice',
+          notice:
+            'The saved session in this browser was written by a newer build and is preserved untouched, so another save cannot replace it. Delete the saved session in Settings first.',
+        });
+        return false;
+      }
+      cancelPendingPersist();
+      const slot = options.intoSlot ?? null;
+      const name = slot === null ? null : saveSlotOf(slot);
+      // The autosave is always displaced by a load, and the manual slot as well
+      // when one is named. Both losers are set aside before anything is written.
+      saveSync().backupLocal('autosave');
+      if (name !== null) saveSync().backupLocal(name);
+      const complete = await runLoad(inspection);
+      if (complete) {
+        if (writeSaveFile(inspection.file)) savedFile.current = inspection.file;
+        if (slot !== null) writeSlotFile(slot, inspection.file);
+      }
+      return complete;
+    },
     [runLoad, cancelPendingPersist],
   );
 
   const deleteSlot = useCallback((slot: number) => {
     const removed = clearSlot(slot);
+    const name = saveSlotOf(slot);
+    if (removed && name !== null) void saveSync().remove(name);
     dispatch({
       type: 'notice',
       notice: removed ? `Slot ${slot} deleted.` : `Slot ${slot} could not be deleted: this browser refused the removal.`,
@@ -1153,6 +1260,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveToSlot,
       loadFromSlot,
       deleteSlot,
+      loadSaveFile,
       exportSave: exportSaveText,
       importSave: importSaveText,
       updateSettings,
@@ -1173,6 +1281,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       saveToSlot,
       loadFromSlot,
       deleteSlot,
+      loadSaveFile,
       exportSaveText,
       importSaveText,
       updateSettings,

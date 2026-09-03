@@ -1,6 +1,6 @@
 # Frontier Capital on the Raspberry Pi.
 #
-# One service, one port, one volume. The Pi is a shared machine — it also runs
+# One service, one port, two volumes. The Pi is a shared machine — it also runs
 # the household WhatsApp/Routine backend and a Postgres that belongs to another
 # application — so every limit here is a promise to the *other* tenants, not a
 # tuning knob for this one.
@@ -83,15 +83,37 @@ services:
       retries: 3
 
     volumes:
-      # The *only* server-side state this deployment has.
-      #
-      # Not game saves — those live in each player's browser (localStorage, per
-      # device) because demo mode keeps no world on the server. What is here is
-      # the Agent SDK's config directory: the Claude Code session transcripts
+      # The Agent SDK's config directory: the Claude Code session transcripts
       # that let a Chief-of-Staff thread or a conversation with a director be
       # resumed instead of restarted. Losing it costs conversational memory and
       # nothing else.
       - claude-home:/home/node/.claude
 
+      # Server-side saves. `SAVE_DIR=/data/saves` in .env turns them on.
+      #
+      # Its own volume, deliberately NOT claude-home: a save is the player's
+      # record of their own game and must survive anything done to the SDK's
+      # cache, including deleting that volume to reclaim space. Demo mode still
+      # keeps no world on the server — what is stored here is the same save file
+      # the browser writes, byte for byte, filed under a profile name so the
+      # game started on the phone can be continued on the laptop.
+      #
+      # OWNERSHIP, ONCE. Docker creates a *new* named volume's mount point as
+      # root, and this container runs as `node` (uid 1000). On a host where
+      # /data has never been prepared the app finds it unwritable and reports
+      # server saves as unavailable — every browser then keeps its saves in
+      # localStorage exactly as before, so nothing breaks; the phone and the
+      # laptop simply stay separate games. One idempotent command turns them on:
+      #
+      #   docker compose run --rm --user 0 --entrypoint sh app \
+      #     -c 'install -d -o node -g node -m 0700 /data /data/saves'
+      #
+      # `run` rather than an init service on purpose: update.sh refuses to
+      # update when the compose merge yields more than one service, and that
+      # guard is what stops an overlay from silently starting a second
+      # container nobody is routed to. A second service here would trip it.
+      - saves:/data
+
 volumes:
   claude-home:
+  saves:

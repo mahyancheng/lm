@@ -101,6 +101,52 @@ proposed follow-up that would fix this.
 
 ---
 
+## Updating without the Mac
+
+Every push to the deployment branch that touches the app, the packages or
+`deploy/pi/` runs `.github/workflows/pi-image.yml`, which builds this same
+`Dockerfile` for `linux/arm64` under QEMU (slow — 20–40 minutes — but free) and
+publishes it as `ghcr.io/mahyancheng/lm/frontier-capital:pi` (plus a
+`pi-<sha>` tag per commit). The Pi then updates itself:
+
+```sh
+cd /home/ycmah/frontier-capital/deploy/pi && ./update.sh
+```
+
+`update.sh` tags the running image `frontier-capital:rollback`, pulls the new
+one, restarts through the `docker-compose.ghcr.yml` overlay, waits for
+`/api/llm/health`, and rolls back automatically if health does not come up.
+Run it from any SSH app on a phone over the tailnet, or let a timer do it:
+
+```ini
+# /etc/systemd/system/frontier-update.service
+[Unit]
+Description=Update Frontier Capital from GHCR
+[Service]
+Type=oneshot
+User=ycmah
+ExecStart=/home/ycmah/frontier-capital/deploy/pi/update.sh
+
+# /etc/systemd/system/frontier-update.timer
+[Unit]
+Description=Check for a new Frontier Capital image
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+[Install]
+WantedBy=timers.target
+```
+
+`systemctl enable --now frontier-update.timer`. Unchanged image → no restart.
+
+**One-time:** the GitHub package is private until made public. Either open
+the package on GitHub (Packages → `frontier-capital` → Package settings →
+Change visibility → Public — the repository is already public) or, to keep it
+private, `docker login ghcr.io` on the Pi once with a read-only token
+(`read:packages`). The Mac path (`docker save | ssh docker load`) still works
+and the base compose file is unchanged; the overlay only swaps the image and
+lets it pull.
+
 ## Logs, health, rollback
 
 ```sh

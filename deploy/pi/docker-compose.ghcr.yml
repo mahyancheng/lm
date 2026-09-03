@@ -1,0 +1,11 @@
+# Overlay for the self-update path: run the image GitHub Actions built instead
+# of one loaded from the Mac.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# `update.sh` does exactly that after pulling. The base file's `build:` stays
+# for the Mac path; this overlay only swaps the image and lets it pull.
+services:
+  frontier-capital:
+    image: ghcr.io/mahyancheng/lm/frontier-capital:pi
+    pull_policy: always

@@ -93,11 +93,11 @@ token from `claude setup-token`. The panel will ask for the setup secret: that
 is `LLM_SETUP_SECRET` from `.env`, sent as an `x-setup-secret` header, and it is
 what lets a non-localhost caller with no Supabase admin write the credential.
 
-**The credential lives in the server process's memory and nowhere else.** It is
-not written to the volume, not written to `.env`, and not persisted anywhere.
-After `docker compose restart`, after `docker compose up -d` on a new image, and
-after any container crash, **you must paste it again**. See HANDOFF.md for the
-proposed follow-up that would fix this.
+**The credential persists.** Once accepted it is sealed with AES-256-GCM under
+`LLM_KEY_SECRET` into `frontier-capital/credential.enc.json` on the
+`claude-home` volume and restored on the next boot, so a restart, a new image
+or a container crash comes back already connected. Disconnecting in Settings
+deletes the file; rotating `LLM_KEY_SECRET` makes it unreadable by design.
 
 ---
 
@@ -165,8 +165,8 @@ docker compose up -d                       # recreates from the retagged image
 ```
 
 `pull_policy: never` means compose will never reach for a registry, and the
-`build:` section will not fire as long as the image exists locally. Re-paste the
-AI credential afterwards.
+`build:` section will not fire as long as the image exists locally. The AI
+credential survives the rollback (it lives on the volume).
 
 ---
 

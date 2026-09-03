@@ -15,14 +15,19 @@
 services:
   app:
     image: frontier-capital:pi
-    # The image is built on a Mac and shipped with `docker save | docker load`.
-    # Never reach for a registry: there is no published image under this name,
-    # and a pull would either fail or fetch something unrelated.
+    # This base file is the Mac path: an image built with `docker build` and
+    # shipped by `docker save | docker load`, never pulled. The registry path —
+    # the image GitHub Actions publishes to GHCR — is the `docker-compose.ghcr.yml`
+    # overlay, which swaps `image` and `pull_policy` and nothing else.
     pull_policy: never
     build:
       context: ../..
       dockerfile: deploy/pi/Dockerfile
-      platform: linux/arm64
+      # The compose spec takes a LIST here (`platforms`); the singular
+      # `platform` is valid only at service level, and Compose v5 refuses the
+      # whole file if it appears under `build`.
+      platforms:
+        - linux/arm64
     platform: linux/arm64
     container_name: frontier-capital
 
@@ -45,6 +50,13 @@ services:
     # gets the container killed outright; with the swap headroom it gets slow
     # instead, which is the right failure for a game whose worst outcome should
     # be a longer overlay.
+    #
+    # INERT ON THE PI TODAY. Its kernel exposes no memory cgroup controller
+    # (`cat /sys/fs/cgroup/cgroup.controllers` → `cpuset cpu io pids`), so Docker
+    # prints "memory limit capabilities ... Limitation discarded" and `docker
+    # stats` shows 0B / 0B. The values stay because they are right and take
+    # effect the moment the kernel supports them — see README, "Memory" — but
+    # until then the only bound is LLM_MAX_CONCURRENCY=1 plus NODE_OPTIONS.
     mem_limit: 1g
     memswap_limit: 2g
 

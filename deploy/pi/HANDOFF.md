@@ -290,3 +290,40 @@ mirrored `next.config.js` can go away (§2).
 **Nothing was added to `deploy/vps/`,** which is untouched. If that deployment
 stays, note that it inherits the §3 fix for free and would want the same
 `LLM_MAX_CONCURRENCY` reasoning applied to whatever host it targets.
+
+
+---
+
+## 7. Fix order from the Mac session — resolved
+
+Two defects the Mac session had to hand-patch on the Pi, plus the doc
+corrections it asked for, are in the repository now:
+
+1. **`docker-compose.yml` was invalid** — `platform:` nested under `build:`;
+   Compose v5 rejects the file. Now `build.platforms: [linux/arm64]` (a list,
+   per the spec); the service-level `platform:` is unchanged.
+2. **`docker-compose.ghcr.yml` was a silent no-op** — its service key was
+   `frontier-capital` (the container name) instead of `app` (the service), so
+   the merge *added* a second service and `update.sh` reported success while
+   the old container kept serving. Fixed to `app`, and `update.sh` now runs
+   `docker compose config` first and refuses to proceed unless the merge
+   yields exactly the one `app` service running the GHCR image.
+3. **Memory limits are inert on this kernel** (no memory cgroup controller):
+   stated plainly in the README and the compose comment; the operator step
+   (`cgroup_enable=memory cgroup_memory=1` in `/boot/firmware/cmdline.txt` +
+   reboot) is documented as the owner's call because the reboot drops the
+   household backend. Not done by anyone.
+4. **Layout decision: the Pi is a git checkout** at
+   `/home/ycmah/frontier-capital` with `.env` at `deploy/pi/.env`, updated by
+   `git pull --ff-only && deploy/pi/update.sh` — so a fix to the compose files
+   or the updater reaches the Pi with everything else. Mac session: please
+   restructure the flat directory into the checkout (move the existing `.env`
+   to `deploy/pi/.env`); the README's bring-up section is written for it.
+5. **`update.sh` prints the image digest** (and image id, and the checkout's
+   commit) on success, and "Already on the latest image: <digest>" when nothing
+   moved.
+
+Untouched, as instructed: port 8110, demo mode, `LLM_MAX_CONCURRENCY=1`,
+tailnet-only, the in-app setup-secret credential flow. Still unverified by
+anyone: a real quarter with live AI under `docker stats` — needs the owner's
+subscription connected first.

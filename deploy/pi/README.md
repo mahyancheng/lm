@@ -18,10 +18,11 @@ concurrency bound, the port — is a promise to those other tenants.
 
 | | |
 |---|---|
-| Image | `frontier-capital:pi`, `linux/arm64`, built on the Mac |
-| Transport | `docker save` on the Mac → `ssh` → `docker load` on the Pi |
+| Image | `ghcr.io/mahyancheng/lm/frontier-capital:pi`, `linux/arm64`, built by GitHub Actions on every push (a Mac `docker build` remains an alternative) |
+| Transport | the Pi pulls from GHCR through `deploy/pi/update.sh` (anonymous pull; the package is public) |
 | Port | `8110` on the host → `3000` in the container |
-| Memory | `mem_limit 1g`, `memswap_limit 2g` (1 GB RAM + up to 1 GB of the host's swap) |
+| Memory | `mem_limit 1g` / `memswap_limit 2g` are declared but **inert on this kernel** (no memory cgroup controller) — the bound that holds is `LLM_MAX_CONCURRENCY=1` + `NODE_OPTIONS=--max-old-space-size=384`; see *Memory* below |
+| Layout on the Pi | a git checkout at `/home/ycmah/frontier-capital`; compose files, `update.sh` and `.env` live in its `deploy/pi/` |
 | Server-side state | one named volume, `claude-home` → `/home/node/.claude` |
 | Game saves | **in the player's browser**, not on the server — see below |
 | Credentials | none in the image, none in the repository; pasted in through Settings → AI |
@@ -30,74 +31,71 @@ concurrency bound, the port — is a promise to those other tenants.
 
 ## Bring-up, from a clean checkout
 
-### 1. On the Mac: build the arm64 image
+The Pi holds a **real git checkout** of this repository, so a fix to the
+compose files or to `update.sh` reaches the Pi with the same `git pull` that
+fetches everything else — the alternative (files copied flat into a directory)
+is exactly how two compose defects once had to be hand-patched on the host.
 
-`colima` must be running with enough memory to build (the build stage peaks
-around 1.85 GB before pruning).
-
-```sh
-colima start --cpu 4 --memory 8 --arch aarch64   # once
-cd <repo root>
-docker build --platform linux/arm64 -f deploy/pi/Dockerfile -t frontier-capital:pi .
-```
-
-The build ends by executing the Claude Code binary it just packaged and
-asserting `2.1.251`. If that step fails, the image would have started fine on
-the Pi and then failed at the first role call instead — read HANDOFF.md.
-
-Tag the build so you can roll back to it later:
+### 1. On the Pi: check out and configure
 
 ```sh
-docker tag frontier-capital:pi frontier-capital:pi-$(git rev-parse --short HEAD)
-```
-
-### 2. Ship it
-
-```sh
-docker save frontier-capital:pi frontier-capital:pi-$(git rev-parse --short HEAD) \
-  | ssh ycvps 'docker load'
-```
-
-~1 GB over the tailnet. `gzip -1` in the pipe helps on a slow link and costs
-CPU on both ends; the image is mostly an already-compressed executable, so the
-saving is modest.
-
-### 3. On the Pi: configure and start
-
-```sh
-mkdir -p ~/frontier-capital && cd ~/frontier-capital
-# deploy/pi/docker-compose.yml and .env live here
+git clone --depth 1 --branch claude/opus5-agents-vercel-supabase-kz1ehf \
+  https://github.com/mahyancheng/lm /home/ycmah/frontier-capital
+cd /home/ycmah/frontier-capital/deploy/pi
 cp .env.example .env && chmod 600 .env
-$EDITOR .env          # fill in LLM_SETUP_SECRET and LLM_KEY_SECRET
-docker compose up -d
+$EDITOR .env          # LLM_SETUP_SECRET and LLM_KEY_SECRET; the other names as in the example
 ```
 
-`.env` already exists at `/home/ycmah/frontier-capital/.env` (mode 0600) with
-exactly the names in `.env.example`.
+`.env` lives **beside the compose file** (`deploy/pi/.env`): compose resolves
+`env_file` relative to the compose file, and `update.sh` runs from that
+directory. The existing `/home/ycmah/frontier-capital/.env` from the flat
+layout moves to `deploy/pi/.env` when the directory becomes a checkout.
 
-### 4. Check it
+### 2. Pull the image and start
+
+```sh
+./update.sh
+```
+
+That validates the compose merge, pulls
+`ghcr.io/mahyancheng/lm/frontier-capital:pi` (the image the last push built —
+see *Updating*), starts the service through the GHCR overlay, waits for
+`/api/llm/health`, and prints the image **digest** it is now running.
+
+### 3. Check it
 
 ```sh
 curl -s http://localhost:8110/api/llm/health
 # {"available":true,"transportKind":"claude-session","model":"sonnet"}
-docker compose ps            # should read "healthy" within ~90s
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml ps   # "healthy" within ~90s
 ```
 
 `available: true` means the transport is *configured and can run here*. It does
-not mean a credential has been accepted yet — that is step 5.
+not mean a credential has been accepted yet — that is step 4.
 
-### 5. Connect the AI
+### 4. Connect the AI
 
-Open `http://<pi>:8110` on the tailnet, go to **Settings → AI**, and paste the
-token from `claude setup-token`. The panel will ask for the setup secret: that
-is `LLM_SETUP_SECRET` from `.env`, sent as an `x-setup-secret` header, and it is
-what lets a non-localhost caller with no Supabase admin write the credential.
+Open `http://<pi>:8110` on the tailnet. The **Set up AI** button in the
+masthead (or **Settings → AI · Claude** inside the game) asks for the setup
+secret — `LLM_SETUP_SECRET` from `.env` — and then offers **Connect with
+Claude**. The token it issues is sealed to the `claude-home` volume under
+`LLM_KEY_SECRET` and restored on every boot, so this is done once.
 
-**The credential persists.** Once accepted it is sealed with AES-256-GCM under
-`LLM_KEY_SECRET` into `frontier-capital/credential.enc.json` on the
-`claude-home` volume and restored on the next boot, so a restart, a new image
-or a container crash comes back already connected. Disconnecting in Settings
-deletes the file; rotating `LLM_KEY_SECRET` makes it unreadable by design.
+### Alternative: build on a Mac and ship by hand
+
+Still supported, unchanged, for a build that must not wait for CI:
+
+```sh
+colima start --cpu 4 --memory 8 --arch aarch64   # once
+docker build --platform linux/arm64 -f deploy/pi/Dockerfile -t frontier-capital:pi .
+docker save frontier-capital:pi | ssh ycvps 'docker load'
+# on the Pi:
+cd /home/ycmah/frontier-capital/deploy/pi && docker compose up -d   # base file only: pull_policy never
+```
+
+The build ends by executing the Claude Code binary it packaged and asserting
+`2.1.251`; if that fails the image would have started and then failed at the
+first role call — read HANDOFF.md.
 
 ---
 
@@ -110,13 +108,18 @@ publishes it as `ghcr.io/mahyancheng/lm/frontier-capital:pi` (plus a
 `pi-<sha>` tag per commit). The Pi then updates itself:
 
 ```sh
-cd /home/ycmah/frontier-capital/deploy/pi && ./update.sh
+cd /home/ycmah/frontier-capital && git pull --ff-only && deploy/pi/update.sh
 ```
 
-`update.sh` tags the running image `frontier-capital:rollback`, pulls the new
-one, restarts through the `docker-compose.ghcr.yml` overlay, waits for
-`/api/llm/health`, and rolls back automatically if health does not come up.
-Run it from any SSH app on a phone over the tailnet, or let a timer do it:
+`git pull` first, so the compose files and `update.sh` itself are current
+before they run. `update.sh` then validates the compose merge (it refuses to
+continue if the overlay would produce anything but the one `app` service),
+tags the running image `frontier-capital:rollback`, pulls the new one,
+restarts through the `docker-compose.ghcr.yml` overlay, waits for
+`/api/llm/health`, prints the **digest** now serving (the tag reads the same
+before and after; the digest is the proof the image moved), and rolls back
+automatically if health does not come up. Run it from any SSH app on a phone
+over the tailnet, or let a timer do it:
 
 ```ini
 # /etc/systemd/system/frontier-update.service
@@ -125,7 +128,8 @@ Description=Update Frontier Capital from GHCR
 [Service]
 Type=oneshot
 User=ycmah
-ExecStart=/home/ycmah/frontier-capital/deploy/pi/update.sh
+WorkingDirectory=/home/ycmah/frontier-capital
+ExecStart=/bin/sh -c 'git pull --ff-only && deploy/pi/update.sh'
 
 # /etc/systemd/system/frontier-update.timer
 [Unit]
@@ -139,13 +143,30 @@ WantedBy=timers.target
 
 `systemctl enable --now frontier-update.timer`. Unchanged image → no restart.
 
-**One-time:** the GitHub package is private until made public. Either open
-the package on GitHub (Packages → `frontier-capital` → Package settings →
-Change visibility → Public — the repository is already public) or, to keep it
-private, `docker login ghcr.io` on the Pi once with a read-only token
-(`read:packages`). The Mac path (`docker save | ssh docker load`) still works
-and the base compose file is unchanged; the overlay only swaps the image and
-lets it pull.
+The package is public, so the pull is anonymous; if it is ever made private
+again, `docker login ghcr.io` once on the Pi with a read-only token
+(`read:packages`).
+
+## Memory
+
+**The compose memory limits do nothing on this Pi today.** Its kernel boots
+without the memory cgroup controller — `cat /sys/fs/cgroup/cgroup.controllers`
+prints `cpuset cpu io pids` — so every `docker compose up` warns
+`Your kernel does not support memory limit capabilities or the cgroup is not
+mounted. Limitation discarded.` and `docker stats` shows `0B / 0B`. The
+`mem_limit: 1g` / `memswap_limit: 2g` lines stay in the compose file because
+they are correct and take effect the moment the kernel supports them, but
+**there is no second net under the application today**: what bounds memory is
+`LLM_MAX_CONCURRENCY=1` (one ~213 MB Claude Code subprocess at a time) plus
+`NODE_OPTIONS=--max-old-space-size=384` on the Next process.
+
+**Enabling the controller is an operator step, and a reboot.** Append
+`cgroup_enable=memory cgroup_memory=1` to the single line in
+`/boot/firmware/cmdline.txt` and reboot the Pi. The reboot drops the household
+WhatsApp/Routine backend for as long as it takes, which is why nobody has done
+it in passing — it is the owner's call. After it, the same compose file starts
+enforcing the limits with no other change, and `docker stats` shows a real
+ceiling.
 
 ## Logs, health, rollback
 
@@ -250,7 +271,7 @@ pasted, or the pasted one was rejected. Settings → AI shows which.
 compared in constant time and rate-limited to 10 attempts a minute per process.
 
 **The container is killed, or quarters get very slow.** Check
-`docker stats` against `mem_limit`. Raising `mem_limit` (and `memswap_limit`
+`docker stats` (which reports a real ceiling only once the memory controller is enabled — see *Memory*). Raising `mem_limit` (and `memswap_limit`
 with it) is the first knob; lowering `NODE_OPTIONS=--max-old-space-size` is the
 second. Never raise `LLM_MAX_CONCURRENCY` to buy speed on this host.
 

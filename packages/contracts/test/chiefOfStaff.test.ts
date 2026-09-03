@@ -54,6 +54,15 @@ const DOSSIER = {
     operatingMarginPct: -0.2,
     history: [],
   },
+  group: {
+    companyCount: 1,
+    revenueUsd: 1_200_000,
+    netIncomeUsd: -600_000,
+    cashUsd: 4_000_000,
+    debtUsd: 0,
+    headcount: 9,
+    marketValueUsd: 10_000_000,
+  },
   products: {
     lines: [],
     computeOwned: 0,
@@ -327,7 +336,7 @@ function filedQuarter() {
 /* -------------------------------------------------------------------------- */
 
 describe('the lookup catalogue', () => {
-  it('names six kinds and bounds a turn to four of them', () => {
+  it('names nine kinds and bounds a turn to four of them', () => {
     expect([...LOOKUP_KINDS]).toEqual([
       'compute_market',
       'acquisition_targets',
@@ -335,6 +344,9 @@ describe('the lookup catalogue', () => {
       'government_programmes',
       'hiring_market',
       'own_position',
+      'launchable_lines',
+      'suppliers',
+      'customers',
     ]);
     expect(MAX_LOOKUPS_PER_TURN).toBe(4);
     expect(MAX_LOOKUP_ROWS).toBe(12);
@@ -348,6 +360,9 @@ describe('the lookup catalogue', () => {
       { kind: 'government_programmes' },
       { kind: 'hiring_market', role: 'researchers' },
       { kind: 'own_position' },
+      { kind: 'launchable_lines' },
+      { kind: 'suppliers', inputCategoryId: 'ai_frontier_models', productId: 'prd_agent_copilot' },
+      { kind: 'customers', productId: 'prd_frontier_model_api' },
     ];
     for (const request of requests) {
       const parsed = LookupRequestSchema.safeParse(request);

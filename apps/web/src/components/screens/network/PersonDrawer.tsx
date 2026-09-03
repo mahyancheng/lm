@@ -25,7 +25,7 @@ import { CONNECTION_GAP_RULE, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatScore } from '@frontier/shared';
 import { MIN_INTRODUCTION_PURPOSE_CHARS } from '@frontier/simulation';
 import { AccessBadge, Drawer, Icon, KeyValueGrid, Meter, SectionHeading, Tag, ValidationBanner, cx } from '@/components/ui';
-import { useGameActions, usePlayerCompany, useSession } from '@/lib/game';
+import { useActiveCompany, useGameActions, useSession } from '@/lib/game';
 import { characterName, memoriesAbout, type DirectoryEntry } from './directory';
 import { TalkPanel } from './TalkPanel';
 import {
@@ -72,7 +72,7 @@ export function PersonDrawer({
   onClose,
 }: PersonDrawerProps): React.JSX.Element | null {
   const session = useSession();
-  const ownCompany = usePlayerCompany();
+  const ownCompany = useActiveCompany();
   const { queueAction, validateIntent } = useGameActions();
 
   const [openKind, setOpenKind] = useState<PersonActionKind | null>(null);

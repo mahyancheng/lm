@@ -193,6 +193,23 @@ function reactToRegulatorMeeting(draft: SessionState, ctx: ResolverContext, acti
   if (action.intent.type !== 'meet_regulator') return;
   const regulator = characterById(draft, action.intent.regulatorCharacterId);
   if (regulator === null) return;
+
+  // World 2 only: the validator no longer refuses a meeting request out of
+  // network reach — it is attempted here and fails on the same check, rather
+  // than never happening. World 1 still refuses it at validation, so this
+  // never fires there.
+  const reach = checkAccess(draft, action.actorCharacterId, regulator.id);
+  if (!reach.allowed) {
+    rememberEvent(draft, ctx, {
+      ownerCharacterId: regulator.id,
+      aboutId: action.actorCharacterId,
+      kind: 'meeting',
+      summary: `A meeting was asked for about ${action.intent.topic.replace(/_/g, ' ')}, but the office never took the call: ${reach.reason}`.slice(0, 300),
+      sentiment: -0.05,
+    });
+    return;
+  }
+
   const postureSentiment: Record<string, number> = { cooperative: 0.5, informational: 0.2, defensive: -0.1, lobbying: -0.3 };
   const base = postureSentiment[action.intent.posture] ?? 0;
   const concessionBonus = Math.min(0.25, action.intent.concessionsOffered.length * 0.08);

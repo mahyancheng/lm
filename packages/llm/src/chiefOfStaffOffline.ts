@@ -69,6 +69,9 @@ export const COS_QUESTION_KINDS = [
   'capabilities',
   'people',
   'board',
+  // STAGE 5 — consolidated across every company the seat directs, not this
+  // one alone. Appended: enum growth stays at the end.
+  'group',
   'unclassified',
 ] as const;
 export type CosQuestionKind = (typeof COS_QUESTION_KINDS)[number];
@@ -93,6 +96,10 @@ const PATTERNS: readonly (readonly [CosQuestionKind, readonly string[]])[] = [
   ['capabilities', ['what can i do', 'what can we do', 'what are my options', 'what actions', 'what is available', 'what can you do']],
   ['people', ['headcount', 'how many people', 'staff', 'morale', 'team size', 'employees']],
   ['board', ['board', 'directors', 'ownership', 'control', 'my stake']],
+  // STAGE 5: consolidated across every company the seat directs. Tested before
+  // nothing above it collides — "the group" does not otherwise appear in any
+  // of the earlier patterns.
+  ['group', ['group', 'consolidat', 'subsidiar', 'whole empire', 'across the companies', 'across all my companies']],
 ];
 
 /** Classify a founder's message. Lower-cased substring matching, first pattern wins. */
@@ -128,6 +135,7 @@ const SOURCING_PATTERNS: readonly (readonly [LookupKind, readonly string[]])[] =
   ['debt_headroom', ['borrow', 'debt', 'a loan', 'credit line', 'leverage', 'refinance']],
   ['government_programmes', ['government', 'procurement', 'agency', 'tender', 'public contract', 'bid on']],
   ['hiring_market', ['hire', 'hiring', 'recruit', 'headcount cost', 'what does an engineer cost', 'salaries', 'salary']],
+  ['launchable_lines', ['what could i launch', 'what can i launch', 'new product line', 'new line', 'launch a product', 'what should we launch', 'what can we build']],
 ];
 
 /** A number written in the message, e.g. "buy 500 accelerators". 0 when none. */
@@ -151,6 +159,17 @@ function marketRequest(kind: LookupKind, message: string): LookupRequest | null 
       return { kind: 'debt_headroom' };
     case 'government_programmes':
       return { kind: 'government_programmes' };
+    case 'launchable_lines':
+      return { kind: 'launchable_lines' };
+    // `suppliers` and `customers` each need a category or product id no
+    // keyword table can safely guess, so they are never matched by
+    // `SOURCING_PATTERNS` and never reached here from a real message — but the
+    // model may still ask for either in `research` mode, and a findings turn
+    // built from that request has to come back through this same offline path
+    // if the model then goes unreachable, so the exhaustive switches below
+    // (`answerFromFinding`, `actionsFromFindings`) still answer them.
+    case 'suppliers':
+    case 'customers':
     // `own_position` is always appended and is never the market half.
     case 'own_position':
       return null;
@@ -258,6 +277,29 @@ export function answerFromFinding(finding: LookupResult): string {
         finding.runwayQuarters,
       )} of runway. ${finding.negativeCashQuarters} of the ${finding.solvencyQuartersAllowed} quarters that end the company have closed below zero.`;
 
+    case 'launchable_lines': {
+      const open = finding.rows.filter((row) => !row.locked);
+      if (open.length === 0) return 'Nothing in our own industry is open to launch right now; every line is waiting on research.';
+      return `${open.length} line${open.length === 1 ? '' : 's'} open now: ${open
+        .slice(0, 3)
+        .map((row) => `${row.label} at ${formatMoney(row.referencePriceUsd)} a ${row.unitLabel}`)
+        .join('; ')}.`;
+    }
+
+    case 'suppliers':
+      return finding.rows.length === 0
+        ? 'Nobody currently publishes that as an input we could buy.'
+        : `${finding.rows.length} would sell it to us; the best on quality per dollar is ${finding.rows[0]?.name ?? ''} at ${formatMoney(
+            finding.rows[0]?.pricePerUnitUsd ?? 0,
+          )} a unit.`;
+
+    case 'customers':
+      return finding.rows.length === 0
+        ? 'Nobody is building on that line yet.'
+        : `${finding.rows.length} compan${finding.rows.length === 1 ? 'y builds' : 'ies build'} on it, worth ${formatMoney(
+            finding.rows.reduce((sum, row) => sum + row.revenueUsd, 0),
+          )} this quarter.`;
+
     default: {
       const exhaustive: never = finding;
       return String((exhaustive as { kind?: string }).kind ?? '');
@@ -295,6 +337,18 @@ export function actionsFromFindings(findings: readonly LookupResult[]): ActionIn
         if (row?.intent != null) out.push(row.intent);
         break;
       }
+      case 'launchable_lines': {
+        const row = finding.rows.find((entry) => entry.intent !== null);
+        if (row?.intent != null) out.push(row.intent);
+        break;
+      }
+      case 'suppliers': {
+        const row = finding.rows.find((entry) => entry.intent !== null);
+        if (row?.intent != null) out.push(row.intent);
+        break;
+      }
+      // `customers` names counterparties; it carries no action of our own to offer.
+      case 'customers':
       default:
         break;
     }
@@ -347,6 +401,7 @@ const PATHS: Readonly<Record<CosQuestionKind, string>> = {
   capabilities: 'Command Centre',
   people: 'People',
   board: 'Boardroom',
+  group: 'Group',
   unclassified: 'Command Centre',
 };
 
@@ -449,6 +504,18 @@ export function answerFromDossier(kind: CosQuestionKind, dossier: ChiefOfStaffDo
       const proposals =
         g.openProposals.length === 0 ? 'Nothing is before it.' : `Before it: ${g.openProposals.map((entry) => entry.title).join('; ')}.`;
       return `You hold ${pct(g.founderOwnershipPct)} of the company and ${g.isCeo ? 'are' : 'are not'} chief executive. ${seats} ${proposals}`;
+    }
+
+    case 'group': {
+      const g = dossier.group;
+      if (g.companyCount <= 1) {
+        return `You direct one company — ${dossier.companyName} — so there is nothing to consolidate yet. Buying a majority stake or completing an acquisition that keeps the target alive as a subsidiary is what starts a group.`;
+      }
+      return `${g.companyCount} companies, consolidated: ${formatMoney(g.revenueUsd)} revenue and ${formatMoney(
+        g.netIncomeUsd,
+      )} net income last filed quarter, ${formatMoney(g.cashUsd)} cash against ${formatMoney(g.debtUsd)} debt, ${formatCount(
+        g.headcount,
+      )} people, ${formatMoney(g.marketValueUsd)} consolidated market value.`;
     }
 
     default:

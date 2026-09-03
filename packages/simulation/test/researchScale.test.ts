@@ -27,6 +27,7 @@ import {
 import { projectRequirements, resourcingFactors } from '../src/research/progress';
 import { researchComputeHeadroom } from '../src/validator/context';
 import { createActionValidator } from '../src/validator';
+import { expectedFill } from '../src/fills';
 import { heldComputeUnits } from '../src/companies/products';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, createDemoSession, createWorld2Session } from '../src/scenario';
 
@@ -168,7 +169,7 @@ describe('research compute headroom', () => {
     expect(result.codes).not.toContain('insufficient_compute');
   });
 
-  it('asking for more than the headroom is clamped to it, and a second programme sees what the first took', () => {
+  it('asking for more than the headroom is accepted whole and advises what the first left the second', () => {
     const state = createWorld2Session();
     const company = playerCompany(state);
     const seat = playerSeat(state);
@@ -182,16 +183,27 @@ describe('research compute headroom', () => {
     // No researchers asked for: this programme exists only to read the compute
     // the first one left behind.
     const next: ActionIntent = { type: 'start_research_project', targetNodeId: second.id, budgetUsd: 1, computeUnits: 10, researchersAssigned: 0, secret: true };
+
+    // world 2: availability is realised at resolution, not refused or clamped
+    // at validation — `expectedFill` is the one place that expectation is
+    // computed, and it is what the note on each verdict has to agree with.
+    const overFill = expectedFill(state, company.id, over);
+    expect(overFill.expected).toBe(headroom);
+    expect(overFill.asked).toBe(headroom + 50);
+
     const [a, b] = validator.validateBatch(state, [
       submit(state, over, company.id, seat.playerId, character),
       submit(state, next, company.id, seat.playerId, character),
     ]);
     if (a === undefined || b === undefined) throw new Error('no results');
-    expect(a.status).toBe('clamped');
-    expect(a.codes).toContain('insufficient_compute');
-    expect(a.clampedAction?.type === 'start_research_project' ? a.clampedAction.computeUnits : -1).toBe(headroom);
-    // The first programme took everything, so the second gets zero compute.
-    expect(b.clampedAction?.type === 'start_research_project' ? b.clampedAction.computeUnits : -1).toBe(0);
+    expect(a.status).toBe('accepted');
+    expect(a.codes).toContain('partial_fill_expected');
+    expect(a.clampedAction).toBeNull();
+    // The first programme is expected to take everything, so the second is
+    // expected to be short too — noted, not clamped.
+    expect(b.status).toBe('accepted');
+    expect(b.codes).toContain('partial_fill_expected');
+    expect(b.clampedAction).toBeNull();
   });
 
   it('world 1 still ignores cloud capacity when a programme starts', () => {

@@ -134,6 +134,15 @@ export const SIM_EVENT_TYPES = [
   'capital_entity_marked',
   // Compute bought outright from another company. Appended, never inserted.
   'accelerators_bought',
+  // Non-compute capacity built with invest_capacity. Appended, never inserted.
+  'capacity_invested',
+  // Group control (world 2). Appended, never inserted. `acquisition_completed`
+  // is reused for a subsidiary-creating offer (its payload carries mode:
+  // 'subsidiary' | 'absorbed'); these three cover what happens to a group
+  // after that.
+  'control_changed',
+  'group_transfer_executed',
+  'subsidiary_merged',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');

@@ -1,5 +1,5 @@
 /**
- * The achievable ceiling, read off the engine's own curve.
+ * The achievable ceiling, read off the engine's own forecast.
  *
  * §4 P0-4 refuses to add a monopoly price cap — the payoff is emergent, because
  * `segmentReferencePrice` is customer-weighted and a dominant seller drags the
@@ -7,49 +7,45 @@
  * "the mechanics that land are the ones with a number a player can quote"
  * (§1.13).
  *
- * There is such a number and it is already in the engine: `relativePrice`
- * saturates at `PRICE_DEVIATION_BOUNDS.max`, and above that price the
- * elasticity term stops responding at all — the product is no longer competing
- * on price, and only the churn shock is left. That saturation price is the
- * ceiling worth drawing.
- *
- * It is found by walking the engine's own `relativePrice`, not by restating its
- * arithmetic here. If the bounds are ever retuned, this follows.
+ * From world version 2 there is no validator band to draw a ceiling from — "a
+ * price cut is a price cut", and a rise is unbounded too. The number worth
+ * drawing is where the engine's own forecast revenue *peaks*: below it, a
+ * higher price still buys more revenue than it loses in churn and gross
+ * additions; above it, the demand model's saturation decay and the churn shock
+ * take more than the price gains. That peak is found by walking `repriceForecast`
+ * — the same function the reprice control shows — over a wide range of
+ * candidate prices, not by restating its arithmetic here. Guidance, never
+ * enforced: nothing here clamps or refuses a price.
  */
 
-import type { ProductSegment } from '@frontier/contracts';
-import { PRICE_DEVIATION_BOUNDS, PRICE_MOVE_BAND, relativePrice } from '@frontier/simulation';
+import type { SessionState } from '@frontier/contracts';
+import { repriceForecast } from '@frontier/simulation';
 
-/** Bisection depth. Forty halvings of an eightfold range settles to the cent. */
-const STEPS = 40;
+/** How many candidate prices the walk samples between zero and the top of the range. */
+const SCAN_POINTS = 60;
 
 /**
- * The highest price at which the segment's elasticity still responds, in whole
- * dollars. Zero when there is no reference to be judged against.
+ * The price at which the engine's own forecast revenue peaks for this
+ * product, in whole dollars — guidance for where the ladder draws its dashed
+ * line, never a bound the reprice slider or the validator enforces.
+ *
+ * Zero when the product cannot be found, is no longer selling, or carries no
+ * price to scan around.
  */
-export function achievableCeilingUsd(segment: ProductSegment, referenceUsd: number): number {
-  if (!(referenceUsd > 0)) return 0;
-  const saturated = (price: number): boolean => relativePrice(price, referenceUsd) >= PRICE_DEVIATION_BOUNDS.max;
+export function achievableCeilingUsd(session: SessionState, companyId: string, productId: string, referenceUsd: number, currentUsd: number): number {
+  const top = Math.max(referenceUsd, currentUsd, 1) * 10;
+  if (!(top > 0)) return 0;
 
-  let low = referenceUsd;
-  let high = referenceUsd * 8;
-  if (!saturated(high)) return Math.round(high);
-
-  for (let step = 0; step < STEPS; step += 1) {
-    const mid = (low + high) / 2;
-    if (saturated(mid)) high = mid;
-    else low = mid;
+  let bestPriceUsd = Math.max(0, currentUsd);
+  let bestRevenueUsd = -Infinity;
+  for (let step = 0; step <= SCAN_POINTS; step += 1) {
+    const candidateUsd = (top * step) / SCAN_POINTS;
+    const forecast = repriceForecast(session, companyId, productId, candidateUsd);
+    if (forecast === null) return 0;
+    if (forecast.revenueAfterUsd > bestRevenueUsd) {
+      bestRevenueUsd = forecast.revenueAfterUsd;
+      bestPriceUsd = candidateUsd;
+    }
   }
-  return Math.round(high);
-}
-
-/**
- * The most a price may move upward in one quarter, in whole dollars.
- *
- * `PRICE_MOVE_BAND` is the validator's own clamp, so this is what would clear
- * rather than what is desirable. The ladder draws whichever of the two ceilings
- * binds first.
- */
-export function repriceCeilingUsd(currentUsd: number): number {
-  return Math.round(Math.max(0, currentUsd) * PRICE_MOVE_BAND.max);
+  return Math.round(bestPriceUsd);
 }

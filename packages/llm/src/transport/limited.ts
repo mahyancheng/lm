@@ -34,7 +34,30 @@
  *   `max = 1` resolves one strategist at a time and every rival still gets its
  *   own genuine plan.
  *
- * Order is first-in-first-out, so a call cannot be starved by later arrivals.
+ * Order is first-in-first-out *within a priority lane* — see "Priority lanes"
+ * below — so a call cannot be starved by a later arrival in the same lane.
+ *
+ * ## Priority lanes
+ *
+ * A quarter's own batch of calls (World Director, then up to six NPC
+ * strategists, then up to three social-author posts) can hold the single
+ * permit for minutes on the Pi. A founder who opens the Chief of Staff during
+ * that window is not asking about the quarter that is resolving — they are
+ * asking about the company they are looking at right now, and a queue that
+ * made them wait behind someone else's rival strategists is indistinguishable
+ * from "the model cannot be reached."
+ *
+ * So there are two waiting lines, not one: `interactive` (a founder is looking
+ * directly at this call — Chief of Staff, character dialogue, the innovation
+ * interpreter) and `batch` (fired unattended, in bulk, by the resolver). Both
+ * still share the one `max` permits total — this is not a second concurrency
+ * lane, only a second *queue* — but whenever a permit frees up, every waiting
+ * `interactive` call is served before any waiting `batch` call, oldest first
+ * within each line. A `batch` call already holding the permit is never
+ * pre-empted mid-flight (there is no way to pre-empt a spawned subprocess);
+ * only the *next* permit is affected. `batch` calls are never starved outright
+ * — they resume the moment the interactive traffic clears — but they are
+ * deliberately deprioritised while a person is waiting.
  *
  * ## Clock-free
  *
@@ -45,7 +68,8 @@
  * module exists to prevent.
  */
 
-import type { LlmCompletion, LlmCompletionRequest, LlmTransport } from './types';
+import type { AgentRole } from '@frontier/contracts';
+import type { LlmCallClass, LlmCompletion, LlmCompletionRequest, LlmTransport } from './types';
 
 /* -------------------------------------------------------------------------- */
 /*  Configuration                                                              */
@@ -84,21 +108,45 @@ export function resolveMaxConcurrency(value: string | undefined): number {
 /*  The semaphore                                                              */
 /* -------------------------------------------------------------------------- */
 
+/** Everything `run` accepts beyond the task itself. Every field is optional and defaults conservatively. */
+export interface ConcurrencyRunOptions {
+  /** Which queue this call waits in when no permit is free. Defaults to `'batch'`. See `LlmCallClass`. */
+  readonly priority?: LlmCallClass;
+  /** Which role is calling, recorded only for `snapshot()` — never read by the queue logic itself. */
+  readonly role?: AgentRole;
+}
+
+/** A point-in-time read of the limiter's bookkeeping, for the health route. */
+export interface LimiterSnapshot {
+  readonly max: number;
+  readonly active: number;
+  /** Total waiting, both lanes. */
+  readonly queued: number;
+  readonly queuedInteractive: number;
+  readonly queuedBatch: number;
+  /** The role of the call currently holding the permit, or null when the limiter is idle. */
+  readonly runningRole: AgentRole | null;
+  /** The lane of the call currently holding the permit, or null when idle. */
+  readonly runningPriority: LlmCallClass | null;
+}
+
 export interface ConcurrencyLimiter {
   /** How many tasks may run at once. Fixed for the life of the limiter. */
   readonly max: number;
   /** Tasks currently holding a permit. Diagnostics only. */
   readonly active: number;
-  /** Tasks waiting for one. Diagnostics only. */
+  /** Tasks waiting for one, across both priority lanes. Diagnostics only. */
   readonly queued: number;
   /** Run `task` once a permit is free. Resolves or rejects exactly as `task` does. */
-  run<T>(task: () => Promise<T>): Promise<T>;
+  run<T>(task: () => Promise<T>, options?: ConcurrencyRunOptions): Promise<T>;
+  /** A snapshot of the queue right now — depth per lane and who holds the permit. */
+  snapshot(): LimiterSnapshot;
 }
 
 /**
- * A FIFO async semaphore.
+ * A priority-lane async semaphore.
  *
- * Two properties worth stating because tests depend on both:
+ * Three properties worth stating because tests depend on all three:
  *
  * 1. **An uncontended `run` starts its task synchronously.** The permit is
  *    taken in `run`'s synchronous prologue, so `limiter.run(t)` on a free
@@ -107,30 +155,42 @@ export interface ConcurrencyLimiter {
  * 2. **A permit is handed directly to the next waiter**, rather than being
  *    returned to a counter that the waiter then races for. `active` therefore
  *    never dips below `max` while anything is queued, and wake-up order is
- *    exactly arrival order.
+ *    exactly the rule below — never a re-race.
+ * 3. **`interactive` waiters are served before `batch` waiters, always** —
+ *    oldest first within each lane, but every interactive arrival outranks
+ *    every batch arrival regardless of who queued first. This is a priority
+ *    order, not a plain FIFO, and it is the entire point of having two lanes:
+ *    see "Priority lanes" above.
  */
 export function createConcurrencyLimiter(max: number): ConcurrencyLimiter {
   const ceiling = Number.isInteger(max) && max >= 1 ? max : DEFAULT_LLM_MAX_CONCURRENCY;
-  /** Resolvers of the waiting calls, oldest first. */
-  const waiters: Array<() => void> = [];
+  /** Resolvers of the waiting interactive calls, oldest first. Always drained before `batchWaiters`. */
+  const interactiveWaiters: Array<() => void> = [];
+  /** Resolvers of the waiting batch calls, oldest first. */
+  const batchWaiters: Array<() => void> = [];
   let active = 0;
+  let runningRole: AgentRole | null = null;
+  let runningPriority: LlmCallClass | null = null;
 
   /** Take a permit now, or a promise that resolves when one is handed over. */
-  function acquire(): Promise<void> | null {
+  function acquire(priority: LlmCallClass): Promise<void> | null {
     if (active < ceiling) {
       active += 1;
       return null;
     }
+    const queue = priority === 'interactive' ? interactiveWaiters : batchWaiters;
     return new Promise<void>((resolve) => {
-      waiters.push(resolve);
+      queue.push(resolve);
     });
   }
 
-  /** Give the permit to the oldest waiter, or put it back. */
+  /** Give the permit to the oldest interactive waiter, else the oldest batch waiter, else put it back. */
   function release(): void {
-    const next = waiters.shift();
+    const next = interactiveWaiters.shift() ?? batchWaiters.shift();
     if (next === undefined) {
       active -= 1;
+      runningRole = null;
+      runningPriority = null;
       return;
     }
     // `active` is deliberately unchanged: the permit moves, it is not recycled.
@@ -143,11 +203,16 @@ export function createConcurrencyLimiter(max: number): ConcurrencyLimiter {
       return active;
     },
     get queued() {
-      return waiters.length;
+      return interactiveWaiters.length + batchWaiters.length;
     },
-    async run<T>(task: () => Promise<T>): Promise<T> {
-      const wait = acquire();
+    async run<T>(task: () => Promise<T>, options?: ConcurrencyRunOptions): Promise<T> {
+      const priority = options?.priority ?? 'batch';
+      const wait = acquire(priority);
       if (wait !== null) await wait;
+      // Recorded only once the permit is actually held, so `snapshot()` never
+      // reports a "running" role that is really still queued.
+      runningRole = options?.role ?? null;
+      runningPriority = priority;
       try {
         return await task();
       } finally {
@@ -156,6 +221,17 @@ export function createConcurrencyLimiter(max: number): ConcurrencyLimiter {
         // deadlocks waiting for a permit nobody holds.
         release();
       }
+    },
+    snapshot(): LimiterSnapshot {
+      return {
+        max: ceiling,
+        active,
+        queued: interactiveWaiters.length + batchWaiters.length,
+        queuedInteractive: interactiveWaiters.length,
+        queuedBatch: batchWaiters.length,
+        runningRole,
+        runningPriority,
+      };
     },
   };
 }
@@ -182,7 +258,7 @@ export function withConcurrencyLimit(transport: LlmTransport, max: number | Conc
   return {
     ...transport,
     complete<T>(req: LlmCompletionRequest<T>): Promise<LlmCompletion<T>> {
-      return limiter.run(() => transport.complete(req));
+      return limiter.run(() => transport.complete(req), { priority: req.priority ?? 'batch', role: req.role });
     },
   };
 }

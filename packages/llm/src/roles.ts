@@ -77,7 +77,7 @@ import { composeWorldDirector } from './compose/worldDirector';
 import type { ComposedPrompt } from './compose/render';
 import { INNOVATION_DECLINE_REASON, fallbackCharacterReply, fallbackChiefOfStaff, fallbackNarratorOutput } from './fallbacks';
 import { type RunSink, createNullRunSink, safeRunSink } from './runSink';
-import { type LlmFailureReason, type LlmTransport, classifyIssues } from './transport/types';
+import { type LlmCallClass, type LlmFailureReason, type LlmTransport, classifyIssues } from './transport/types';
 
 /** Version of the prompts and wiring in this package. Bump when behaviour changes. */
 export const AGENT_VERSION = 'llm-1.0.0';
@@ -202,6 +202,7 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
       schema: params.schema,
       schemaName: params.schemaName,
       sessionKey: params.sessionKey,
+      priority: ROLE_CALL_CLASS[params.role],
     });
 
     let output: TOutput | null = completion.output;
@@ -392,6 +393,32 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
  * verbatim from `LLM_FALLBACK_STRATEGIES` in the contracts so the ledger and
  * the documentation can never drift apart.
  */
+/**
+ * Which priority lane each role's calls queue in — see `LlmCallClass` in
+ * `transport/types.ts` for the full reasoning.
+ *
+ * `chief_of_staff` and `character_dialogue` are a founder looking directly at
+ * the reply. `innovation_interpreter` is the same shape of call even though it
+ * is not a dialogue role: it is fired once, synchronously, from a screen a
+ * player is sitting on (turning their own words into a proposal), never as
+ * part of the resolver's unattended fan-out — so it queues with the other
+ * roles a person is waiting on, not behind them.
+ *
+ * `world_director`, `npc_strategist`, `social_author` and `narrator` are the
+ * quarter resolver's own calls: fired in bulk, unattended, with nothing
+ * rendered until the whole quarter commits. Queue depth there is invisible to
+ * anyone, which is exactly why it is safe to deprioritise.
+ */
+const ROLE_CALL_CLASS: Record<AgentRole, LlmCallClass> = {
+  world_director: 'batch',
+  chief_of_staff: 'interactive',
+  npc_strategist: 'batch',
+  character_dialogue: 'interactive',
+  innovation_interpreter: 'interactive',
+  social_author: 'batch',
+  narrator: 'batch',
+};
+
 const LLM_FALLBACK_STRATEGY_TEXT: Record<AgentRole, string> = {
   world_director: 'Apply the candidate skeletons using their event family template modifiers at the drawn severity.',
   chief_of_staff: 'Answer from the typed dossier where arithmetic can, and otherwise echo the instruction back for the player to submit themselves.',

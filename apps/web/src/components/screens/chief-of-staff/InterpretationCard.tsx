@@ -20,7 +20,7 @@ import { useMemo, useState } from 'react';
 import type { ActionIntent, ActionType, ActionValidationResult, CosAvailableAction, CosBound } from '@frontier/contracts';
 import { formatCount, formatMoney } from '@frontier/shared';
 import { ConfirmDialog, Icon, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
-import { availableActionsForSession, needsConfirmation, useGameActions, useSession } from '@/lib/game';
+import { availableActionsForSession, needsConfirmation, useActiveCompany, useGameActions, useSession } from '@/lib/game';
 import { describeIntent } from '@/components/screens/end-quarter/intents';
 import type { TranscriptEntry } from './transcript';
 
@@ -43,7 +43,10 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   reserve_compute: '/company',
   buy_cloud_capacity: '/company',
   buy_accelerators: '/company',
+  invest_capacity: '/company',
   allocate_compute: '/company',
+  set_supply_terms: '/products',
+  choose_supplier: '/products',
   raise_round: '/capital',
   issue_debt: '/capital',
   buyback: '/capital',
@@ -67,6 +70,10 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   accept_deal: '/deal-room',
   reject_deal: '/deal-room',
   request_introduction: '/network',
+  // Group control (STAGE 4): the screens stage gives these their own surface;
+  // until then the portfolio tab is where a subsidiary is visible at all.
+  transfer_between_group: '/portfolio',
+  merge_subsidiary: '/portfolio',
 };
 
 const DRAFT_CONFIDENCE = 0.7;
@@ -130,6 +137,7 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
   // a card that survives a resolve must recompute rather than keep showing a
   // clamp that was calculated against a world that no longer exists.
   const session = useSession();
+  const activeCompany = useActiveCompany();
   const [queued, setQueued] = useState<Readonly<Record<number, ActionValidationResult>>>({});
   const [pending, setPending] = useState<{ index: number; intent: ActionIntent } | null>(null);
   // True while "Do it" is walking the outstanding confirmations one at a time.
@@ -138,9 +146,14 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
   const [runningAll, setRunningAll] = useState(false);
 
   // The engine's own verdict on what this company could do right now, memoised
-  // per session object. It is what turns "reserve 4,000 accelerators" into
-  // "reserve 4,000 accelerators — the market can free 1,536 this quarter".
-  const availability = useMemo(() => new Map(availableActionsForSession(session).map((entry) => [entry.type, entry])), [session]);
+  // per (session, active company). It is what turns "reserve 4,000
+  // accelerators" into "reserve 4,000 accelerators — the market can free
+  // 1,536 this quarter" — and, since STAGE 5, whichever company the switcher
+  // currently has active, matching what `queueAction` below will actually do.
+  const availability = useMemo(
+    () => new Map(availableActionsForSession(session, activeCompany.id).map((entry) => [entry.type, entry])),
+    [session, activeCompany.id],
+  );
 
   const { interpretation } = entry;
   const draft = interpretation.confidence < DRAFT_CONFIDENCE;

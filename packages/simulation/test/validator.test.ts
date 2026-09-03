@@ -287,10 +287,12 @@ describe('product and marketing', () => {
         type: 'launch_product',
         name: 'Ventures Analyst',
         segment: 'enterprise',
+        categoryId: null,
         pricePerSeatUsd: 140,
         computeIntensity: 0.3,
         launchMarketingUsd: 9_000_000,
         targetQuality: 0.6,
+        supply: [],
       }),
     );
     expect(result.status).toBe('clamped');
@@ -303,10 +305,12 @@ describe('product and marketing', () => {
         type: 'launch_product',
         name: 'Ventures Copilot',
         segment: 'enterprise',
+        categoryId: null,
         pricePerSeatUsd: 140,
         computeIntensity: 0.3,
         launchMarketingUsd: 1_000,
         targetQuality: 0.6,
+        supply: [],
       }),
     );
     expect(codes(result)).toContain('duplicate_action');

@@ -46,7 +46,7 @@ import { BoardroomScene } from '@/components/screens/boardroom/BoardroomScene';
 import { LobbyPanel, type LobbyFocus } from '@/components/screens/boardroom/LobbyPanel';
 import { ProposePanel } from '@/components/screens/boardroom/ProposePanel';
 import { MANDATE_LABEL, PROPOSAL_KIND_LABEL, commitmentText } from '@/components/screens/boardroom/labels';
-import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useActiveCompany, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
 const STATUS_TONE = {
   draft: 'neutral',
@@ -66,7 +66,7 @@ function scrollTo(id: string): void {
 export default function BoardroomPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const [openDirectorId, setOpenDirectorId] = useState<string | null>(null);
   const [openProposalId, setOpenProposalId] = useState<string | null>(null);

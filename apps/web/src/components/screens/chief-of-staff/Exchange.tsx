@@ -19,9 +19,17 @@
 import type { Character } from '@frontier/contracts';
 import { AiLabel, Tag } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard, type PortraitMood } from '@/components/scenes/people';
+import type { ChiefOfStaffFailure } from '@/lib/llm/client';
 import { FindingsCards } from './FindingsCards';
 import { InterpretationCard } from './InterpretationCard';
 import type { TranscriptEntry } from './transcript';
+
+/** What the "no model reached" tag says, when a specific reason is on record. Absent (`undefined`/`null`) reads as no transport configured at all. */
+const FAILURE_TAG_LABEL: Readonly<Record<Exclude<ChiefOfStaffFailure, null>, string>> = {
+  timeout: 'Model timed out',
+  network_error: 'Network error',
+  aborted: 'Cancelled',
+};
 
 export interface ExchangeProps {
   readonly entry: TranscriptEntry;
@@ -104,7 +112,15 @@ export function Exchange({ entry, founder, startYear, dense = false }: ExchangeP
               <AiLabel />
               <Tag tone={interpretation.mode === 'act' ? 'brand' : 'neutral'}>{MODE_LABEL[interpretation.mode]}</Tag>
               {entry.findings !== undefined && entry.findings.length > 0 ? <Tag tone="info">Sourced</Tag> : null}
-              {entry.fallback ? <Tag tone="loss">No model reached</Tag> : null}
+              {entry.quick === true ? (
+                <Tag tone="neutral" dot>
+                  Quick answer
+                </Tag>
+              ) : entry.fallback ? (
+                <Tag tone="loss">
+                  {entry.failureReason !== undefined && entry.failureReason !== null ? FAILURE_TAG_LABEL[entry.failureReason] : 'No model reached'}
+                </Tag>
+              ) : null}
             </>
           }
         >

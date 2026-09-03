@@ -37,6 +37,8 @@ import type {
   SubmittedAction,
 } from '@frontier/contracts';
 import { ActionIntentSchema, makeId } from '@frontier/contracts';
+import { CEO_ONLY_ACTIONS } from '../validator';
+import { rememberEvent } from '../relationships/relations';
 
 /** One action and what validation decided about it. */
 export interface ReviewedAction {
@@ -281,6 +283,7 @@ export function reviewActions(
       });
     }
 
+    if (effective !== null) noteSubsidiaryOverrule(draft, ctx, effective);
     reviewed.push({ action, result, effective });
   }
 
@@ -340,6 +343,12 @@ export function labelFor(intent: ActionIntent): string {
       return `A reservation of ${intent.units} accelerators`;
     case 'buy_accelerators':
       return `A purchase of ${intent.units} accelerators${intent.sellerCompanyId === null ? '' : ` from ${intent.sellerCompanyId}`}`;
+    case 'invest_capacity':
+      return `A ${intent.kind} capacity investment`;
+    case 'set_supply_terms':
+      return `Publishing ${intent.productId} as a supply line`;
+    case 'choose_supplier':
+      return `Choosing a supplier for ${intent.productId}`;
     case 'start_research_project':
       return `A programme against ${intent.targetNodeId}`;
     case 'submit_board_proposal':
@@ -384,4 +393,32 @@ export function summariseIntent(intent: ActionIntent): Record<string, unknown> {
 
 function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * A controller directing a subsidiary through a `CEO_ONLY_ACTIONS` instruction
+ * their own character does not hold the office for is overruling whoever does
+ * (`validator/index.ts` is where that is let through, deliberately, for
+ * exactly this case). The incumbent CEO is not consulted; this is the record
+ * of what that costs the relationship.
+ *
+ * At most one memory per subsidiary per quarter, however many such actions
+ * land on it that quarter — the stable key collapses repeats, so directing a
+ * subsidiary's whole plan in one sitting reads as one event, not eight.
+ */
+function noteSubsidiaryOverrule(draft: SessionState, ctx: ResolverContext, action: SubmittedAction): void {
+  if (!CEO_ONLY_ACTIONS.includes(action.intent.type)) return;
+  const company = draft.companies.find((candidate) => candidate.id === action.actorCompanyId);
+  if (company === undefined || company.parentCompanyId === null || company.ceoCharacterId === null) return;
+  if (company.controllerPlayerId !== action.actorPlayerId) return;
+  if (action.actorCharacterId === company.ceoCharacterId) return;
+
+  rememberEvent(draft, ctx, {
+    ownerCharacterId: company.ceoCharacterId,
+    aboutId: action.actorCharacterId,
+    kind: 'personal',
+    summary: `The parent company directed ${company.name} over my head again this quarter.`,
+    sentiment: -0.4,
+    stableKey: `overruled_${company.id}_${draft.quarter}`,
+  });
 }

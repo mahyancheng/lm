@@ -142,6 +142,7 @@ export function renderAvailableAction(action: CosAvailableAction): string {
 /** The whole dossier as the markdown the model reads. Pure: same input, same text. */
 export function renderDossier(dossier: ChiefOfStaffDossier): string {
   const f = dossier.finances;
+  const grp = dossier.group;
   const p = dossier.products;
   const people = dossier.people;
   const g = dossier.governance;
@@ -162,6 +163,15 @@ export function renderDossier(dossier: ChiefOfStaffDossier): string {
           )
           .join('; ')}.`,
   ].join('\n');
+
+  // STAGE 5: the group this seat directs, consolidated — companyCount 1 means
+  // there is nothing beyond the company this dossier is otherwise built for.
+  const group =
+    grp.companyCount <= 1
+      ? `You direct one company. There is no group to consolidate.`
+      : `${grp.companyCount} companies. Consolidated: revenue ${money(grp.revenueUsd)}, net income ${money(grp.netIncomeUsd)}, cash ${money(
+          grp.cashUsd,
+        )}, debt ${money(grp.debtUsd)}, headcount ${grp.headcount}, market value ${money(grp.marketValueUsd)}.`;
 
   const products = [
     p.lines.length === 0
@@ -282,6 +292,7 @@ export function renderDossier(dossier: ChiefOfStaffDossier): string {
   return joinBlocks([
     `# ${dossier.companyName} — ${dossier.quarterLabel}, founder ${dossier.founderName}, posture ${dossier.posture.replace(/_/g, ' ')}`,
     section('Finances', finances),
+    section('Group', group),
     section('Products and capacity', products),
     section('People', peopleBlock),
     section('Board and ownership', governance),
@@ -411,6 +422,50 @@ export function renderFinding(finding: LookupResult): string {
                   (row) => `Q${row.quarter} — revenue ${money(row.revenueUsd)}, net ${money(row.netIncomeUsd)}, cash ${money(row.cashUsd)}, ${row.headcount} people`,
                 ),
               ),
+        ].join('\n\n'),
+      );
+
+    case 'launchable_lines':
+      return section(
+        'Finding — product lines in our industry',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map((row) =>
+              row.locked
+                ? `${row.label} (${row.categoryId}) — locked until we have ${row.missingNodeTitles.join(', ') || 'the required research'}`
+                : `${row.label} (${row.categoryId}) — open now, ${money(row.referencePriceUsd)} a ${row.unitLabel}`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'suppliers':
+      return section(
+        'Finding — who could supply this',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.name} (${row.companyId}) via ${row.productName} — ${money(row.pricePerUnitUsd)} a unit, quality ${row.qualityScorePct} of 100${
+                  row.isDirectRival ? ', a direct rival in this line' : ''
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'customers':
+      return section(
+        'Finding — who builds on us',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) => `${row.buyerName} (${row.buyerCompanyId}) — ${row.buyerProductName}, ${row.unitsFilled} units, ${money(row.revenueUsd)} this quarter`,
+            ),
+          ),
         ].join('\n\n'),
       );
 

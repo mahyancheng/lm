@@ -104,21 +104,44 @@ const PHASE_LABEL: Readonly<Record<string, string>> = Object.fromEntries(
 /*  The overlay                                                                */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `resolveStatus` is one headline line — the four/five strings
+ * `stageOfStatus` recognises — followed by zero or more progress-row lines
+ * from `formatProgressStatus` (`lib/game/resolveProgress.ts`): `"World
+ * Director · done (2.1s)"`, `"Aletheia Labs strategist · 41s"`, `"Basalt
+ * Compute strategist · on policy (budget)"`. Split once, here, so the
+ * headline drives the existing stage detection unchanged and the rows get
+ * their own list instead of being jammed into one paragraph.
+ */
+function splitStatus(status: string): { headline: string; rows: readonly string[] } {
+  const lines = status.split('\n');
+  return { headline: lines[0] ?? '', rows: lines.slice(1).filter((line) => line.length > 0) };
+}
+
+/** A progress row's tone, read off the punctuation `formatProgressLine` already put there — no parallel state to keep in sync. */
+function toneOfProgressRow(row: string): 'pending' | 'running' | 'done' | 'skipped' {
+  if (!row.includes(' · ')) return 'pending';
+  if (row.includes('on policy') || row.includes('· skipped')) return 'skipped';
+  if (row.includes(' · done')) return 'done';
+  return 'running';
+}
+
 export function ResolvingOverlay(): React.JSX.Element | null {
   const { resolving, status } = useResolving();
   const { loading, progress } = useLoading();
   if (!resolving && !loading) return null;
 
+  const { headline, rows: progressRows } = splitStatus(status);
   const heading = resolving ? 'Resolving quarter' : 'Replaying your session';
   const detail = resolving
-    ? status === ''
+    ? headline === ''
       ? 'Working'
-      : status
+      : headline
     : progress === null
       ? 'Reading the save'
       : `Quarter ${progress.quarter} — ${progress.completed} of ${progress.total}`;
 
-  const stageIndex = resolving ? stageOfStatus(status) : -1;
+  const stageIndex = resolving ? stageOfStatus(headline) : -1;
   /* The engine stage covers both operating groups, so the last tile lights with
      it rather than pretending the market has not been reached yet. */
   const lastActive = stageIndex === 3 ? 4 : stageIndex;
@@ -236,6 +259,43 @@ export function ResolvingOverlay(): React.JSX.Element | null {
                     ].join(' ')}
                   >
                     {PHASE_LABEL[phase] ?? phase}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+
+        {/* --- what is actually happening right now, with elapsed time ------ */}
+        {/* A real list, not a frozen spinner: the World Director, each rival
+            strategist in priority order and the deterministic engine pass each
+            get their own line, moving from waiting to running to done — or to
+            "on policy (budget)" when the quarter's model-time budget ran out
+            before that rival's turn. See `formatProgressStatus`. */}
+        {resolving && progressRows.length > 0 ? (
+          // `aria-hidden`: the outer `role="status"` region already announces
+          // `detail` (the headline) on every stage change: a screen reader
+          // does not need every tick of every row's elapsed-seconds counter
+          // re-announced once a second for the whole resolve.
+          <ul className="mt-3 space-y-1 border-t border-hair pt-2" aria-hidden="true">
+            {progressRows.map((row, index) => {
+              const tone = toneOfProgressRow(row);
+              return (
+                <li key={`${index}-${row}`} className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className={[
+                      'inline-block size-1.5 shrink-0 rounded-pill',
+                      tone === 'running' ? 'animate-pulse-soft bg-brand' : tone === 'done' ? 'bg-gain' : tone === 'skipped' ? 'bg-loss' : 'bg-hair-strong',
+                    ].join(' ')}
+                  />
+                  <span
+                    className={[
+                      'min-w-0 truncate text-[11px]',
+                      tone === 'running' ? 'text-ink' : tone === 'done' ? 'text-ink-dim' : tone === 'skipped' ? 'text-loss' : 'text-ink-faint',
+                    ].join(' ')}
+                  >
+                    {row}
                   </span>
                 </li>
               );

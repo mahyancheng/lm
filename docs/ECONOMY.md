@@ -34,34 +34,140 @@ Eight postures drive quarterly behaviour: `aggressive_growth`, `balanced`,
 `efficiency`, `research_first`, `land_grab`, `consolidation`, `defensive`,
 `survival`.
 
-## 2. Products and demand
+## 2. Products, categories and demand
 
 Each `Product` carries a segment (`consumer`, `enterprise`, `developer_api`,
-`government`), a price per seat per quarter, active customers, quarterly churn
-and gross growth, gross margin, compute intensity and a quality score relative
-to the market frontier.
+`government` — who buys it), a price per unit per quarter, active customers,
+quarterly churn and gross growth, gross margin, compute intensity and a
+quality score relative to the market frontier — and, from world version 2, a
+`categoryId`: which of the thirty-six industry lines in
+`PRODUCT_CATEGORIES` (`packages/contracts/src/productCategories.ts`) it
+actually is. A segment says who buys; a category says what is being sold. Two
+enterprise products can sell into the same segment and be nothing alike — a
+frontier model licensed by the token and an accelerator sold by the unit both
+say `enterprise`, and the category is what tells them apart.
 
-Demand resolution, per product, in `product_demand_resolution`:
+### 2.1 World 1 is unchanged
+
+World version 1 has no catalogue. Every `SEGMENT_*` table in
+`packages/simulation/src/companies/balance.ts` is exactly what it always was,
+`Product.categoryId` is never written onto a world-1 product, and the frozen
+world's pinned hash (`world2Scenario.test.ts`) does not move. Everything in
+this section from here on is world version 2 only.
+
+### 2.2 The category catalogue
+
+A category (`ProductCategory`) is the industry line's own unit economics:
+
+- **`unitLabel`** — what one unit is: `seat`, `1M tokens`, `unit`, `MWh`,
+  `shipment`, `subscription`, `wafer lot`, `accelerator-hour`…
+- **`referencePriceUsd`, `elasticity`, `churnBand`, `baseAddRate`, `seedPool`,
+  `supportCostShare`, `grossMarginBaselinePct`** — the same shape the old
+  `SEGMENT_*` tables had, specialised per line rather than shared across
+  everything that sells into one segment. The *fallback* only: the real
+  reference price a product is judged against is still the customer-weighted
+  mean price of every active product in its **segment**, exactly as before —
+  a category's own number is what a brand-new line falls back to before any
+  real market exists to read a reference off.
+- **`capacityKind`** — `compute`, `plant`, `fleet`, `grid` or `none`. Which
+  physical or virtual capacity the line is served from (§2.4).
+- **`computeIntensityBaseline`** — only meaningful when `capacityKind` is
+  `compute`.
+- **`requiresNodeIds`** — Frontier Map node ids the company must have
+  achieved, or have public access to, before it may launch into this
+  category. Empty for a commodity line (§2.5).
+- **`regionAffinityWeight`** — how much a company's regional sector fit
+  should weigh on this specific line relative to the sector average.
+- **`inputs`** (`{ categoryId, share, required }[]`) and **`canSupply`** —
+  the supply graph: what a line is built on, and whether it can be sold as
+  someone else's input. `required` edges are acyclic
+  (`requiredSupplyGraphIsAcyclic`, asserted by the contract tests). This is
+  the graph the supply-chain stage builds real transactions on; nothing in
+  this stage moves goods along it yet.
+
+`categoryOf(company, product)` (`packages/simulation/src/companies/
+categories.ts`) is the one place the engine resolves a product to its row:
+the product's own `categoryId` when it has one, otherwise
+`defaultCategoryFor(sector, segment)` — the first catalogue entry in the
+company's sector whose `buyerSegment` matches the product's segment, falling
+back to that sector's first entry. The derivation is **read-only**: a
+category is never written back onto a product that did not carry one, which
+is what keeps a promoted or pre-catalogue save byte-identical until it
+actually launches something new.
+
+The full catalogue, one row per line (`referencePriceUsd` and `elasticity`
+are the catalogue's own numbers; a product's real reference is the segment's
+live blend):
+
+| Category | Sector | Unit | Ref. price | Elasticity | Capacity |
+|---|---|---|---:|---:|---|
+| `ai_software` | ai | seat | $38 | 0.7 | compute |
+| `ai_frontier_models` | ai | 1M tokens | $1,800 | 0.9 | compute |
+| `ai_agents` | ai | seat | $5,200 | 0.7 | compute |
+| `ai_inference_api` | ai | 1M tokens | $900 | 1.4 | compute |
+| `ai_data_labelling` | ai | dataset | $1,100 | 1.0 | none |
+| `ai_safety_evals` | ai | audit | $4,200 | 0.5 | none |
+| `ai_cloud_infrastructure` | ai | accelerator-hour | $5,800 | 0.5 | compute |
+| `ai_developer_tools` | ai | seat | $480 | 1.3 | none |
+| `ai_model_hosting` | ai | 1M tokens | $1,400 | 1.1 | compute |
+| `robotics_industrial_arms` | robotics | unit | $42,000 | 0.6 | plant |
+| `robotics_warehouse` | robotics | unit | $9,400 | 0.65 | fleet |
+| `robotics_humanoids` | robotics | unit | $68,000 | 0.4 | plant |
+| `robotics_drones` | robotics | unit | $68,000 | 0.3 | plant |
+| `robotics_software` | robotics | seat | $1,800 | 1.0 | none |
+| `manufacturing_accelerators` | manufacturing | unit | $240,000 | 0.5 | plant |
+| `manufacturing_fabs_packaging` | manufacturing | wafer lot | $320,000 | 0.4 | plant |
+| `manufacturing_sensors` | manufacturing | unit | $34,000 | 0.7 | plant |
+| `manufacturing_batteries` | manufacturing | unit | $18,000 | 0.8 | plant |
+| `manufacturing_machine_tools` | manufacturing | unit | $96,000 | 0.5 | plant |
+| `manufacturing_contract_mfg` | manufacturing | shipment | $52,000 | 0.7 | plant |
+| `energy_generation` | energy | MWh | $26,000 | 0.4 | grid |
+| `energy_grid_storage` | energy | MW connected | $320,000 | 0.35 | grid |
+| `energy_datacentre_power` | energy | MW contracted | $42,000 | 0.45 | grid |
+| `energy_fuel_hydrogen` | energy | tonne | $22,000 | 0.6 | plant |
+| `energy_transmission` | energy | connection | $12,000 | 0.3 | grid |
+| `logistics_freight` | logistics | shipment | $46,000 | 0.9 | fleet |
+| `logistics_last_mile` | logistics | shipment | $42 | 1.3 | fleet |
+| `logistics_ports_fleets` | logistics | vessel-call | $74,000 | 0.6 | fleet |
+| `logistics_supply_chain_software` | logistics | seat | $1,600 | 1.0 | none |
+| `logistics_cold_chain` | logistics | shipment | $21,000 | 0.8 | fleet |
+| `consumer_apps` | consumer | subscription | $14 | 1.7 | none |
+| `consumer_devices` | consumer | unit | $320 | 1.3 | plant |
+| `consumer_media` | consumer | subscription | $22 | 1.5 | none |
+| `consumer_marketplaces` | consumer | subscription | $36 | 1.4 | none |
+| `consumer_subscriptions` | consumer | subscription | $20 | 1.5 | none |
+| `consumer_retail_commerce` | consumer | unit | $9 | 1.8 | fleet |
+
+### 2.3 Demand resolution, per product, in `product_demand_resolution`
 
 ```text
+category      = categoryOf(company, product)          // world 2 only; null in world 1
+reference     = segmentReferencePrice(segment, category.referencePriceUsd)
 base demand   = segmentDemand(sector.demand, world.society.*, world.macro.consumerDemand)
 quality edge  = qualityScore - marketFrontierQuality(segment)
-price effect  = elasticity(segment) × (price / referencePrice - 1)
+price effect  = category.elasticity × (price / reference - 1)
 reputation    = reputation.<audience for segment> / 100
-capacity cap  = servingCapacity(compute) / computeIntensity
+capacity cap  = capacityFor(category.capacityKind) / requiredPerUnit(category)
 
-grossAdds     = base × (1 + quality edge) × (1 - price effect) × reputation
+grossAdds     = (customers + category.seedPool) × category.baseAddRate
+                × (1 + quality edge) × (1 - price effect) × reputation
                 × marketing lift × company.demandMultiplier
-customers_t+1 = min(capacity cap, customers_t × (1 - churn) + grossAdds)
+customers_t+1 = min(capacity cap, customers_t × (1 - churn(category.churnBand)) + grossAdds)
 revenue       = customers_t+1 × pricePerSeat
 ```
 
-Two properties matter. **Capacity is a hard cap**: a company that sells more
-inference than it can serve does not book the revenue, it books churn instead.
-And **churn is segment-shaped**: 0.05 per quarter is healthy enterprise, 0.20 is
-a leaking consumer product.
+World 1 (and any world-2 product whose category never resolves — never
+happens, but the fallback is there) runs the identical arithmetic with the
+old flat `SEGMENT_*` constants instead of `category.*`, byte for byte.
 
-Elasticity by segment (design defaults, held as balancing data):
+Two properties matter, unchanged from before this catalogue existed.
+**Capacity is a hard cap**: a company that sells more than it can serve does
+not book the revenue, it books churn instead. And **churn is shaped by the
+line it is**: a humanoid line runs a tight 1–5% band; a last-mile shipment
+line runs double digits.
+
+Elasticity by segment (the world-1 tables, and every category's own
+fallback before a category overrides it):
 
 | Segment | Price elasticity | Typical churn | Reputation audience |
 |---|---:|---:|---|
@@ -69,6 +175,176 @@ Elasticity by segment (design defaults, held as balancing data):
 | `enterprise` | 0.7 | 0.03–0.08 | `enterprise` |
 | `developer_api` | 1.2 | 0.06–0.14 | `developer` |
 | `government` | 0.4 | 0.01–0.03 | `government` |
+
+### 2.4 Capacity kinds
+
+`capacityKind: 'compute' | 'plant' | 'fleet' | 'grid' | 'none'` says what a
+line is rationed against:
+
+- **`compute`** — accelerator-equivalents, exactly the mechanism §4 always
+  described. Unchanged.
+- **`plant` / `fleet` / `grid`** — cash invested via `invest_capacity`
+  (§4.2's companion action; same shape, same two-phase staging contract as
+  `buy_accelerators`), held on `Company.capacity` as
+  `{ plantUsd, fleetUsd, gridUsd }`. A category's `capacityYieldPerUnit` is
+  how many customers a **million dollars** of that capacity kind serves —
+  the same role `SERVE_CUSTOMERS_PER_ACCELERATOR` plays for compute, in
+  dollar terms instead of accelerator terms. `invest_capacity`'s cash lands
+  in `balanceSheet.assets.ppe` (capex, exactly like an owned accelerator)
+  and in the matching bucket, and both depreciate at the same
+  `PPE_DEPRECIATION_PER_QUARTER` rate.
+- **`none`** — never capacity-constrained. A marketplace or a subscription
+  app grows on demand alone.
+
+Rationing runs **one bucket per capacity kind a company's products actually
+touch**, not one company-wide pool: a manufacturer selling both accelerators
+(`plant`) and a robot-software seat (`none`) never has one line's shortage
+bleed into the other's growth. World 1, and any world-2 company whose
+products are all `compute`-kind, reduces to exactly the single-bucket
+arithmetic the phase always ran.
+
+A company that has **never recorded a `plant`/`fleet`/`grid` position** —
+never invested, and not seeded with one — reads as unconstrained rather than
+rationed to nothing: `company.capacity === undefined` is "not tracked yet",
+never "tracked at zero". This is what lets a promoted or freshly-launched
+company grow before it has to think about capacity at all, exactly the same
+"absent means the neutral value" rule every other optional field in this
+priced-economy block already reads by. The twenty-four world-2 seed
+companies whose category needs `plant`/`fleet`/`grid` are seeded with a real
+opening position sized to their starting customer base plus headroom
+(`startingCapacityFor` in `scenario/world2/seeds.ts`), mirroring how
+`seed.compute` already gave every company a real opening compute position
+rather than starting every accelerator count at zero.
+
+### 2.5 Tech-gated categories
+
+A category's `requiresNodeIds` is a **launch gate**, not a demand input:
+checked once, at `launch_product`, against `dependencySatisfied` — the same
+node-ownership rule research already uses (the node is publicly `achieved`,
+or this company privately holds a `succeeded` project against it). Missing
+even one required node **refuses** the launch outright
+(`requirement_not_met`) rather than clamping it smaller: this is structural,
+per `docs/SIMULATION.md` §11's KEEP-vs-REALISE table, not a matter of money
+or scale.
+Empty `requiresNodeIds` means commodity — capital and demand are the only
+gate. A `launch_product` naming `categoryId: null` resolves to
+`defaultCategoryFor(sector, segment)` and clamps back the chosen category on
+the action, the same way a null `providerCompanyId` resolves to the cheapest
+seller with capacity. A `TechNode` may carry `unlocksCategoryIds`, so the
+research screen can say "unlocks: Humanoids" beside a programme.
+
+### 2.6 The supply chain
+
+The owner's second north star: *"if any company publishes a public API for
+its LLM, any other company with a harness can decide if they want to put a
+product on the other company's LLM."* §2.2 already declared the graph —
+every category's `inputs` (upstream lines it is built on, each with a
+`share` and a `required` flag) and `canSupply` (whether it can be somebody
+else's input). This section is what turns that declared graph into real
+transactions between two named companies, priced by the seller.
+
+**The two actions.** `set_supply_terms { productId, terms }` publishes,
+reprices or closes a `canSupply` product line as an input — `terms.openToAll:
+true` is a public API; `false` with `exclusiveCustomerIds` is a private
+deal. `choose_supplier { productId, inputCategoryId, supplierCompanyId,
+supplierProductId }` is the buyer's half: build on a named company's
+product, or name `null` for the open market (or, on a `required` input, a
+deliberate refusal to fill it). Both are structural-refusal-only per
+`docs/SIMULATION.md` §11: an unknown product, company or category, a
+supplier that is closed to this buyer, or a product naming itself as its own
+supplier are refused; everything else — a price far from reference, a
+required input left genuinely unfilled — realises.
+
+**Resolving one input.** `resolveSupplyLine(draft, buyer, product, input)`
+in `@frontier/simulation`'s `companies/supply.ts` answers one of three
+statuses, and additivity is the rule that governs all three:
+
+- **`open_market`** — no entry in `Product.supply` for this input at all
+  (every product launched before this stage, and every input a founder has
+  never touched), *or* an explicit `null` supplier on an input that is not
+  `required`. Costs nothing beyond what the category's own
+  `grossMarginBaselinePct` already assumes, and moves no counterparty's
+  revenue — every product's margin was tuned against that baseline before
+  this module existed, so "the market" is the model's existing cost, not a
+  new one stacked on top of it.
+- **`unsupplied`** — a `required` input whose chosen supplier is an
+  explicit `null`, or whose named company/product no longer exists, no
+  longer matches the category, or no longer admits this buyer. The product
+  **ships zero units** this quarter (`requiredInputUnsupplied` forces
+  `desiredCustomers` to zero in `product_demand_resolution`), with its own
+  report line — a founder who launched ahead of a supplier, or who was cut
+  off and never switched, pays for it in lost revenue, not in a refusal.
+- **`supplied`** — a live, named, category-matched, currently-admitting
+  supplier. This is the only status that moves real quality or real money.
+
+**Quality.** `effectiveQuality(draft, company, product, switchedThisQuarter)`
+blends a product's own `qualityScore` with each `supplied` input's supplier
+product quality by that input's `share`:
+`quality = own + Σ share × (supplierQuality − own)` over every `supplied`
+line. An agents line built on a weak model reads close to the weak model; on
+the frontier it reads close to the frontier. `open_market` and `unsupplied`
+lines contribute nothing — there is no real product to blend in. A line
+`choose_supplier` moved *this* quarter has its pull dampened to
+`SWITCH_QUALITY_FACTOR` (0.7) for the one quarter the switch lands in — the
+"switching costs one quarter of degraded quality, stated" the owner asked
+for — and is undamped every quarter after.
+
+**Cost and revenue.** `resolveSupplyLedger(draft)` is the one function both
+sides read, so a buyer's spend and a seller's revenue can never disagree.
+For every `supplied` line it prices `unitsRequested = (revenue × share) ÷
+supplierCategory.referencePriceUsd` — a normalised quantity, independent of
+what the seller actually charges — then rations every buyer of one supplying
+product **proportionally** against that supplier's own spare capacity (§2.4):
+`fillRatio = min(1, spareUnits ÷ Σ unitsRequested)`, exactly the rule
+`sellableCapacityUnits` already applies to compute. `costUsd = unitsFilled ×
+price`, where `price` is the supplier's own `supplyTerms.pricePerUnitUsd`,
+bounded to `SUPPLY_PRICE_FACTOR_BOUNDS` (0.25×–4×) of its category's
+reference — real leverage in both directions without one mis-keyed price
+collapsing or exploding a buyer's cost base. `financial_resolution` adds
+this into the same `interCompanyRevenue`/`interCompanyCogs` figure
+compute's counterparty charges already use (§4.1): the buyer's COGS rises by
+exactly what the seller's revenue rises by, recognised at the **seller's
+own realised margin** (`counterpartyMarginOf`), and a supplier at full
+capacity degrades every buyer's fill proportionally and says so
+(`supply_capacity_short`).
+
+**Leverage.** A supplier's price change hits every buyer's margin the
+moment it is set — priced by the seller, felt by every customer on the
+line, which is the weapon the owner's north star describes.
+`blockedCustomerIds`, a narrowed `exclusiveCustomerIds`, or closing
+`openToAll` does **not** cut an existing buyer immediately: the affected
+line's `cutOffNoticeQuarter` is set to next quarter, the buyer stays
+`supplied` (and is told, `supply_terms_changed`) for one more quarter to
+react, and only then drops to `unsupplied` (`supply_cut_off`) — the same
+notice-then-effect shape `reserve_compute`'s expiry already uses.
+
+**Dependence.** `dependenceOn(draft, company, supplierCompanyId)` is
+derived, never stored: the share of a company's revenue riding on one named
+supplier, recomputed on every read (`Σ supplied-line revenue ÷ total
+revenue`) so the dossier and the feed always read the live position — "62%
+of your revenue runs on Aletheia's API."
+
+**NPC policy.** A `significant` or `background` company's archetype default
+(`companies/npc.ts`) publishes open terms the first quarter a `canSupply`
+line exists (`defaultSupplyTerms`: `openToAll: true` at `1.1×` its
+category's reference), and chooses a supplier for every input by
+`chooseSupplierDefault`: best quality-per-dollar among `suppliersFor`'s
+open offers, never a direct rival in the same category unless nothing else
+is on offer, sticky unless the best available option is materially
+better (>15% higher quality-per-dollar) than the one already chosen. A
+major company's LLM strategist reaches the same two actions through the
+ordinary action union.
+
+**Events.** `supply_started`, `supply_switched`, `supply_terms_changed` and
+`supply_cut_off` are `kind`s on the existing `cost_recognised` vocabulary
+(company-visibility for an ordinary choice, public when a line is first
+published or reworked — the market should see a public API appear);
+`supply_capacity_short` is emitted at settlement, in `financial_resolution`,
+alongside the ordinary partial-fill row a rationed buyer gets.
+
+World version 1 has no product categories, so every function here is a
+no-op or an empty result for it, `Product.supply`/`supplyTerms` are absent
+on a world-1 product, and the frozen world's hash does not move.
 
 ## 3. People
 
@@ -184,6 +460,26 @@ about fifteen quarters and the P&L charge is lighter from the first quarter
   `financials.capex` set to the total, and the investing line of the filed
   `FinancialQuarter` carrying it. Equity does not move, so the double-entry gate
   sees a matched pair.
+
+### 4.2b Owning plant, fleet or grid capacity: `invest_capacity`
+
+`invest_capacity { kind, amountUsd }` (`kind` one of `plant`, `fleet`, `grid`)
+is `buy_accelerators`' companion for every capacity kind that is not compute
+(§2.4). Same shape, same two-phase contract:
+
+- **Validator.** Refused in world 1. Refused for a non-positive amount. Cash
+  is *noted*, never clamped, exactly like every other world-2 capital
+  commitment.
+- **Resolution, phase 10** (`resolveCapacityOrders`, called alongside
+  `resolveComputeOrders`). Stages the investment on
+  `company.capacity.pendingInvestments`; a sim event `capacity_invested
+  {companyId, kind, amountUsd}`.
+- **Cash, phase 11.** The financial phase settles the pending investment:
+  cash down, `balanceSheet.assets.ppe` up by the same figure (folded into the
+  same `capex` an accelerator purchase uses), and the matching
+  `company.capacity.{plant,fleet,grid}Usd` bucket depreciates at the opening
+  balance's own rate and then receives the quarter's investment, the same
+  "decay then add" `ppe` itself does.
 
 ### 4.3 The seller's side
 

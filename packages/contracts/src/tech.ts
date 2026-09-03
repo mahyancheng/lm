@@ -94,6 +94,16 @@ export const TechNodeSchema = z
     createdQuarter: QuarterIndexSchema.describe('Quarter the node entered the graph.'),
     novelty: unitInterval('How far this sits from what the world already believes. High novelty nodes move the whole map when they succeed.'),
     plausibility: unitInterval('Engine assessment of whether the node is coherent with known physics, economics and the current frontier.'),
+    /*
+     * Appended, world version 2. Absent rather than defaulted for the reason
+     * every world-2-only field is: a defaulted array would materialise on
+     * every world-version-1 node the moment the schema parsed one and the
+     * frozen world would stop hashing to the value it has always hashed to.
+     * Filled for the world-2 seed graph's nodes that gate a PRODUCT_CATEGORIES
+     * entry's `requiresNodeIds`, so the research screen can say "unlocks:
+     * Humanoids" beside a programme.
+     */
+    unlocksCategoryIds: z.array(z.string()).max(6).optional().describe('Product category ids this node\'s achievement unlocks the launch gate for, e.g. ["robotics_humanoids"]. Absent for a node that gates nothing.'),
   })
   .describe('One node on the Frontier Map: a belief about a possible technology, held with a confidence that differs between the public and each company.');
 export type TechNode = z.infer<typeof TechNodeSchema>;

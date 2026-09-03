@@ -329,6 +329,12 @@ export function buildSocialAuthorInput(session: SessionState, post: SocialPost):
  * request that had to drop it — still gets a usable briefing. Whichever is
  * present, the composer is the boundary: nothing private about another company
  * crosses it.
+ *
+ * `options.companyId` is STAGE 5's switcher: which company the conversation is
+ * speaking for. Defaults to the founding company, so every caller from before
+ * the switcher existed is unchanged. An id this seat does not actually
+ * control falls back to the founding company too, rather than building a
+ * briefing for a company the seat has no standing to instruct.
  */
 export function buildChiefOfStaffInput(
   session: SessionState,
@@ -343,11 +349,17 @@ export function buildChiefOfStaffInput(
      * its presence is what closes research mode for that turn.
      */
     readonly findings?: readonly LookupResult[];
+    /** The company this conversation is speaking for. Defaults to the founding company. */
+    readonly companyId?: string;
   } = {},
 ): ChiefOfStaffInput {
-  const company = playerCompanyOf(session);
+  const company =
+    options.companyId === undefined
+      ? playerCompanyOf(session)
+      : (session.companies.find((entry) => entry.isActive && entry.id === options.companyId && entry.controllerPlayerId === PLAYER_ID) ??
+        playerCompanyOf(session));
   const seat = session.players.find((player) => player.playerId === PLAYER_ID) ?? null;
-  const dossier = buildChiefOfStaffDossier(session, options.ledger ?? []);
+  const dossier = buildChiefOfStaffDossier(session, options.ledger ?? [], company);
   return {
     sessionId: session.sessionId,
     quarter: session.quarter,

@@ -59,18 +59,17 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
   }
 
   /**
-   * Slider ceiling: what the hire rule's cash cover could fund (capped at 100 so
-   * a notch stays one person) or the whole team on a reduction.
+   * Slider ceiling: four times the role's current headcount, or 25, whichever
+   * is larger — independent of cash and of the market.
    *
-   * Cash is a suggestion here, not a bound. From world version 2 a requisition
-   * is never refused or shrunk for want of it, so the range never collapses on
-   * an overdrawn company — the preview under the slider is what tells the
-   * founder where the balance lands.
+   * `hire` has no gate at all: the talent market fills what it fills and the
+   * rest stands as an open requisition, reported next quarter. Cash is not a
+   * bound either — a requisition is never refused or shrunk for want of it —
+   * so nothing about affordability belongs in the range a slider offers; the
+   * `CashAfter` line under it is where that answer actually lives.
    */
-  function countBound(perQuarterUsd: number, role: StaffRole): number {
-    const perHire = perQuarterUsd * HIRING_CASH_COVER_QUARTERS;
-    const affordable = perHire <= 0 ? 100 : Math.floor(Math.max(0, company.financials.cash) / perHire);
-    return Math.max(Math.min(affordable, 100), company.employees[role], countFor(role), 25);
+  function countBound(role: StaffRole): number {
+    return Math.max(company.employees[role] * 4, countFor(role), 25);
   }
 
   function hire(role: StaffRole): void {
@@ -206,7 +205,7 @@ export function HeadcountPlan({ session, company }: HeadcountPlanProps): React.J
                     value={count}
                     onChange={(next) => setCounts((current) => ({ ...current, [role]: String(next) }))}
                     min={0}
-                    max={countBound(entry.perQuarterUsd, role)}
+                    max={countBound(role)}
                     step={1}
                     format={formatCount}
                   />

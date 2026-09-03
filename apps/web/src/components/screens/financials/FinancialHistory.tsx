@@ -35,8 +35,10 @@ import {
 } from '@/components/ui';
 import { StatementTable, type StatementRow } from '@/components/screens/reporting/StatementTable';
 import {
+  groupProductLines,
   historyCsv,
   latestOf,
+  productLinesCsv,
   qoqDeltaPct,
   quarterLabels,
   revenueStacks,
@@ -99,7 +101,9 @@ function TrendCard({
 export function FinancialHistory({ history, startYear, companyName }: FinancialHistoryProps): React.JSX.Element {
   const [selectedQuarter, setSelectedQuarter] = useState<number | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [showLinesExport, setShowLinesExport] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedLines, setCopiedLines] = useState(false);
 
   const labels = useMemo(() => quarterLabels(history, startYear), [history, startYear]);
   const revenue = useMemo(() => seriesOf(history, (entry) => entry.income.revenueUsd), [history]);
@@ -113,6 +117,7 @@ export function FinancialHistory({ history, startYear, companyName }: FinancialH
   const stacks = useMemo(() => revenueStacks(history, startYear), [history, startYear]);
 
   const csv = useMemo(() => historyCsv(history, startYear), [history, startYear]);
+  const linesCsv = useMemo(() => productLinesCsv(history, startYear), [history, startYear]);
 
   const selected = statementAt(history, selectedQuarter) ?? (history[history.length - 1] ?? null);
 
@@ -146,6 +151,15 @@ export function FinancialHistory({ history, startYear, companyName }: FinancialH
       setCopied(true);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const onCopyLines = (): void => {
+    try {
+      void navigator.clipboard?.writeText(linesCsv);
+      setCopiedLines(true);
+    } catch {
+      setCopiedLines(false);
     }
   };
 
@@ -281,10 +295,16 @@ export function FinancialHistory({ history, startYear, companyName }: FinancialH
         iconName="ledger"
         subtitle="Tap a quarter to read the statements exactly as they were filed."
         actions={
-          <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setShowExport((open) => !open)}>
-            <Icon name="ledger" size={15} accent="current" />
-            {showExport ? 'Hide export' : 'Export CSV'}
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setShowExport((open) => !open)}>
+              <Icon name="ledger" size={15} accent="current" />
+              {showExport ? 'Hide export' : 'Export CSV'}
+            </button>
+            <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setShowLinesExport((open) => !open)}>
+              <Icon name="box" size={15} accent="current" />
+              {showLinesExport ? 'Hide lines' : 'Export lines CSV'}
+            </button>
+          </div>
         }
       >
         <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
@@ -323,6 +343,26 @@ export function FinancialHistory({ history, startYear, companyName }: FinancialH
               readOnly
               value={csv}
               aria-label={`${companyName} financial history as CSV`}
+              className="mt-2 h-40 w-full resize-y rounded-card border border-hair bg-raised p-2 font-mono text-[10px] text-ink-dim"
+            />
+          </div>
+        ) : null}
+
+        {showLinesExport ? (
+          <div className="mt-3 border-t border-hair pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="btn tap-target gap-1.5" onClick={onCopyLines}>
+                <Icon name="box" size={15} accent="current" />
+                {copiedLines ? 'Copied' : 'Copy to clipboard'}
+              </button>
+              <span className="text-[11px] text-ink-faint">
+                One row per line per quarter, carrying its industry line, category id and unit.
+              </span>
+            </div>
+            <textarea
+              readOnly
+              value={linesCsv}
+              aria-label={`${companyName} product lines as CSV`}
               className="mt-2 h-40 w-full resize-y rounded-card border border-hair bg-raised p-2 font-mono text-[10px] text-ink-dim"
             />
           </div>
@@ -476,7 +516,26 @@ function QuarterStatements({ entry, startYear }: { readonly entry: FinancialQuar
       {entry.productLines === undefined || entry.productLines.length === 0 ? null : (
         <div>
           <SectionHeading rule>Product lines</SectionHeading>
-          <div className="mt-2 overflow-x-auto">
+          <ProductLinesByIndustry lines={entry.productLines} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One quarter's product lines, grouped by industry line — the group header
+ * only earns its place once there is more than one group to tell apart, the
+ * same rule the Products screen's grouping uses.
+ */
+function ProductLinesByIndustry({ lines }: { readonly lines: FinancialQuarter['productLines'] }): React.JSX.Element {
+  const groups = groupProductLines(lines ?? []);
+  return (
+    <>
+      {groups.map((group) => (
+        <div key={group.label} className="mt-2">
+          {groups.length > 1 ? <div className="label-caps-faint mb-1">{group.label}</div> : null}
+          <div className="overflow-x-auto">
             <table className="w-full min-w-[420px] text-[11px]">
               <thead>
                 <tr className="text-ink-faint">
@@ -488,10 +547,13 @@ function QuarterStatements({ entry, startYear }: { readonly entry: FinancialQuar
                 </tr>
               </thead>
               <tbody>
-                {entry.productLines.map((line) => (
+                {group.lines.map((line) => (
                   <tr key={line.productId} className="border-t border-hair">
                     <td className="py-1.5 pr-2 text-ink">{line.name}</td>
-                    <td className="figure py-1.5 px-2 text-right text-ink-dim">{formatCount(line.units)}</td>
+                    <td className="figure py-1.5 px-2 text-right text-ink-dim">
+                      {formatCount(line.units)}
+                      {line.unit === undefined ? '' : <span className="text-ink-faint"> {line.unit}</span>}
+                    </td>
                     <td className="figure py-1.5 px-2 text-right text-ink-dim">{formatMoney(line.priceUsd, 'full')}</td>
                     <td className="figure py-1.5 px-2 text-right text-ink">{formatMoney(line.revenueUsd)}</td>
                     <td className="figure py-1.5 pl-2 text-right text-ink-dim">{formatPct(line.grossMarginPct)}</td>
@@ -501,7 +563,7 @@ function QuarterStatements({ entry, startYear }: { readonly entry: FinancialQuar
             </table>
           </div>
         </div>
-      )}
-    </div>
+      ))}
+    </>
   );
 }

@@ -27,22 +27,37 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { formatMoney } from '@frontier/shared';
-import { AiLabel, Drawer, Icon, Tag, cx } from '@/components/ui';
+import { AiLabel, Drawer, Icon, Tag, cx, type Tone } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
 import { quickPromptsFor, screenLabelFor } from '@/components/screens/chief-of-staff/quickPrompts';
 import { sourcingLabel } from '@/components/screens/chief-of-staff/findings';
 import { useChiefOfStaff } from '@/components/screens/chief-of-staff/useChiefOfStaff';
+import { llmHealth, type LlmHealth } from '@/lib/llm/client';
+import { describeLlmStatus, type LlmStatusKind } from '@/lib/llm/status';
 import { openSettings } from './settingsBus';
-import { useLlm, usePlayerCharacter, usePlayerCompany, useQueuedActions, useResolving, useSession } from '@/lib/game';
+import { useActiveCompany, useLlm, usePlayerCharacter, useQueuedActions, useResolving, useSession } from '@/lib/game';
 
 /** The dedicated screen owns the thread already; the dock would be a second copy of it. */
 const OWN_SCREEN = '/chief-of-staff';
 
+/** How often the drawer re-polls health while it is open, to keep the queue estimate honest while a quarter resolves. */
+const LIVE_HEALTH_POLL_MS = 4_000;
+
+const STATUS_TONE: Readonly<Record<LlmStatusKind, Tone>> = {
+  ready: 'gain',
+  no_credential: 'neutral',
+  offline_demo: 'neutral',
+  busy: 'warn',
+  timeout: 'loss',
+  network_error: 'loss',
+  aborted: 'neutral',
+};
+
 export function ChiefOfStaffDock(): React.JSX.Element | null {
   const pathname = usePathname();
   const session = useSession();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const llm = useLlm();
   const queue = useQueuedActions();
@@ -51,6 +66,7 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
 
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [liveHealth, setLiveHealth] = useState<LlmHealth>(llm);
   const bottom = useRef<HTMLDivElement | null>(null);
 
   const prompts = useMemo(() => quickPromptsFor(pathname), [pathname]);
@@ -59,6 +75,36 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
   useEffect(() => {
     if (open) bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [open, thread.entries.length, thread.sending]);
+
+  // Refresh independently of the store's own one-shot health check while the
+  // drawer is open, so "3 calls ahead" is still true a minute into a quarter's
+  // resolution rather than a snapshot from whenever the tab first loaded.
+  useEffect(() => {
+    setLiveHealth(llm);
+  }, [llm]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const poll = (): void => {
+      void llmHealth().then((health) => {
+        if (!cancelled) setLiveHealth(health);
+      });
+    };
+    poll();
+    const id = setInterval(poll, LIVE_HEALTH_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [open]);
+
+  // The most recent exchange's own failure, while nothing new is in flight —
+  // "the model just timed out on you" outranks a generic queue estimate, but
+  // only until the founder asks again, at which point `sending` takes over.
+  const latestEntry = thread.entries[thread.entries.length - 1];
+  const lastFailure = thread.sending ? undefined : latestEntry?.failureReason;
+  const status = describeLlmStatus({ health: liveHealth, lastFailure });
 
   // Its own screen has the full-height thread; a second one over the top of it
   // would be the same conversation twice. Resolving owns the whole viewport.
@@ -101,7 +147,7 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
         open={open}
         onClose={() => setOpen(false)}
         title="Chief of Staff"
-        subtitle={`Asking about ${screenLabel} · nothing here executes`}
+        subtitle={`Speaking for ${company.name} · asking about ${screenLabel} · nothing here executes`}
         width={460}
       >
         <div className="flex min-h-0 flex-col gap-3">
@@ -112,16 +158,23 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
               {formatMoney(company.financials.quarterlyBurn)} a quarter
             </Tag>
             {queue.length > 0 ? <Tag tone="brand" dot>{`${queue.length} queued`}</Tag> : null}
-            {llm.available ? (
-              <Tag tone="gain" dot>{`Live · ${llm.model ?? llm.transportKind}`}</Tag>
-            ) : (
-              <button type="button" className="press-pop tap-target flex items-center rounded-pill" onClick={() => openSettings('ai')}>
-                <Tag tone="neutral" dot>
-                  Offline — answers from your own state
+            {status.kind === 'ready' ? (
+              <Tag tone="gain" dot>{`Live · ${liveHealth.model ?? liveHealth.transportKind}`}</Tag>
+            ) : status.kind === 'no_credential' || status.kind === 'offline_demo' ? (
+              <button type="button" className="press-pop tap-target flex items-center rounded-pill" onClick={() => openSettings('ai')} title={status.action ?? undefined}>
+                <Tag tone={STATUS_TONE[status.kind]} dot>
+                  {status.sentence}
                 </Tag>
               </button>
+            ) : (
+              <Tag tone={STATUS_TONE[status.kind]} dot title={status.action ?? undefined}>
+                {status.sentence}
+              </Tag>
             )}
           </div>
+          {status.action !== null && status.kind !== 'ready' && status.kind !== 'no_credential' && status.kind !== 'offline_demo' ? (
+            <p className="-mt-1.5 text-[10.5px] leading-relaxed text-ink-faint">{status.action}</p>
+          ) : null}
 
           {/* --- the thread ------------------------------------------------ */}
           <div className="flex min-h-[30dvh] flex-col gap-3">
@@ -156,8 +209,22 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
                 <span className="animate-pulse-soft stagger-2 size-1.5 rounded-pill bg-brand" />
                 <span className="animate-pulse-soft stagger-4 size-1.5 rounded-pill bg-brand" />
                 <span className="ml-1 text-[11px] text-ink-faint">
-                  {thread.sourcing === null ? 'Reading it against your briefing…' : `Sourcing… (${sourcingLabel(thread.sourcing)})`}
+                  {thread.sourcing !== null
+                    ? `Sourcing… (${sourcingLabel(thread.sourcing)})`
+                    : thread.cancellable
+                      ? `Asking the model · thinking ${thread.elapsedSeconds}s`
+                      : 'Reading it against your briefing…'}
                 </span>
+                {thread.cancellable ? (
+                  <button
+                    type="button"
+                    className="press-pop tap-target ml-auto flex items-center gap-1 rounded-pill border border-hair bg-panel px-2 py-0.5 text-[10.5px] font-semibold text-ink-dim hover:border-hair-strong hover:text-ink"
+                    onClick={() => thread.cancel()}
+                  >
+                    <Icon name="close" size={12} accent="inherit" />
+                    Cancel
+                  </button>
+                ) : null}
               </div>
             ) : null}
 

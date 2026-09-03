@@ -46,8 +46,10 @@ import {
   toneOfStatus,
 } from '@/components/ui';
 import { cashEffectOf, describeIntent, phaseOfIntent, titleise } from '@/components/screens/end-quarter/intents';
+import { groupQueueByCompany } from '@/components/screens/end-quarter/companyGrouping';
 import { DeskScene, PaperSheet, SealStamp, StickyNote } from '@/components/screens/end-quarter/desk';
 import {
+  PLAYER_ID,
   useGameActions,
   useLlm,
   useOutcome,
@@ -124,6 +126,12 @@ export default function EndQuarterPage(): React.JSX.Element {
     }
     return RESOLUTION_PHASES.filter((phase) => map.has(phase)).map((phase) => ({ phase, entries: map.get(phase) ?? [] }));
   }, [queue]);
+
+  // STAGE 5: the same queue, folded by the company each instruction actually
+  // belongs to — every company committing cash this quarter has its own
+  // balance sheet, and a group of more than one is what turns the single
+  // "Cash impact" panel below into one row per company.
+  const companyGroups = useMemo(() => groupQueueByCompany(session, queue, PLAYER_ID), [session, queue]);
 
   const timings = outcome?.phaseTimings ?? [];
   const canSubmit = blocked.length === 0 && !resolving;
@@ -267,6 +275,11 @@ export default function EndQuarterPage(): React.JSX.Element {
                                 <p className="mt-0.5 text-[10px] text-ink-faint">
                                   {entry.action.origin === 'chief_of_staff' ? 'Interpreted by the Chief of Staff' : 'Entered by hand'} · sequence{' '}
                                   {entry.action.sequence}
+                                  {/* STAGE 5: which company this row belongs to — only worth saying
+                                      once more than one company has something queued. */}
+                                  {companyGroups.length > 1
+                                    ? ` · ${session.companies.find((candidate) => candidate.id === entry.action.actorCompanyId)?.name ?? entry.action.actorCompanyId}`
+                                    : ''}
                                 </p>
                                 {description.terms.length === 0 ? null : (
                                   <dl className="mt-2 grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
@@ -331,6 +344,42 @@ export default function EndQuarterPage(): React.JSX.Element {
         {/* `min-w-0`: without it this column's min-content width widens the
             implicit grid track and the page scrolls sideways at 390px. */}
         <div className="flex min-w-0 flex-col gap-4">
+          {/* STAGE 5: one balance sheet per acting company. Shown only once
+              more than one company has something queued — the common case is
+              still exactly the single "Cash impact" panel below it, unchanged. */}
+          {companyGroups.length > 1 ? (
+            <Panel
+              title="By company"
+              subtitle="Cash is never pooled — each company you queued for closes on its own balance sheet"
+              iconName="boardTable"
+              iconTone="warn"
+            >
+              <ul className="flex flex-col gap-2.5">
+                {companyGroups.map((group) => (
+                  <li key={group.company.id} className="raised-surface px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="min-w-0 truncate text-[12px] font-semibold text-ink">{group.company.name}</span>
+                      <span className="figure shrink-0 text-[10px] text-ink-faint">
+                        {group.entries.length} instruction{group.entries.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[11px]">
+                      <span className="text-ink-dim">Committed</span>
+                      <span className={cx('figure', group.outflowUsd > group.availableUsd ? 'tone-loss' : 'text-ink')}>
+                        {formatMoney(group.outflowUsd)} / {formatMoney(group.availableUsd)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2 text-[11px]">
+                      <span className="text-ink-dim">Cash at the close</span>
+                      <span className={cx('figure', group.afterUsd < 0 ? 'tone-loss' : 'text-ink')}>{formatMoney(group.afterUsd)}</span>
+                    </div>
+                    {group.solvencyLine === null ? null : <p className="mt-1 text-[10px] text-warn">{group.solvencyLine}</p>}
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
+
           <Panel title="Cash impact" subtitle="Estimated from the validator's affordability model" iconName="coins" iconTone="warn">
             <ProgressBar
               label="Committed against cash on hand"

@@ -13,6 +13,7 @@
 import type {
   ActionIntent,
   ActionType,
+  ActionValidationResult,
   GmProposalBatch,
   NewGameSetupInput,
   NpcActionBundle,
@@ -27,6 +28,7 @@ import { createRng } from '@frontier/shared';
 import {
   DEMO_PLAYER_ID,
   DEMO_SEED,
+  controlledCompaniesOf,
   createDefaultEngine,
   demoSessionInput,
   phaseStream,
@@ -110,15 +112,26 @@ export function playerSeat(session: SessionState) {
   return session.players.find((player) => player.playerId === PLAYER_ID) ?? session.players[0] ?? null;
 }
 
-/** The company the player directs. */
+/**
+ * The player's FOUNDING company — `players[].companyId`, set once and never
+ * reassigned. Every screen that means "my own company" as opposed to "a
+ * company I also happen to direct" reads this, not `controllerPlayerId`:
+ * STAGE 4 lets a controller direct several companies at once (see
+ * `controlledCompaniesOf` in `@frontier/simulation`), and scanning for *any*
+ * company whose `controllerPlayerId` is the seat would answer this with
+ * whichever one happens to sort first once a subsidiary also carries it.
+ */
 export function playerCompanyOf(session: SessionState) {
   const seat = playerSeat(session);
-  const byController = session.companies.find((company) => company.controllerPlayerId === PLAYER_ID);
-  if (byController !== undefined) return byController;
   if (seat !== null) {
     const byId = session.companies.find((company) => company.id === seat.companyId);
     if (byId !== undefined) return byId;
   }
+  // The seat's own company id could not be found — a malformed save, not the
+  // normal path. Falling back to any company this seat directs beats
+  // throwing, and is still better than the first company in the list.
+  const byController = session.companies.find((company) => company.controllerPlayerId === PLAYER_ID);
+  if (byController !== undefined) return byController;
   const first = session.companies[0];
   if (first === undefined) throw new Error('Session contains no companies.');
   return first;
@@ -157,7 +170,33 @@ export function buildSubmittedAction(
   sequence: number,
   options: { readonly origin?: SubmittedAction['origin']; readonly confirmedByHuman?: boolean } = {},
 ): SubmittedAction {
-  const company = playerCompanyOf(session);
+  return buildSubmittedActionForCompany(session, intent, sequence, playerCompanyOf(session).id, options);
+}
+
+/**
+ * Build a `SubmittedAction` acting as an explicit company the seat controls.
+ *
+ * STAGE 5: a controller may direct any company in `controlledCompaniesOf`, not
+ * only the one they founded — the switcher decides which company is "acting",
+ * and this is what lets a queued instruction carry that company as
+ * `actorCompanyId` instead of always the founding one. The character is always
+ * the human founder's own: `overrulesSubsidiaryCeo` in the validator lets a
+ * controller take `CEO_ONLY_ACTIONS` on a company they control whatever
+ * character submits it, so there is no reason to invent a different actor here
+ * — and every relationship consequence of overruling a subsidiary's incumbent
+ * management is attributed to the one person actually making the call.
+ *
+ * Not itself validated against `controlledCompaniesOf`: that is the
+ * validator's job (`not_controller_of_company`), the same as every other
+ * refusal. This only shapes the envelope.
+ */
+export function buildSubmittedActionForCompany(
+  session: SessionState,
+  intent: ActionIntent,
+  sequence: number,
+  companyId: string,
+  options: { readonly origin?: SubmittedAction['origin']; readonly confirmedByHuman?: boolean } = {},
+): SubmittedAction {
   const character = playerCharacterOf(session);
   return {
     actionId: `act_${session.sessionId}_q${session.quarter}_${sequence}`,
@@ -165,12 +204,76 @@ export function buildSubmittedAction(
     quarter: session.quarter,
     sequence,
     actorPlayerId: PLAYER_ID,
-    actorCompanyId: company.id,
+    actorCompanyId: companyId,
     actorCharacterId: character.id,
     origin: options.origin ?? 'player_ui',
     intent,
     confirmedByHuman: options.confirmedByHuman ?? !needsConfirmation(intent.type),
   };
+}
+
+/**
+ * Re-validate one already-built `SubmittedAction` exactly as recorded — its
+ * own `actorPlayerId`, `actorCompanyId` and `actorCharacterId`, not the
+ * current seat's. Used to re-check a stored queue entry on load and to
+ * re-confirm one still queued: both cases must judge the action as it was
+ * actually submitted, which for STAGE 5 may be a subsidiary rather than the
+ * founding company.
+ */
+export function validateSubmittedAction(session: SessionState, action: SubmittedAction): ActionValidationResult {
+  const [result] = getEngine().validator.validateBatch(session, [action]);
+  return (
+    result ?? {
+      actionId: action.actionId,
+      status: 'rejected',
+      reasons: ['The action could not be re-validated.'],
+      codes: ['illegal_value'],
+      clampedAction: null,
+    }
+  );
+}
+
+/**
+ * Validate a preview for an explicit acting company.
+ *
+ * `ActionValidator.validate` (the single-intent preview) always resolves the
+ * acting company from the seat's `companyId` — the founding company — because
+ * an `ActionIntent` carries no company of its own (see its doc comment in
+ * `@frontier/simulation`). That is the right default everywhere except a
+ * screen that means "as the company I am currently directing", which is what
+ * the switcher exists for — so this builds the same one-element batch a real
+ * queue submission would and reads `validateBatch`'s answer for it instead,
+ * which resolves the actor from `actorCompanyId` directly.
+ */
+export function validateIntentForCompany(session: SessionState, intent: ActionIntent, companyId: string): ActionValidationResult {
+  const preview = buildSubmittedActionForCompany(session, intent, 0, companyId, { confirmedByHuman: true });
+  const [result] = getEngine().validator.validateBatch(session, [preview]);
+  return (
+    result ?? {
+      actionId: preview.actionId,
+      status: 'rejected',
+      reasons: ['The preview could not be validated.'],
+      codes: ['illegal_value'],
+      clampedAction: null,
+    }
+  );
+}
+
+/**
+ * The active company id, corrected for a seat that no longer controls it.
+ *
+ * `activeCompanyId` is client UI state, not engine state (STAGE 5): the store
+ * carries whatever the player last switched to, and this is the one place
+ * that reconciles it against a session that may have moved on — a subsidiary
+ * sold off, absorbed, or wound up — falling back to the founding company,
+ * which every seat always controls. Also the answer for a candidate of `null`
+ * (nothing stored yet, e.g. a fresh tab).
+ */
+export function resolveActiveCompanyId(session: SessionState, candidateId: string | null): string {
+  const founding = playerCompanyOf(session).id;
+  if (candidateId === null) return founding;
+  const controlled = controlledCompaniesOf(session, PLAYER_ID);
+  return controlled.some((company) => company.id === candidateId) ? candidateId : founding;
 }
 
 /* -------------------------------------------------------------------------- */

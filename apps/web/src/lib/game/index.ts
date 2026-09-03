@@ -16,6 +16,9 @@ export {
   useGameActions,
   useSession,
   usePlayerCompany,
+  useActiveCompany,
+  useActiveCompanyId,
+  useControlledCompanies,
   usePlayerCharacter,
   usePlayerView,
   useCompanyMetrics,
@@ -40,6 +43,7 @@ export {
   DEMO_SEED,
   PLAYER_ID,
   buildSubmittedAction,
+  buildSubmittedActionForCompany,
   createSequenceAllocator,
   createSession,
   drawWorldCandidates,
@@ -48,9 +52,15 @@ export {
   playerCharacterOf,
   playerCompanyOf,
   playerSeat,
+  resolveActiveCompanyId,
   seedOf,
+  validateIntentForCompany,
+  validateSubmittedAction,
 } from './engine';
 export type { NewGameOptions, SequenceAllocator } from './engine';
+
+export { controlledCompanyRows, hasGroup } from './group';
+export type { ControlledCompanyRow } from './group';
 
 export {
   buildAlerts,
@@ -160,3 +170,5 @@ export {
   slotOverwriteLabel,
 } from './saveDisplay';
 export type { SavePosition } from './saveDisplay';
+
+export { setPendingLaunchCategory, setPendingResearchNode, takePendingLaunchCategory, takePendingResearchNode } from './deepLink';

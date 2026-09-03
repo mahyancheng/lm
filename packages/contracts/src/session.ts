@@ -547,7 +547,9 @@ export const SessionPlayerSchema = z
   .object({
     playerId: z.string().min(1),
     characterId: z.string().min(1).describe('The founder character this participant controls. The player is the character, not the company.'),
-    companyId: z.string().min(1).describe('Company they currently direct. This can change: a dismissed chief executive keeps their shares and may later direct a different company.'),
+    companyId: z.string().min(1).describe(
+      'The FOUNDING company: set once, when the seat joins, and never reassigned. A player may come to direct other companies too — a subsidiary kept alive by an acquisition, or a majority stake built up without one — but those live on `Company.controllerPlayerId`, derived through `controlledCompaniesOf`, never here. This field is what elimination, `ownCompany` and every "own company" default read; it is deliberately stable so a player is never quietly moved off the company they started with.',
+    ),
     isHuman: z.boolean().describe('False for AI-controlled founders occupying a player seat. Their messages must be labelled as AI-generated.'),
     displayName: z.string().min(1).max(60),
     joinedQuarter: QuarterIndexSchema,
@@ -737,6 +739,24 @@ export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
  * aggregate contains every rival's private research, internal confidence,
  * undisclosed holdings and secret programmes.
  */
+/**
+ * Full, undredacted detail for one company a seat directs — the founding
+ * company or a subsidiary/majority stake reached through `controlledCompaniesOf`.
+ *
+ * `Company.financialHistory` already travels on `company` itself, so this adds
+ * only what is not: the cap table and the research programmes, including
+ * secret ones, exactly as `ownCapTable`/`ownResearchProjects` state them for
+ * the founding company today.
+ */
+export const ControlledCompanyViewSchema = z
+  .object({
+    company: CompanySchema,
+    capTable: CapTableSchema,
+    researchProjects: z.array(ResearchProjectSchema).describe('Including secret programmes, which only this company can see.'),
+  })
+  .describe('One company this seat directs, in full.');
+export type ControlledCompanyView = z.infer<typeof ControlledCompanyViewSchema>;
+
 export const PlayerViewSchema = z
   .object({
     sessionId: z.string().min(1),
@@ -745,9 +765,15 @@ export const PlayerViewSchema = z
     playerId: z.string().min(1),
     world: WorldStateSchema.describe('The world is shared: every participant sees the same world state.'),
     sectors: SectorStateMapSchema,
-    ownCompany: CompanySchema.describe('Full detail for the company this player directs.'),
+    ownCompany: CompanySchema.describe('Full detail for the founding company — the one this seat was created with. Kept stable for compatibility; see controlledCompanies for the rest of the group.'),
     ownCapTable: CapTableSchema,
     ownResearchProjects: z.array(ResearchProjectSchema).describe('Including secret programmes, which only this company can see.'),
+    controlledCompanies: z
+      .array(ControlledCompanyViewSchema)
+      .default([])
+      .describe(
+        'Every active company this seat directs — the founding company first (also mirrored as ownCompany/ownCapTable/ownResearchProjects for compatibility), then subsidiaries and majority-held companies, oldest acquisition first. Full, undredacted detail for each, because the seat directs them. In a single-sector world this holds exactly the founding company.',
+      ),
     visibleCompanies: z
       .array(CompanySchema.partial())
       .describe('Rivals, redacted to what this player could reasonably know: public financials for listed companies, much less for private ones.'),

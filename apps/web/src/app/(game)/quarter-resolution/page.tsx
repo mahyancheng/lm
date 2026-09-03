@@ -51,9 +51,19 @@ import { CountUp } from '@/components/screens/quarter-resolution/CountUp';
 import { Newspaper } from '@/components/screens/quarter-resolution/Newspaper';
 import { PriceTape, type PriceRow } from '@/components/screens/quarter-resolution/Tape';
 import { RankPodium, type RankRow } from '@/components/screens/quarter-resolution/Podium';
-import { humanise } from '@/components/screens/reporting/util';
+import { companyNameOf, delintText, humanise, invariantLabel, phaseLabel } from '@/components/screens/reporting/util';
 import { requestNarrative } from '@/lib/llm/client';
-import { PLAYER_ID, useGameActions, useLlm, useOutcome, usePlayerCharacter, usePlayerCompany, useSession, useSettings } from '@/lib/game';
+import {
+  PLAYER_ID,
+  useGameActions,
+  useLlm,
+  useOutcome,
+  usePlayerCharacter,
+  usePlayerCompany,
+  usePlayerView,
+  useSession,
+  useSettings,
+} from '@/lib/game';
 
 /** Milliseconds between one revealed line and the next. CSS only — no timers. */
 const REVEAL_STEP_MS = 55;
@@ -77,6 +87,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
   const session = useSession();
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
+  const playerView = usePlayerView();
   const outcome = useOutcome();
   const settings = useSettings();
   const llm = useLlm();
@@ -250,10 +261,12 @@ export default function QuarterResolutionPage(): React.JSX.Element {
               {failed.map((check) => (
                 <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="rounded-card border border-loss/30 bg-loss-wash px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[12px] text-loss">{humanise(check.invariant)}</span>
-                    {check.subjectId === null ? null : <span className="figure text-[10px] text-ink-faint">{check.subjectId}</span>}
+                    <span className="text-[12px] text-loss">{invariantLabel(check.invariant)}</span>
+                    {check.subjectId === null ? null : (
+                      <span className="figure text-[10px] text-ink-faint">{companyNameOf(playerView, check.subjectId)}</span>
+                    )}
                   </div>
-                  <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">{check.detail}</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-ink-dim">{delintText(check.detail, session)}</p>
                 </li>
               ))}
             </ul>
@@ -567,7 +580,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           <ul className="flex flex-col gap-1">
             {outcome.invariants.map((check) => (
               <li key={`${check.invariant}:${check.subjectId ?? 'session'}`} className="flex items-baseline justify-between gap-3 text-[11px]">
-                <span className="truncate text-ink-dim">{humanise(check.invariant)}</span>
+                <span className="truncate text-ink-dim">{invariantLabel(check.invariant)}</span>
                 <span className={cx('figure shrink-0', check.passed ? 'tone-gain' : 'tone-loss')}>{check.passed ? 'pass' : 'fail'}</span>
               </li>
             ))}
@@ -598,7 +611,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
           <ul className="flex flex-col gap-0.5">
             {outcome.phaseTimings.map((timing) => (
               <li key={timing.phase} className="flex items-baseline justify-between gap-3 text-[11px]">
-                <span className="truncate text-ink-dim">{humanise(timing.phase)}</span>
+                <span className="truncate text-ink-dim">{phaseLabel(timing.phase)}</span>
                 <span className="figure shrink-0 text-[10px] text-ink-faint">
                   {formatCount(timing.durationMs)}ms · {timing.eventsEmitted}
                 </span>
@@ -628,7 +641,7 @@ export default function QuarterResolutionPage(): React.JSX.Element {
         </Link>
       </div>
 
-      <LedgerDrawer line={openLine} events={view.events} startYear={session.startYear} onClose={() => setOpenLine(null)} />
+      <LedgerDrawer line={openLine} events={view.events} startYear={session.startYear} session={session} onClose={() => setOpenLine(null)} />
     </>
   );
 }

@@ -39,6 +39,9 @@ import {
   type EffectivePolicy,
 } from './archetypes';
 import { RUNWAY_CAP_QUARTERS } from './balance';
+import { categoryOf } from './categories';
+import { chooseSupplierDefault, defaultSupplyTerms, resolveSupplyLine } from './supply';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { activeCompanies, activeProducts, capabilityIndex, clamp, emitEvent, money, ratio, roleHeadcount, totalHeadcount, unit } from './util';
 
 /** True when some other source already queued an action for this company this quarter. */
@@ -184,6 +187,35 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
         const next = money(product.pricePerSeat * (1 + policy.pricingNudge));
         if (next === product.pricePerSeat) continue;
         intents.push({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: next });
+      }
+    }
+
+    /* --- supply chain: publish an open API, build on the best supplier ---- */
+    // The owner's second north star, run by policy rather than by a model
+    // call for every one of hundreds of background companies: a canSupply
+    // line publishes open terms the first quarter it exists, and a line with
+    // a real input builds on the best quality-per-dollar offer that is not a
+    // direct rival — sticky once chosen, so a background economy's supply
+    // graph does not reshuffle itself for no reason every quarter.
+    if (isMultiSectorWorld(draft)) {
+      for (const product of products) {
+        const category = categoryOf(company, product);
+        if (category.canSupply && (product.supplyTerms === null || product.supplyTerms === undefined)) {
+          intents.push({ type: 'set_supply_terms', productId: product.id, terms: defaultSupplyTerms(category) });
+        }
+        for (const input of category.inputs) {
+          const resolved = resolveSupplyLine(draft, company, product, input);
+          if (resolved.status === 'supplied') continue; // sticky: already built on something live
+          const choice = chooseSupplierDefault(draft, company, product, input);
+          if (choice === null) continue;
+          intents.push({
+            type: 'choose_supplier',
+            productId: product.id,
+            inputCategoryId: input.categoryId,
+            supplierCompanyId: choice.supplierCompanyId,
+            supplierProductId: choice.supplierProductId,
+          });
+        }
       }
     }
 

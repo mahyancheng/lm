@@ -170,7 +170,7 @@ describe('buy_accelerators at the validator', () => {
     expect(result?.codes).toContain('requirement_not_met');
   });
 
-  it('clamps the order to what the named seller can ship', () => {
+  it('accepts the order whole and notes what the named seller can ship (world 2: availability, not a refusal)', () => {
     const state = world2();
     const market = sellersFor(state, 'accelerators', PLAYER_COMPANY);
     const smallest = [...market].sort((a, b) => a.sellableUnits - b.sellableUnits)[0]!;
@@ -183,14 +183,12 @@ describe('buy_accelerators at the validator', () => {
         sellerCompanyId: smallest.company.id,
       }),
     ]);
-    expect(result?.status).toBe('clamped');
-    expect(result?.codes).toContain('insufficient_compute');
-    const clamped = result?.clampedAction;
-    expect(clamped?.type).toBe('buy_accelerators');
-    if (clamped?.type === 'buy_accelerators') {
-      expect(clamped.units).toBe(smallest.sellableUnits);
-      expect(clamped.sellerCompanyId).toBe(smallest.company.id);
-    }
+    // The ask runs whole; `resolveComputeOrders` ships what the seller
+    // actually has this quarter and reports the rest as a `partial_fill`,
+    // rather than the validator clamping the order down to it.
+    expect(result?.status).toBe('accepted');
+    expect(result?.codes).toContain('partial_fill_expected');
+    expect(result?.clampedAction).toBeNull();
   });
 
   it('notes the cash rather than refusing it, and the note carries the solvency clock', () => {
@@ -344,7 +342,7 @@ describe('runLookups answers from canonical state', () => {
     }
   });
 
-  it('quotes sellable units the validator then clamps to exactly', () => {
+  it('quotes sellable units the validator then advises against, not clamps to', () => {
     const state = world2();
     const [result] = runLookups(state, PLAYER_COMPANY, [{ kind: 'compute_market', units: 50 }]);
     expect(result?.kind).toBe('compute_market');
@@ -357,9 +355,12 @@ describe('runLookups answers from canonical state', () => {
     const [verdict] = validator.validateBatch(state, [
       act(state, { type: 'buy_accelerators', units: row.sellableUnits + 1, maxPricePerUnitUsd: row.unitPriceUsd * 2, sellerCompanyId: row.companyId }),
     ]);
-    const clamped = verdict?.clampedAction;
-    expect(clamped?.type).toBe('buy_accelerators');
-    if (clamped?.type === 'buy_accelerators') expect(clamped.units).toBe(row.sellableUnits);
+    // World 2: what a seller can actually ship is availability, not a limit on
+    // the order — the ask is accepted whole and the shortfall is a
+    // `partial_fill` at resolution, not a validator clamp.
+    expect(verdict?.status).toBe('accepted');
+    expect(verdict?.codes).toContain('partial_fill_expected');
+    expect(verdict?.clampedAction).toBeNull();
   });
 
   it('hands back an acquisition intent the validator accepts', () => {

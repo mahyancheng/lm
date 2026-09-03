@@ -12,10 +12,10 @@
  * anyone in this world, so no rival product appears on this screen at all.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Product } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { servingComputeUnits } from '@frontier/simulation';
+import { isMultiSectorWorld, servingComputeUnits } from '@frontier/simulation';
 import { formatCount, formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import {
   DataTable,
@@ -26,6 +26,7 @@ import {
   PageHeader,
   Panel,
   ProgressBar,
+  SectorBadge,
   Sparkline,
   StatCard,
   Tag,
@@ -39,22 +40,49 @@ import {
   productGrossProfit,
   productRevenue,
   productServingUnits,
+  productsByIndustryLine,
   projectCustomers,
 } from '@/components/screens/products/labels';
-import { usePlayerCompany, usePlayerView, useQueuedActions, useSession } from '@/lib/game';
+import { takePendingLaunchCategory, useActiveCompany, usePlayerView, useQueuedActions, useSession } from '@/lib/game';
 
 export default function ProductsPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const queuedEntries = useQueuedActions();
   const [openProductId, setOpenProductId] = useState<string | null>(null);
   const [launchOpen, setLaunchOpen] = useState(false);
+  // A Frontier Map node's "launch this line" link hands the category id off
+  // through sessionStorage rather than a query param — see deepLink.ts —
+  // taken once on mount so a later remount does not reopen the modal.
+  const [launchCategoryId, setLaunchCategoryId] = useState<string | null>(null);
+  useEffect(() => {
+    const pending = takePendingLaunchCategory();
+    if (pending === null) return;
+    setLaunchCategoryId(pending);
+    setLaunchOpen(true);
+  }, []);
+
+  function openLaunch(): void {
+    setLaunchCategoryId(null);
+    setLaunchOpen(true);
+  }
 
   const queued = useMemo(() => queuedEntries.map((entry) => entry.action), [queuedEntries]);
 
   const active = useMemo(() => company.products.filter((product) => product.isActive), [company.products]);
   const sunset = useMemo(() => company.products.filter((product) => !product.isActive), [company.products]);
+
+  // Grouped by industry line only in world 2, where `categoryOf` resolves a
+  // real catalogue entry — world 1's products have no such line to group by,
+  // so it keeps its original single flat table. A company selling into only
+  // one line still gets the plain table too; grouping earns its place only
+  // once there is more than one group to tell apart.
+  const industryGroups = useMemo(
+    () => (isMultiSectorWorld(session) ? productsByIndustryLine(company, active) : []),
+    [session, company, active],
+  );
+  const grouped = industryGroups.length > 1;
 
   const revenue = active.reduce((total, product) => total + productRevenue(product), 0);
   const grossProfit = active.reduce((total, product) => total + productGrossProfit(product), 0);
@@ -187,7 +215,7 @@ export default function ProductsPage(): React.JSX.Element {
         eyebrow={`${quarterLabel(session.startYear, session.quarter)} · ${company.name}`}
         subtitle="Pricing, customers and unit economics. Every ticket on this screen is an intent: the engine validates, clamps and resolves."
         actions={
-          <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
+          <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={openLaunch}>
             <Icon name="plus" size={16} accent="current" />
             Launch product
           </button>
@@ -247,42 +275,74 @@ export default function ProductsPage(): React.JSX.Element {
         </p>
       </Panel>
 
-      <Panel title="Product lines" iconName="box" subtitle="Select a line to open its economics, reprice it or sunset it" flush>
-        <DataTable
-          columns={columns}
-          rows={active}
-          rowKey={(row) => row.id}
-          onRowClick={(row) => setOpenProductId(row.id)}
-          initialSort={{ key: 'revenue', direction: 'desc' }}
-          cardMode="auto"
-          cardTitleKey="name"
-          empty={
-            <div className="p-4">
-              <EmptyState
-                icon="box"
-                title="No active products"
-                message="Nothing is being sold. A company with no product line books no revenue and churns nobody."
-                action={
-                  <button type="button" className="btn btn-primary tap-target gap-1.5" onClick={() => setLaunchOpen(true)}>
-                    <Icon name="plus" size={16} accent="current" />
-                    Launch the first product
-                  </button>
-                }
+      {grouped ? (
+        <>
+          {industryGroups.map((group) => (
+            <Panel
+              key={group.industryLine}
+              title={group.industryLine}
+              iconName="box"
+              subtitle={`${group.products.length} line${group.products.length === 1 ? '' : 's'} · select one to open its economics`}
+              actions={<SectorBadge sector={group.sector} />}
+              flush
+            >
+              <DataTable
+                columns={columns}
+                rows={group.products}
+                rowKey={(row) => row.id}
+                onRowClick={(row) => setOpenProductId(row.id)}
+                initialSort={{ key: 'revenue', direction: 'desc' }}
+                cardMode="auto"
+                cardTitleKey="name"
+                dense
               />
-            </div>
-          }
-        />
-        {active.length === 0 ? null : (
-          // The ticket sits under the thing it acts on, where a thumb already
-          // is, rather than only in the page header a scroll away.
-          <div className="border-t border-hair p-3">
-            <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
+            </Panel>
+          ))}
+          <div className="-mt-1">
+            <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={openLaunch}>
               <Icon name="plus" size={16} accent="current" />
               Launch another product
             </button>
           </div>
-        )}
-      </Panel>
+        </>
+      ) : (
+        <Panel title="Product lines" iconName="box" subtitle="Select a line to open its economics, reprice it or sunset it" flush>
+          <DataTable
+            columns={columns}
+            rows={active}
+            rowKey={(row) => row.id}
+            onRowClick={(row) => setOpenProductId(row.id)}
+            initialSort={{ key: 'revenue', direction: 'desc' }}
+            cardMode="auto"
+            cardTitleKey="name"
+            empty={
+              <div className="p-4">
+                <EmptyState
+                  icon="box"
+                  title="No active products"
+                  message="Nothing is being sold. A company with no product line books no revenue and churns nobody."
+                  action={
+                    <button type="button" className="btn btn-primary tap-target gap-1.5" onClick={openLaunch}>
+                      <Icon name="plus" size={16} accent="current" />
+                      Launch the first product
+                    </button>
+                  }
+                />
+              </div>
+            }
+          />
+          {active.length === 0 ? null : (
+            // The ticket sits under the thing it acts on, where a thumb already
+            // is, rather than only in the page header a scroll away.
+            <div className="border-t border-hair p-3">
+              <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={openLaunch}>
+                <Icon name="plus" size={16} accent="current" />
+                Launch another product
+              </button>
+            </div>
+          )}
+        </Panel>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <MarketingPanel company={company} queued={queued} />
@@ -338,7 +398,7 @@ export default function ProductsPage(): React.JSX.Element {
         companyId={company.id}
         companyNames={companyNames}
       />
-      <LaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
+      <LaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} initialCategoryId={launchCategoryId} />
     </>
   );
 }

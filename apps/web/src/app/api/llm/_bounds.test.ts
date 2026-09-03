@@ -136,6 +136,15 @@ function dossier() {
       operatingMarginPct: 0,
       history: [],
     },
+    group: {
+      companyCount: 1,
+      revenueUsd: 1,
+      netIncomeUsd: 0,
+      cashUsd: 1,
+      debtUsd: 0,
+      headcount: 0,
+      marketValueUsd: 0,
+    },
     products: {
       lines: [],
       computeOwned: 0,

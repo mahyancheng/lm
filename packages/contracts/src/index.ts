@@ -72,6 +72,7 @@ export * from './world';
 export * from './modifiers';
 export * from './events';
 export * from './company';
+export * from './productCategories';
 export * from './ownership';
 export * from './economy';
 export * from './markets';
@@ -94,4 +95,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.3.0';
+export const CONTRACTS_VERSION = '1.4.0';

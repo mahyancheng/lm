@@ -57,7 +57,9 @@ import {
   RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
 import { resolveCloudSeller, resolveComputeSeller, sellerPriceFactor } from './sellers';
+import { emitPartialFill } from './partialFill';
 import { isMultiSectorWorld } from '../economy/sectors';
+import { reservableUnits } from '../fills';
 import { activeCompanies, companyActions, count, emitEvent, intentsOfType, money, unit, usdLabel } from './util';
 
 /** What one reserved accelerator-equivalent costs this quarter, at the world's index. */
@@ -240,8 +242,40 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
         continue;
       }
 
+      // World 1: the validator already clamped `intent.units` to what the
+      // market and the counterparty could free, against a single snapshot of
+      // the draft shared by the whole batch. Resolution has never re-checked
+      // it, and re-checking now — against a draft this same loop is mutating
+      // company by company — would move the frozen world's hash, so it still
+      // does not.
+      //
+      // World 2: the validator no longer clamps the ask down to this — it
+      // notes the same expectation instead — so this is the one place the cap
+      // is real: a reservation clears against what exists this quarter, never
+      // against what was merely asked for.
+      let units = intent.units;
+      if (isMultiSectorWorld(draft)) {
+        const marketCap = reservableUnits(draft);
+        const cap = Math.max(0, seller === null ? marketCap : Math.min(marketCap, seller.sellableUnits));
+        units = Math.min(intent.units, cap);
+        if (units < intent.units) {
+          emitPartialFill(draft, ctx, company.id, {
+            actionType: 'reserve_compute',
+            asked: intent.units,
+            got: units,
+            unit: 'accelerators',
+            reason:
+              seller === null || seller.sellableUnits > marketCap
+                ? `At an accelerator supply of ${draft.world.compute.acceleratorSupply.toFixed(2)} the market could free ${cap} this quarter.`
+                : `${seller.company.name} holds ${cap} beyond its own use.`,
+            phase: 'product_demand_resolution',
+          });
+        }
+        if (units <= 0) continue;
+      }
+
       const before = company.compute.reservedAccelerators;
-      company.compute.reservedAccelerators = count(before + intent.units);
+      company.compute.reservedAccelerators = count(before + units);
       if (seller !== null) {
         company.compute.reservationProviderCompanyId = seller.company.id;
         company.compute.reservationProviderFactor = sellerPriceFactor(draft, seller.company);
@@ -258,11 +292,11 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
         null,
         {
           kind: 'compute_reserved',
-          units: intent.units,
+          units,
           quarters: intent.quarters,
           sellerCompanyId: seller === null ? null : seller.company.id,
           unitPriceUsd: unitPrice,
-          quarterlyCostUsd: money(intent.units * unitPrice),
+          quarterlyCostUsd: money(units * unitPrice),
           reservedBefore: before,
           reservedAfter: company.compute.reservedAccelerators,
           expiryQuarter: company.compute.reservationExpiryQuarter,
@@ -271,8 +305,8 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
       );
       ctx.log({
         phase: 'product_demand_resolution',
-        text: `${company.name} reserved ${intent.units} accelerator-equivalents for ${intent.quarters} quarters at ${usdLabel(unitPrice)} each, taking held reserved capacity to ${company.compute.reservedAccelerators}.`,
-        deltaLabel: `+${intent.units} units`,
+        text: `${company.name} reserved ${units} accelerator-equivalents for ${intent.quarters} quarters at ${usdLabel(unitPrice)} each, taking held reserved capacity to ${company.compute.reservedAccelerators}.`,
+        deltaLabel: `+${units} units`,
         refEventIds: [eventId],
         tone: 'positive',
         subjectId: company.id,
@@ -355,6 +389,22 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
           subjectId: company.id,
         });
         continue;
+      }
+
+      if (units < intent.units) {
+        // Partial, not a failure: the order above only reports a total miss.
+        // The validator no longer clamps the ask down to `seller.sellableUnits`
+        // — it notes the same expectation — so a shipment shorter than the
+        // order is a real, everyday outcome here and is stated as one.
+        emitPartialFill(draft, ctx, company.id, {
+          actionType: 'buy_accelerators',
+          asked: intent.units,
+          got: units,
+          unit: 'accelerators',
+          reason: `${seller.company.name} could ship ${units} of ${intent.units} this quarter; the rest was not on offer.`,
+          phase: 'product_demand_resolution',
+          targetId: seller.company.id,
+        });
       }
 
       const totalUsd = money(units * unitPrice);

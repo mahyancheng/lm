@@ -32,10 +32,10 @@ import {
   buildChiefOfStaffDossier,
   currentBudgets,
   openDecisions,
+  useActiveCompany,
   useGame,
   useLlm,
   usePlayerCharacter,
-  usePlayerCompany,
   useQueuedActions,
   useResolving,
   useSession,
@@ -61,7 +61,7 @@ const MANUAL_TICKETS: readonly { readonly href: string; readonly label: string; 
 
 export default function ChiefOfStaffPage(): React.JSX.Element {
   const session = useSession();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const llm = useLlm();
   const settings = useSettings();
@@ -87,7 +87,10 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
   // Exactly what the model is handed, built by the same function the request
   // uses. Showing it is the point: a founder who cannot see what their chief of
   // staff knows cannot tell a gap in its knowledge from a gap in its judgement.
-  const dossier = useMemo(() => buildChiefOfStaffDossier(session, lastOutcome?.events ?? []), [session, lastOutcome]);
+  const dossier = useMemo(
+    () => buildChiefOfStaffDossier(session, lastOutcome?.events ?? [], company),
+    [session, lastOutcome, company],
+  );
   const openActions = useMemo(() => dossier.availableActions.filter((entry) => entry.available), [dossier]);
   const blockedActions = useMemo(() => dossier.availableActions.filter((entry) => !entry.available), [dossier]);
 
@@ -256,6 +259,9 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
         subtitle="Say what you want in your own words. What comes back is a proposal with the validator's answer already on it — nothing here executes."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {/* STAGE 5: which company this conversation is speaking for — the
+                switcher's choice, and its own separate thread and memory. */}
+            <Tag tone="brand" dot>{`Speaking for ${company.name}`}</Tag>
             {llm.available ? (
               <Tag tone="gain" dot>{`Live · ${llm.model ?? llm.transportKind}`}</Tag>
             ) : (

@@ -5,20 +5,30 @@
  *
  * Three things live here: the unit economics as the engine will read them, a
  * seat projection at today's rates, and the two tickets that change the
- * product — a reprice and a sunset. Both submit intents; the engine validates,
- * clamps and resolves, and the banner under each control says what it decided.
+ * product — a reprice and a sunset. Both submit intents; the engine validates
+ * and resolves, and the banner under each control says what it decided.
  *
- * The price preview uses the engine's own `priceFactor`, judged against the
- * published segment reference. The engine judges the same curve against the
- * live customer-weighted market mean, which moves every quarter and is not the
- * player's to see — so the preview is a shape, and the panel says so.
+ * The price preview is the engine's own `repriceForecast`: customers, revenue
+ * and margin before and after, run through the same demand model and the same
+ * capacity rationing the quarter itself will use — never a clamp ceiling or
+ * floor. From world version 2 there is no band a price may not cross; the
+ * forecast is what tells a founder what a price actually buys instead.
  */
 
-import { useMemo, useState } from 'react';
-import type { ActionValidationResult, EconomyReport, Product, SessionState } from '@frontier/contracts';
+import { useEffect, useMemo, useState } from 'react';
+import type { ActionValidationResult, EconomyReport, Product, SessionState, SupplyTerms } from '@frontier/contracts';
 import { antitrustExposure, isPredatoryPrice, quarterLabel, rivalPressureFor, undercutFraction } from '@frontier/contracts';
-import { SEGMENT_PRICE_ELASTICITY, SEGMENT_REFERENCE_PRICE_USD, priceFactor } from '@frontier/simulation';
-import { formatCount, formatMoney, formatMultiple, formatPct } from '@frontier/shared';
+import {
+  SEGMENT_REFERENCE_PRICE_USD,
+  categoryOf,
+  customersFor,
+  dependenceOn,
+  isMultiSectorWorld,
+  repriceForecast,
+  resolveSupplyLedger,
+  resolveSupplyLine,
+} from '@frontier/simulation';
+import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import {
   DeltaBadge,
   Drawer,
@@ -32,9 +42,10 @@ import {
   ValidationBanner,
   roundStep,
 } from '@/components/ui';
-import { useGameActions } from '@/lib/game';
+import { useActiveCompany, useGameActions } from '@/lib/game';
 import { predatorsInSegment } from '../sector/model';
-import { achievableCeilingUsd, repriceCeilingUsd } from './ceiling';
+import { achievableCeilingUsd } from './ceiling';
+import { builtOnRows } from './launchFlow';
 import { PriceLadder } from './PriceLadder';
 import {
   SEGMENT_BLURB,
@@ -69,32 +80,38 @@ export function ProductDrawer({
   companyNames,
 }: ProductDrawerProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
+  const company = useActiveCompany();
   const [priceText, setPriceText] = useState('');
   const [windDown, setWindDown] = useState(2);
   const [priceResult, setPriceResult] = useState<ActionValidationResult | null>(null);
   const [sunsetResult, setSunsetResult] = useState<ActionValidationResult | null>(null);
+  const [supplyResults, setSupplyResults] = useState<Readonly<Record<string, ActionValidationResult | null>>>({});
+  const [publishOpenToAll, setPublishOpenToAll] = useState(true);
+  const [publishPrice, setPublishPrice] = useState('');
+  const [publishResult, setPublishResult] = useState<ActionValidationResult | null>(null);
 
   const proposedPrice = Number.parseFloat(priceText);
   const hasPrice = product !== null && Number.isFinite(proposedPrice) && proposedPrice >= 0;
 
+  // The engine's own forecast: customers, revenue and margin the candidate
+  // price is expected to produce, run through the identical demand model and
+  // capacity rationing the quarter itself uses. Falls back to today's price
+  // when the field is empty, so the panel always has something to show.
   const preview = useMemo(() => {
     if (product === null) return null;
-    const reference = SEGMENT_REFERENCE_PRICE_USD[product.segment];
-    const current = priceFactor(product.segment, product.pricePerSeat, reference);
-    const next = hasPrice ? priceFactor(product.segment, proposedPrice, reference) : current;
-    return { reference, current, next, change: current === 0 ? 0 : next / current - 1 };
-  }, [product, hasPrice, proposedPrice]);
+    return repriceForecast(session, companyId, product.id, hasPrice ? proposedPrice : product.pricePerSeat);
+  }, [session, companyId, product, hasPrice, proposedPrice]);
 
   const projection = useMemo(() => (product === null ? [] : projectCustomers(product, PROJECTION_QUARTERS)), [product]);
 
-  /* --- V3: the price ladder -----------------------------------------------
-     The ceiling is whichever binds first: the price at which the engine's own
-     elasticity stops responding, or the top of the validator's one-quarter
-     reprice band. Both are read from the engine; neither is invented here. */
+  /* --- V3: the price ladder -------------------------------------------------
+     The ceiling is where the engine's own forecast revenue peaks — guidance,
+     never enforced. From world version 2 there is no validator band to draw a
+     second ceiling from. */
   const ladder = useMemo(() => {
     if (product === null) return null;
     const reference = SEGMENT_REFERENCE_PRICE_USD[product.segment];
-    const ceiling = Math.min(achievableCeilingUsd(product.segment, reference), repriceCeilingUsd(product.pricePerSeat));
+    const ceiling = achievableCeilingUsd(session, companyId, product.id, reference, product.pricePerSeat);
     return {
       reference,
       ceiling,
@@ -102,14 +119,73 @@ export function ProductDrawer({
       pressure: rivalPressureFor(report, companyId, product.segment),
       own: report?.predation.find((row) => row.companyId === companyId && row.productId === product.id) ?? null,
     };
-  }, [product, report, companyId]);
+  }, [session, product, report, companyId]);
 
-  // Four times the published reference or today's price, whichever is larger:
-  // the whole range a defensible reprice lives in, with Exact beyond it.
+  /* --- V37: the supply chain -------------------------------------------------
+     Everything below reads real engine state — `categoryOf`, `resolveSupplyLine`,
+     `resolveSupplyLedger`, `customersFor` — the same functions the Chief of
+     Staff's `suppliers`/`customers` lookups and the launch flow's "Built on"
+     step read. Nothing here is a modelled price; a row is either a real
+     published line or the open market. Only rendered for the player's own
+     company — a redacted rival never carries enough to compute this. */
+  const isOwnCompany = company.id === companyId;
+  const category = useMemo(() => (product === null || !isOwnCompany ? null : categoryOf(company, product)), [company, product, isOwnCompany]);
+  const inputRows = useMemo(() => (product === null || category === null ? [] : builtOnRows(session, company, category)), [session, company, category, product]);
+  const supplyLedger = useMemo(() => (isMultiSectorWorld(session) ? resolveSupplyLedger(session) : []), [session]);
+  const costOfInput = (inputCategoryId: string): number => {
+    if (product === null) return 0;
+    const entry = supplyLedger.find(
+      (row) => row.buyerCompany.id === companyId && row.buyerProduct.id === product.id && row.inputCategoryId === inputCategoryId,
+    );
+    return entry?.costUsd ?? 0;
+  };
+  const resolvedInputs = useMemo(() => {
+    if (product === null || category === null) return [];
+    return category.inputs.map((input) => ({ input, resolved: resolveSupplyLine(session, company, product, input) }));
+  }, [session, company, product, category]);
+
+  const customers = useMemo(
+    () => (product === null || category === null || !category.canSupply ? [] : customersFor(session, companyId, product.id)),
+    [session, product, category, companyId],
+  );
+
+  // The publish form starts from whatever this line already has terms for
+  // (or the category's reference price, for a first publish), and resets
+  // whenever the drawer opens on a different product.
+  useEffect(() => {
+    if (product === null || category === null) return;
+    setPublishOpenToAll(product.supplyTerms?.openToAll ?? true);
+    setPublishPrice(String(Math.round(product.supplyTerms?.pricePerUnitUsd ?? category.referencePriceUsd)));
+    setPublishResult(null);
+  }, [product?.id, category]);
+
+  function switchSupplier(inputCategoryId: string, supplierCompanyId: string | null, supplierProductId: string | null): void {
+    if (product === null) return;
+    const entry = queueAction({ type: 'choose_supplier', productId: product.id, inputCategoryId, supplierCompanyId, supplierProductId });
+    setSupplyResults((current) => ({ ...current, [inputCategoryId]: entry.validation }));
+  }
+
+  function submitSupplyTerms(closeToAll: boolean): void {
+    if (product === null) return;
+    const priceValue = Number.parseFloat(publishPrice);
+    if (!Number.isFinite(priceValue) || priceValue < 0) return;
+    const terms: SupplyTerms = {
+      openToAll: closeToAll ? false : publishOpenToAll,
+      pricePerUnitUsd: priceValue,
+      exclusiveCustomerIds: closeToAll ? [] : (product.supplyTerms?.exclusiveCustomerIds ?? []),
+      blockedCustomerIds: product.supplyTerms?.blockedCustomerIds ?? [],
+    };
+    const entry = queueAction({ type: 'set_supply_terms', productId: product.id, terms });
+    setPublishResult(entry.validation);
+  }
+
+  // Ten times the published reference or today's price, whichever is larger —
+  // a wide, permissive range. Nothing bounds a reprice from world version 2;
+  // this is generous headroom for the slider, not a ceiling.
   const repriceMax =
     product === null
       ? 10
-      : Math.max(SEGMENT_REFERENCE_PRICE_USD[product.segment] * 4, product.pricePerSeat * 4, hasPrice ? proposedPrice : 0, 10);
+      : Math.max(SEGMENT_REFERENCE_PRICE_USD[product.segment] * 10, product.pricePerSeat * 10, hasPrice ? proposedPrice : 0, 10);
 
   function applyPrice(): void {
     if (product === null || !hasPrice) return;
@@ -127,6 +203,8 @@ export function ProductDrawer({
     setPriceText('');
     setPriceResult(null);
     setSunsetResult(null);
+    setSupplyResults({});
+    setPublishResult(null);
     onClose();
   }
 
@@ -209,6 +287,128 @@ export function ProductDrawer({
             </div>
           </div>
 
+          {resolvedInputs.length === 0 ? null : (
+            <div>
+              <SectionHeading rule>Built on</SectionHeading>
+              <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
+                What {product.name} is assembled from. Left on the open market an input costs nothing beyond this line&apos;s own margin; naming a
+                supplier lets their quality and price flow through, one quarter of degraded quality while a switch beds in.
+              </p>
+              <div className="mt-2 space-y-2.5">
+                {resolvedInputs.map(({ input, resolved }) => {
+                  const row = inputRows.find((entry) => entry.input.categoryId === input.categoryId);
+                  const costUsd = costOfInput(input.categoryId);
+                  const currentKey = resolved.status === 'supplied' ? `${resolved.supplierCompany?.id ?? ''}|${resolved.supplierProduct?.id ?? ''}` : 'open';
+                  return (
+                    <div key={input.categoryId} className="raised-surface px-3 py-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[12px] font-semibold text-ink">{row?.category?.label ?? input.categoryId.replace(/_/g, ' ')}</span>
+                        <Tag tone={input.required ? 'warn' : 'neutral'}>{input.required ? 'Required' : 'Optional'}</Tag>
+                      </div>
+                      <p className="mt-1 text-[11px] text-ink-dim">
+                        {resolved.status === 'supplied' && resolved.supplierCompany !== null && resolved.supplierProduct !== null
+                          ? `Built on ${resolved.supplierCompany.name} — ${resolved.supplierProduct.name}, ${formatMoney(costUsd)} this quarter`
+                          : resolved.status === 'unsupplied'
+                            ? 'Unsupplied — a deliberate choice, and this line ships zero units until it is filled'
+                            : 'Open market — no named counterparty'}
+                      </p>
+                      {resolved.status === 'supplied' && resolved.supplierCompany !== null ? (
+                        <p className="mt-0.5 text-[10px] text-ink-faint">
+                          {formatPct(dependenceOn(session, company, resolved.supplierCompany.id))} of {company.name}&apos;s revenue rides on{' '}
+                          {resolved.supplierCompany.name} across every line.
+                        </p>
+                      ) : null}
+                      {row === undefined || row.options.length <= 1 ? null : (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {row.options.map((option) => {
+                            const key = option.supplierCompanyId === null ? 'open' : `${option.supplierCompanyId}|${option.supplierProductId ?? ''}`;
+                            const active = key === currentKey;
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                disabled={active}
+                                onClick={() => switchSupplier(input.categoryId, option.supplierCompanyId, option.supplierProductId)}
+                                className={`tap-target rounded-chip border px-2 py-1 text-[10.5px] transition-colors ${
+                                  active ? 'border-brand bg-brand-wash text-brand' : 'border-hair bg-panel text-ink-dim hover:text-ink'
+                                }`}
+                              >
+                                {option.label}
+                                {option.offer !== null ? ` · ${formatMoney(option.offer.pricePerUnitUsd, 'full')}` : ''}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {supplyResults[input.categoryId] == null ? null : (
+                        <div className="mt-2">
+                          <ValidationBanner result={supplyResults[input.categoryId] as ActionValidationResult} compact />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {category === null || !category.canSupply ? null : (
+            <div>
+              <SectionHeading rule>Publish as an input</SectionHeading>
+              <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
+                {product.supplyTerms == null
+                  ? `${product.name} is not published — nobody else can build on it. Publishing an API is a real decision: the owner's own words.`
+                  : `Published ${product.supplyTerms.openToAll ? 'open to all' : 'on private terms'} at ${formatMoney(product.supplyTerms.pricePerUnitUsd, 'full')} a ${category.unitLabel}.`}
+              </p>
+              <div className="mt-2 space-y-2.5">
+                <SliderField
+                  label={`Price per ${category.unitLabel}`}
+                  value={Math.max(0, Number.parseFloat(publishPrice) || 0)}
+                  onChange={(next) => setPublishPrice(String(next))}
+                  min={0}
+                  max={Math.max(category.referencePriceUsd * 4, Number.parseFloat(publishPrice) || 0, 10)}
+                  step={roundStep(category.referencePriceUsd * 4)}
+                  format={formatMoney}
+                />
+                <label className="flex items-center gap-2 text-[11.5px] text-ink-dim">
+                  <input type="checkbox" checked={publishOpenToAll} onChange={(event) => setPublishOpenToAll(event.target.checked)} className="tap-target" />
+                  Open to any company — a public API. Unchecked keeps it to whoever already builds on it.
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className="btn btn-primary tap-target gap-1.5" onClick={() => submitSupplyTerms(false)}>
+                    <Icon name="check" size={16} accent="current" />
+                    {product.supplyTerms == null ? 'Publish' : 'Update terms'}
+                  </button>
+                  {product.supplyTerms == null ? null : (
+                    <button type="button" className="btn btn-danger tap-target gap-1.5" onClick={() => submitSupplyTerms(true)}>
+                      <Icon name="warning" size={16} accent="current" />
+                      Close to everyone
+                    </button>
+                  )}
+                </div>
+                {publishResult === null ? null : <ValidationBanner result={publishResult} />}
+              </div>
+
+              {customers.length === 0 ? (
+                <p className="mt-2.5 text-[10.5px] text-ink-faint">Nobody is currently building on this line.</p>
+              ) : (
+                <div className="mt-2.5 space-y-1.5">
+                  <div className="label-caps-faint">Building on this ({customers.length})</div>
+                  {customers.map((row) => (
+                    <div key={`${row.buyerCompany.id}_${row.buyerProduct.id}`} className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="min-w-0 truncate text-ink-dim">
+                        {row.buyerCompany.name} — {row.buyerProduct.name}
+                      </span>
+                      <span className="figure shrink-0 text-ink">
+                        {formatMoney(row.revenueUsd)} · {formatCount(row.unitsFilled)}u
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {ladder === null ? null : (
             <div>
               <SectionHeading rule>Price against the market</SectionHeading>
@@ -286,28 +486,39 @@ export function ProductDrawer({
 
             {preview === null ? null : (
               <div className="raised-surface mt-2.5 px-3 py-2.5">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="label-caps-faint">Demand multiplier</span>
-                  <span className="figure flex items-center gap-1.5 text-[13px] text-ink">
-                    {formatMultiple(preview.current)}
-                    {hasPrice ? (
-                      <span className="text-ink-faint">
-                        <Icon name="chevronRight" size={12} accent="current" />
-                      </span>
-                    ) : null}
-                    {hasPrice ? formatMultiple(preview.next) : null}
-                  </span>
-                </div>
+                <div className="label-caps-faint">Next quarter, forecast</div>
+                <KeyValueGrid
+                  columns={2}
+                  items={[
+                    { label: 'Customers', value: formatCount(preview.customersAfter), hint: `now ${formatCount(preview.customersNow)}` },
+                    { label: 'Revenue', value: formatMoney(preview.revenueAfterUsd), hint: `now ${formatMoney(preview.revenueNowUsd)}` },
+                    {
+                      label: 'Gross margin',
+                      value: formatPct(preview.marginAfterPct),
+                      tone: preview.marginAfterPct < 0 ? 'loss' : undefined,
+                      hint: `now ${formatPct(preview.marginNowPct)}`,
+                    },
+                    { label: 'Churn that quarter', value: formatPct(preview.churnAfter) },
+                  ]}
+                />
                 {hasPrice ? (
                   <div className="mt-1.5 flex items-center gap-2">
-                    <DeltaBadge value={preview.change} format="percent" />
-                    <span className="text-[11px] text-ink-dim">change to gross additions from price alone</span>
+                    <DeltaBadge
+                      value={preview.customersNow === 0 ? 0 : preview.customersAfter / preview.customersNow - 1}
+                      format="percent"
+                    />
+                    <span className="text-[11px] text-ink-dim">change to customers from the price move alone</span>
                   </div>
                 ) : null}
+                {preview.capacityConstrained ? (
+                  <p className="mt-2 flex items-start gap-1.5 text-[10px] text-warn">
+                    <Icon name="warning" size={12} accent="current" className="mt-px shrink-0" />
+                    Serving capacity, not demand, is what limits the forecast — more compute would grow this further.
+                  </p>
+                ) : null}
                 <p className="mt-2 text-[10px] text-ink-faint">
-                  Segment elasticity {formatPct(SEGMENT_PRICE_ELASTICITY[product.segment])} against a published reference of{' '}
-                  {formatMoney(preview.reference, 'full')}. The engine judges price against the live customer-weighted market mean, which moves each
-                  quarter and is not yours to see.
+                  The engine&apos;s own demand model, run at this price with today&apos;s marketing and no rival pressure — a forecast, not a promise. It judges
+                  price against the live customer-weighted market mean, which moves each quarter and is not yours to see.
                 </p>
               </div>
             )}

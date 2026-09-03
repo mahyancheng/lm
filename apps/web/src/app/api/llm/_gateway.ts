@@ -23,6 +23,11 @@
  *
  * Each call spawns a Claude Code subprocess on the operator's subscription, so
  * "no auth and no limit" is not a missing nicety — it is an open tap.
+ *
+ * `/chief-of-staff/quick` is the one route that never opens that tap — pure
+ * arithmetic, no transport — so it calls `admitQuick()` instead of `admit()`
+ * and spends a separate, more generous window (`RATE_LIMIT_QUICK_PER_WINDOW`)
+ * rather than the model budget every other route shares.
  */
 
 import { cookies } from 'next/headers';
@@ -33,10 +38,13 @@ import {
   DEFAULT_CLAUDE_SESSION_MODEL,
   createConcurrencyLimiter,
   createGateway,
+  createInMemoryMemoryStore,
   resolveMaxConcurrency,
   resolveTransportKind,
   type ConcurrencyLimiter,
+  type LimiterSnapshot,
   type LlmGateway,
+  type LlmMemoryStore,
   type LlmTransportKind,
 } from '@frontier/llm';
 import { getRouteClient, isSupabaseAdminConfigured } from '@/lib/supabase/server';
@@ -48,7 +56,9 @@ import {
   MAX_BODY_BYTES,
   type Principal,
   RATE_LIMIT_COOKIELESS_PER_WINDOW,
+  RATE_LIMIT_QUICK_PER_WINDOW,
   type RateDecision,
+  type RateLimiter,
   conversationKeySecret,
   createRateLimiter,
   declaresOversizeBody,
@@ -108,6 +118,22 @@ export function maxConcurrency(): number {
 }
 
 /**
+ * The limiter's own bookkeeping, right now: queue depth per priority lane and
+ * which role — if any — holds the permit.
+ *
+ * This is what turns "the model cannot be reached" into an honest sentence.
+ * `/api/llm/health` reads it so the client can tell "no credential" (nothing
+ * would ever start) apart from "the model is busy resolving the quarter — 3
+ * calls ahead" (something is running, plenty is queued, and it will clear) —
+ * two situations a bare `available: boolean` cannot distinguish. Cheap and
+ * synchronous: it is the same process-wide limiter every role route already
+ * shares, just read rather than acquired.
+ */
+export function limiterSnapshot(): LimiterSnapshot {
+  return concurrencyLimiter.snapshot();
+}
+
+/**
  * The process-wide gateway.
  *
  * Cached, because building one starts a session store; rebuilt whenever the
@@ -130,6 +156,19 @@ const cachedGateway = createGenerationCache<LlmGateway>(() =>
 
 export function gateway(): LlmGateway {
   return cachedGateway();
+}
+
+/**
+ * The durable half of every Chief of Staff thread — see the doc comment on
+ * `chief-of-staff/route.ts` for why it lives on the **process**, not on the
+ * gateway. Shared with `chief-of-staff/quick/route.ts`, which reads the same
+ * memory (never writes it) so the instant offline answer and the eventual
+ * model answer are read against one thread rather than two.
+ */
+const chiefOfStaffMemory = processSingleton<LlmMemoryStore>('llm.chiefOfStaffMemory', () => createInMemoryMemoryStore());
+
+export function chiefOfStaffMemoryStore(): LlmMemoryStore {
+  return chiefOfStaffMemory;
 }
 
 /** The transport in force: the pasted credential's, or the environment's. */
@@ -206,7 +245,7 @@ export function ok<T>(output: T | null, fallback: boolean, reason?: string): Nex
  * runtime credential store.
  */
 
-/** One limiter for the process, shared by every role route. */
+/** One limiter for the process, shared by every route that may reach a model. */
 const limiter = processSingleton('llm.roleLimiter', () => createRateLimiter());
 
 /**
@@ -216,6 +255,15 @@ const limiter = processSingleton('llm.roleLimiter', () => createRateLimiter());
  */
 const cookielessLimiter = processSingleton('llm.cookielessLimiter', () =>
   createRateLimiter({ limit: RATE_LIMIT_COOKIELESS_PER_WINDOW }),
+);
+
+/**
+ * A separate, generous bucket for `/chief-of-staff/quick` — see
+ * `RATE_LIMIT_QUICK_PER_WINDOW`. Kept off the `limiter` above so the instant
+ * offline preview never spends the budget the real model call needs.
+ */
+const quickAnswerLimiter = processSingleton('llm.quickAnswerLimiter', () =>
+  createRateLimiter({ limit: RATE_LIMIT_QUICK_PER_WINDOW }),
 );
 
 /**
@@ -289,6 +337,27 @@ function refuse(status: number, reason: string, extraHeaders: Record<string, str
  * denial-of-service surface rather than a protection).
  */
 export async function admit(request: Request): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
+  return admitAgainst(request, limiter);
+}
+
+/**
+ * `admit()`, but charged against `quickAnswerLimiter` instead of the shared
+ * model-call budget.
+ *
+ * For `/chief-of-staff/quick` only — see `RATE_LIMIT_QUICK_PER_WINDOW`. Every
+ * other check (size ceiling, identity, the cookieless bucket) is identical:
+ * this route still needs a principal and a conversation key, and a caller with
+ * no cookie is still worth bounding by origin. What differs is only *which*
+ * per-principal window a call spends, because this call never reaches a model.
+ */
+export async function admitQuick(request: Request): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
+  return admitAgainst(request, quickAnswerLimiter);
+}
+
+async function admitAgainst(
+  request: Request,
+  perPrincipalLimiter: RateLimiter,
+): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
   if (declaresOversizeBody(request.headers)) {
     return { ok: false, response: refuse(413, `body_too_large: at most ${MAX_BODY_BYTES} bytes`) };
   }
@@ -317,7 +386,7 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
 
   const { principal, issuedAnonymousId } = outcome.resolution;
   const now = Date.now();
-  const decisions = [limiter.take(principal.id, now)];
+  const decisions = [perPrincipalLimiter.take(principal.id, now)];
   if (issuedAnonymousId !== null) decisions.push(cookielessLimiter.take(originKey(request.headers), now));
 
   const refused = decisions.find((decision) => !decision.allowed);

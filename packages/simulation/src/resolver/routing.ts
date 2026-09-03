@@ -29,6 +29,9 @@ import type {
 import { DEFAULT_QUORUM_RULE, makeId } from '@frontier/contracts';
 import { labelFor, pendingOfType } from './actions';
 import { plannedProgrammeQuarters } from '../research/forecast';
+import { emitPartialFill } from '../companies/partialFill';
+import { isMultiSectorWorld } from '../economy/sectors';
+import { computeCommitted, researchComputeHeadroom, researchersCommitted } from '../validator/context';
 
 /* -------------------------------------------------------------------------- */
 /*  Board proposals                                                            */
@@ -129,6 +132,37 @@ export function ensureResearchProjects(draft: SessionState, ctx: ResolverContext
     );
     if (already) continue;
 
+    // World 1: the validator already clamped these to what was free, against a
+    // snapshot the whole batch shared, and resolution has never re-checked
+    // them — re-checking now would move the frozen world's hash.
+    //
+    // World 2: the validator no longer clamps the ask — it notes the same
+    // expectation instead — so a programme opens with whatever researchers and
+    // compute are actually free once earlier actions in this resolution have
+    // already been booked, and the rest is reported as a `partial_fill`.
+    let talentAllocated = intent.researchersAssigned;
+    let computeAllocated = intent.computeUnits;
+    if (isMultiSectorWorld(draft)) {
+      const freeResearchers = Math.max(0, company.employees.researchers - researchersCommitted(draft, company.id));
+      const freeCompute = Math.max(0, Math.floor(researchComputeHeadroom(draft, company)) - computeCommitted(draft, company.id));
+      talentAllocated = Math.min(talentAllocated, freeResearchers);
+      computeAllocated = Math.min(computeAllocated, freeCompute);
+      if (talentAllocated < intent.researchersAssigned || computeAllocated < intent.computeUnits) {
+        emitPartialFill(draft, ctx, company.id, {
+          actionType: 'start_research_project',
+          asked: Math.max(intent.researchersAssigned, intent.computeUnits),
+          got: Math.max(talentAllocated, computeAllocated),
+          unit: talentAllocated < intent.researchersAssigned ? 'researchers' : 'accelerators',
+          reason:
+            talentAllocated < intent.researchersAssigned
+              ? `${talentAllocated} of ${intent.researchersAssigned} researchers were free; the rest are on other programmes.`
+              : `${computeAllocated} of ${intent.computeUnits} accelerator-equivalents were free; the rest are committed elsewhere.`,
+          phase: 'research_resolution',
+          targetId: node.id,
+        });
+      }
+    }
+
     // One definition of the schedule, shared with the Frontier Map's forecast:
     // a preview cannot promise a different number of quarters from the
     // programme it opens.
@@ -139,8 +173,8 @@ export function ensureResearchProjects(draft: SessionState, ctx: ResolverContext
       companyId: company.id,
       targetNodeId: node.id,
       budgetQuarterly: intent.budgetUsd,
-      computeAllocated: intent.computeUnits,
-      talentAllocated: intent.researchersAssigned,
+      computeAllocated,
+      talentAllocated,
       progress: 0,
       internalConfidence: node.confidenceByCompany[company.id] ?? node.publicConfidence,
       quartersElapsed: 0,
@@ -215,9 +249,42 @@ export function applyResearchAdjustments(draft: SessionState, ctx: ResolverConte
       computeAllocated: project.computeAllocated,
       talentAllocated: project.talentAllocated,
     };
+
+    // World 1: the validator already clamped these against a batch-wide
+    // snapshot, and re-checking now would move the frozen world's hash.
+    //
+    // World 2: not clamped at the validator, so the programme hands back what
+    // it already holds, is re-resourced with whatever is actually free, and
+    // reports the rest as a `partial_fill` — the same "hand back before
+    // counting free" rule the validator has always used for this action.
+    let wantedTalent = Math.max(0, Math.round(intent.researchersAssigned));
+    let wantedCompute = Math.max(0, Math.round(intent.computeUnits));
+    if (isMultiSectorWorld(draft) && company !== undefined) {
+      const freeResearchers = Math.max(0, company.employees.researchers - researchersCommitted(draft, company.id) + before.talentAllocated);
+      const freeCompute = Math.max(0, Math.floor(researchComputeHeadroom(draft, company)) - computeCommitted(draft, company.id) + before.computeAllocated);
+      const cappedTalent = Math.min(wantedTalent, freeResearchers);
+      const cappedCompute = Math.min(wantedCompute, freeCompute);
+      if (cappedTalent < wantedTalent || cappedCompute < wantedCompute) {
+        emitPartialFill(draft, ctx, company.id, {
+          actionType: 'adjust_research_project',
+          asked: Math.max(wantedTalent, wantedCompute),
+          got: Math.max(cappedTalent, cappedCompute),
+          unit: cappedTalent < wantedTalent ? 'researchers' : 'accelerators',
+          reason:
+            cappedTalent < wantedTalent
+              ? `${cappedTalent} of ${wantedTalent} researchers were free; the rest are on other programmes.`
+              : `${cappedCompute} of ${wantedCompute} accelerator-equivalents were free; the rest are committed elsewhere.`,
+          phase: 'research_resolution',
+          targetId: project.targetNodeId,
+        });
+      }
+      wantedTalent = cappedTalent;
+      wantedCompute = cappedCompute;
+    }
+
     project.budgetQuarterly = Math.max(0, intent.budgetUsd);
-    project.computeAllocated = Math.max(0, Math.round(intent.computeUnits));
-    project.talentAllocated = Math.max(0, Math.round(intent.researchersAssigned));
+    project.computeAllocated = wantedCompute;
+    project.talentAllocated = wantedTalent;
     if (
       project.budgetQuarterly === before.budgetQuarterly &&
       project.computeAllocated === before.computeAllocated &&

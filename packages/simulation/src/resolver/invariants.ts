@@ -331,18 +331,49 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
         break;
       case 'acquisition_completed': {
         add(event, actor, 'stockUsd', (value) => (actor.capital += value));
-        // A purchase below net asset value is a gain, not negative goodwill.
-        add(event, actor, 'bargainGainUsd', (value) => (actor.capital += value));
-        // The target's investments cross onto the acquirer's sheet with the
-        // rest of it. Chains resolve because rows are walked in order.
-        const swallowed = event.targetId === null ? undefined : opening.get(event.targetId);
-        const carried = event.targetId === null ? undefined : out.get(event.targetId);
-        actor.absorbedInvestments += (swallowed?.balanceSheet.assets.investments ?? 0) + (carried?.absorbedInvestments ?? 0);
+        if (event.payload.mode === 'subsidiary') {
+          // STAGE 4: the target is not merged, and the stake is carried at
+          // cost — `goodwillUsd`/`bargainGainUsd` on this row are informational
+          // (cost against the target's net assets), not something the
+          // acquirer's own sheet recognised. Its `investments` line rose by
+          // exactly what it paid, never by the target's own book, which stays
+          // on the target's own sheet because the target stays alive.
+          add(event, actor, 'offerValueUsd', (value) => (actor.absorbedInvestments += value));
+        } else {
+          // A purchase below net asset value is a gain, not negative goodwill.
+          add(event, actor, 'bargainGainUsd', (value) => (actor.capital += value));
+          // The target's investments cross onto the acquirer's sheet with the
+          // rest of it. Chains resolve because rows are walked in order.
+          const swallowed = event.targetId === null ? undefined : opening.get(event.targetId);
+          const carried = event.targetId === null ? undefined : out.get(event.targetId);
+          actor.absorbedInvestments += (swallowed?.balanceSheet.assets.investments ?? 0) + (carried?.absorbedInvestments ?? 0);
+        }
         break;
       }
       case 'shares_traded':
         if (event.payload.side === 'buy') add(event, actor, 'considerationUsd', (value) => (actor.bought += value));
         else if (event.payload.side === 'sell') add(event, actor, 'considerationUsd', (value) => (actor.sold += value));
+        break;
+      case 'group_transfer_executed':
+        // Accelerator units carry no dollar line on the balance sheet the
+        // reconstruction reads, so only a cash transfer moves equity — down on
+        // the sender, exactly like a dividend, and up on the receiver.
+        if (event.payload.kind === 'cash') {
+          add(event, actor, 'amountUsd', (value) => (actor.capital -= value));
+          const receiver = event.targetId === null ? null : entry(event.targetId);
+          const value = money(event, 'amountUsd');
+          if (receiver !== null && value !== null) receiver.capital += value;
+        }
+        break;
+      case 'subsidiary_merged':
+        // The `acquisition_completed` row this pairs with already prices the
+        // subsidiary's own investments crossing over into `absorbedInvestments`
+        // (the ordinary absorb identity); `resolveMergeSubsidiary` additionally
+        // removes the stake's cost basis from the parent's `investments` line
+        // *before* that crossover, so the reconstruction removes the same
+        // amount here to keep the two paired rows netting to the one thing
+        // that actually moved equity: the goodwill/bargain-gain split.
+        add(event, actor, 'stakeCostUsd', (value) => (actor.absorbedInvestments -= value));
         break;
       case 'information_revealed':
         // A wind-up moves equity without trading: the estate is realised at a

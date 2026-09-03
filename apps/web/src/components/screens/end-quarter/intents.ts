@@ -19,7 +19,7 @@
  */
 
 import type { ActionIntent, ActionType, ResolutionPhase, SessionState } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { categoryById, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { quarterlyHireCostUsd } from '@frontier/simulation';
 
@@ -112,6 +112,7 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
         label: `Launch ${intent.name}`,
         terms: [
           term('Segment', titleise(intent.segment)),
+          term('Category', intent.categoryId === null ? 'Engine default' : (categoryById(intent.categoryId)?.label ?? intent.categoryId)),
           term('Price', `${formatMoney(intent.pricePerSeatUsd)} per seat`),
           term('Launch marketing', formatMoney(intent.launchMarketingUsd)),
           term('Target quality', formatPct(intent.targetQuality)),
@@ -123,6 +124,25 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
       return {
         label: `Retire ${intent.productId}`,
         terms: [term('Wind-down', `${intent.windDownQuarters} quarters`)],
+      };
+
+    case 'set_supply_terms':
+      return {
+        label: `Publish ${intent.productId} as a supply line`,
+        terms: [
+          term('Open to all', intent.terms.openToAll ? 'Yes' : 'No'),
+          term('Price per unit', formatMoney(intent.terms.pricePerUnitUsd)),
+          term('Blocked customers', intent.terms.blockedCustomerIds.length > 0 ? intent.terms.blockedCustomerIds.join(', ') : 'None'),
+        ],
+      };
+
+    case 'choose_supplier':
+      return {
+        label: `Choose a supplier for ${intent.productId}`,
+        terms: [
+          term('Input', humanise(intent.inputCategoryId)),
+          term('Supplier', intent.supplierCompanyId ?? 'Open market'),
+        ],
       };
 
     case 'set_marketing_budget':
@@ -191,6 +211,12 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
           term('Seller', intent.sellerCompanyId ?? 'Cheapest with capacity'),
           term('Price ceiling', `${formatMoney(intent.maxPricePerUnitUsd)} an accelerator'`.replace("'", '')),
         ],
+      };
+
+    case 'invest_capacity':
+      return {
+        label: `Invest in ${titleise(intent.kind)} capacity`,
+        terms: [term('Amount', formatMoney(intent.amountUsd))],
       };
 
     case 'allocate_compute':
@@ -387,6 +413,22 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
         label: `Ask ${intent.viaCharacterId} for an introduction`,
         terms: [term('To', intent.targetCharacterId), term('Purpose', intent.purpose || '—')],
       };
+
+    case 'transfer_between_group':
+      return {
+        label: `Move ${intent.cashUsd !== null ? 'cash' : 'accelerators'} within the group`,
+        terms: [
+          term('From', intent.fromCompanyId),
+          term('To', intent.toCompanyId),
+          intent.cashUsd !== null ? term('Amount', formatMoney(intent.cashUsd)) : term('Units', `${intent.acceleratorUnits ?? 0} accelerators`),
+        ],
+      };
+
+    case 'merge_subsidiary':
+      return {
+        label: `Fully absorb ${intent.subsidiaryCompanyId}`,
+        terms: [term('Subsidiary', intent.subsidiaryCompanyId), term('Reversible', 'No')],
+      };
   }
 }
 
@@ -415,6 +457,8 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   buy_shares: 'capital_resolution',
   sell_shares: 'capital_resolution',
   acquire_company: 'capital_resolution',
+  transfer_between_group: 'capital_resolution',
+  merge_subsidiary: 'capital_resolution',
 
   bid_government: 'government_resolution',
   decline_opportunity: 'government_resolution',
@@ -434,6 +478,7 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   reserve_compute: 'research_resolution',
   buy_cloud_capacity: 'research_resolution',
   buy_accelerators: 'product_demand_resolution',
+  invest_capacity: 'product_demand_resolution',
   allocate_compute: 'research_resolution',
 
   set_product_price: 'product_demand_resolution',
@@ -441,6 +486,8 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   sunset_product: 'product_demand_resolution',
   set_marketing_budget: 'product_demand_resolution',
   marketing_campaign: 'product_demand_resolution',
+  set_supply_terms: 'product_demand_resolution',
+  choose_supplier: 'product_demand_resolution',
 
   give_guidance: 'disclosure_resolution',
   respond_crisis: 'disclosure_resolution',
@@ -527,6 +574,8 @@ export function cashEffectOf(session: SessionState, intent: ActionIntent): CashE
         inflowUsd: 0,
         note: 'At your stated ceiling. Capital, paid in the quarter it clears; the seller books it as revenue.',
       };
+    case 'invest_capacity':
+      return { outflowUsd: intent.amountUsd, inflowUsd: 0, note: 'Capital, paid in the quarter it clears; it depreciates like any other property.' };
     case 'buyback':
       return { outflowUsd: intent.budgetUsd, inflowUsd: 0, note: 'Capital returned rather than invested.' };
     case 'acquire_company':
@@ -561,6 +610,12 @@ export function cashEffectOf(session: SessionState, intent: ActionIntent): CashE
       return { outflowUsd: 0, inflowUsd: 0, note: 'Nothing moves until the counterparty accepts.' };
     case 'accept_deal':
       return { outflowUsd: 0, inflowUsd: 0, note: 'Obligations begin executing next quarter.' };
+    case 'transfer_between_group':
+      return intent.cashUsd !== null
+        ? { outflowUsd: intent.cashUsd, inflowUsd: 0, note: 'Moves within the group; nothing leaves it.' }
+        : { outflowUsd: 0, inflowUsd: 0, note: 'Compute, not cash, moves within the group.' };
+    case 'merge_subsidiary':
+      return { outflowUsd: 0, inflowUsd: 0, note: 'The stake was already paid for when it became a subsidiary.' };
     default:
       return NONE;
   }

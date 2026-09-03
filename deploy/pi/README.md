@@ -218,29 +218,51 @@ credential survives the rollback (it lives on the volume).
 
 Every role call spawns a Claude Code subprocess, and the gateway runs
 **one at a time** (`LLM_MAX_CONCURRENCY=1`). Ending a quarter therefore blocks
-on five sequential model turns: the World Director, then one strategist for each
-of the ~4 rival companies.
+on the World Director, then up to `NEXT_PUBLIC_LLM_STRATEGISTS_PER_QUARTER`
+(default 4) rival strategists — the ones whose plan actually bears on the
+player's next move: mid-deal with the player, head-to-head on a bid, same
+sector, same region, largest, in that order (`strategistPriority` in
+`@frontier/simulation`). World 2's roster runs to two dozen companies across
+six sectors; this ordering, not just the count, is what keeps a quarter from
+scaling with the size of the world.
 
 At the 4–10 s per session turn measured for this project:
 
 | | |
 |---|---|
 | World Director | 4–10 s |
-| ~4 rival strategists, one after another | 16–40 s |
-| **Blocking total per quarter** | **roughly 20–50 s** |
+| up to 4 rival strategists, one after another | 16–40 s |
+| **Blocking total per quarter, worst case** | **roughly 20–50 s** |
 
-The deterministic 18-phase resolution that follows is milliseconds. The
-narrator runs *after* the quarter is committed and does not block the screen.
+The deterministic 18-phase resolution that follows is milliseconds — measured
+at 250–400 ms on world 2's full 25-company roster in this project's own CI
+sandbox, well inside the generous ceiling `packages/simulation/test/resolvePerformance.test.ts`
+asserts. The narrator runs *after* the quarter is committed and does not block
+the screen.
 
-Two things worth knowing about that number:
+Three things worth knowing about that number:
 
 - **It is queue time, not slowness.** Raising `LLM_MAX_CONCURRENCY` to 2 roughly
   halves it and roughly doubles peak memory. On this host, don't — the second
   subprocess is what takes the machine down. It is the right knob on a bigger
   box.
+- **A time budget bounds the worst case.** `NEXT_PUBLIC_LLM_QUARTER_BUDGET_MS`
+  (default 90 s) is the ceiling on the World Director plus every strategist
+  *together* — when it runs out, whichever rivals have not had their turn yet
+  fall back to their archetype policy immediately, and the resolving overlay's
+  own progress list says which ones ("Basalt Compute strategist · on policy
+  (budget)") rather than leaving the player guessing why a quarter felt
+  shorter than usual.
+- **Strategist calls start before End Quarter is even clicked.** The moment a
+  quarter opens, the client starts each priority rival's call in the
+  background (`apps/web/src/lib/game/strategistPrefetch.ts`) — a strategist's
+  plan depends only on state at the start of the quarter, so by the time the
+  player actually ends it, some or all of that work is already done and the
+  overlay only waits for whichever call genuinely is not back yet.
 - **Nothing degrades while waiting.** Queued calls are never refused, so every
-  rival still gets a real plan. The client waits up to 90 s per quarter call for
-  exactly this reason.
+  rival that gets a live call gets a real plan. The client waits up to 90 s
+  per quarter-role call for exactly this reason — see `QUARTER_ROLE_TIMEOUT_MS`
+  in `apps/web/src/lib/llm/client.ts`.
 
 If a quarter *does* time out or the model is unreachable, the game resolves on
 its deterministic fallbacks: the Director's drawn events fire on their family

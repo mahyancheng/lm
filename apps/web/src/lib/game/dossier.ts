@@ -34,7 +34,15 @@ import type {
   SimEvent,
 } from '@frontier/contracts';
 import { OWNERSHIP_THRESHOLDS, quarterLabel } from '@frontier/contracts';
-import { availableActionsFor, projectPublicRecord, recentFinancialQuarters } from '@frontier/simulation';
+import {
+  availableActionsFor,
+  categoryOf,
+  consolidatedEnterpriseValueOf,
+  controlledCompaniesOf,
+  groupStatementOf,
+  projectPublicRecord,
+  recentFinancialQuarters,
+} from '@frontier/simulation';
 import { PLAYER_ID, playerCharacterOf, playerCompanyOf, playerSeat } from './engine';
 import { latestQuote, marketCapOf, metricsFor } from './playerView';
 import { openDecisions, worldBriefing } from './briefings';
@@ -54,6 +62,8 @@ function productLinesOf(company: Company): CosProductLine[] {
     productId: product.id,
     name: product.name,
     segment: product.segment,
+    categoryId: categoryOf(company, product).id,
+    unitLabel: categoryOf(company, product).unitLabel,
     pricePerSeatUsd: product.pricePerSeat,
     activeCustomers: product.activeCustomers,
     grossMarginPct: product.grossMarginPct,
@@ -189,6 +199,35 @@ function debtHeadroomOf(session: SessionState, company: Company): number {
   return Math.max(0, annualRevenue * availability - company.financials.debt);
 }
 
+/**
+ * STAGE 5 — the group, consolidated, for whichever seat this dossier is for.
+ *
+ * Deliberately independent of which company the dossier is otherwise built
+ * for: "how is the group doing" means the same thing whether the founder is
+ * currently looking at the founding company or a subsidiary. `groupStatementOf`
+ * and `consolidatedEnterpriseValueOf` are the same functions the Group screen
+ * itself reads — nothing here is a second answer to a question those already
+ * answer.
+ */
+function groupSectionOf(session: SessionState): ChiefOfStaffDossier['group'] {
+  const companies = controlledCompaniesOf(session, PLAYER_ID);
+  const founding = companies[0] ?? null;
+  const statement = groupStatementOf(session, PLAYER_ID);
+  const headcount = companies.reduce((sum, company) => {
+    const staff = company.employees;
+    return sum + staff.engineers + staff.researchers + staff.sales + staff.ops + staff.execs;
+  }, 0);
+  return {
+    companyCount: Math.max(1, companies.length),
+    revenueUsd: statement.income.revenueUsd,
+    netIncomeUsd: statement.income.netIncomeUsd,
+    cashUsd: statement.balance.cashUsd,
+    debtUsd: statement.balance.debtUsd,
+    headcount,
+    marketValueUsd: founding === null ? 0 : Math.max(0, consolidatedEnterpriseValueOf(session, founding)),
+  };
+}
+
 function feedFor(session: SessionState, company: Company, ledger: readonly SimEvent[]): CosFeedItem[] {
   return projectPublicRecord(session, PLAYER_ID, { ledger: [...ledger] })
     .filter((item) => item.companyIds.length === 0 || item.companyIds.includes(company.id))
@@ -216,14 +255,24 @@ function worldNotesOf(session: SessionState): string[] {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Build the whole dossier for the player's seat.
+ * Build the whole dossier for one company this seat directs.
+ *
+ * `company` defaults to the founding one — every caller from before STAGE 5's
+ * switcher existed still gets exactly the dossier it always did. A caller that
+ * follows the active company passes it explicitly, and everything below reads
+ * from it rather than re-deriving the founding company, so a founder directing
+ * a subsidiary gets that subsidiary's own finances, products, people, board
+ * and available actions — never the founding company's by mistake.
  *
  * `ledger` is the seat's own projected rows from the last resolution, which
  * only fills in *why* a public-record item mattered; it can never add an item
  * the projection withheld.
  */
-export function buildChiefOfStaffDossier(session: SessionState, ledger: readonly SimEvent[] = []): ChiefOfStaffDossier {
-  const company = playerCompanyOf(session);
+export function buildChiefOfStaffDossier(
+  session: SessionState,
+  ledger: readonly SimEvent[] = [],
+  company: Company = playerCompanyOf(session),
+): ChiefOfStaffDossier {
   const founder = playerCharacterOf(session);
   const metrics = metricsFor(session, company.id);
   const staff = company.employees;
@@ -233,7 +282,7 @@ export function buildChiefOfStaffDossier(session: SessionState, ledger: readonly
   const ownership = founderOwnershipOf(session, company);
   const table = session.capTables.find((entry) => entry.companyId === company.id) ?? null;
 
-  const availableActions: CosAvailableAction[] = availableActionsForSession(session);
+  const availableActions: CosAvailableAction[] = availableActionsForSession(session, company.id);
 
   return {
     companyName: company.name,
@@ -254,6 +303,8 @@ export function buildChiefOfStaffDossier(session: SessionState, ledger: readonly
       operatingMarginPct: metrics?.operatingMarginPct ?? 0,
       history: [...recentFinancialQuarters(company, DOSSIER_HISTORY_QUARTERS)],
     },
+
+    group: groupSectionOf(session),
 
     products: {
       lines: productLinesOf(company),
@@ -404,28 +455,34 @@ export function buildChiefOfStaffDossier(session: SessionState, ledger: readonly
 /* -------------------------------------------------------------------------- */
 
 /**
- * One probe pass per session object.
+ * One probe pass per (session, acting company).
  *
  * `availableActionsFor` runs the validator once per action type — thirty-nine
  * probes — which is cheap but not free, and several screens want the same
  * answer at once. The store replaces the session object whenever anything
- * changes, so identity is an exact cache key: a stale entry is impossible, and
- * a changed quarter recomputes.
+ * changes, and STAGE 5 lets the acting company change independently of it (the
+ * switcher), so both are the cache key: a stale entry is impossible for
+ * either to produce, and a changed quarter or a changed active company both
+ * recompute. `companyId` defaults to the founding company, so every caller
+ * from before the switcher existed still gets exactly the answer it always
+ * did.
  */
-let probeCache: { readonly session: SessionState; readonly actions: CosAvailableAction[] } | null = null;
+let probeCache: { readonly session: SessionState; readonly companyId: string; readonly actions: CosAvailableAction[] } | null = null;
 
-export function availableActionsForSession(session: SessionState): CosAvailableAction[] {
-  if (probeCache !== null && probeCache.session === session) return probeCache.actions;
+export function availableActionsForSession(session: SessionState, companyId?: string): CosAvailableAction[] {
   const seat = playerSeat(session);
+  const targetCompanyId = companyId ?? seat?.companyId ?? null;
+  if (targetCompanyId === null) return [];
+  if (probeCache !== null && probeCache.session === session && probeCache.companyId === targetCompanyId) return probeCache.actions;
   const actions =
-    seat === null ? [] : availableActionsFor(session, { playerId: seat.playerId, companyId: seat.companyId, characterId: seat.characterId });
-  probeCache = { session, actions };
+    seat === null ? [] : availableActionsFor(session, { playerId: seat.playerId, companyId: targetCompanyId, characterId: seat.characterId });
+  probeCache = { session, companyId: targetCompanyId, actions };
   return actions;
 }
 
-/** The entry for one action type on this session, or null when there is no seat. */
-export function availabilityOf(session: SessionState, type: CosAvailableAction['type']): CosAvailableAction | null {
-  return availableActionsForSession(session).find((entry) => entry.type === type) ?? null;
+/** The entry for one action type on this session (for the named company, defaulting to the founding one), or null when there is no seat. */
+export function availabilityOf(session: SessionState, type: CosAvailableAction['type'], companyId?: string): CosAvailableAction | null {
+  return availableActionsForSession(session, companyId).find((entry) => entry.type === type) ?? null;
 }
 
 /** A holder's fraction of one company, from the cap table. Zero when they hold none. */

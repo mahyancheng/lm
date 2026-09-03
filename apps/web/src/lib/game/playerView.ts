@@ -21,7 +21,9 @@
 
 import { filedFinancialQuarter } from '@frontier/contracts';
 import type {
+  CapTable,
   Company,
+  ControlledCompanyView,
   Leaderboard,
   PlayerView,
   ProcurementOpportunity,
@@ -31,6 +33,7 @@ import type {
 } from '@frontier/contracts';
 import {
   SOLVENCY_NEGATIVE_QUARTERS,
+  controlledCompaniesOf,
   founderPortfolioOf,
   negativeCashQuarters,
   projectEconomyReportForPlayer,
@@ -197,19 +200,34 @@ export function buildAlerts(session: SessionState): string[] {
  * Memoise this by session identity — it walks every collection once, which is
  * cheap, but not free on every render. `usePlayerView()` already does.
  */
+function emptyCapTable(session: SessionState, companyId: string): CapTable {
+  return {
+    companyId,
+    shareClasses: [],
+    holdings: [],
+    totalIssuedByClass: {},
+    fullyDilutedShares: 0,
+    optionPoolShares: 0,
+    lastUpdatedQuarter: session.quarter,
+  };
+}
+
+/**
+ * Full detail for every company this seat directs, founding company first —
+ * `controlledCompaniesOf`'s own order, carried straight through so a screen
+ * that wants "just the group" never has to re-derive it.
+ */
+function controlledCompanyViewsOf(session: SessionState): ControlledCompanyView[] {
+  return controlledCompaniesOf(session, PLAYER_ID).map((company) => ({
+    company,
+    capTable: session.capTables.find((entry) => entry.companyId === company.id) ?? emptyCapTable(session, company.id),
+    researchProjects: session.researchProjects.filter((project) => project.companyId === company.id),
+  }));
+}
+
 export function projectPlayerView(session: SessionState): PlayerView {
   const company = playerCompanyOf(session);
-  const capTable =
-    session.capTables.find((entry) => entry.companyId === company.id) ??
-    ({
-      companyId: company.id,
-      shareClasses: [],
-      holdings: [],
-      totalIssuedByClass: {},
-      fullyDilutedShares: 0,
-      optionPoolShares: 0,
-      lastUpdatedQuarter: session.quarter,
-    } as PlayerView['ownCapTable']);
+  const capTable = session.capTables.find((entry) => entry.companyId === company.id) ?? emptyCapTable(session, company.id);
 
   return {
     sessionId: session.sessionId,
@@ -224,6 +242,7 @@ export function projectPlayerView(session: SessionState): PlayerView {
     ownCompany: company,
     ownCapTable: capTable,
     ownResearchProjects: session.researchProjects.filter((project) => project.companyId === company.id),
+    controlledCompanies: controlledCompanyViewsOf(session),
     visibleCompanies: session.companies.filter((rival) => rival.id !== company.id).map(redactRival),
     techGraph: techGraphForCompany(session.techGraph, company.id),
     quotes: session.quotes,

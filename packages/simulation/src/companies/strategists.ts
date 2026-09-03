@@ -53,3 +53,78 @@ export function strategistCompanyIds(state: SessionState, limit: number = MAX_LI
     .slice(0, Math.max(0, limit))
     .map((company) => company.id);
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Player-relevance ordering                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** True when `company` has an open deal directly with `playerCompanyId`, either direction. */
+function hasOpenDealWithPlayer(state: SessionState, company: Company, playerCompanyId: string): boolean {
+  return state.deals.some((deal) => {
+    if (deal.status !== 'proposed') return false;
+    const parties = [deal.proposerId, deal.counterpartyId];
+    return parties.includes(company.id) && parties.includes(playerCompanyId);
+  });
+}
+
+/** True when `company` holds a live bid on a procurement opportunity the player company is also actively contesting. */
+function hasOpenBidAgainstPlayer(state: SessionState, company: Company, playerCompanyId: string): boolean {
+  const live = new Set(['submitted', 'shortlisted']);
+  const playerOpportunityIds = new Set(
+    state.governmentBids.filter((bid) => bid.bidderCompanyId === playerCompanyId && live.has(bid.status)).map((bid) => bid.opportunityId),
+  );
+  if (playerOpportunityIds.size === 0) return false;
+  return state.governmentBids.some(
+    (bid) => bid.bidderCompanyId === company.id && live.has(bid.status) && playerOpportunityIds.has(bid.opportunityId),
+  );
+}
+
+/**
+ * Rank the companies `strategistCompanyIds` selected by how much they matter to
+ * the player *right now*, largest engine-selection cap first.
+ *
+ * This is a second, independent ordering over the same eligible set — it never
+ * changes *who* is eligible for a live strategist (that stays
+ * `strategistCompanyIds`'s job: major tier, active, not player-directed), only
+ * *which order* they are attempted in when a per-quarter model-time budget means
+ * not every eligible rival gets a live call. A rival mid-negotiation with the
+ * player, or one the player is head-to-head against for a contract, is the one
+ * whose plan actually changes what the player should do next quarter; a distant
+ * rival in another sector planning on its archetype policy costs the player
+ * nothing to skip.
+ *
+ * Priority, highest first: an open deal or competing bid against the player
+ * outranks everything (their move directly bears on a decision the player is
+ * mid-way through), then the same sector, then the same region, then size
+ * (`weightOf`/`capOf`, as `strategistCompanyIds` already breaks ties), then id —
+ * so the ordering is total and two calls against the same state always agree.
+ *
+ * Pure: reads only committed `SessionState`, draws no RNG, and is safe to call
+ * from the client as well as from a test.
+ */
+export function strategistPriority(state: SessionState, playerCompanyId: string, limit: number = MAX_LIVE_STRATEGISTS): readonly string[] {
+  const player = state.companies.find((company) => company.id === playerCompanyId) ?? null;
+  const eligible = strategistCompanyIds(state, Number.POSITIVE_INFINITY).map(
+    (id) => state.companies.find((company) => company.id === id)!,
+  );
+
+  const scored = eligible.map((company) => ({
+    company,
+    contested: player !== null && (hasOpenDealWithPlayer(state, company, playerCompanyId) || hasOpenBidAgainstPlayer(state, company, playerCompanyId)),
+    sameSector: player !== null && company.sectorId === player.sectorId,
+    sameRegion: player !== null && company.region === player.region,
+  }));
+
+  scored.sort((a, b) => {
+    if (a.contested !== b.contested) return a.contested ? -1 : 1;
+    if (a.sameSector !== b.sameSector) return a.sameSector ? -1 : 1;
+    if (a.sameRegion !== b.sameRegion) return a.sameRegion ? -1 : 1;
+    const weightDelta = weightOf(state, b.company) - weightOf(state, a.company);
+    if (weightDelta !== 0) return weightDelta;
+    const capDelta = capOf(state, b.company) - capOf(state, a.company);
+    if (capDelta !== 0) return capDelta;
+    return a.company.id < b.company.id ? -1 : a.company.id > b.company.id ? 1 : 0;
+  });
+
+  return scored.slice(0, Math.max(0, limit)).map((entry) => entry.company.id);
+}

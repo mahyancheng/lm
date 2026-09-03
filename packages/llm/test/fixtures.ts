@@ -483,12 +483,26 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
       operatingMarginPct: -0.12,
       history: [],
     },
+    // No subsidiary in this fixture, so the group is just Nexus itself —
+    // consistent with `finances` and `people.total` below, the same way the
+    // rest of this fixture is arithmetically self-consistent.
+    group: {
+      companyCount: 1,
+      revenueUsd: 900_000_000,
+      netIncomeUsd: -100_000_000,
+      cashUsd: 2_100_000_000,
+      debtUsd: 400_000_000,
+      headcount: 1_240,
+      marketValueUsd: 18_000_000_000,
+    },
     products: {
       lines: [
         {
           productId: 'prd_enterprise_agent',
           name: 'Nexus Enterprise Agent',
           segment: 'enterprise',
+          categoryId: 'ai_agents',
+          unitLabel: 'seat',
           pricePerSeatUsd: 900,
           activeCustomers: 620_000,
           grossMarginPct: 0.71,
@@ -501,6 +515,8 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           productId: 'prd_consumer_copilot',
           name: 'Nexus Copilot',
           segment: 'consumer',
+          categoryId: 'consumer_apps',
+          unitLabel: 'subscription',
           pricePerSeatUsd: 40,
           activeCustomers: 3_100_000,
           grossMarginPct: 0.21,

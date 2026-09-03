@@ -32,7 +32,7 @@
  * quarter and writes it for every active company, launch spend included.
  */
 
-import type { Company, PredationRow, Product, ProductSegment, ResolverContext, RivalPressureRow, SessionState } from '@frontier/contracts';
+import type { CapacityKind, Company, PredationRow, Product, ProductSegment, ResolverContext, RivalPressureRow, SessionState } from '@frontier/contracts';
 import {
   ANTITRUST_EXPOSURE_WEIGHTS,
   combinedPressure,
@@ -40,6 +40,7 @@ import {
   makeId,
   nextPredatoryQuarters,
   predatorPressure,
+  resolveCategory,
   undercutFraction,
 } from '@frontier/contracts';
 import { isMultiSectorWorld } from '../economy/sectors';
@@ -71,6 +72,9 @@ import {
   SERVE_CUSTOMERS_PER_ACCELERATOR,
 } from './balance';
 import { resolveComputeOrders } from './compute';
+import { resolveCapacityOrders } from './capacity';
+import { effectiveQuality, requiredInputUnsupplied, resolveSupplyOrders } from './supply';
+import { categoryOf, capacityUsd } from './categories';
 import { marketingPlan } from './policy';
 import { sectorEconomy, sectorOf } from '../economy/sectors';
 import { companyRegionFitFactor } from '../economy/regions';
@@ -179,23 +183,77 @@ export function relativePrice(price: number, referencePrice: number): number {
   return clamp(ratio(price, referencePrice, 1) - 1, PRICE_DEVIATION_BOUNDS.min, PRICE_DEVIATION_BOUNDS.max);
 }
 
-/** The price response multiplier for a segment: `1 - elasticity × (price/reference - 1)`. */
-export function priceFactor(segment: ProductSegment, price: number, referencePrice: number): number {
-  return clamp(
-    1 - SEGMENT_PRICE_ELASTICITY[segment] * relativePrice(price, referencePrice),
-    PRICE_FACTOR_BOUNDS.min,
-    PRICE_FACTOR_BOUNDS.max,
-  );
+/**
+ * The price response multiplier for a segment: `1 - elasticity × (price/reference - 1)`.
+ *
+ * `elasticityOverride` lets world version 2 answer with a category's own
+ * elasticity rather than its segment's — an accelerator line and a subscription
+ * app can both sell into "enterprise" and still react to price completely
+ * differently. Undefined falls back to the segment table, which is what world
+ * version 1 always passes and is exactly the original arithmetic.
+ */
+export function priceFactor(segment: ProductSegment, price: number, referencePrice: number, elasticityOverride?: number): number {
+  const elasticity = elasticityOverride ?? SEGMENT_PRICE_ELASTICITY[segment];
+  return clamp(1 - elasticity * relativePrice(price, referencePrice), PRICE_FACTOR_BOUNDS.min, PRICE_FACTOR_BOUNDS.max);
 }
 
 /**
- * How violent a repricing was, 0..1, where 1 is a move to the top of the band
- * the validator allows in one quarter. Price cuts are not a shock: nobody leaves
- * over a discount.
+ * How violent a repricing was, measured in fourfoldings: 1 is a move to four
+ * times the price, 2 is sixteen times. Unbounded above, because from world
+ * version 2 nothing bounds the move itself — a price may go anywhere and the
+ * consequence has to keep scaling with it. Price cuts are not a shock: nobody
+ * leaves over a discount.
+ */
+export function priceMoveShock(beforeUsd: number, afterUsd: number): number {
+  if (!(beforeUsd > 0) || !(afterUsd > beforeUsd)) return 0;
+  return Math.log(afterUsd / beforeUsd) / Math.log(PRICE_MOVE_BAND.max);
+}
+
+/**
+ * The same figure clamped to 0..1, which is what world version 1 measures: its
+ * validator refuses any move past the top of the band, so a shock above 1 was
+ * unreachable there and the clamp was free.
  */
 export function priceShock(beforeUsd: number, afterUsd: number): number {
-  if (!(beforeUsd > 0) || !(afterUsd > beforeUsd)) return 0;
-  return unit(Math.log(afterUsd / beforeUsd) / Math.log(PRICE_MOVE_BAND.max));
+  return unit(priceMoveShock(beforeUsd, afterUsd));
+}
+
+/**
+ * What is left of new demand at a price past the point the elasticity term
+ * stops answering.
+ *
+ * `relativePrice` saturates at `PRICE_DEVIATION_BOUNDS.max`, so above that
+ * price `priceFactor` is a constant and gross additions would not fall however
+ * far the price rose — revenue (`customers x price`) would rise for nothing.
+ * That was the reason for the validator's move band, and removing the band puts
+ * the burden here instead.
+ *
+ * The decay is the *square* of how far past its onset the price sits, which is
+ * the property that matters: new-customer revenue is `price x adds`, adds fall
+ * as the square of the price, so revenue above the onset falls like `1/price`.
+ * A founder who doubles an already-decaying price sells less, not more.
+ * Exactly 1 at or below the onset, so a normally priced product is untouched.
+ *
+ * The onset is deliberately well past `PRICE_DEVIATION_BOUNDS.max`, the point
+ * `priceFactor`'s own elasticity term goes flat — not the same point. A
+ * product priced beyond that bound was already an ordinary, shipped shape of
+ * this economy (a premium position `priceFactor` alone already prices in);
+ * decaying it too would crush every quality-differentiated product's growth
+ * every quarter it holds a stable premium, for no repricing at all. This is
+ * the mechanism `set_product_price` needed once the validator stopped
+ * refusing a move — a founder who walks a price to several times the
+ * reference and holds it there, à la the owner's "a 6x price" example, not a
+ * founder who has always sold at a defensible premium.
+ */
+const PRICE_SATURATION_DECAY_ONSET_MULTIPLE = 6;
+
+export function priceSaturationDecay(priceUsd: number, referencePriceUsd: number): number {
+  if (!(referencePriceUsd > 0) || !(priceUsd > 0)) return 1;
+  const onset = PRICE_DEVIATION_BOUNDS.max * PRICE_SATURATION_DECAY_ONSET_MULTIPLE;
+  const deviation = priceUsd / referencePriceUsd - 1;
+  if (deviation <= onset) return 1;
+  const ratio = onset / deviation;
+  return ratio * ratio;
 }
 
 /**
@@ -204,10 +262,11 @@ export function priceShock(beforeUsd: number, afterUsd: number): number {
  * the band allows.
  *
  * The elasticity term above saturates at `PRICE_DEVIATION_BOUNDS`, so without
- * this a company could raise its price to the top of the validator's band every
- * quarter and keep most of its customers, and revenue (`customers × price`)
- * would rise without limit. A shock big enough to leave the model's defined
- * range takes the base with it.
+ * this a company could raise its price every quarter and keep most of its
+ * customers, and revenue (`customers × price`) would rise without limit. A
+ * shock big enough to leave the model's defined range takes the base with it,
+ * and from world version 2 the shock is unbounded, so there is no size of move
+ * that escapes the consequence.
  */
 export function productChurn(
   segment: ProductSegment,
@@ -216,17 +275,24 @@ export function productChurn(
   reputation: number,
   capacityShortfall: number,
   shock = 0,
+  churnBandOverride?: { readonly min: number; readonly max: number },
+  elasticityOverride?: number,
 ): number {
-  const band = SEGMENT_CHURN_BAND[segment];
+  const band = churnBandOverride ?? SEGMENT_CHURN_BAND[segment];
+  const elasticity = elasticityOverride ?? SEGMENT_PRICE_ELASTICITY[segment];
   const mid = (band.min + band.max) / 2;
+  // The churn term scales with the whole size of the move; the ceiling term is
+  // an interpolation and stays on 0..1. In world version 1 no shock above 1 is
+  // reachable, so the two are the same number and nothing there moves.
+  const scaled = Math.max(0, shock);
   const bounded = unit(shock);
   const raw =
     mid -
     QUALITY_CHURN_SENSITIVITY * qualityEdge +
-    PRICE_CHURN_SENSITIVITY * SEGMENT_PRICE_ELASTICITY[segment] * priceEdge -
+    PRICE_CHURN_SENSITIVITY * elasticity * priceEdge -
     REPUTATION_CHURN_SENSITIVITY * (reputation / 100 - 0.5) * 2 +
     CAPACITY_SHORTFALL_CHURN * capacityShortfall +
-    PRICE_SHOCK_CHURN * bounded;
+    PRICE_SHOCK_CHURN * scaled;
   // The band is where a healthy or leaking product sits; a genuinely broken one
   // is allowed to run above it, but never below the segment floor. A repriced
   // one is allowed to run right up to a near-total walkout.
@@ -245,21 +311,152 @@ interface DemandDraft {
   readonly grossAdds: number;
   readonly churn: number;
   readonly retained: number;
+  /**
+   * How much of this line's own capacity kind desired demand would consume:
+   * accelerator-equivalents for "compute" (as it always was), otherwise
+   * dollar-equivalents of the category's own capacityKind bucket — the same
+   * unit `capacityUsd(company, kind) / 1_000_000` is expressed in, so the two
+   * sides of the ratio always agree. Zero and unused for "none".
+   */
   readonly unitsRequired: number;
+  readonly capacityKind: CapacityKind;
   readonly marketingUsd: number;
+  /** True when a required input has no live supplier: the product ships zero units this quarter. */
+  readonly supplyBlocked: boolean;
 }
+
+const EMPTY_SWITCHED_LINES: ReadonlySet<string> = new Set();
 
 /** What the action pass leaves behind for the demand pass. */
 interface StagedProduct {
   readonly plan: ReturnType<typeof marketingPlan>;
   /** How hard each product was repriced this quarter, for the churn model. */
   readonly shockByProduct: ReadonlyMap<string, number>;
+  /** `${productId}|${inputCategoryId}` keys that switched supplier this quarter, for the quality discount. */
+  readonly switchedSupplierLines: ReadonlySet<string>;
 }
 
 /** Demand a company loses to rivals dumping in its segments, keyed `companyId|segment`. */
 type PressureMap = ReadonlyMap<string, { readonly pct: number; readonly from: readonly string[] }>;
 
 const NO_PRESSURE: PressureMap = new Map();
+
+/** Everything about a quarter that is not the product itself. */
+interface DemandInputs {
+  /** The price the product is being demanded at — its own, or a candidate. */
+  readonly priceUsd: number;
+  /** Marketing dollars behind this product this quarter. */
+  readonly marketingUsd: number;
+  /** The sector cycle, upstream supply and regional fit, as one multiplier. */
+  readonly sectorDemandFactor: number;
+  /** The seeded demand draw, or 1 for a forecast, which has no RNG. */
+  readonly noise: number;
+  /** What rivals dumping in this segment leave of new demand, 0..1. */
+  readonly squeeze: number;
+  /** How hard the product was repriced this quarter, for the churn model. */
+  readonly shock: number;
+}
+
+/**
+ * One product's demand for one quarter, before capacity rations it.
+ *
+ * The single definition of the demand model. The phase calls it with the
+ * quarter's RNG draw and the real pressure map; `repriceForecast` calls it with
+ * the draw fixed at 1 and no pressure, so the number a founder is shown on the
+ * Products screen is produced by the same arithmetic that will produce the
+ * number in the report. A second copy of this for previews is exactly how a
+ * preview starts lying.
+ */
+function productDemandDraft(
+  draft: SessionState,
+  company: Company,
+  product: Product,
+  inputs: DemandInputs,
+  switchedSupplierLines: ReadonlySet<string> = EMPTY_SWITCHED_LINES,
+): DemandDraft {
+  const segment = product.segment;
+  // World 1 never resolves a category (isMultiSectorWorld is false), so every
+  // one of these falls straight back to its SEGMENT_* constant and the
+  // arithmetic below is byte-for-byte what it always was. World 2 resolves a
+  // real category — a product's own if it launched with one, else the
+  // deterministic sector/segment default — and uses that line's own numbers.
+  const category = isMultiSectorWorld(draft) ? categoryOf(company, product) : null;
+  const reference = segmentReferencePrice(draft, segment, category?.referencePriceUsd ?? SEGMENT_REFERENCE_PRICE_USD[segment]);
+  const frontier = segmentFrontierQuality(draft, segment);
+  const reputation = segmentReputation(company, SEGMENT_REPUTATION_AUDIENCE[segment]);
+  const elasticity = category?.elasticity;
+  const churnBand = category?.churnBand;
+
+  // What a product built on chosen suppliers actually sells at: its own
+  // quality blended with each live supplier's quality by the input's share.
+  // Exactly `product.qualityScore` in world 1 and for any product with no
+  // resolved inputs, so nothing here moves a number the demand model did not
+  // already produce before supply chains existed.
+  const quality = isMultiSectorWorld(draft) ? effectiveQuality(draft, company, product, switchedSupplierLines) : product.qualityScore;
+  // A required input nobody has filled means the product cannot ship at all
+  // this quarter: booked as zero units, with its own report line, rather than
+  // refused — "realise, not refuse" extends to a founder who launched ahead
+  // of a supplier.
+  const supplyBlocked = isMultiSectorWorld(draft) && requiredInputUnsupplied(draft, company, product);
+
+  const qualityEdge = quality - frontier;
+  const priceEdge = relativePrice(inputs.priceUsd, reference);
+  const qualityFactor = clamp(1 + QUALITY_DEMAND_SENSITIVITY * qualityEdge, QUALITY_FACTOR_BOUNDS.min, QUALITY_FACTOR_BOUNDS.max);
+  const price = priceFactor(segment, inputs.priceUsd, reference, elasticity);
+  const reputationFactor = 0.5 + 0.7 * (reputation / 100);
+  const demand = segmentDemand(draft, company.sectorId, segment);
+  const lift = marketingLift(inputs.marketingUsd, product.activeCustomers * inputs.priceUsd);
+
+  // Past the point elasticity stops answering, new demand decays instead of
+  // sitting flat: without this a price above saturation would add customers at
+  // the same rate as one at the reference and revenue would rise for nothing.
+  // Exactly 1 at or below saturation, and exactly 1 in world version 1, which
+  // has a validator band instead.
+  const saturation = isMultiSectorWorld(draft) ? priceSaturationDecay(inputs.priceUsd, reference) : 1;
+
+  const base = (product.activeCustomers + (category?.seedPool ?? SEGMENT_SEED_POOL[segment])) * (category?.baseAddRate ?? SEGMENT_BASE_ADD_RATE[segment]);
+  const grossAddsRaw = Math.max(
+    0,
+    base *
+      (demand * 2) *
+      qualityFactor *
+      price *
+      reputationFactor *
+      lift *
+      inputs.noise *
+      inputs.sectorDemandFactor *
+      inputs.squeeze *
+      saturation,
+  );
+
+  const churn = supplyBlocked ? 1 : productChurn(segment, qualityEdge, priceEdge, reputation, 0, inputs.shock, churnBand, elasticity);
+  const grossAdds = supplyBlocked ? 0 : grossAddsRaw;
+  const retained = supplyBlocked ? 0 : product.activeCustomers * (1 - churn);
+  const desired = retained + grossAdds;
+  // "compute" is the only kind world 1 ever sees (category is always null
+  // there), and it keeps the exact original accelerator-equivalents formula.
+  // The other kinds are expressed in the same dollar-equivalent unit
+  // `capacityUsd` reads capacity in: desired customers divided by how many a
+  // million dollars of that kind serves.
+  const capacityKind: CapacityKind = category?.capacityKind ?? 'compute';
+  const unitsRequired =
+    capacityKind === 'compute'
+      ? desired / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity))
+      : capacityKind === 'none'
+        ? 0
+        : desired / Math.max(1e-6, category?.capacityYieldPerUnit ?? 1);
+  return {
+    product,
+    desiredCustomers: desired,
+    grossAdds,
+    churn,
+    retained,
+    unitsRequired,
+    capacityKind,
+    marketingUsd: inputs.marketingUsd,
+    supplyBlocked,
+  };
+}
 
 /**
  * Resolve capacity, pricing, demand and churn for every product of every company.
@@ -286,6 +483,14 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
   // anything reads serving capacity: capacity bought this quarter serves this
   // quarter's demand.
   resolveComputeOrders(draft, ctx);
+  // Plant, fleet and grid investments, staged the same way for the same
+  // reason: capacity built this quarter serves this quarter's demand. A no-op
+  // in world version 1, which has no capacity kind but compute.
+  resolveCapacityOrders(draft, ctx);
+  // Suppliers chosen and terms published this quarter, on the same contract:
+  // an input built on this quarter is an input this quarter's quality and
+  // cost reflect. A no-op in world version 1, which has no product categories.
+  const switchedSupplierLines = resolveSupplyOrders(draft, ctx);
 
   // Sector conditions are read by every company, so they are computed once:
   // building them per company would walk the whole company list per company.
@@ -295,13 +500,13 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
 
   if (!isMultiSectorWorld(draft)) {
     for (const company of companies) {
-      resolveCompanyDemand(draft, ctx, rng, economy, company, applyProductActions(draft, ctx, company), NO_PRESSURE);
+      resolveCompanyDemand(draft, ctx, rng, economy, company, applyProductActions(draft, ctx, company, switchedSupplierLines), NO_PRESSURE);
     }
     return;
   }
 
   const staged = new Map<string, StagedProduct>();
-  for (const company of companies) staged.set(company.id, applyProductActions(draft, ctx, company));
+  for (const company of companies) staged.set(company.id, applyProductActions(draft, ctx, company, switchedSupplierLines));
   const pressure = resolvePredation(draft, ctx);
   for (const company of companies) {
     const own = staged.get(company.id);
@@ -311,7 +516,7 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
 }
 
 /** Reprice, launch, sunset and set the marketing plan for one company. */
-function applyProductActions(draft: SessionState, ctx: ResolverContext, company: Company): StagedProduct {
+function applyProductActions(draft: SessionState, ctx: ResolverContext, company: Company, switchedSupplierLines: ReadonlySet<string>): StagedProduct {
   {
     const actions = companyActions(draft, ctx, company.id);
 
@@ -323,7 +528,13 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       if (product === undefined) continue;
       const before = product.pricePerSeat;
       product.pricePerSeat = money(intent.pricePerSeatUsd);
-      shockByProduct.set(product.id, priceShock(before, product.pricePerSeat));
+      // World 1 measures the shock on 0..1 because its validator refused any
+      // move past the top of the band. World 2 has no band, so the shock is
+      // the whole size of the move and the churn model answers all of it.
+      shockByProduct.set(
+        product.id,
+        isMultiSectorWorld(draft) ? priceMoveShock(before, product.pricePerSeat) : priceShock(before, product.pricePerSeat),
+      );
       const eventId = emitEvent(
         draft,
         ctx,
@@ -350,13 +561,20 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       const delivered = unit(intent.targetQuality * (0.55 + 0.45 * capability));
       const id = makeId('prd', company.id, intent.name, ctx.quarter);
       if (company.products.some((p) => p.id === id)) continue;
+      // World 1: no catalogue, so categoryId stays entirely absent from the
+      // product and the frozen world never grows the key. World 2: the
+      // validator has already resolved a real category id onto the intent
+      // (its own choice, or the sector/segment default), so this is never null
+      // here.
+      const multiSector = isMultiSectorWorld(draft);
+      const category = multiSector ? resolveCategory(intent.categoryId, company.sector, intent.segment) : null;
       const product: Product = {
         id,
         name: intent.name,
         segment: intent.segment,
         pricePerSeat: money(intent.pricePerSeatUsd),
         activeCustomers: 0,
-        churnQuarterly: SEGMENT_CHURN_BAND[intent.segment].max,
+        churnQuarterly: category?.churnBand.max ?? SEGMENT_CHURN_BAND[intent.segment].max,
         growthQuarterly: 0,
         grossMarginPct: 0.5,
         computeIntensity: unit(intent.computeIntensity),
@@ -364,6 +582,22 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
         launchedQuarter: ctx.quarter,
         isActive: true,
       };
+      if (category !== null) {
+        product.categoryId = category.id;
+        // Only entries that name one of this category's own inputs survive —
+        // the validator has already checked the ones that do (a live company,
+        // a live product, a matching category, open terms), so this is a
+        // defensive filter, not a second validation pass.
+        product.supply = intent.supply
+          .filter((entry) => category.inputs.some((input) => input.categoryId === entry.inputCategoryId))
+          .map((entry) => ({
+            inputCategoryId: entry.inputCategoryId,
+            supplierCompanyId: entry.supplierCompanyId,
+            supplierProductId: entry.supplierProductId,
+            cutOffNoticeQuarter: null,
+          }));
+        product.supplyTerms = null;
+      }
       company.products.push(product);
       const eventId = emitEvent(
         draft,
@@ -375,6 +609,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
           productId: product.id,
           name: product.name,
           segment: product.segment,
+          categoryId: category?.id ?? null,
           pricePerSeatUsd: product.pricePerSeat,
           targetQuality: intent.targetQuality,
           deliveredQuality: delivered,
@@ -384,7 +619,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       );
       ctx.log({
         phase: 'product_demand_resolution',
-        text: `${company.name} launched ${product.name} into ${product.segment.replace(/_/g, ' ')} at quality ${(delivered * 100).toFixed(0)}.`,
+        text: `${company.name} launched ${product.name}${category === null ? '' : ` (${category.label})`} into ${product.segment.replace(/_/g, ' ')} at quality ${(delivered * 100).toFixed(0)}.`,
         deltaLabel: `q ${(delivered * 100).toFixed(0)}`,
         refEventIds: [eventId],
         tone: delivered >= intent.targetQuality * 0.9 ? 'positive' : 'warning',
@@ -426,8 +661,55 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
     /* --- marketing plan --------------------------------------------------- */
     const plan = marketingPlan(company, actions);
     company.financials.marketing = money(plan.recurringUsd + plan.oneOffUsd);
-    return { plan, shockByProduct };
+    return { plan, shockByProduct, switchedSupplierLines };
   }
+}
+
+/** How far one capacity kind's rationing goes for a company this quarter. */
+interface KindRationing {
+  readonly capacityRatio: number;
+  readonly baseRetention: number;
+  readonly availableUnits: number;
+  readonly requiredUnits: number;
+}
+
+/**
+ * Ration every capacity kind a company's staged demand touches, one bucket per
+ * kind. World 1 (and any world-2 product with no category) only ever produces
+ * the "compute" kind, so this reduces to exactly the single-bucket arithmetic
+ * the phase always ran: same `serving`, same `unitsRequired`, same
+ * `capacityRatio`, same `baseRetention`. `repriceForecast` calls this too, so
+ * the ratio a forecast shows and the ratio the resolved quarter applies are
+ * the same function at the same inputs.
+ */
+function rationCapacityByKind(draft: SessionState, company: Company, drafts: readonly DemandDraft[]): ReadonlyMap<CapacityKind, KindRationing> {
+  const requiredByKind = new Map<CapacityKind, number>();
+  for (const d of drafts) requiredByKind.set(d.capacityKind, (requiredByKind.get(d.capacityKind) ?? 0) + d.unitsRequired);
+
+  const out = new Map<CapacityKind, KindRationing>();
+  for (const [kind, requiredUnits] of requiredByKind) {
+    if (kind === 'none') {
+      out.set(kind, { capacityRatio: 1, baseRetention: 1, availableUnits: Number.POSITIVE_INFINITY, requiredUnits });
+      continue;
+    }
+    // A company that has never recorded a plant/fleet/grid position — never
+    // invested, and not seeded with one — is not tracked yet, not tracked at
+    // zero. Rationing it to nothing the instant a category resolves onto an
+    // untracked kind would crush every company this mechanic reaches before
+    // it, the seeded rivals of a promoted save included; "absent means the
+    // neutral value" is the same rule the rest of this priced-economy block
+    // reads by. Once `company.capacity` exists — seeded, or from a first
+    // invest_capacity — the real balance rations exactly as compute does.
+    const availableUnits =
+      kind === 'compute'
+        ? servingComputeUnits(draft, company)
+        : company.capacity === undefined
+          ? Number.POSITIVE_INFINITY
+          : capacityUsd(company, kind) / 1_000_000;
+    const capacityRatio = requiredUnits <= 0 ? 1 : Math.min(1, ratio(availableUnits, requiredUnits, 1));
+    out.set(kind, { capacityRatio, baseRetention: 1 - CAPACITY_BASE_LOSS_CEILING * (1 - capacityRatio), availableUnits, requiredUnits });
+  }
+  return out;
 }
 
 /** Resolve one company's demand, capacity rationing and churn. */
@@ -441,7 +723,7 @@ function resolveCompanyDemand(
   pressureMap: PressureMap,
 ): void {
   {
-    const { plan, shockByProduct } = staged;
+    const { plan, shockByProduct, switchedSupplierLines } = staged;
     const products = activeProducts(company);
     if (products.length === 0) return;
 
@@ -459,58 +741,37 @@ function resolveCompanyDemand(
     const drafts: DemandDraft[] = [];
     for (const product of products) {
       const segment = product.segment;
-      const reference = segmentReferencePrice(draft, segment, SEGMENT_REFERENCE_PRICE_USD[segment]);
-      const frontier = segmentFrontierQuality(draft, segment);
-      const audience = SEGMENT_REPUTATION_AUDIENCE[segment];
-      const reputation = segmentReputation(company, audience);
-
-      const qualityEdge = product.qualityScore - frontier;
-      const priceEdge = relativePrice(product.pricePerSeat, reference);
-      const qualityFactor = clamp(
-        1 + QUALITY_DEMAND_SENSITIVITY * qualityEdge,
-        QUALITY_FACTOR_BOUNDS.min,
-        QUALITY_FACTOR_BOUNDS.max,
-      );
-      const price = priceFactor(segment, product.pricePerSeat, reference);
-      const reputationFactor = 0.5 + 0.7 * (reputation / 100);
-      const demand = segmentDemand(draft, company.sectorId, segment);
       const share = (plan.bySegment[segment] ?? 0) / Math.max(1, segmentProductCount[segment] ?? 1);
-      const lift = marketingLift(share, product.activeCustomers * product.pricePerSeat);
+      // The only stateful term, drawn here so the RNG sequence stays exactly
+      // where it was: one draw per product, in product order.
       const noise = rng.range(DEMAND_NOISE_BAND.min, DEMAND_NOISE_BAND.max);
-
-      // One more multiplicative term, in the same place as every other one: what
-      // rivals dumping in this segment took off the top. Exactly zero when nobody
-      // is, and bounded to a quarter of new demand however many of them there are.
-      const squeeze = 1 - (pressureMap.get(`${company.id}|${segment}`)?.pct ?? 0);
-
-      const base = (product.activeCustomers + SEGMENT_SEED_POOL[segment]) * SEGMENT_BASE_ADD_RATE[segment];
-      const grossAdds = Math.max(0, base * (demand * 2) * qualityFactor * price * reputationFactor * lift * noise * sectorDemandFactor * squeeze);
-
-      const churn = productChurn(segment, qualityEdge, priceEdge, reputation, 0, shockByProduct.get(product.id) ?? 0);
-      const retained = product.activeCustomers * (1 - churn);
-      const desired = retained + grossAdds;
-      drafts.push({
-        product,
-        desiredCustomers: desired,
-        grossAdds,
-        churn,
-        retained,
-        unitsRequired: desired / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity)),
-        marketingUsd: share,
-      });
+      drafts.push(
+        productDemandDraft(
+          draft,
+          company,
+          product,
+          {
+            priceUsd: product.pricePerSeat,
+            marketingUsd: share,
+            sectorDemandFactor,
+            noise,
+            // What rivals dumping in this segment took off the top. Exactly zero
+            // when nobody is, and bounded to a quarter of new demand however many
+            // of them there are.
+            squeeze: 1 - (pressureMap.get(`${company.id}|${segment}`)?.pct ?? 0),
+            shock: shockByProduct.get(product.id) ?? 0,
+          },
+          switchedSupplierLines,
+        ),
+      );
     }
 
-    /* --- capacity constraint ---------------------------------------------- */
-    const serving = servingComputeUnits(draft, company);
-    let unitsRequired = 0;
-    for (const d of drafts) unitsRequired += d.unitsRequired;
-    const capacityRatio = unitsRequired <= 0 ? 1 : Math.min(1, ratio(serving, unitsRequired, 1));
-    const constrained = capacityRatio < 0.999;
-    // What is left of the retained base after a shortage. New demand is rationed
-    // by the capacity ratio outright; the base only degrades, and never by more
-    // than `CAPACITY_BASE_LOSS_CEILING` in one quarter, so losing the compute
-    // starts a collapse instead of finishing one.
-    const baseRetention = 1 - CAPACITY_BASE_LOSS_CEILING * (1 - capacityRatio);
+    /* --- capacity constraint, one bucket per capacity kind ------------------ */
+    // World 1 (and any world-2 product with no category) only ever produces
+    // the "compute" bucket, so this is exactly the original single-bucket
+    // rationing, unchanged in every number it produces.
+    const rationing = rationCapacityByKind(draft, company, drafts);
+    const constrained = [...rationing.values()].some((bucket) => bucket.capacityRatio < 0.999);
 
     let servedCustomers = 0;
     let lostToCapacity = 0;
@@ -518,6 +779,9 @@ function resolveCompanyDemand(
     for (const d of drafts) {
       const product = d.product;
       const before = product.activeCustomers;
+      const bucket = rationing.get(d.capacityKind);
+      const capacityRatio = bucket?.capacityRatio ?? 1;
+      const baseRetention = bucket?.baseRetention ?? 1;
       const allowed = Math.min(d.desiredCustomers, d.grossAdds * capacityRatio + d.retained * baseRetention);
       const shortfall = unit(ratio(d.desiredCustomers - allowed, Math.max(1, d.desiredCustomers)));
       // Demand that cannot be served is not deferred, it is lost — and it makes
@@ -559,12 +823,22 @@ function resolveCompanyDemand(
           // So a squeezed rival can see who is squeezing them.
           rivalPricePressurePct: Math.round((pressureMap.get(`${company.id}|${product.segment}`)?.pct ?? 0) * 100),
           pressureFrom: [...(pressureMap.get(`${company.id}|${product.segment}`)?.from ?? [])],
+          supplyBlocked: d.supplyBlocked,
         },
         'company',
       );
 
       const change = ratio(after - before, Math.max(1, before));
-      if (shortfall > 0) {
+      if (d.supplyBlocked) {
+        ctx.log({
+          phase: 'product_demand_resolution',
+          text: `${product.name} shipped nothing this quarter: a required input has no live supplier. Choose one with choose_supplier, or use the open market.`,
+          deltaLabel: '0 units',
+          refEventIds: [eventId],
+          tone: 'negative',
+          subjectId: company.id,
+        });
+      } else if (shortfall > 0) {
         ctx.log({
           phase: 'product_demand_resolution',
           text: `capacity_constraint: ${company.name} could not serve ${Math.round(d.desiredCustomers - allowed)} customers of ${product.name}; the demand was lost and churn rose to ${(product.churnQuarterly * 100).toFixed(1)}%.`,
@@ -586,33 +860,45 @@ function resolveCompanyDemand(
     }
 
     /* --- compute utilisation follows what was actually served -------------- */
+    // Only "compute"-kind products draw on held compute: a plant, fleet or
+    // grid line's customers are served by that other capacity kind and would
+    // otherwise inflate this company's compute utilisation for free.
     const held = heldComputeUnits(draft, company);
     if (held > 0) {
       let unitsUsed = 0;
-      for (const product of activeProducts(company)) {
-        unitsUsed += product.activeCustomers / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity));
+      for (const d of drafts) {
+        if (d.capacityKind !== 'compute') continue;
+        unitsUsed += d.product.activeCustomers / Math.max(1e-6, customersPerUnit(draft, d.product.computeIntensity));
       }
       const training = held * unit(company.compute.trainingAllocation);
       company.compute.computeUtilisation = unit(ratio(unitsUsed + training, held));
     }
 
+    // One summary row per constrained capacity kind — "the same words it uses
+    // for compute", now for whichever kind actually bound. World 1 only ever
+    // has the "compute" bucket, so this reduces to exactly the one row it
+    // always emitted.
     if (constrained && lostToCapacity > 0) {
-      emitEvent(
-        draft,
-        ctx,
-        'cost_recognised',
-        company.id,
-        null,
-        {
-          kind: 'capacity_constraint',
-          servingUnits: serving,
-          unitsRequired,
-          capacityRatio,
-          customersLost: Math.round(lostToCapacity),
-          customersServed: servedCustomers,
-        },
-        'company',
-      );
+      for (const [kind, bucket] of rationing) {
+        if (bucket.capacityRatio >= 0.999) continue;
+        emitEvent(
+          draft,
+          ctx,
+          'cost_recognised',
+          company.id,
+          null,
+          {
+            kind: 'capacity_constraint',
+            capacityKind: kind,
+            servingUnits: bucket.availableUnits,
+            unitsRequired: bucket.requiredUnits,
+            capacityRatio: bucket.capacityRatio,
+            customersLost: Math.round(lostToCapacity),
+            customersServed: servedCustomers,
+          },
+          'company',
+        );
+      }
     }
   }
 }
@@ -620,6 +906,24 @@ function resolveCompanyDemand(
 /* -------------------------------------------------------------------------- */
 /*  Dumping and price wars                                                     */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * The unclamped gross margin a hypothetical `customers` × `priceUsd` would run
+ * at, for `product`'s own serving cost (compute intensity only — the product
+ * itself is read for nothing else, so a forecast can call this at a candidate
+ * price nobody has set yet).
+ *
+ * The general form `unclampedGrossMargin` and `repriceForecast` both call, so
+ * a margin read off a live product and a margin read off a forecast are the
+ * same arithmetic at different inputs, never two copies of it.
+ */
+function grossMarginAt(draft: SessionState, product: Product, customers: number, priceUsd: number): number {
+  const revenue = customers * priceUsd;
+  if (!(revenue > 0)) return 0;
+  const unitsUsed = customers / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity));
+  const servingCost = unitsUsed * CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, draft.world.compute.spotPrice) * 0.6 + revenue * 0.04;
+  return 1 - servingCost / revenue;
+}
 
 /**
  * The unclamped gross margin a product is running at.
@@ -631,11 +935,7 @@ function resolveCompanyDemand(
  * selling under cost reads as negative.
  */
 export function unclampedGrossMargin(draft: SessionState, product: Product): number {
-  const revenue = product.activeCustomers * product.pricePerSeat;
-  if (!(revenue > 0)) return 0;
-  const unitsUsed = product.activeCustomers / Math.max(1e-6, customersPerUnit(draft, product.computeIntensity));
-  const servingCost = unitsUsed * CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, draft.world.compute.spotPrice) * 0.6 + revenue * 0.04;
-  return 1 - servingCost / revenue;
+  return grossMarginAt(draft, product, product.activeCustomers, product.pricePerSeat);
 }
 
 /**
@@ -803,4 +1103,117 @@ function resolvePredation(draft: SessionState, ctx: ResolverContext): PressureMa
   }
 
   return pressureMap;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Reprice forecast                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** What the engine expects one product to do at a price, before and after. */
+export interface RepriceForecast {
+  readonly productId: string;
+  /** The price the product carries today. */
+  readonly priceNowUsd: number;
+  /** The price being considered. */
+  readonly priceAfterUsd: number;
+  readonly customersNow: number;
+  readonly customersAfter: number;
+  readonly revenueNowUsd: number;
+  readonly revenueAfterUsd: number;
+  /** Share of the base expected to leave in the quarter the move lands, 0..1. */
+  readonly churnAfter: number;
+  /** New customers expected in that quarter at the new price. */
+  readonly grossAddsAfter: number;
+  /** True when serving capacity, not demand, is what bounds the result. */
+  readonly capacityConstrained: boolean;
+  /** Gross margin at today's price and customer count. Unclamped: can run negative. */
+  readonly marginNowPct: number;
+  /** Gross margin the candidate price and its forecast customer count would run at. Unclamped. */
+  readonly marginAfterPct: number;
+}
+
+/**
+ * What repricing one product to `priceUsd` is expected to do, next quarter.
+ *
+ * Runs the demand model — the same `productDemandDraft` the phase runs, with
+ * the same capacity rationing — twice: once at the price the product carries
+ * and once at the candidate. The RNG term is fixed at its midpoint of 1 and
+ * rival price pressure is left out, because neither is knowable while the
+ * founder is still deciding; everything else is the engine's own arithmetic.
+ *
+ * Pure and read-only. Returns null when the product is not this company's or is
+ * no longer selling.
+ */
+export function repriceForecast(session: SessionState, companyId: string, productId: string, priceUsd: number): RepriceForecast | null {
+  const company = session.companies.find((candidate) => candidate.id === companyId);
+  if (company === undefined) return null;
+  const product = company.products.find((candidate) => candidate.id === productId);
+  if (product === undefined || !product.isActive) return null;
+
+  const products = activeProducts(company);
+  const economy = sectorEconomy(session);
+  const sectorDemandFactor = economy[sectorOf(company)].demandMultiplier * companyRegionFitFactor(session, company);
+  // Marketing is spread evenly over what the company sells: the plan for the
+  // open quarter is not settled yet, and pretending it is zero would understate
+  // every forecast on the screen.
+  const marketingUsd = products.length === 0 ? 0 : company.financials.marketing / products.length;
+  const candidate = Math.max(0, priceUsd);
+  const shock = isMultiSectorWorld(session)
+    ? priceMoveShock(product.pricePerSeat, candidate)
+    : priceShock(product.pricePerSeat, candidate);
+
+  /** The whole company's demand with one product held at `priceFor`. */
+  const run = (priceFor: (candidateProduct: Product) => number, shockFor: (candidateProduct: Product) => number): DemandDraft[] =>
+    products.map((entry) =>
+      productDemandDraft(session, company, entry, {
+        priceUsd: priceFor(entry),
+        marketingUsd,
+        sectorDemandFactor,
+        noise: 1,
+        squeeze: 1,
+        shock: shockFor(entry),
+      }),
+    );
+
+  /**
+   * Apply the phase's own per-kind capacity rationing and read this product's
+   * line off its own bucket — the same `rationCapacityByKind` the resolved
+   * quarter runs, so a forecast and the quarter it forecasts never disagree
+   * about which capacity a line is even rationed against.
+   */
+  const settle = (drafts: DemandDraft[]): { customers: number; constrained: boolean } => {
+    const own = drafts.find((entry) => entry.product.id === product.id);
+    if (own === undefined) return { customers: 0, constrained: false };
+    const bucket = rationCapacityByKind(session, company, drafts).get(own.capacityKind);
+    const capacityRatio = bucket?.capacityRatio ?? 1;
+    const baseRetention = bucket?.baseRetention ?? 1;
+    const allowed = Math.min(own.desiredCustomers, own.grossAdds * capacityRatio + own.retained * baseRetention);
+    return { customers: count(allowed), constrained: capacityRatio < 0.999 };
+  };
+
+  const now = settle(run((entry) => entry.pricePerSeat, () => 0));
+  const afterDrafts = run(
+    (entry) => (entry.id === product.id ? candidate : entry.pricePerSeat),
+    (entry) => (entry.id === product.id ? shock : 0),
+  );
+  const after = settle(afterDrafts);
+  const own = afterDrafts.find((entry) => entry.product.id === product.id);
+
+  return {
+    productId: product.id,
+    priceNowUsd: product.pricePerSeat,
+    priceAfterUsd: candidate,
+    customersNow: now.customers,
+    customersAfter: after.customers,
+    revenueNowUsd: money(now.customers * product.pricePerSeat),
+    revenueAfterUsd: money(after.customers * candidate),
+    churnAfter: unit(own?.churn ?? 0),
+    grossAddsAfter: count(own?.grossAdds ?? 0),
+    capacityConstrained: after.constrained,
+    // Unclamped on purpose: "a price cut is a price cut" extends to the margin
+    // it produces, and a deep cut or a demand-collapsing rise can genuinely run
+    // negative. The solvency clock is the consequence, not a clamp here.
+    marginNowPct: grossMarginAt(session, product, now.customers, product.pricePerSeat),
+    marginAfterPct: grossMarginAt(session, product, after.customers, candidate),
+  };
 }

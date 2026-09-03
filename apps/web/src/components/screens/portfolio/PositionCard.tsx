@@ -46,6 +46,13 @@ export interface PositionCardProps {
   readonly onAct?: (action: PortfolioAction) => void;
   /** Where tapping the card itself goes: the target's own screen. */
   readonly href?: string | null;
+  /**
+   * STAGE 5: a slot for a control the eight `PortfolioAction`s do not cover —
+   * today, a subsidiary row's "Direct this company", which switches the
+   * active company rather than opening a ticket. Rendered after the ordinary
+   * actions row, undrawn when there is nothing to put there.
+   */
+  readonly extraActions?: ReactNode;
 }
 
 export function PositionCard({
@@ -65,6 +72,7 @@ export function PositionCard({
   actions = [],
   onAct,
   href = null,
+  extraActions,
 }: PositionCardProps): React.JSX.Element {
   const gain = gainPct(costUsd, valueUsd);
 
@@ -142,6 +150,8 @@ export function PositionCard({
           })}
         </div>
       )}
+
+      {extraActions === undefined ? null : <div className="mt-2 flex flex-wrap gap-2">{extraActions}</div>}
     </article>
   );
 }

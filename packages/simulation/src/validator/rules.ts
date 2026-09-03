@@ -1,8 +1,7 @@
 /**
  * @frontier/simulation — validator/rules.ts
  *
- * One rule per action type. All forty-one of them, in the order
- * `ACTION_TYPES` declares them.
+ * One rule per action type, in the order `ACTION_TYPES` declares them.
  *
  * The table is a `Record<ActionType, Rule>`, so the compiler refuses to build
  * this file if the union gains a member and this table does not. An action type
@@ -32,12 +31,15 @@ import type {
   SessionState,
   StaffRole,
 } from '@frontier/contracts';
-import { ANTITRUST_EXPOSURE_WEIGHTS, DIVIDEND_MAX_PAYOUT_PCT, TOLL_FLOOR_SHARE } from '@frontier/contracts';
+import { ANTITRUST_EXPOSURE_WEIGHTS, DIVIDEND_MAX_PAYOUT_PCT, TOLL_FLOOR_SHARE, defaultCategoryFor, resolveCategory } from '@frontier/contracts';
 import { maxTollForCompany } from '../economy/prices';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { solvencyCommitmentNote } from '../companies/solvency';
 import { resolveCloudSeller, resolveComputeSeller } from '../companies/sellers';
+import { categoryOf } from '../companies/categories';
+import { dependencySatisfied } from '../research/nodes';
+import { expectedFill, isShortFill, realisesAvailability, reservableUnits, shortFillLine } from '../fills';
 import {
   COMP_BAND_MULTIPLIER,
   CLOUD_UNIT_COST_USD_PER_QUARTER,
@@ -114,11 +116,49 @@ export function quarterlyHireCostUsd(draft: SessionState, role: StaffRole, band:
   return (base * COMP_BAND_MULTIPLIER[band] * pressure) / 4;
 }
 
-/** Accelerator-equivalents the market could free for one new reservation. */
-export function reservableUnits(draft: SessionState): number {
-  const installed = installedComputeBase(draft);
-  const supply = draft.world.compute.acceleratorSupply;
-  return Math.max(MIN_RESERVABLE_UNITS, Math.round(installed * RESERVABLE_SHARE_OF_INSTALLED_BASE * supply));
+// Defined in `../fills` so the validator, the compute phase and the interface
+// all read one number; re-exported here because this module is where callers
+// have always imported it from.
+export { reservableUnits };
+
+/**
+ * Record what the world is expected to give, without touching the instruction.
+ *
+ * The world-2 shape of an availability bound: the action stays `accepted`, the
+ * note carries `partial_fill_expected`, and the phase that owns the action
+ * fills what it can and writes the shortfall row. One source — `expectedFill` —
+ * so the note, the screen's preview and the report cannot disagree.
+ */
+function noteExpectedFill(ctx: RuleContext, verdict: Verdict<ActionIntent>, intent: ActionIntent): void {
+  const fill = expectedFill(ctx.draft, ctx.company.id, intent);
+  if (isShortFill(fill)) verdict.note('partial_fill_expected', shortFillLine(fill));
+}
+
+/**
+ * The research-specific shape of the same note.
+ *
+ * `expectedFill`'s `researchFill` is deliberately pure over the session alone,
+ * so it cannot see what an earlier `start_research_project` in the *same*
+ * batch already reserved against `ctx.budget` — a batch of two programmes,
+ * both asking for the last of the compute, would otherwise have the second
+ * note say the ask fits, because in isolation it would. This reads the
+ * batch-aware free counts the rule already computed, so the note the founder
+ * sees agrees with what `ctx.budget` actually holds committed by the time it
+ * fires — the one thing `expectedFill` cannot promise across a batch.
+ */
+function noteResearchFill(
+  verdict: Verdict<ActionIntent>,
+  researchersAsked: number,
+  freeResearchers: number,
+  computeAsked: number,
+  freeCompute: number,
+): void {
+  if (researchersAsked <= freeResearchers && computeAsked <= freeCompute) return;
+  const researchersShort = researchersAsked > freeResearchers;
+  const line = researchersShort
+    ? `${Math.max(0, freeResearchers)} of ${researchersAsked} researchers are free; the rest are on other programmes.`
+    : `${Math.max(0, freeCompute)} of ${computeAsked} accelerator-equivalents are free; the rest are committed elsewhere.`;
+  verdict.note('partial_fill_expected', line);
 }
 
 /**
@@ -215,40 +255,53 @@ const startResearchProject: Rule<'start_research_project'> = (intent, verdict, c
   }
 
   const freeResearchers = Math.max(0, ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id));
-  if (intent.researchersAssigned > freeResearchers) {
-    if (freeResearchers <= 0) {
-      verdict.reject('insufficient_headcount', 'Every researcher is already assigned to another programme.');
-      return;
-    }
-    verdict.clamp(
-      (draft) => {
-        draft.researchersAssigned = freeResearchers;
-      },
-      'insufficient_headcount',
-      `Researchers reduced from ${intent.researchersAssigned} to ${freeResearchers}: the rest are on other programmes.`,
-    );
-  }
-
   // Headroom is what the company holds (cloud included from world version 2)
   // less running programmes; what earlier actions in this batch already put on
   // new programmes comes off on top of that.
   const freeCompute = Math.max(0, researchComputeHeadroom(ctx.draft, ctx.company) - ctx.budget.committedCompute(ctx.company.id));
-  if (intent.computeUnits > freeCompute) {
-    verdict.clamp(
-      (draft) => {
-        draft.computeUnits = Math.max(0, freeCompute);
-      },
-      'insufficient_compute',
-      `Compute reduced from ${intent.computeUnits} to ${Math.max(0, freeCompute)} accelerator-equivalents: the rest is committed elsewhere.`,
-    );
+
+  if (solvencyWorld(ctx)) {
+    // World 2: a company free of researchers or compute is not malformed —
+    // the programme opens on the ask, and `ensureResearchProjects` resources it
+    // with whatever is actually free when the quarter resolves, reporting the
+    // shortfall as a `partial_fill`. Neither headcount nor compute gates the
+    // instruction here.
+    noteResearchFill(verdict, intent.researchersAssigned, freeResearchers, intent.computeUnits, freeCompute);
+  } else {
+    if (intent.researchersAssigned > freeResearchers) {
+      if (freeResearchers <= 0) {
+        verdict.reject('insufficient_headcount', 'Every researcher is already assigned to another programme.');
+        return;
+      }
+      verdict.clamp(
+        (draft) => {
+          draft.researchersAssigned = freeResearchers;
+        },
+        'insufficient_headcount',
+        `Researchers reduced from ${intent.researchersAssigned} to ${freeResearchers}: the rest are on other programmes.`,
+      );
+    }
+    if (intent.computeUnits > freeCompute) {
+      verdict.clamp(
+        (draft) => {
+          draft.computeUnits = Math.max(0, freeCompute);
+        },
+        'insufficient_compute',
+        `Compute reduced from ${intent.computeUnits} to ${Math.max(0, freeCompute)} accelerator-equivalents: the rest is committed elsewhere.`,
+      );
+    }
   }
 
   affordable(ctx, verdict, intent.budgetUsd, 'The programme budget', (draft, allowed) => {
     draft.budgetUsd = allowed;
   });
 
-  const assigned = verdict.current.researchersAssigned;
-  const compute = verdict.current.computeUnits;
+  // What is actually reserved against this batch's budget is always the
+  // expectation, never the unclamped ask: a second research action in the same
+  // batch has to see the researchers and compute this one is really going to
+  // take, not the larger number world 2 left on the verdict.
+  const assigned = Math.min(verdict.current.researchersAssigned, freeResearchers);
+  const compute = Math.min(verdict.current.computeUnits, freeCompute);
   ctx.reservations.push(() => {
     ctx.budget.commitStaff(ctx.company.id, 'researchers', assigned);
     ctx.budget.commitCompute(ctx.company.id, compute);
@@ -282,28 +335,35 @@ const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict,
     0,
     ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id) + project.talentAllocated,
   );
-  if (intent.researchersAssigned > freeResearchers) {
-    verdict.clamp(
-      (draft) => {
-        draft.researchersAssigned = freeResearchers;
-      },
-      'insufficient_headcount',
-      `Researchers reduced from ${intent.researchersAssigned} to ${freeResearchers}: the rest are on other programmes.`,
-    );
-  }
-
   const freeCompute = Math.max(
     0,
     researchComputeHeadroom(ctx.draft, ctx.company) - ctx.budget.committedCompute(ctx.company.id) + project.computeAllocated,
   );
-  if (intent.computeUnits > freeCompute) {
-    verdict.clamp(
-      (draft) => {
-        draft.computeUnits = freeCompute;
-      },
-      'insufficient_compute',
-      `Compute reduced from ${intent.computeUnits} to ${freeCompute} accelerator-equivalents: the rest is committed elsewhere.`,
-    );
+
+  if (solvencyWorld(ctx)) {
+    // World 2: the re-resourcing runs whole; `applyResearchAdjustments` gives
+    // the programme what is actually free and reports a `partial_fill` for the
+    // rest, exactly as opening a programme does.
+    noteResearchFill(verdict, intent.researchersAssigned, freeResearchers, intent.computeUnits, freeCompute);
+  } else {
+    if (intent.researchersAssigned > freeResearchers) {
+      verdict.clamp(
+        (draft) => {
+          draft.researchersAssigned = freeResearchers;
+        },
+        'insufficient_headcount',
+        `Researchers reduced from ${intent.researchersAssigned} to ${freeResearchers}: the rest are on other programmes.`,
+      );
+    }
+    if (intent.computeUnits > freeCompute) {
+      verdict.clamp(
+        (draft) => {
+          draft.computeUnits = freeCompute;
+        },
+        'insufficient_compute',
+        `Compute reduced from ${intent.computeUnits} to ${freeCompute} accelerator-equivalents: the rest is committed elsewhere.`,
+      );
+    }
   }
 
   // Only the increase is a new call on cash: the programme was already going to
@@ -315,8 +375,8 @@ const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict,
     });
   }
 
-  const assigned = verdict.current.researchersAssigned;
-  const compute = verdict.current.computeUnits;
+  const assigned = Math.min(verdict.current.researchersAssigned, freeResearchers);
+  const compute = Math.min(verdict.current.computeUnits, freeCompute);
   ctx.reservations.push(() => {
     ctx.budget.commitStaff(ctx.company.id, 'researchers', Math.max(0, assigned - project.talentAllocated));
     ctx.budget.commitCompute(ctx.company.id, Math.max(0, compute - project.computeAllocated));
@@ -373,10 +433,23 @@ const setProductPrice: Rule<'set_product_price'> = (intent, verdict, ctx) => {
     verdict.reject('requirement_not_met', `${product.name} has been sunset and cannot be repriced.`);
     return;
   }
+  if (intent.pricePerSeatUsd < 0) {
+    verdict.reject('illegal_value', 'A price cannot be negative.');
+    return;
+  }
 
-  // A price may move a long way over a year and only so far in one quarter. The
-  // band is the range the demand model's elasticity is defined on: outside it
-  // customers stop responding and revenue rises with the price for nothing.
+  // World 1: a price may move a long way over a year and only so far in one
+  // quarter, and the band is enforced here because it is where the frozen
+  // world always enforced it.
+  //
+  // World 2: "a price cut is a price cut" — a founder may reprice to anything,
+  // including zero. There is no band to clamp to. The consequence is realised
+  // in the demand model instead: `priceSaturationDecay` and the unbounded
+  // `priceMoveShock` in `companies/products.ts` make a move big enough to
+  // leave the model's defined range cost the base its customers over a few
+  // quarters, rather than being refused or reduced here.
+  if (isMultiSectorWorld(ctx.draft)) return;
+
   if (product.pricePerSeat <= 0) return;
   const floor = product.pricePerSeat * PRICE_MOVE_BAND.min;
   const ceiling = product.pricePerSeat * PRICE_MOVE_BAND.max;
@@ -400,6 +473,78 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
     verdict.reject('duplicate_action', `${ctx.company.name} already sells a product called ${clash.name}.`);
     return;
   }
+
+  // World 2: a launch resolves to a real catalogue category — the company's
+  // own choice, or the deterministic sector/segment default when it left the
+  // choice to the engine — and that category's requiresNodeIds is a structural
+  // gate: not something a bigger cheque or a smaller launch works around, so
+  // it is refused rather than clamped, exactly as stage 1's table refuses only
+  // the impossible. World 1 has no catalogue, so nothing here ever runs for it.
+  if (isMultiSectorWorld(ctx.draft)) {
+    const category = resolveCategory(intent.categoryId, ctx.company.sector, intent.segment);
+    const missing = category.requiresNodeIds.filter((nodeId) => !dependencySatisfied(ctx.draft, nodeId, ctx.company.id));
+    if (missing.length > 0) {
+      const titles = missing
+        .map((nodeId) => ctx.draft.techGraph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId)
+        .join(', ');
+      verdict.reject(
+        'requirement_not_met',
+        `${ctx.company.name} cannot launch into ${category.label} without ${titles}: achieve it, or have public access to it, first.`,
+      );
+      return;
+    }
+    if (intent.categoryId === null) {
+      verdict.clamp(
+        (draft) => {
+          draft.categoryId = category.id;
+        },
+        'unknown_target',
+        `No category chosen; launching into ${category.label}, the default line for ${ctx.company.name}'s sector and this segment.`,
+      );
+    } else if (intent.categoryId !== category.id) {
+      // Named an id the catalogue does not have: resolved to the same default
+      // a null would have picked, and said so.
+      verdict.clamp(
+        (draft) => {
+          draft.categoryId = category.id;
+        },
+        'unknown_target',
+        `"${intent.categoryId}" is not a product category; launching into ${category.label} instead.`,
+      );
+    }
+
+    // Suppliers named at launch: structural checks only, the same ones
+    // choose_supplier runs — an input the category does not declare, a
+    // supplier that does not exist or is closed to this buyer, or the launch
+    // naming itself. An invalid entry is dropped rather than failing the
+    // whole launch; a founder who got one supplier wrong should not lose the
+    // product over it.
+    const validSupply = intent.supply.filter((entry) => {
+      const input = category.inputs.find((candidate) => candidate.categoryId === entry.inputCategoryId);
+      if (input === undefined) return false;
+      if (entry.supplierCompanyId === null) return true;
+      const supplierCompany = ctx.draft.companies.find((candidate) => candidate.id === entry.supplierCompanyId);
+      if (supplierCompany === undefined || !supplierCompany.isActive) return false;
+      const supplierProduct = supplierCompany.products.find((candidate) => candidate.id === entry.supplierProductId && candidate.isActive);
+      if (supplierProduct === undefined) return false;
+      const supplierCategory = categoryOf(supplierCompany, supplierProduct);
+      if (supplierCategory.id !== entry.inputCategoryId || !supplierCategory.canSupply) return false;
+      const terms = supplierProduct.supplyTerms ?? null;
+      if (terms === null || terms.blockedCustomerIds.includes(ctx.company.id)) return false;
+      if (!terms.openToAll && !terms.exclusiveCustomerIds.includes(ctx.company.id)) return false;
+      return true;
+    });
+    if (validSupply.length !== intent.supply.length) {
+      verdict.clamp(
+        (draft) => {
+          draft.supply = validSupply;
+        },
+        'unknown_target',
+        `${intent.supply.length - validSupply.length} named supplier(s) could not be resolved and were dropped; the rest of the launch went ahead.`,
+      );
+    }
+  }
+
   affordable(ctx, verdict, intent.launchMarketingUsd, 'Launch marketing', (draft, allowed) => {
     draft.launchMarketingUsd = allowed;
   });
@@ -511,53 +656,64 @@ const hire: Rule<'hire'> = (intent, verdict, ctx) => {
 
 const layoff: Rule<'layoff'> = (intent, verdict, ctx) => {
   const inRole = ctx.budget.availableStaff(ctx.company, intent.role);
-  if (inRole <= 0) {
-    verdict.reject('insufficient_headcount', `${ctx.company.name} employs nobody in ${intent.role}.`);
-    return;
-  }
-  let count = intent.count;
-  if (count > inRole) {
-    count = inRole;
-    verdict.clamp(
-      (draft) => {
-        draft.count = inRole;
-      },
-      'insufficient_headcount',
-      `Reduction capped at ${inRole}: that is the whole ${intent.role} team.`,
-    );
-  }
 
-  const perHead = quarterlyHireCostUsd(ctx.draft, intent.role, 'market') * intent.severanceQuartersOfPay;
-  const available = ctx.budget.availableCash(ctx.company);
-  if (perHead > 0 && count * perHead > available && solvencyWorld(ctx)) {
-    // A company short of cash is exactly the company that needs to cut. Refusing
-    // the severance for want of cash would trap it in the payroll it is trying
-    // to escape, so the reduction runs whole and the note states the landing.
-    const staffed = count;
-    commitCashWithNote(ctx, verdict, count * perHead);
-    ctx.reservations.push(() => ctx.budget.commitStaff(ctx.company.id, intent.role, staffed));
-    return;
-  }
-  if (perHead > 0 && count * perHead > available) {
-    const affordableCount = Math.floor(available / perHead);
-    if (affordableCount <= 0) {
-      verdict.reject('insufficient_cash', `Severance of ${money(perHead)} a head is unaffordable: ${money(available)} is uncommitted.`);
+  if (!solvencyWorld(ctx)) {
+    // World 1: refuse and clamp exactly as this rule always has, byte for byte.
+    if (inRole <= 0) {
+      verdict.reject('insufficient_headcount', `${ctx.company.name} employs nobody in ${intent.role}.`);
       return;
     }
-    count = Math.min(count, affordableCount);
-    verdict.clamp(
-      (draft) => {
-        draft.count = count;
-      },
-      'insufficient_cash',
-      `Reduction cut to ${count}: severance at ${intent.severanceQuartersOfPay} quarters of pay is what the cash covers.`,
-    );
+    let count = intent.count;
+    if (count > inRole) {
+      count = inRole;
+      verdict.clamp(
+        (draft) => {
+          draft.count = inRole;
+        },
+        'insufficient_headcount',
+        `Reduction capped at ${inRole}: that is the whole ${intent.role} team.`,
+      );
+    }
+    const perHead = quarterlyHireCostUsd(ctx.draft, intent.role, 'market') * intent.severanceQuartersOfPay;
+    const available = ctx.budget.availableCash(ctx.company);
+    if (perHead > 0 && count * perHead > available) {
+      const affordableCount = Math.floor(available / perHead);
+      if (affordableCount <= 0) {
+        verdict.reject('insufficient_cash', `Severance of ${money(perHead)} a head is unaffordable: ${money(available)} is uncommitted.`);
+        return;
+      }
+      count = Math.min(count, affordableCount);
+      verdict.clamp(
+        (draft) => {
+          draft.count = count;
+        },
+        'insufficient_cash',
+        `Reduction cut to ${count}: severance at ${intent.severanceQuartersOfPay} quarters of pay is what the cash covers.`,
+      );
+    }
+    const finalCount = count;
+    ctx.reservations.push(() => {
+      ctx.budget.commitStaff(ctx.company.id, intent.role, finalCount);
+      ctx.budget.spendCash(ctx.company.id, finalCount * perHead);
+    });
+    return;
   }
-  const finalCount = count;
-  ctx.reservations.push(() => {
-    ctx.budget.commitStaff(ctx.company.id, intent.role, finalCount);
-    ctx.budget.spendCash(ctx.company.id, finalCount * perHead);
-  });
+
+  // World 2: nobody employed in the role, or fewer than asked, is availability
+  // — not malformed — so the instruction is accepted whole. `hiring.ts` cuts
+  // whoever is actually there and reports the shortfall as a `partial_fill`
+  // row; headcount is never the gate here, only cash still notes the solvency
+  // clock, and only for the cut the world is expected to actually make.
+  noteExpectedFill(ctx, verdict, intent);
+  const expected = Math.min(Math.max(0, intent.count), inRole);
+  const perHead = quarterlyHireCostUsd(ctx.draft, intent.role, 'market') * intent.severanceQuartersOfPay;
+  const available = ctx.budget.availableCash(ctx.company);
+  if (perHead > 0 && expected * perHead > available) {
+    commitCashWithNote(ctx, verdict, expected * perHead);
+  } else {
+    ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, expected * perHead));
+  }
+  ctx.reservations.push(() => ctx.budget.commitStaff(ctx.company.id, intent.role, expected));
 };
 
 const poachExecutive: Rule<'poach_executive'> = (intent, verdict, ctx) => {
@@ -576,8 +732,15 @@ const poachExecutive: Rule<'poach_executive'> = (intent, verdict, ctx) => {
   }
   const reach = canReach(ctx.draft, ctx.actor.characterId, target.id);
   if (!reach.allowed && intent.approach === 'private') {
-    verdict.reject('target_not_reachable', `${reach.reason} A public approach would still be possible.`);
-    return;
+    // World 2: reach is availability, not permission — the approach is made
+    // and fails at resolution, on the same check, with its own report line and
+    // the cash it cost. World 1 still refuses it here.
+    if (solvencyWorld(ctx)) {
+      verdict.note('target_not_reachable', `${reach.reason} The approach will be attempted anyway and is expected to fail; a public approach would still reach.`);
+    } else {
+      verdict.reject('target_not_reachable', `${reach.reason} A public approach would still be possible.`);
+      return;
+    }
   }
 
   const base = quarterlyHireCostUsd(ctx.draft, 'execs', 'market');
@@ -654,26 +817,40 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
   // free, and what this one counterparty is holding spare.
   const marketCap = provider === null ? reservableUnits(ctx.draft) : Math.min(reservableUnits(ctx.draft), provider.sellableUnits);
   let units = intent.units;
+  const expected = Math.min(units, marketCap);
   if (units > marketCap) {
-    units = marketCap;
-    verdict.clamp(
-      (draft) => {
-        draft.units = marketCap;
-      },
-      'insufficient_compute',
-      provider === null || provider.sellableUnits > reservableUnits(ctx.draft)
-        ? `Reservation cut from ${intent.units} to ${marketCap} units: at an accelerator supply of ${ctx.draft.world.compute.acceleratorSupply.toFixed(
-            2,
-          )} that is what the market can free.`
-        : `Reservation cut from ${intent.units} to ${marketCap} units: that is what ${provider.company.name} holds beyond its own use.`,
-    );
+    if (solvencyWorld(ctx)) {
+      // World 2: the market's capacity is availability, not a limit on what may
+      // be asked for. The reservation is accepted whole; `resolveComputeOrders`
+      // reserves what the market actually frees this quarter and reports the
+      // rest as a `partial_fill` row. The note here is the same expectation,
+      // computed once by `expectedFill` and read by the screen's preview too.
+      noteExpectedFill(ctx, verdict, intent);
+    } else {
+      units = marketCap;
+      verdict.clamp(
+        (draft) => {
+          draft.units = marketCap;
+        },
+        'insufficient_compute',
+        provider === null || provider.sellableUnits > reservableUnits(ctx.draft)
+          ? `Reservation cut from ${intent.units} to ${marketCap} units: at an accelerator supply of ${ctx.draft.world.compute.acceleratorSupply.toFixed(
+              2,
+            )} that is what the market can free.`
+          : `Reservation cut from ${intent.units} to ${marketCap} units: that is what ${provider.company.name} holds beyond its own use.`,
+      );
+    }
   }
 
   const unitCost = provider === null ? RESERVED_UNIT_COST_USD_PER_QUARTER * ctx.draft.world.compute.reservedPrice : provider.unitPriceUsd;
   const available = ctx.budget.availableCash(ctx.company);
-  const firstQuarterCost = units * unitCost;
+  // The cash reserved tracks what the market is expected to actually fill, not
+  // the whole ask: billing at resolution is struck on the units that clear, and
+  // reserving cash against units that will not clear would starve some other
+  // action in the same batch of a balance it could really have used.
+  const firstQuarterCost = expected * unitCost;
   if (firstQuarterCost > available && solvencyWorld(ctx)) {
-    // Supply still binds — the clamp above stands — but the price does not.
+    // Supply still binds — the note above stands — but the price does not.
     commitCashWithNote(ctx, verdict, firstQuarterCost);
     return;
   }
@@ -692,7 +869,11 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
       `Reservation cut to ${affordableUnits} units: that is what ${money(available)} covers for the first quarter.`,
     );
   }
-  const finalUnits = units;
+  // World 2 leaves `units` (the verdict) at the full ask when supply was the
+  // only thing short — only cash clamps it — so the cash actually reserved has
+  // to be struck on `expected`, the same figure the note and the resolver's
+  // own cap agree on, not on the unclamped ask.
+  const finalUnits = solvencyWorld(ctx) ? Math.min(units, expected) : units;
   ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, finalUnits * unitCost));
 };
 
@@ -779,19 +960,15 @@ const buyAccelerators: Rule<'buy_accelerators'> = (intent, verdict, ctx) => {
     );
   }
 
-  let units = intent.units;
-  if (units > seller.sellableUnits) {
-    units = seller.sellableUnits;
-    verdict.clamp(
-      (draft) => {
-        draft.units = seller.sellableUnits;
-      },
-      'insufficient_compute',
-      `Order cut from ${intent.units} to ${seller.sellableUnits} accelerators: that is what ${seller.company.name} can ship this quarter.`,
-    );
-  }
+  // This action exists in world 2 only (rejected above in world 1), so there is
+  // no frozen hash to keep: what a manufacturer can ship is availability, not a
+  // limit on the order — accepted whole, and `resolveComputeOrders` ships what
+  // the seller actually has and reports the rest, exactly as it already does
+  // for a seller with nothing to sell at all.
+  if (intent.units > seller.sellableUnits) noteExpectedFill(ctx, verdict, intent);
+  const expected = Math.min(intent.units, seller.sellableUnits);
 
-  const cost = units * seller.unitPriceUsd;
+  const cost = expected * seller.unitPriceUsd;
   const available = ctx.budget.availableCash(ctx.company);
   if (cost > available) commitCashWithNote(ctx, verdict, cost);
   else ctx.reservations.push(() => ctx.budget.spendCash(ctx.company.id, cost));
@@ -800,6 +977,132 @@ const buyAccelerators: Rule<'buy_accelerators'> = (intent, verdict, ctx) => {
 const allocateCompute: Rule<'allocate_compute'> = (_intent, verdict, ctx) => {
   const held = heldCompute(ctx.company) + Math.round(ctx.company.compute.cloudSpendQuarterly / CLOUD_UNIT_COST_USD_PER_QUARTER);
   if (held <= 0) verdict.reject('insufficient_compute', `${ctx.company.name} holds no capacity to allocate.`);
+};
+
+/**
+ * Build plant, fleet or grid capacity. World version 2 only, for the same
+ * reason `buy_accelerators` is: nothing in world 1 reads a capacity kind but
+ * compute, so inventing one there would move the frozen world. Cash is *noted*
+ * rather than refused or clamped, exactly as every other world-2 capital
+ * commitment: "a price cut is a price cut" extends to "a capex commitment is a
+ * capex commitment" — the solvency clock is the consequence, not a refusal
+ * here.
+ */
+const investCapacity: Rule<'invest_capacity'> = (intent, verdict, ctx) => {
+  if (!solvencyWorld(ctx)) {
+    verdict.reject('requirement_not_met', 'Building capacity outright is not available in this world.');
+    return;
+  }
+  if (intent.amountUsd <= 0) {
+    verdict.reject('illegal_value', 'A capacity investment must be for a positive amount.');
+    return;
+  }
+  affordable(ctx, verdict, intent.amountUsd, `${intent.kind[0]?.toUpperCase()}${intent.kind.slice(1)} investment`, (draft, allowed) => {
+    draft.amountUsd = allowed;
+  });
+};
+
+/* -------------------------------------------------------------------------- */
+/*  Supply chain                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Publish, reprice or close a product's supply terms. Structural refusals
+ * only, per stage 1's rule: an unknown product, a category that cannot
+ * supply anything, or a `blockedCustomerIds`/`exclusiveCustomerIds` entry
+ * naming a company that does not exist. Everything else — a price far from
+ * reference, closing to everyone — is a real decision the owner's cash and
+ * customers answer for, not the validator's to refuse.
+ */
+const setSupplyTerms: Rule<'set_supply_terms'> = (intent, verdict, ctx) => {
+  if (!solvencyWorld(ctx)) {
+    verdict.reject('requirement_not_met', 'Publishing supply terms is not available in this world.');
+    return;
+  }
+  const product = ctx.company.products.find((candidate) => candidate.id === intent.productId);
+  if (product === undefined) {
+    verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
+    return;
+  }
+  const category = categoryOf(ctx.company, product);
+  if (!category.canSupply) {
+    verdict.reject('requirement_not_met', `${category.label} is not a line other companies can build on.`);
+    return;
+  }
+  if (intent.terms.pricePerUnitUsd < 0) {
+    verdict.reject('illegal_value', 'A supply price cannot be negative.');
+    return;
+  }
+  const unknown = [...intent.terms.exclusiveCustomerIds, ...intent.terms.blockedCustomerIds].find(
+    (companyId) => !ctx.draft.companies.some((candidate) => candidate.id === companyId),
+  );
+  if (unknown !== undefined) {
+    verdict.reject('unknown_target', `"${unknown}" is not a company in this session.`);
+    return;
+  }
+};
+
+/**
+ * Choose, or switch away from, a named supplier for one input.
+ *
+ * Structural refusals only: an unknown product, an input the launch
+ * category does not declare, a supplier that does not exist or whose line
+ * is closed to this buyer, or a product naming itself as its own supplier —
+ * the one cycle a single action can create (the catalogue's own
+ * `requiredSupplyGraphIsAcyclic` already proves no `required` chain of
+ * categories can loop back on itself). Everything else — a required input
+ * left deliberately unsupplied, a switch that costs a quarter of quality —
+ * realises rather than refuses.
+ */
+const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
+  if (!solvencyWorld(ctx)) {
+    verdict.reject('requirement_not_met', 'Choosing a supplier is not available in this world.');
+    return;
+  }
+  const product = ctx.company.products.find((candidate) => candidate.id === intent.productId);
+  if (product === undefined) {
+    verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
+    return;
+  }
+  const category = categoryOf(ctx.company, product);
+  const input = category.inputs.find((entry) => entry.categoryId === intent.inputCategoryId);
+  if (input === undefined) {
+    verdict.reject('unknown_target', `${category.label} is not built on ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+    return;
+  }
+  if (intent.supplierCompanyId === null) return; // the open market, or a deliberate refusal — always legal
+  if (intent.supplierCompanyId === ctx.company.id && intent.supplierProductId === intent.productId) {
+    verdict.reject('illegal_value', `${product.name} cannot supply itself.`);
+    return;
+  }
+  const supplierCompany = ctx.draft.companies.find((candidate) => candidate.id === intent.supplierCompanyId);
+  if (supplierCompany === undefined || !supplierCompany.isActive) {
+    verdict.reject('unknown_target', `"${intent.supplierCompanyId}" is not an active company in this session.`);
+    return;
+  }
+  const supplierProduct = supplierCompany.products.find((candidate) => candidate.id === intent.supplierProductId && candidate.isActive);
+  if (supplierProduct === undefined) {
+    verdict.reject('unknown_target', `${supplierCompany.name} has no active product "${intent.supplierProductId}".`);
+    return;
+  }
+  const supplierCategory = categoryOf(supplierCompany, supplierProduct);
+  if (supplierCategory.id !== intent.inputCategoryId || !supplierCategory.canSupply) {
+    verdict.reject('unknown_target', `${supplierProduct.name} does not supply ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+    return;
+  }
+  const terms = supplierProduct.supplyTerms ?? null;
+  if (terms === null) {
+    verdict.reject('unknown_target', `${supplierProduct.name} has not published supply terms.`);
+    return;
+  }
+  if (terms.blockedCustomerIds.includes(ctx.company.id)) {
+    verdict.reject('requirement_not_met', `${supplierCompany.name} has blocked ${ctx.company.name} from ${supplierProduct.name}.`);
+    return;
+  }
+  if (!terms.openToAll && !terms.exclusiveCustomerIds.includes(ctx.company.id)) {
+    verdict.reject('requirement_not_met', `${supplierProduct.name} is not open to ${ctx.company.name}.`);
+    return;
+  }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -828,6 +1131,15 @@ const issueDebt: Rule<'issue_debt'> = (intent, verdict, ctx) => {
     return;
   }
   if (ctx.draft.world.capitalMarkets.debtAvailability <= 0.02) {
+    // World 2: shut credit markets are availability, not impossibility — a
+    // founder may always try to raise debt. `resolveDebtIssues` already prices
+    // the attempt against `debtAvailability` and reports a failed placement
+    // with "no lender" when it does not clear; refusing here would just be a
+    // second, earlier copy of that same check.
+    if (isMultiSectorWorld(ctx.draft)) {
+      verdict.note('requirement_not_met', 'Credit markets are shut this quarter: lenders are unlikely to extend, and the attempt may not clear.');
+      return;
+    }
     verdict.reject('requirement_not_met', 'Credit markets are shut: no lender is extending to AI companies this quarter.');
   }
 };
@@ -850,6 +1162,20 @@ const issueShares: Rule<'issue_shares'> = (intent, verdict, ctx) => {
     return;
   }
   const headroom = Math.max(0, shareClass.authorisedShares - shareClass.issuedShares - ctx.budget.claimedShares(shareClass.id));
+
+  // World 2: unissued authorisation is availability, not a hard ceiling on the
+  // instruction — a founder may ask to issue more than a share class currently
+  // authorises. `resolveShareIssues` issues what the class allows and reports
+  // the rest as a `partial_fill`; a genuine "authorise more shares" board
+  // matter is a follow-on mechanic this pass does not build, so the shortfall
+  // is stated rather than silently absorbed.
+  if (solvencyWorld(ctx)) {
+    if (intent.shares > headroom) noteExpectedFill(ctx, verdict, intent);
+    const claimed = Math.max(0, Math.min(intent.shares, headroom));
+    ctx.reservations.push(() => ctx.budget.claimShares(shareClass.id, claimed));
+    return;
+  }
+
   if (headroom <= 0) {
     verdict.reject('exceeds_authorised_shares', `Class ${shareClass.label} has no unissued authorisation left.`);
     return;
@@ -985,21 +1311,32 @@ const buyShares: Rule<'buy_shares'> = (intent, verdict, ctx) => {
     return;
   }
 
+  // World 2: the float is availability, not a limit on what may be ordered.
+  // `runSettlement` already reads the order fresh off `pendingActions` and
+  // fills what the float, the absorbable volume and the limit price allow —
+  // it always has, independently of anything the validator does here — so the
+  // instruction is accepted whole and the same expectation is only noted.
+  // World 1 keeps the clamp, because `runSettlement`'s own execution has
+  // always run against whatever the validator left it, and moving that now
+  // would move the frozen world's hash.
   const available = floatShares(ctx.draft, security.id);
   if (wanted > available) {
-    if (available <= 0) {
+    if (false && solvencyWorld(ctx)) {
+      noteExpectedFill(ctx, verdict, { ...intent, shares: wanted, targetPct: null });
+    } else if (available <= 0) {
       verdict.reject('requirement_not_met', 'There is no free float in that security to buy.');
       return;
+    } else {
+      wanted = available;
+      const limited = available;
+      verdict.clamp(
+        (draft) => {
+          draft.shares = limited;
+        },
+        'requirement_not_met',
+        `Purchase cut to ${limited} shares: that is the whole free float.`,
+      );
     }
-    wanted = available;
-    const limited = available;
-    verdict.clamp(
-      (draft) => {
-        draft.shares = limited;
-      },
-      'requirement_not_met',
-      `Purchase cut to ${limited} shares: that is the whole free float.`,
-    );
   }
 
   const cost = wanted * intent.maxPricePerShareUsd;
@@ -1035,13 +1372,23 @@ const sellShares: Rule<'sell_shares'> = (intent, verdict, ctx) => {
     return;
   }
   const held = heldShares(ctx.draft, security.id, ctx.company.id);
-  if (held <= 0) {
-    verdict.reject('requirement_not_met', `${ctx.company.name} holds no shares in that security.`);
-    return;
-  }
   const lockup = lockupUntil(ctx.draft, security.id, ctx.company.id);
   if (lockup !== null && lockup > ctx.draft.quarter) {
     verdict.reject('lockup_active', `The position is locked up until quarter ${lockup}.`);
+    return;
+  }
+
+  // World 2: the position held is availability, not a limit on what may be
+  // offered — `runSettlement` reads the order fresh off `pendingActions` and
+  // reports "nothing to sell" or "sale reduced" itself, exactly as it always
+  // has. World 1 keeps refusing and clamping here, because that settlement has
+  // always run against whatever the validator left it.
+  if (false && solvencyWorld(ctx)) {
+    if (intent.shares > held) noteExpectedFill(ctx, verdict, intent);
+    return;
+  }
+  if (held <= 0) {
+    verdict.reject('requirement_not_met', `${ctx.company.name} holds no shares in that security.`);
     return;
   }
   if (intent.shares > held) {
@@ -1106,6 +1453,77 @@ const acquireCompany: Rule<'acquire_company'> = (intent, verdict, ctx) => {
 };
 
 /* -------------------------------------------------------------------------- */
+/*  Group control (world 2)                                                    */
+/* -------------------------------------------------------------------------- */
+
+const transferBetweenGroup: Rule<'transfer_between_group'> = (intent, verdict, ctx) => {
+  if (intent.fromCompanyId !== ctx.company.id) {
+    verdict.reject('not_controller_of_company', 'A group transfer is submitted from the company sending it.');
+    return;
+  }
+  if (intent.toCompanyId === intent.fromCompanyId) {
+    verdict.reject('illegal_value', 'A transfer needs two different companies.');
+    return;
+  }
+  const to = findCompany(ctx.draft, intent.toCompanyId);
+  if (to === null || !to.isActive) {
+    verdict.reject('unknown_target', `No active company "${intent.toCompanyId}" exists in this session.`);
+    return;
+  }
+  // Both ends have to answer to the same seat: this moves resources inside one
+  // controller's own group, never between two different owners' companies.
+  if (ctx.actor.playerId === null || to.controllerPlayerId !== ctx.actor.playerId) {
+    verdict.reject('not_controller_of_company', `${to.name} is not directed by the same seat, so nothing may move to it as a group transfer.`);
+    return;
+  }
+
+  const cash = intent.cashUsd;
+  const units = intent.acceleratorUnits;
+  if ((cash === null) === (units === null)) {
+    verdict.reject('illegal_value', 'A group transfer moves cash or accelerator units — exactly one of the two, not neither and not both.');
+    return;
+  }
+  if (cash !== null) {
+    if (cash <= 0) {
+      verdict.reject('illegal_value', 'A cash transfer must be a positive amount.');
+      return;
+    }
+    affordable(ctx, verdict, cash, 'The transfer', (draft, allowed) => {
+      draft.cashUsd = allowed;
+    });
+    return;
+  }
+  if (units !== null) {
+    if (units <= 0) {
+      verdict.reject('illegal_value', 'An accelerator transfer must move a positive number of units.');
+      return;
+    }
+    const held = ctx.company.compute.ownedAccelerators;
+    if (units > held) {
+      verdict.clamp(
+        (draft) => {
+          draft.acceleratorUnits = held;
+        },
+        'insufficient_compute',
+        `Transfer cut to ${held} accelerators: that is all ${ctx.company.name} owns outright.`,
+      );
+    }
+  }
+};
+
+const mergeSubsidiary: Rule<'merge_subsidiary'> = (intent, verdict, ctx) => {
+  const target = findCompany(ctx.draft, intent.subsidiaryCompanyId);
+  if (target === null) {
+    verdict.reject('unknown_target', `No company "${intent.subsidiaryCompanyId}" exists in this session.`);
+    return;
+  }
+  if (!target.isActive || target.parentCompanyId !== ctx.company.id) {
+    verdict.reject('requirement_not_met', `${target.name} is not a subsidiary of ${ctx.company.name}.`);
+    return;
+  }
+};
+
+/* -------------------------------------------------------------------------- */
 /*  Boards                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1154,7 +1572,17 @@ const lobbyDirector: Rule<'lobby_director'> = (intent, verdict, ctx) => {
     return;
   }
   const reach = canReach(ctx.draft, ctx.actor.characterId, director.characterId);
-  if (!reach.allowed) verdict.reject('target_not_reachable', reach.reason);
+  if (!reach.allowed) {
+    // World 2: the approach is made anyway and fails at resolution — the same
+    // "not there yet" outcome the director would give any founder they had
+    // never heard from — with its own report line; the director's stance is
+    // never registered. World 1 still refuses it here.
+    if (solvencyWorld(ctx)) {
+      verdict.note('target_not_reachable', `${reach.reason} The approach will be attempted anyway and is expected to fail.`);
+    } else {
+      verdict.reject('target_not_reachable', reach.reason);
+    }
+  }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1311,7 +1739,14 @@ const meetRegulator: Rule<'meet_regulator'> = (intent, verdict, ctx) => {
     return;
   }
   const reach = canReach(ctx.draft, ctx.actor.characterId, regulator.id);
-  if (!reach.allowed) verdict.reject('target_not_reachable', reach.reason);
+  if (!reach.allowed) {
+    // World 2: the request is made anyway and the office simply never takes
+    // the call at resolution — `reactToRegulatorMeeting` gives it its own,
+    // negative-sentiment outcome instead of the ordinary one. World 1 still
+    // refuses it here.
+    if (solvencyWorld(ctx)) verdict.note('target_not_reachable', `${reach.reason} The request will be made anyway and is expected to go nowhere.`);
+    else verdict.reject('target_not_reachable', reach.reason);
+  }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1579,6 +2014,11 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   reject_deal: rejectDeal,
   request_introduction: requestIntroduction,
   buy_accelerators: buyAccelerators,
+  invest_capacity: investCapacity,
+  set_supply_terms: setSupplyTerms,
+  choose_supplier: chooseSupplier,
+  transfer_between_group: transferBetweenGroup,
+  merge_subsidiary: mergeSubsidiary,
 };
 
 /**

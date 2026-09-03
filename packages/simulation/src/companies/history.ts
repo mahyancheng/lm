@@ -37,6 +37,7 @@
 import type { Company, FinancialProductLine, FinancialQuarter } from '@frontier/contracts';
 import { FINANCIAL_HISTORY_QUARTERS } from '@frontier/contracts';
 import { activeProducts, clamp, count, money, signedMoney, totalHeadcount, unit } from './util';
+import { categoryOf } from './categories';
 
 /**
  * Everything the financial phase already knows, handed over verbatim.
@@ -139,6 +140,12 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
       priceUsd: money(product.pricePerSeat),
       revenueUsd: money(count(product.activeCustomers) * money(product.pricePerSeat)),
       grossMarginPct: unit(product.grossMarginPct),
+      // This statement is only ever filed in a multi-sector world (the caller
+      // gates `appendFinancialQuarter` on `isMultiSectorWorld`), so a category
+      // always resolves — the product's own if it launched with one, else the
+      // deterministic sector/segment default.
+      categoryId: categoryOf(company, product).id,
+      unit: categoryOf(company, product).unitLabel,
     }))
     .sort((a, b) => (a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0))
     .slice(0, 64);

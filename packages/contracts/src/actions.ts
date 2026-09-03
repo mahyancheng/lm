@@ -28,7 +28,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, unitInterval, usd } from './ids';
-import { CompBandSchema, CompanyPostureSchema, ExecutiveRoleSchema, ProductSegmentSchema, StaffRoleSchema } from './company';
+import { CapacityKindSchema, CompBandSchema, CompanyPostureSchema, ExecutiveRoleSchema, ProductSegmentSchema, StaffRoleSchema, SupplyTermsSchema } from './company';
 import { RegionSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
 import { BoardProposalKindSchema, CommitmentConditionSchema } from './governance';
@@ -77,6 +77,21 @@ export const RegulatorPostureSchema = z
   .enum(REGULATOR_POSTURES)
   .describe('The stance taken into the meeting. Cooperative builds standing slowly; lobbying can shift a rule and is remembered by everyone it disadvantages.');
 export type RegulatorPosture = z.infer<typeof RegulatorPostureSchema>;
+
+/**
+ * One supplier choice named at launch — the same three fields `choose_supplier`
+ * changes later, without the engine-only `cutOffNoticeQuarter` a launch can
+ * never set. Named separately from `ProductSupplyLineSchema` in `company.ts`
+ * for exactly that reason: one is state, the other is what an action may say.
+ */
+export const LaunchSupplyChoiceSchema = z
+  .object({
+    inputCategoryId: z.string().min(1).describe('The upstream category (PRODUCT_CATEGORIES) this line names a supplier for.'),
+    supplierCompanyId: z.string().min(1).nullable().describe('The company to build on, or null for the open market or a deliberately unfilled required input.'),
+    supplierProductId: z.string().min(1).nullable().describe('The specific supplying product, or null exactly when supplierCompanyId is null.'),
+  })
+  .describe('One supplier chosen for one input category, named at launch.');
+export type LaunchSupplyChoice = z.infer<typeof LaunchSupplyChoiceSchema>;
 
 /* -------------------------------------------------------------------------- */
 /*  ActionIntent                                                               */
@@ -149,12 +164,28 @@ export const ActionIntentSchema = z
         type: z.literal('launch_product'),
         name: z.string().min(1).max(80).describe('Product name.'),
         segment: ProductSegmentSchema,
+        // Required-but-nullable rather than optional: every LLM-facing schema
+        // in this file must emit every key. Null means "choose the industry
+        // line for me" — the validator resolves it to
+        // `defaultCategoryFor(company.sector, segment)` and names the choice
+        // back in the clamp, exactly as a null providerCompanyId does for
+        // compute.
+        categoryId: z
+          .string()
+          .nullable()
+          .describe('Id into PRODUCT_CATEGORIES (@frontier/contracts): the industry line this product launches into, e.g. "ai_frontier_models" or "manufacturing_batteries". Null lets the engine choose the company\'s sector default for this segment.'),
         pricePerSeatUsd: usd('Launch price per seat per quarter.'),
         computeIntensity: unitInterval('How much serving compute each unit consumes. Higher intensity buys quality and costs margin.'),
         launchMarketingUsd: usd('One-off launch marketing spend.'),
         targetQuality: unitInterval('Quality the team is aiming for. The engine delivers this discounted by the company\'s real capabilities and by how rushed the launch is.'),
+        // Required-and-empty rather than optional: every LLM-facing schema in
+        // this file must emit every key, so an ordinary commodity launch with
+        // nothing to name here still sends `[]`. Each entry a name from the
+        // launch category's own `inputs`; anything else is dropped at
+        // validation rather than refused, exactly as a stray categoryId is.
+        supply: z.array(LaunchSupplyChoiceSchema).max(6).describe('Suppliers named for this launch, one per input category the launch category declares. Unnamed inputs default to the open market.'),
       })
-      .describe('Launch a new product line.'),
+      .describe('Launch a new product line. World version 2: the category must be one the company has the research access for — see requiresNodeIds on the catalogue entry.'),
 
     z
       .object({
@@ -163,6 +194,26 @@ export const ActionIntentSchema = z
         windDownQuarters: z.number().int().min(1).max(8).describe('How long customers are given. Shorter wind-downs save cost and damage enterprise and developer reputation.'),
       })
       .describe('Retire a product.'),
+
+    z
+      .object({
+        type: z.literal('set_supply_terms'),
+        productId: z.string().min(1).describe('Your own product line publishing, repricing or closing its terms as somebody else\'s input. Its category must have canSupply true.'),
+        terms: SupplyTermsSchema,
+      })
+      .describe(
+        'Publish, reprice, or close your product as an input other companies can build on. A public API is openToAll: true. Blocking a customer, or closing the line to everyone, is a real decision: an existing buyer keeps drawing on it for one more quarter\'s notice before the cut takes effect.',
+      ),
+
+    z
+      .object({
+        type: z.literal('choose_supplier'),
+        productId: z.string().min(1).describe('Your own product line choosing, or switching away from, an input.'),
+        inputCategoryId: z.string().min(1).describe('Which of the launch category\'s inputs this names a supplier for.'),
+        supplierCompanyId: z.string().min(1).nullable().describe('The company to build on, or null for the open market, or a deliberate refusal to fill a required input.'),
+        supplierProductId: z.string().min(1).nullable().describe('The specific supplying product, or null exactly when supplierCompanyId is null.'),
+      })
+      .describe('Build on, or switch away from, a named supplier for one input of your product. A switch costs one quarter of degraded quality on that input while the integration beds in.'),
 
     /* ---------------------------- marketing --------------------------- */
     z
@@ -259,6 +310,16 @@ export const ActionIntentSchema = z
       })
       .describe(
         'Buy accelerators outright from a company that makes them. Owned capacity is capital: it depreciates instead of renting, it is immune to the spot price, and it is paid for in cash the quarter it is bought.',
+      ),
+
+    z
+      .object({
+        type: z.literal('invest_capacity'),
+        kind: CapacityKindSchema.exclude(['compute', 'none']).describe('Which capacity to build: "plant" for manufacturing, "fleet" for logistics, "grid" for energy.'),
+        amountUsd: usd('Cash committed to this capacity this quarter.'),
+      })
+      .describe(
+        'Build non-compute capacity — plant, fleet or grid — that a product category with that capacityKind is served from. The generalised capex action for every sector that is not accelerators: same shape as buy_accelerators, paid for in cash the quarter it is bought, and it depreciates like any other property.',
       ),
 
     z
@@ -485,6 +546,33 @@ export const ActionIntentSchema = z
         purpose: z.string().max(300).describe('What you want from the meeting. Vague requests are refused.'),
       })
       .describe('Ask for an introduction. The main legitimate route from a low connection level to a high one.'),
+
+    /* ----------------------- group control (world 2) ------------------ */
+    // Appended: STAGE 4 lets a controlling player direct every company they
+    // control, not only the one they founded. An acquisition in a
+    // multi-sector world keeps the target alive as a subsidiary rather than
+    // absorbing it (see resolver/capital.ts); these two actions are how the
+    // group is then run day to day.
+    z
+      .object({
+        type: z.literal('transfer_between_group'),
+        fromCompanyId: z.string().min(1).describe('The company sending. Must be the acting company.'),
+        toCompanyId: z.string().min(1).describe('The company receiving. Must answer to the same controller as the acting company.'),
+        cashUsd: usd('Cash to move, or null when this transfer moves accelerators instead.').nullable(),
+        acceleratorUnits: intCount('Owned accelerators to move, or null when this transfer moves cash instead.').nullable(),
+      })
+      .describe(
+        'Move cash or owned compute between two companies you control. Shared resources are never pooled automatically — this is how a founder actually moves them. Exactly one of cashUsd and acceleratorUnits is set.',
+      ),
+
+    z
+      .object({
+        type: z.literal('merge_subsidiary'),
+        subsidiaryCompanyId: z.string().min(1).describe('A company already a subsidiary of the acting company.'),
+      })
+      .describe(
+        'Fully absorb a subsidiary: its cash, staff, products and balance sheet merge into yours and it is extinguished, exactly like an old-style acquisition. Irreversible — the subsidiary stops filing its own accounts and stops being a company you can direct separately.',
+      ),
   ])
   .describe('One intended action. Submitting it is not doing it: the engine validates, clamps and then resolves.');
 export type ActionIntent = z.infer<typeof ActionIntentSchema>;
@@ -534,6 +622,12 @@ export const ACTION_TYPES = [
   // Appended, never inserted: ACTION_TYPES backs a zod enum and a saved game
   // names its actions by string.
   'buy_accelerators',
+  'invest_capacity',
+  'set_supply_terms',
+  'choose_supplier',
+  // Group control (world 2). Appended, never inserted.
+  'transfer_between_group',
+  'merge_subsidiary',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -568,6 +662,15 @@ export const CONFIRMATION_REQUIRED_ACTIONS: readonly ActionType[] = [
   // Owning capacity is a capital commitment, not an operating one: it takes the
   // cash in the quarter it is bought and it never unwinds.
   'buy_accelerators',
+  'invest_capacity',
+  // Publishing, repricing or closing a public API is a leverage decision with
+  // consequences for every customer on it — the owner's second north star,
+  // made a confirmed decision rather than a routine one. choose_supplier stays
+  // routine: it is the buyer's own ordinary sourcing choice, like set_product_price.
+  'set_supply_terms',
+  // Full absorption is irreversible and ends the subsidiary as a company a
+  // founder can direct separately, exactly like an acquisition.
+  'merge_subsidiary',
 ];
 
 /** True when an action may never be auto-executed on the player's behalf. */
@@ -634,6 +737,11 @@ export const ACTION_REJECTION_CODES = [
   'exceeds_authorised_shares',
   'quarter_already_locked',
   'illegal_value',
+  // Appended, never inserted: ACTION_REJECTION_CODES backs a zod enum that
+  // reaches the model. Advisory, not a refusal — the action is accepted whole
+  // and the engine already knows the world will not fill all of it. What was
+  // asked, what is expected and why are in the reason beside it.
+  'partial_fill_expected',
 ] as const;
 export const ActionRejectionCodeSchema = z.enum(ACTION_REJECTION_CODES).describe('Machine-readable reason an action was refused or reduced.');
 export type ActionRejectionCode = z.infer<typeof ActionRejectionCodeSchema>;

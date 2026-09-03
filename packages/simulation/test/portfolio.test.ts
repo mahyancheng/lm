@@ -214,7 +214,12 @@ describe('the rows reconcile to the balance sheet', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('a company bought outright', () => {
-  it('becomes a subsidiary row carrying the price paid', () => {
+  // STAGE 4: in world 2 an acquisition keeps the target alive as a
+  // subsidiary rather than absorbing it — this test used to assert the old
+  // absorb outcome directly off `acquire_company`; that outcome is still
+  // reachable, just one explicit `merge_subsidiary` later (the test right
+  // after this one).
+  it('stays alive as a subsidiary, carrying the price paid', () => {
     const state = withoutBoard(withCash(createWorld2Session(), 20_000_000_000));
     const targetId = smallestTarget(state);
     const target = companyOf(state, targetId);
@@ -225,23 +230,55 @@ describe('a company bought outright', () => {
       [act(state, { type: 'acquire_company', targetCompanyId: targetId, offerValueUsd: offer, cashPct: 1, stockPct: 0 })],
     );
 
-    const husk = companyOf(next, targetId);
-    expect(husk.isActive).toBe(false);
-    expect(husk.parentCompanyId).toBe(PLAYER_COMPANY);
-    expect(husk.acquisition?.priceUsd).toBe(offer);
+    const subsidiary = companyOf(next, targetId);
+    expect(subsidiary.isActive).toBe(true);
+    expect(subsidiary.parentCompanyId).toBe(PLAYER_COMPANY);
+    expect(subsidiary.controllerPlayerId).toBe(DEMO_PLAYER_ID);
+    expect(subsidiary.acquisition?.priceUsd).toBe(offer);
 
     const portfolio = portfolioOf(next, PLAYER_COMPANY);
     const row = portfolio.subsidiaries.find((entry) => entry.companyId === targetId);
-    expect(row?.status).toBe('absorbed');
+    expect(row?.status).toBe('controlled');
     expect(row?.costUsd).toBe(offer);
+    expect(row?.controlPct).toBe(1);
+    // It still files its own accounts and is worth something on its own —
+    // the whole point of staying alive rather than being absorbed.
+    expect(row?.valueUsd).toBeGreaterThan(0);
+    expect(row?.actions.length).toBeGreaterThan(0);
+
+    expect(portfolio.reconciliation.reconciles).toBe(true);
+  });
+
+  it('merge_subsidiary fully absorbs it, reproducing the old outright-buy result', () => {
+    const state = withoutBoard(withCash(createWorld2Session(), 20_000_000_000));
+    const targetId = smallestTarget(state);
+    const target = companyOf(state, targetId);
+    const offer = Math.max(50_000_000, Math.round(target.financials.revenueQuarterly * 8));
+
+    const afterAcquisition = resolveOne(
+      state,
+      [act(state, { type: 'acquire_company', targetCompanyId: targetId, offerValueUsd: offer, cashPct: 1, stockPct: 0 })],
+    );
+    const merged = resolveOne(
+      afterAcquisition,
+      [act(afterAcquisition, { type: 'merge_subsidiary', subsidiaryCompanyId: targetId })],
+    );
+
+    const husk = companyOf(merged, targetId);
+    expect(husk.isActive).toBe(false);
+    expect(husk.parentCompanyId).toBe(PLAYER_COMPANY);
+
+    const portfolio = portfolioOf(merged, PLAYER_COMPANY);
+    const row = portfolio.subsidiaries.find((entry) => entry.companyId === targetId);
+    expect(row?.status).toBe('absorbed');
     expect(row?.controlPct).toBe(1);
     // Its assets are inside the parent now; counting them again here would
     // double-count the parent, so the row is worth nothing on its own.
     expect(row?.valueUsd).toBe(0);
     expect(row?.actions).toEqual([]);
 
-    // ...and it stays off the investments line, which is where a double count
-    // would show up first.
+    // ...and the parent's own sheet still reconciles once the stake carried
+    // at cost has been replaced by the subsidiary's real net assets.
     expect(portfolio.reconciliation.reconciles).toBe(true);
   });
 

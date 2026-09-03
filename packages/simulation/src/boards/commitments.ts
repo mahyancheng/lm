@@ -29,6 +29,7 @@ import type {
 } from '@frontier/contracts';
 import { makeId } from '@frontier/contracts';
 import { rememberEvent } from '../relationships/relations';
+import { canReach } from '../validator/context';
 import { assessDirector, boardForProposal, bindingCommitments, SUPPORT_THRESHOLD } from './tally';
 import { clamp, companyById, emitEvent, round, signedScore100, unit } from './util';
 
@@ -150,6 +151,23 @@ export function commitmentsFromLobbying(draft: SessionState, ctx: ResolverContex
     const board = boardForProposal(draft, proposal);
     const director = board?.directors.find((d) => d.characterId === intent.directorCharacterId);
     if (board === null || board === undefined || director === undefined) continue;
+
+    // World 2 only: the validator no longer refuses an approach out of network
+    // reach — it is attempted here and fails on the same check, with its own
+    // memory of the missed approach rather than a registered stance. World 1
+    // still refuses it at validation, so this branch is never reached there.
+    const reach = canReach(draft, action.actorCharacterId, director.characterId);
+    if (!reach.allowed) {
+      rememberEvent(draft, ctx, {
+        ownerCharacterId: director.characterId,
+        aboutId: action.actorCharacterId,
+        kind: 'negotiation',
+        summary: `They tried to reach me before the ${proposal.kind.replace(/_/g, ' ')} vote and never got through: ${reach.reason}`.slice(0, 300),
+        sentiment: -0.05,
+        stableKey: `${proposal.id}_lobby_${action.actorCharacterId}`,
+      });
+      continue;
+    }
 
     // Would they support it on the terms offered?
     const hypothetical = applyConcessions(proposal, intent.concessions);

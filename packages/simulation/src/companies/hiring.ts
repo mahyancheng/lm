@@ -19,6 +19,9 @@
 
 import type { CompBand, Company, ResolverContext, SessionState, StaffRole } from '@frontier/contracts';
 import { effectivePolicy } from './archetypes';
+import { emitPartialFill } from './partialFill';
+import { isMultiSectorWorld } from '../economy/sectors';
+import { canReach } from '../validator/context';
 import { companyTalentCostFactor } from '../economy/regions';
 import {
   ATTRITION_BOUNDS,
@@ -275,6 +278,20 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
     for (const { intent } of intentsOfType(actions, 'layoff')) {
       const available = roleHeadcount(company, intent.role);
       const cut = Math.min(intent.count, available);
+      if (cut < intent.count) {
+        // World 2 only: world 1's validator already clamped `intent.count` to
+        // `available`, so `cut` always equals `intent.count` there and this
+        // never fires. From world 2 the reduction was accepted whole and the
+        // shortfall — a team smaller than the order — is stated here.
+        emitPartialFill(draft, ctx, company.id, {
+          actionType: 'layoff',
+          asked: intent.count,
+          got: cut,
+          unit: 'roles',
+          reason: `${company.name} employs ${available} in ${intent.role}; that is the whole team.`,
+          phase: 'talent_resolution',
+        });
+      }
       if (cut <= 0) continue;
       const headBefore = totalHeadcount(company);
       setRoleHeadcount(company, intent.role, available - cut);
@@ -321,16 +338,18 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       const fromCompanyId = target.companyId;
       if (fromCompanyId === company.id) continue;
 
-      const probability = poachProbability(
-        draft,
-        company,
-        intent.targetCharacterId,
-        action.actorCharacterId,
-        intent.compPremiumPct,
-        intent.approach,
-      );
-      const draw = rng.next();
-      const succeeded = draw < probability;
+      // World 2 only: the validator no longer refuses a private approach to
+      // somebody out of network reach — it is attempted and fails here, on the
+      // same `canReach` the validator would have judged it by, rather than
+      // never happening. World 1 still refuses it at validation, so this path
+      // is never reached there and the reservation always paid for a real shot.
+      const reach = intent.approach === 'private' ? canReach(draft, action.actorCharacterId, intent.targetCharacterId) : null;
+      const unreachable = reach !== null && !reach.allowed;
+
+      const probability = unreachable
+        ? 0
+        : poachProbability(draft, company, intent.targetCharacterId, action.actorCharacterId, intent.compPremiumPct, intent.approach);
+      const succeeded = unreachable ? false : rng.next() < probability;
 
       const eventId = emitEvent(
         draft,
@@ -345,9 +364,22 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
           approach: intent.approach,
           probability,
           succeeded,
+          unreachable,
         },
         intent.approach === 'public' ? 'public' : 'company',
       );
+
+      if (unreachable) {
+        ctx.log({
+          phase: 'talent_resolution',
+          text: `${company.name}'s approach to ${target.name} never got through: ${reach?.reason ?? 'no path to them exists.'}`,
+          deltaLabel: 'no reach',
+          refEventIds: [eventId],
+          tone: 'warning',
+          subjectId: company.id,
+        });
+        continue;
+      }
 
       if (succeeded) {
         const previousEmployer = fromCompanyId === null ? undefined : draft.companies.find((c) => c.id === fromCompanyId);
@@ -473,11 +505,35 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
       departures += leavers;
     }
 
-    // However enthusiastically a company recruits, it cannot carry an unbounded
-    // pipeline: anything past a share of the workforce it actually has is not
-    // being worked, and is withdrawn before morale is asked to carry it.
-    const backlogCap = Math.round(Math.max(OPEN_ROLE_BACKLOG_FLOOR, totalHeadcount(company) * OPEN_ROLE_BACKLOG_CAP_SHARE));
-    if (company.employees.openRoles > backlogCap) company.employees.openRoles = count(backlogCap);
+    // World 1: unconditional and silent, exactly as this cap has always run —
+    // touching it would move the frozen world's hash.
+    //
+    // World 2: a recruiting function that is not player-directed still cannot
+    // carry an unbounded pipeline, and the withdrawal is reported rather than
+    // silent, because nothing the engine drops goes unstated from world 2. A
+    // player who keeps a requisition open is making a decision, not
+    // generating noise the engine has to protect itself from — `hire` has no
+    // headcount gate at all, and the same freedom holds for the backlog it
+    // leaves behind, carried instead in the player's own CashAfter and payroll
+    // lines.
+    if (!isMultiSectorWorld(draft)) {
+      const backlogCap = Math.round(Math.max(OPEN_ROLE_BACKLOG_FLOOR, totalHeadcount(company) * OPEN_ROLE_BACKLOG_CAP_SHARE));
+      if (company.employees.openRoles > backlogCap) company.employees.openRoles = count(backlogCap);
+    } else if (company.controllerPlayerId === null) {
+      const backlogCap = Math.round(Math.max(OPEN_ROLE_BACKLOG_FLOOR, totalHeadcount(company) * OPEN_ROLE_BACKLOG_CAP_SHARE));
+      if (company.employees.openRoles > backlogCap) {
+        const before = company.employees.openRoles;
+        company.employees.openRoles = count(backlogCap);
+        emitPartialFill(draft, ctx, company.id, {
+          actionType: 'hire',
+          asked: before,
+          got: backlogCap,
+          unit: 'open roles',
+          reason: `${company.name}'s recruiting function cannot work a backlog past ${backlogCap} standing requisitions; the rest lapsed.`,
+          phase: 'talent_resolution',
+        });
+      }
+    }
 
     const target = moraleTarget(company, competitiveness, controversy);
     company.employees.morale = score(company.employees.morale + (target - company.employees.morale) * MORALE_DRIFT);

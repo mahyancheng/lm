@@ -66,7 +66,7 @@ import type {
   Sector,
 } from '@frontier/contracts';
 import type { SeededRng } from '@frontier/contracts';
-import { CAPITAL_ENTITY_MEMORY_LIMIT, REGIONS, SECTORS, makeId, regionMeta, regionSectorAffinity } from '@frontier/contracts';
+import { CAPITAL_ENTITY_MEMORY_LIMIT, REGIONS, SECTORS, defaultCategoryFor, makeId, regionMeta, regionSectorAffinity } from '@frontier/contracts';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { deployableUsd, moveDryPowder, remember } from '../capital/context';
 import {
@@ -569,6 +569,7 @@ function seedFor(input: {
     product: {
       name: `${input.name.split(' ')[0] ?? input.name} ${product.suffix}`,
       segment: product.segment,
+      categoryId: defaultCategoryFor(input.sector, product.segment),
       price: product.price,
       churn: 0.07,
       growth: 0.14,

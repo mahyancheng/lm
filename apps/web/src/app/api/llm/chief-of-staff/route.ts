@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { createInMemoryMemoryStore, offlineChiefOfStaff, rememberExchange } from '@frontier/llm';
+import { offlineChiefOfStaff, rememberExchange } from '@frontier/llm';
 import { BoundedChiefOfStaffInputSchema, ConversationPartsSchema } from '../_bounds';
-import { admit, gateway, ok, parseBody, runRole, transportAvailable } from '../_gateway';
-import { processSingleton } from '../_runtime';
+import { admit, chiefOfStaffMemoryStore, gateway, ok, parseBody, runRole, transportAvailable } from '../_gateway';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,23 +15,6 @@ const BodySchema = z.object({
    */
   conversation: ConversationPartsSchema,
 });
-
-/**
- * The durable half of every Chief of Staff thread.
- *
- * Held on the **process**, not on the gateway, and for the same reason the
- * concurrency limiter is: the gateway is rebuilt whenever the Claude credential
- * changes, and a memory rebuilt with it would make a new token cost the founder
- * their standing preferences. A credential change should start a fresh Claude
- * transcript — it does — and should not erase what the founder told their chief
- * of staff two years ago.
- *
- * In-memory, which is right for the deployment this runs on (one always-on Node
- * process on the owner's Pi) and honest about its limits everywhere else: on a
- * multi-instance host each instance keeps its own, and a lost memory degrades a
- * conversation rather than failing a quarter.
- */
-const memoryStore = processSingleton('llm.chiefOfStaffMemory', () => createInMemoryMemoryStore());
 
 /**
  * `POST /api/llm/chief-of-staff` — answer, plan or act.
@@ -84,6 +66,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const { input, conversation } = parsed.value;
   const key = conversationKey('cos', conversation);
+  const memoryStore = chiefOfStaffMemoryStore();
 
   // No transport: answer deterministically rather than returning nothing. The
   // memory is still read and written, so an offline quarter is part of the same

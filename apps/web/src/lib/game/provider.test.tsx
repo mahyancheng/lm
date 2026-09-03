@@ -25,10 +25,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { NewGameSetup } from '@frontier/contracts';
+import type { NewGameSetup, SessionState } from '@frontier/contracts';
 import { NewGameSetupSchema } from '@frontier/contracts';
-import { buildSubmittedAction, createSession } from './engine';
-import { SAVE_KEY, SAVE_VERSION, SLOT_KEYS, buildSaveFile, writeSaveFile } from './persistence';
+import { buildSubmittedAction, createSession, playerCompanyOf, PLAYER_ID } from './engine';
+import { SAVE_KEY, SAVE_VERSION, SLOT_KEYS, buildSaveFile, writeSaveFile, type SaveFile } from './persistence';
 import { GameProvider, useGame, useGameActions, type GameStoreActions, type GameStoreState } from './provider';
 import { backupKeyOf } from '../saves/sync';
 
@@ -432,5 +432,162 @@ describe('loadSaveFile adopts a save that came from elsewhere', () => {
     expect(adopted).toBe(false);
     expect(storedRaw(SAVE_KEY)).toBe(before);
     expect(playerCompanyName(state())).toBe('Southgate Labs');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  STAGE 5 — the active company, through the store                            */
+/* -------------------------------------------------------------------------- */
+
+describe('the active company', () => {
+  const WORLD2_SETUP = NewGameSetupSchema.parse({
+    companyName: 'Kestrel Dynamics',
+    founderName: 'Rae Fontaine',
+    backgroundId: 'humanoid_lab',
+    sector: 'robotics',
+    region: 'east_asia',
+    worldVersion: 2,
+  });
+
+  /** A world-2 session where the seat also controls one NPC company, as a live subsidiary would leave it. */
+  function sessionWithSubsidiary(): { session: SessionState; foundingId: string; subsidiaryId: string } {
+    const session = createSession({ seed: SEED, setup: WORLD2_SETUP });
+    const foundingId = playerCompanyOf(session).id;
+    const subsidiary = session.companies.find(
+      (company) => company.isActive && company.id !== foundingId && company.controllerPlayerId === null,
+    );
+    if (subsidiary === undefined) throw new Error('world 2 seed carries no other active company to make a subsidiary of.');
+    subsidiary.controllerPlayerId = PLAYER_ID;
+    return { session, foundingId, subsidiaryId: subsidiary.id };
+  }
+
+  /** A checkpointed save carrying `session` verbatim as the open quarter. */
+  function fileFor(session: SessionState): SaveFile {
+    return {
+      version: SAVE_VERSION,
+      seed: SEED,
+      difficulty: 'standard',
+      autoExecuteRoutine: false,
+      setup: WORLD2_SETUP,
+      worldVersion: 2,
+      log: [],
+      checkpoint: { quarter: session.quarter, state: session },
+      savedQuarter: session.quarter,
+      endedQuarter: null,
+      queue: [],
+      savedAtIso: STAMP,
+    };
+  }
+
+  it('defaults to the founding company', async () => {
+    // Before any game exists, and after loading one that has never switched.
+    const fresh = await mountGame();
+    expect(fresh.state().activeCompanyId).toBe(playerCompanyOf(fresh.state().session).id);
+
+    const { session, foundingId } = sessionWithSubsidiary();
+    expect(writeSaveFile(fileFor(session))).toBe(true);
+    const loaded = await mountGame();
+    expect(loaded.state().activeCompanyId).toBe(foundingId);
+  });
+
+  it('a new game starts directing the founding company', async () => {
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup: WORLD2_SETUP });
+    });
+    expect(state().activeCompanyId).toBe(playerCompanyOf(state().session).id);
+  });
+
+  it('switches, and the choice is not written into the versioned save file', async () => {
+    const { session, foundingId, subsidiaryId } = sessionWithSubsidiary();
+    expect(writeSaveFile(fileFor(session))).toBe(true);
+    const { state, actions } = await mountGame();
+    expect(state().activeCompanyId).toBe(foundingId);
+
+    await act(async () => {
+      actions().setActiveCompany(subsidiaryId);
+    });
+    expect(state().activeCompanyId).toBe(subsidiaryId);
+    // Client UI state, not engine state: the save file itself is untouched.
+    expect(Object.keys(storedJson(SAVE_KEY))).not.toContain('activeCompanyId');
+
+    // A company this seat does not control is refused, not adopted.
+    const rival = session.companies.find((company) => company.isActive && company.controllerPlayerId !== PLAYER_ID);
+    if (rival === undefined) throw new Error('no rival company in the world-2 seed');
+    await act(async () => {
+      actions().setActiveCompany(rival.id);
+    });
+    expect(state().activeCompanyId).toBe(foundingId);
+  });
+
+  it('persists the switch across a reload of the same session', async () => {
+    const { session, subsidiaryId } = sessionWithSubsidiary();
+    expect(writeSaveFile(fileFor(session))).toBe(true);
+    const { state, actions } = await mountGame();
+
+    await act(async () => {
+      actions().setActiveCompany(subsidiaryId);
+    });
+    expect(state().activeCompanyId).toBe(subsidiaryId);
+
+    // Reloading the very save just switched on lands back on the subsidiary —
+    // the choice survived in its own, separate storage entry.
+    let reloaded = false;
+    await act(async () => {
+      reloaded = await actions().loadGame();
+    });
+    await settle(state);
+    expect(reloaded).toBe(true);
+    expect(state().activeCompanyId).toBe(subsidiaryId);
+  });
+
+  it('resets to the founding company once the seat no longer controls the active one', async () => {
+    const { session, foundingId, subsidiaryId } = sessionWithSubsidiary();
+    expect(writeSaveFile(fileFor(session))).toBe(true);
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().setActiveCompany(subsidiaryId);
+    });
+    expect(state().activeCompanyId).toBe(subsidiaryId);
+
+    // The same session, sold or wound out of the group — same sessionId (it
+    // is derived from the seed alone), so the previously stored choice still
+    // names a company this seat no longer controls when it is reloaded.
+    const soldOff = createSession({ seed: SEED, setup: WORLD2_SETUP });
+    expect(soldOff.sessionId).toBe(session.sessionId);
+    expect(writeSaveFile(fileFor(soldOff))).toBe(true);
+
+    let reloaded = false;
+    await act(async () => {
+      reloaded = await actions().loadGame();
+    });
+    await settle(state);
+    expect(reloaded).toBe(true);
+    expect(state().activeCompanyId).toBe(foundingId);
+  });
+
+  it('resets to the founding company when a resolved quarter costs control of the active one', async () => {
+    const { session, subsidiaryId } = sessionWithSubsidiary();
+    expect(writeSaveFile(fileFor(session))).toBe(true);
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().setActiveCompany(subsidiaryId);
+    });
+    expect(state().activeCompanyId).toBe(subsidiaryId);
+
+    let resolved = false;
+    await act(async () => {
+      resolved = await actions().endQuarter();
+    });
+    expect(resolved).toBe(true);
+    // Whatever the quarter did to the subsidiary's control, the active company
+    // is always one `resolveActiveCompanyId` would still hand back for the
+    // resolved session — never left dangling on one that fell out of the
+    // group.
+    const controlledIds = new Set([
+      playerCompanyOf(state().session).id,
+      ...state().session.companies.filter((company) => company.isActive && company.controllerPlayerId === PLAYER_ID).map((company) => company.id),
+    ]);
+    expect(controlledIds.has(state().activeCompanyId)).toBe(true);
   });
 });

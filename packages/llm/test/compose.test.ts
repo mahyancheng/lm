@@ -21,6 +21,7 @@ import {
   MAYA_ID,
   NEXUS_ID,
   ORBIT_ID,
+  chiefOfStaffDossier,
   chiefOfStaffInput,
   innovationInput,
   memory,
@@ -165,6 +166,34 @@ describe('chief of staff composer', () => {
   it('describes the auto-execute carve-out when it is enabled', () => {
     const { prompt } = composeChiefOfStaff(chiefOfStaffInput({ autoExecuteEnabled: true }));
     expect(prompt).toContain('always require an explicit confirmation');
+  });
+
+  // STAGE 5: a "how is the group doing" question is only answerable if the
+  // dossier's group figures actually reach the prompt text — the model is
+  // instructed to cite only the dossier, so a field the render skipped could
+  // never be quoted back.
+  it('renders the group section from the typed dossier, single company and consolidated', () => {
+    const solo = composeChiefOfStaff(chiefOfStaffInput({ dossier: chiefOfStaffDossier() }));
+    expect(solo.prompt).toContain('Group');
+    expect(solo.prompt).toContain('You direct one company');
+
+    const consolidated = composeChiefOfStaff(
+      chiefOfStaffInput({
+        dossier: chiefOfStaffDossier({
+          group: {
+            companyCount: 2,
+            revenueUsd: 1_100_000_000,
+            netIncomeUsd: -50_000_000,
+            cashUsd: 2_400_000_000,
+            debtUsd: 500_000_000,
+            headcount: 1_500,
+            marketValueUsd: 21_000_000_000,
+          },
+        }),
+      }),
+    );
+    expect(consolidated.prompt).toContain('2 companies');
+    expect(consolidated.prompt).toContain('$1.1bn');
   });
 });
 

@@ -20,12 +20,15 @@ import { createDefaultEngine, createDemoSession } from '@frontier/simulation';
 import { projectPlayerView } from '../../../lib/game/playerView';
 import {
   HISTORY_CSV_COLUMNS,
+  PRODUCT_LINES_CSV_COLUMNS,
   barsOf,
   financialHistoryFor,
+  groupProductLines,
   historyCsv,
   latestOf,
   latestStatement,
   niceStep,
+  productLinesCsv,
   qoqDeltaPct,
   quarterLabels,
   revenueStacks,
@@ -330,5 +333,53 @@ describe('historyCsv', () => {
 
   it('is a header alone for an empty history', () => {
     expect(historyCsv([], 2027)).toBe(HISTORY_CSV_COLUMNS.join(','));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Product lines, by industry                                                */
+/* -------------------------------------------------------------------------- */
+
+describe('groupProductLines', () => {
+  it('places every line in a group and drops none', () => {
+    const withLines = ownHistory.find((entry) => (entry.productLines ?? []).length > 0);
+    if (withLines === undefined) return; // this fixture's five quarters happened to book no product line
+    const groups = groupProductLines(withLines.productLines ?? []);
+    const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
+    expect(total).toBe((withLines.productLines ?? []).length);
+  });
+
+  it('is sorted by label and is empty for no lines', () => {
+    expect(groupProductLines([])).toEqual([]);
+    const withLines = ownHistory.find((entry) => (entry.productLines ?? []).length > 0);
+    if (withLines === undefined) return;
+    const labels = groupProductLines(withLines.productLines ?? []).map((group) => group.label);
+    expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('groups a line with no categoryId under a humanised segment name rather than dropping it', () => {
+    const groups = groupProductLines([
+      { productId: 'prd_x', name: 'Legacy Line', segment: 'developer_api', units: 10, priceUsd: 5, revenueUsd: 50, grossMarginPct: 0.4 },
+    ]);
+    expect(groups).toEqual([{ label: 'Developer api', lines: expect.any(Array) }]);
+  });
+});
+
+describe('productLinesCsv', () => {
+  it('carries categoryId and unit for every row that has them', () => {
+    const withLines = ownHistory.find((entry) => (entry.productLines ?? []).length > 0);
+    if (withLines === undefined) return;
+    const csv = productLinesCsv([withLines], worldTwoView.startYear);
+    const rows = csv.split('\n').slice(1);
+    expect(rows.length).toBe((withLines.productLines ?? []).length);
+    for (const row of rows) {
+      const cells = row.split(',');
+      expect(cells[PRODUCT_LINES_CSV_COLUMNS.indexOf('category_id')]).not.toBe('');
+      expect(cells[PRODUCT_LINES_CSV_COLUMNS.indexOf('unit')]).not.toBe('');
+    }
+  });
+
+  it('is a header alone for an empty history', () => {
+    expect(productLinesCsv([], 2027)).toBe(PRODUCT_LINES_CSV_COLUMNS.join(','));
   });
 });

@@ -55,8 +55,16 @@ async function settle(turns = 16): Promise<void> {
 
 const Schema = z.object({ ok: z.boolean() });
 
-function request(tag: string): LlmCompletionRequest<{ ok: boolean }> {
-  return { role: 'npc_strategist', system: 's', prompt: tag, schema: Schema, schemaName: 'Tag', sessionKey: null };
+function request(tag: string, priority?: 'interactive' | 'batch'): LlmCompletionRequest<{ ok: boolean }> {
+  return {
+    role: priority === 'interactive' ? 'chief_of_staff' : 'npc_strategist',
+    system: 's',
+    prompt: tag,
+    schema: Schema,
+    schemaName: 'Tag',
+    sessionKey: null,
+    ...(priority === undefined ? {} : { priority }),
+  };
 }
 
 interface GatedTransport {
@@ -267,6 +275,175 @@ describe('withConcurrencyLimit', () => {
 
     right.finish('right');
     await second;
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Priority lanes                                                             */
+/* -------------------------------------------------------------------------- */
+
+describe('priority lanes', () => {
+  it('runs an interactive call arriving second, second — ahead of batch calls already queued', async () => {
+    const gated = gatedTransport();
+    const limited = withConcurrencyLimit(gated.transport, 1);
+
+    // One call is already holding the only permit.
+    const running = limited.complete(request('running', 'batch'));
+    await settle();
+    expect(gated.started).toEqual(['running']);
+
+    // Three batch calls queue up behind it first.
+    const b1 = limited.complete(request('b1', 'batch'));
+    const b2 = limited.complete(request('b2', 'batch'));
+    const b3 = limited.complete(request('b3', 'batch'));
+    await settle();
+    expect(gated.started).toEqual(['running']);
+
+    // An interactive call arrives last, after every batch call is already
+    // queued. Plain FIFO would run it fourth (fifth overall, after the three
+    // batch waiters); the priority lane must run it second — right behind the
+    // call already in flight, ahead of every batch call that queued first.
+    const interactive = limited.complete(request('interactive', 'interactive'));
+    await settle();
+    expect(gated.started).toEqual(['running']);
+
+    gated.finish('running');
+    await running;
+    await gated.whenStarted(2);
+    await settle();
+    expect(gated.started).toEqual(['running', 'interactive']);
+
+    // Batch calls resume in their own arrival order once the interactive
+    // traffic clears — starvation-free, just deprioritised.
+    gated.finish('interactive');
+    await interactive;
+    await gated.whenStarted(3);
+    await settle();
+    expect(gated.started).toEqual(['running', 'interactive', 'b1']);
+
+    gated.finish('b1');
+    await b1;
+    await gated.whenStarted(4);
+    await settle();
+    expect(gated.started).toEqual(['running', 'interactive', 'b1', 'b2']);
+
+    gated.finish('b2');
+    await b2;
+    gated.finish('b3');
+    await b3;
+  });
+
+  it('serves every interactive waiter before any batch waiter, oldest first within each lane', async () => {
+    const gated = gatedTransport();
+    const limited = withConcurrencyLimit(gated.transport, 1);
+
+    const running = limited.complete(request('running', 'batch'));
+    await settle();
+
+    const batchA = limited.complete(request('batchA', 'batch'));
+    const interactiveA = limited.complete(request('interactiveA', 'interactive'));
+    const batchB = limited.complete(request('batchB', 'batch'));
+    const interactiveB = limited.complete(request('interactiveB', 'interactive'));
+    await settle();
+    expect(gated.started).toEqual(['running']);
+
+    gated.finish('running');
+    await running;
+    await gated.whenStarted(2);
+    expect(gated.started).toEqual(['running', 'interactiveA']);
+
+    gated.finish('interactiveA');
+    await interactiveA;
+    await gated.whenStarted(3);
+    // interactiveB, queued after both batch calls, still runs before either.
+    expect(gated.started).toEqual(['running', 'interactiveA', 'interactiveB']);
+
+    gated.finish('interactiveB');
+    await interactiveB;
+    await gated.whenStarted(4);
+    // Only now do the batch calls run, in their own arrival order.
+    expect(gated.started).toEqual(['running', 'interactiveA', 'interactiveB', 'batchA']);
+
+    gated.finish('batchA');
+    await batchA;
+    gated.finish('batchB');
+    await batchB;
+  });
+
+  it('treats a request with no declared priority as batch', async () => {
+    const gated = gatedTransport();
+    const limited = withConcurrencyLimit(gated.transport, 1);
+
+    const running = limited.complete(request('running', 'batch'));
+    await settle();
+
+    const undeclared = limited.complete(request('undeclared')); // no priority field at all
+    const interactive = limited.complete(request('interactive', 'interactive'));
+    await settle();
+
+    gated.finish('running');
+    await running;
+    await gated.whenStarted(2);
+    // The interactive call still jumps the undeclared call, which defaulted to batch.
+    expect(gated.started).toEqual(['running', 'interactive']);
+
+    gated.finish('interactive');
+    await interactive;
+    await gated.whenStarted(3);
+    expect(gated.started).toEqual(['running', 'interactive', 'undeclared']);
+
+    gated.finish('undeclared');
+    await undeclared;
+  });
+
+  it('reports queue depth per lane and the running call in a snapshot', async () => {
+    const gated = gatedTransport();
+    const limiter = createConcurrencyLimiter(1);
+    const limited = withConcurrencyLimit(gated.transport, limiter);
+
+    const running = limited.complete(request('running', 'batch'));
+    await settle();
+    expect(limiter.snapshot()).toEqual({
+      max: 1,
+      active: 1,
+      queued: 0,
+      queuedInteractive: 0,
+      queuedBatch: 0,
+      runningRole: 'npc_strategist',
+      runningPriority: 'batch',
+    });
+
+    const batchWaiter = limited.complete(request('batchWaiter', 'batch'));
+    const interactiveWaiter = limited.complete(request('interactiveWaiter', 'interactive'));
+    await settle();
+    expect(limiter.snapshot()).toMatchObject({
+      active: 1,
+      queued: 2,
+      queuedInteractive: 1,
+      queuedBatch: 1,
+      runningRole: 'npc_strategist',
+      runningPriority: 'batch',
+    });
+
+    gated.finish('running');
+    await running;
+    await gated.whenStarted(2);
+    await settle();
+    expect(limiter.snapshot()).toMatchObject({
+      active: 1,
+      queued: 1,
+      queuedInteractive: 0,
+      queuedBatch: 1,
+      runningRole: 'chief_of_staff',
+      runningPriority: 'interactive',
+    });
+
+    gated.finish('interactiveWaiter');
+    await interactiveWaiter;
+    gated.finish('batchWaiter');
+    await batchWaiter;
+    await settle();
+    expect(limiter.snapshot()).toMatchObject({ active: 0, queued: 0, runningRole: null, runningPriority: null });
   });
 });
 

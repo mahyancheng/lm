@@ -29,7 +29,7 @@ import {
   type Column,
   type Tone,
 } from '@/components/ui';
-import { useCompanyMetrics, useGame, usePlayerCompany, usePlayerView, useQuotes, useSession } from '@/lib/game';
+import { useActiveCompany, useCompanyMetrics, useGame, usePlayerView, useQuotes, useSession } from '@/lib/game';
 import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
 import { StatementTable, type StatementRow } from '@/components/screens/reporting/StatementTable';
 import { balanceSheetView, humanise, incomeStatementOf } from '@/components/screens/reporting/util';
@@ -87,7 +87,7 @@ function FactCard({
 export default function FinancialsPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const metrics = useCompanyMetrics();
   const { lastOutcome } = useGame();
   // `useQuotes()` with no id returns the whole tape, so an unlisted company must

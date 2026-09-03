@@ -1,10 +1,15 @@
 /**
- * The Chief of Staff transcript, kept per session.
+ * The Chief of Staff transcript, kept per thread.
  *
  * The store owns game state; a conversation is not game state — nothing in it
- * binds until an action is queued — so it lives here, in the tab, keyed by
- * session id. It survives navigation between screens and a reload, and it is
- * discarded when the session changes.
+ * binds until an action is queued — so it lives here, in the tab. Every
+ * function below takes a `sessionId` parameter, but STAGE 5's switcher means
+ * that is no longer just the session's own id: `useChiefOfStaff` passes
+ * `${session.sessionId}:${activeCompany.id}` — a thread key — so a
+ * subsidiary's conversation is a genuinely separate transcript from the
+ * founding company's, never blurring memory (or, upstream, the Claude session
+ * behind it) between the two. It survives navigation between screens and a
+ * reload, and it is discarded when the session or the active company changes.
  *
  * Everything read back from storage is re-parsed with
  * `ChiefOfStaffInterpretationSchema` before it is trusted. That is the same
@@ -14,6 +19,7 @@
 
 import type { ChiefOfStaffInterpretation, LookupResult } from '@frontier/contracts';
 import { ChiefOfStaffInterpretationSchema, LookupResultSchema } from '@frontier/contracts';
+import type { ChiefOfStaffFailure } from '@/lib/llm/client';
 
 export interface TranscriptEntry {
   /** Deterministic within a session: quarter and position, never a clock. */
@@ -24,6 +30,20 @@ export interface TranscriptEntry {
   readonly interpretation: ChiefOfStaffInterpretation;
   /** True when no model answered and the deterministic echo is being shown. */
   readonly fallback: boolean;
+  /**
+   * True while `interpretation` is the instant offline preview and the real
+   * request is still in flight — see the progressive-answer flow in
+   * `useChiefOfStaff.ts`. Cleared the moment that request settles, whatever it
+   * settles to, so it is never true on anything read back from storage.
+   */
+  readonly quick?: boolean;
+  /**
+   * Set only when the *final* answer is the offline one because the live call
+   * genuinely failed (as opposed to no transport being configured at all,
+   * which also sets `fallback` but leaves this unset). Lets the drawer say
+   * "the model timed out" rather than a generic "no model reached".
+   */
+  readonly failureReason?: ChiefOfStaffFailure;
   /**
    * What the assistant went and looked up before answering, if it did.
    *
@@ -83,6 +103,30 @@ export function writeTranscript(sessionId: string, entries: readonly TranscriptE
 /** Append one exchange. Returns the new transcript. */
 export function appendTranscript(sessionId: string, entry: TranscriptEntry): TranscriptEntry[] {
   return writeTranscript(sessionId, [...readTranscript(sessionId), entry]);
+}
+
+/**
+ * Update one entry in place, by id. A no-op (returns the transcript unchanged,
+ * still notifying nobody) if that id is no longer present — which is fine: it
+ * means the founder cleared the thread while the live call was still in
+ * flight, and there is nothing left to update.
+ *
+ * This is what turns the quick offline answer into the model's answer without
+ * the exchange appearing to happen twice: same id, same position in the list,
+ * new content.
+ */
+export function replaceTranscriptEntry(
+  sessionId: string,
+  id: string,
+  patch: Partial<Omit<TranscriptEntry, 'id' | 'quarter' | 'message'>>,
+): TranscriptEntry[] {
+  const current = readTranscript(sessionId);
+  const index = current.findIndex((entry) => entry.id === id);
+  const existing = current[index];
+  if (index === -1 || existing === undefined) return current;
+  const next = [...current];
+  next[index] = { ...existing, ...patch };
+  return writeTranscript(sessionId, next);
 }
 
 /** Forget the conversation for a session. */
@@ -151,7 +195,14 @@ interface StoredEntry {
   readonly message?: unknown;
   readonly interpretation?: unknown;
   readonly fallback?: unknown;
+  readonly failureReason?: unknown;
   readonly findings?: unknown;
+}
+
+const FAILURE_REASONS: readonly ChiefOfStaffFailure[] = ['timeout', 'network_error', 'aborted'];
+
+function readFailureReason(value: unknown): ChiefOfStaffFailure | undefined {
+  return typeof value === 'string' && (FAILURE_REASONS as readonly string[]).includes(value) ? (value as ChiefOfStaffFailure) : undefined;
 }
 
 function hydrate(sessionId: string): TranscriptEntry[] {
@@ -174,12 +225,17 @@ function hydrate(sessionId: string): TranscriptEntry[] {
             return finding.success ? [finding.data] : [];
           })
         : [];
+      // `quick` is deliberately never restored: it means "the live request is
+      // still in flight", and nothing survives a reload to finish that
+      // request. A rehydrated entry is always a settled one.
+      const failureReason = readFailureReason(candidate.failureReason);
       out.push({
         id: candidate.id,
         quarter: candidate.quarter,
         message: candidate.message,
         interpretation: interpretation.data,
         fallback: candidate.fallback === true,
+        ...(failureReason !== undefined ? { failureReason } : {}),
         ...(findings.length > 0 ? { findings } : {}),
       });
     }

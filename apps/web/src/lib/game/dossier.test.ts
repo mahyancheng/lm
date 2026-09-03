@@ -87,6 +87,28 @@ describe('buildChiefOfStaffDossier', () => {
   it('is deterministic for a given session', () => {
     expect(buildChiefOfStaffDossier(session)).toEqual(dossier);
   });
+
+  it('reports the group as just the founding company when there is no subsidiary concept', () => {
+    expect(dossier.group.companyCount).toBe(1);
+    // Headcount is read straight off the live company, not a filed statement,
+    // so it is meaningful even in quarter 0, before anything has been filed.
+    expect(dossier.group.headcount).toBe(dossier.people.total);
+    // Nothing has been filed yet at quarter 0 — groupStatementOf contributes
+    // nothing rather than inventing a number, and this dossier says the same.
+    expect(dossier.group.revenueUsd).toBe(0);
+  });
+
+  it('builds for an explicit company rather than always the founding one', () => {
+    const rival = session.companies.find((entry) => entry.isActive && entry.id !== playerCompanyOf(session).id);
+    expect(rival).toBeDefined();
+    if (rival === undefined) return;
+    const rivalDossier = buildChiefOfStaffDossier(session, [], rival);
+    expect(rivalDossier.companyName).toBe(rival.name);
+    expect(rivalDossier.finances.cashUsd).toBe(rival.financials.cash);
+    // The group figure is the same seat's group either way — it does not
+    // change just because a different company's dossier was requested.
+    expect(rivalDossier.group).toEqual(dossier.group);
+  });
 });
 
 describe('availableActionsForSession', () => {
@@ -127,5 +149,18 @@ describe('buildChiefOfStaffInput', () => {
     // point of holding it server-side is that a request cannot rewrite the
     // founder's standing preferences.
     expect(buildChiefOfStaffInput(session, 'Remember this', []).memory).toBeUndefined();
+  });
+
+  it('defaults to the founding company, and follows an explicit companyId this seat controls', () => {
+    const founding = playerCompanyOf(session);
+    expect(buildChiefOfStaffInput(session, 'How are we doing?', []).companyId).toBe(founding.id);
+
+    // A company this seat does not control falls back to the founding company
+    // rather than building a briefing for a company it has no standing over.
+    const rival = session.companies.find((entry) => entry.isActive && entry.id !== founding.id);
+    expect(rival).toBeDefined();
+    if (rival !== undefined) {
+      expect(buildChiefOfStaffInput(session, 'How are we doing?', [], { companyId: rival.id }).companyId).toBe(founding.id);
+    }
   });
 });

@@ -38,14 +38,14 @@ import {
 import { ExecutivePanel } from '@/components/screens/people/ExecutivePanel';
 import { HeadcountPlan } from '@/components/screens/people/HeadcountPlan';
 import { ROLE_LABEL, blendedMarketCompUsd, headcountOf, talentReputationOf } from '@/components/screens/people/labels';
-import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useActiveCompany, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
 const OUTLOOK_QUARTERS = 4;
 
 export default function PeoplePage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
 
   const employees = company.employees;

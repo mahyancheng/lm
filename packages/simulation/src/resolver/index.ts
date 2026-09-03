@@ -77,6 +77,7 @@ import { resolveCapital } from './capital';
 import { resolveDisclosures } from './disclosure';
 import { rebuildLeaderboards } from './leaderboards';
 import { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
+import { resolveControlChanges } from '../companies/control';
 
 export { ResolutionRecorder, chainRowHash, rowFingerprint } from './ledger';
 export { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
@@ -313,6 +314,13 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             // quarter is struck at this quarter's quote and its profit and loss
             // lands next quarter. Plannable, and stated.
             subsystems.capitalDesks?.settleShorts(draft, ctx);
+            // Last in the phase: every mechanism that can hand a company a
+            // decisive stake without a formal acquire_company offer — a
+            // buy_shares order settled just above, a term sheet or a PE
+            // tender/LBO/activist win from capital_resolution earlier this
+            // quarter — has run by now, so this is the one point in the
+            // quarter where `controllerPlayerId` can be brought current.
+            resolveControlChanges(draft, ctx);
             break;
 
           case 'social_resolution':

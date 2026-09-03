@@ -793,8 +793,15 @@ describe('constants and invariants', () => {
   // variants, ten ledger types and four optional `SessionState` fields. Every
   // addition is an append or an optional, so a save written against 1.2.0 still
   // parses and still hashes to what it hashed to.
+  //
+  // 1.4.0 adds the supply chain: `Product.supply` and `Product.supplyTerms`
+  // (both optional, so a product parsed before this stage carries neither key
+  // and reads as "nothing chosen — open market"), `set_supply_terms` and
+  // `choose_supplier` action variants, and `launch_product.supply`. Every
+  // addition is an append or an optional; a save written against 1.3.0 still
+  // parses and still hashes to what it hashed to.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.3.0');
+    expect(CONTRACTS_VERSION).toBe('1.4.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {

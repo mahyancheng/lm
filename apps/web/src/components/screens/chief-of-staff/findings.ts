@@ -46,6 +46,9 @@ export const FINDING_TITLE: Readonly<Record<LookupResult['kind'], string>> = {
   government_programmes: 'Procurement open to us',
   hiring_market: 'The hiring market',
   own_position: 'Our own position',
+  launchable_lines: 'What we could launch',
+  suppliers: 'Who could supply us',
+  customers: 'Who builds on us',
 };
 
 /** "compute market and own position", for the line shown while the lookups run. */
@@ -170,6 +173,53 @@ export function cardFor(finding: LookupResult): FindingCard {
           })),
         ],
       };
+
+    case 'launchable_lines': {
+      const open = finding.rows.filter((row) => !row.locked);
+      const first = open[0] ?? finding.rows[0];
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.launchable_lines,
+        figure: first === undefined ? '—' : `${open.length} of ${finding.rows.length}`,
+        caption: first === undefined ? 'no lines catalogued for this sector' : `open now, out of ${finding.rows.length} in this industry`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: row.locked ? `${row.label} — locked` : row.label,
+          value: row.locked ? `needs ${row.missingNodeTitles.join(', ') || 'more research'}` : `${formatMoney(row.referencePriceUsd)} a ${row.unitLabel}`,
+          warn: row.locked,
+          intent: row.intent,
+        })),
+      };
+    }
+
+    case 'suppliers': {
+      const first = finding.rows[0];
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.suppliers,
+        figure: first === undefined ? 'None' : formatMoney(first.pricePerUnitUsd),
+        caption: first === undefined ? 'nobody publishes this input yet' : `a unit from ${first.name}, best on quality per dollar`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: `${row.name} — ${row.productName}${row.isDirectRival ? ' (direct rival)' : ''}`,
+          value: `${formatMoney(row.pricePerUnitUsd)} · quality ${row.qualityScorePct}`,
+          intent: row.intent,
+          counterparty: row.name,
+        })),
+      };
+    }
+
+    case 'customers': {
+      const revenue = finding.rows.reduce((sum, row) => sum + row.revenueUsd, 0);
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.customers,
+        figure: finding.rows.length === 0 ? 'None' : formatMoney(revenue),
+        caption: finding.rows.length === 0 ? 'nobody is building on this line' : `across ${formatCount(finding.rows.length)} companies this quarter`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: `${row.buyerName} — ${row.buyerProductName}`,
+          value: `${formatMoney(row.revenueUsd)} · ${formatCount(row.unitsFilled)} units`,
+        })),
+      };
+    }
 
     default: {
       const exhaustive: never = finding;

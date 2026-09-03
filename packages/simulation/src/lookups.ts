@@ -35,12 +35,15 @@ import type {
   Company,
   ComputeSellerRow,
   HiringRow,
+  LaunchableLineRow,
   LookupRequest,
   LookupResult,
   ProgrammeRow,
   SessionState,
   StaffRole,
   StatementRow,
+  SupplierOfferRow,
+  SupplyCustomerRow,
 } from '@frontier/contracts';
 import { COMP_BANDS, MAX_LOOKUPS_PER_TURN, MAX_LOOKUP_ROWS, STAFF_ROLES } from '@frontier/contracts';
 import {
@@ -60,6 +63,9 @@ import { fillRate } from './companies/hiring';
 import { regionOf } from './economy/regions';
 import { quarterlyHireCostUsd, reservableUnits } from './validator/rules';
 import { companyEnergyCostFactor } from './economy/regions';
+import { launchableLines } from './companies/categories';
+import { customersFor, suppliersFor } from './companies/supply';
+import { isMultiSectorWorld } from './economy/sectors';
 
 /* -------------------------------------------------------------------------- */
 /*  Small shared helpers                                                       */
@@ -428,6 +434,112 @@ function ownPosition(company: Company): LookupResult {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  launchable_lines                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every line in the company's own sector, open now or waiting on a node —
+ * `launchableLines` runs the identical `dependencySatisfied` test the
+ * validator's `launch_product` rule does, so a row marked open here is a row
+ * the validator actually accepts. Absent (empty) in world version 1, which has
+ * no catalogue at all.
+ */
+function launchableLinesLookup(draft: SessionState, company: Company): LookupResult {
+  if (!isMultiSectorWorld(draft)) {
+    return { kind: 'launchable_lines', summary: clip('This world has no industry catalogue; only the four legacy segments exist.'), rows: [] };
+  }
+  const lines = launchableLines(draft, company).slice(0, MAX_LOOKUP_ROWS);
+  const rows: LaunchableLineRow[] = lines.map(({ category, locked, missingNodeIds }) => ({
+    categoryId: category.id,
+    label: clip(category.label),
+    sectorId: clip(category.sector),
+    unitLabel: clip(category.unitLabel),
+    referencePriceUsd: positive(category.referencePriceUsd),
+    locked,
+    missingNodeTitles: missingNodeIds.slice(0, 4).map((nodeId) => clip(draft.techGraph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId)),
+    intent: locked
+      ? null
+      : {
+          type: 'launch_product',
+          name: `${category.label} line`,
+          segment: category.buyerSegment,
+          categoryId: category.id,
+          pricePerSeatUsd: positive(category.referencePriceUsd),
+          computeIntensity: category.computeIntensityBaseline,
+          launchMarketingUsd: 0,
+          targetQuality: 0.5,
+          supply: [],
+        },
+  }));
+  const open = rows.filter((row) => !row.locked).length;
+  return {
+    kind: 'launchable_lines',
+    summary: clip(
+      rows.length === 0
+        ? 'No industry lines are catalogued for this sector.'
+        : `${open} of ${rows.length} lines in ${company.sector ?? 'this sector'} are open to launch now.`,
+    ),
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  suppliers                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** Every company whose published terms would sell `company` this input right now, best quality per dollar first, from `suppliersFor`. */
+function suppliersLookup(draft: SessionState, company: Company, inputCategoryId: string, productId: string | null): LookupResult {
+  const offers = suppliersFor(draft, company.id, inputCategoryId).slice(0, MAX_LOOKUP_ROWS);
+  const rows: SupplierOfferRow[] = offers.map((offer) => ({
+    companyId: offer.company.id,
+    name: clip(offer.company.name),
+    productId: offer.product.id,
+    productName: clip(offer.product.name),
+    pricePerUnitUsd: positive(offer.pricePerUnitUsd),
+    qualityScorePct: positive(offer.qualityScore * 100),
+    isDirectRival: offer.isDirectRival,
+    intent:
+      productId === null
+        ? null
+        : { type: 'choose_supplier', productId, inputCategoryId, supplierCompanyId: offer.company.id, supplierProductId: offer.product.id },
+  }));
+  const label = inputCategoryId.replace(/_/g, ' ');
+  return {
+    kind: 'suppliers',
+    summary: clip(
+      rows.length === 0
+        ? `Nobody currently publishes ${label} open to us.`
+        : `${rows.length} compan${rows.length === 1 ? 'y' : 'ies'} would sell us ${label}; best on quality per dollar is ${rows[0]?.name ?? ''}.`,
+    ),
+    inputCategoryId,
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  customers                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** Every company currently building on `productId`, our own published line, from `customersFor`. */
+function customersLookup(draft: SessionState, company: Company, productId: string): LookupResult {
+  const customers = customersFor(draft, company.id, productId).slice(0, MAX_LOOKUP_ROWS);
+  const rows: SupplyCustomerRow[] = customers.map((entry) => ({
+    buyerCompanyId: entry.buyerCompany.id,
+    buyerName: clip(entry.buyerCompany.name),
+    buyerProductName: clip(entry.buyerProduct.name),
+    unitsFilled: positive(entry.unitsFilled),
+    revenueUsd: positive(entry.revenueUsd),
+  }));
+  const revenue = rows.reduce((sum, row) => sum + row.revenueUsd, 0);
+  return {
+    kind: 'customers',
+    summary: clip(rows.length === 0 ? 'Nobody is currently building on this line.' : `${rows.length} companies build on this line, worth ${revenue} dollars this quarter.`),
+    productId,
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  The entry point                                                            */
 /* -------------------------------------------------------------------------- */
 
@@ -478,6 +590,15 @@ export function runLookups(draft: SessionState, companyId: string, requests: rea
         break;
       case 'own_position':
         out.push(ownPosition(company));
+        break;
+      case 'launchable_lines':
+        out.push(launchableLinesLookup(draft, company));
+        break;
+      case 'suppliers':
+        out.push(suppliersLookup(draft, company, request.inputCategoryId, request.productId));
+        break;
+      case 'customers':
+        out.push(customersLookup(draft, company, request.productId));
         break;
       default: {
         const exhaustive: never = request;

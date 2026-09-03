@@ -214,17 +214,29 @@ describe('cash never refuses a decision (world 2)', () => {
     }
   });
 
-  it('still rejects and clamps for reasons that are not cash', () => {
+  it('still rejects for reasons that are structural, not availability', () => {
     const state = starve(world2Session(), DEMO_COMPANIES.player, 0);
+    const company = state.companies.find((entry) => entry.id === DEMO_COMPANIES.player);
+    if (company === undefined) throw new Error('no player company');
+    // A layoff big enough against this small a company is, by itself, always a
+    // board matter (a separate, unrelated mechanism this suite tests
+    // elsewhere) — a founder with no board yet is the clean way to isolate the
+    // ordinary availability path this test actually means to check.
+    company.boardId = null;
+    const inSales = company.employees.sales;
+    const over = inSales + 1;
     const validator = createActionValidator();
     const results = validator.validateBatch(state, [
       act(state, { type: 'start_research_project', targetNodeId: 'not_a_node', researchersAssigned: 2, computeUnits: 10, budgetUsd: 10_000_000, secret: false }),
-      act(state, { type: 'layoff', role: 'sales', count: 9_999, severanceQuartersOfPay: 1 }),
+      act(state, { type: 'layoff', role: 'sales', count: over, severanceQuartersOfPay: 1 }),
     ]);
     expect(results[0]?.status).toBe('rejected');
     expect(results[0]?.codes).toContain('unknown_target');
-    expect(results[1]?.status).toBe('clamped');
-    expect(results[1]?.codes).toContain('insufficient_headcount');
+    // Availability, not a refusal, from world 2: the reduction is accepted
+    // whole and `hiring.ts` cuts whoever is actually in the role, reporting the
+    // shortfall as a `partial_fill` at resolution rather than clamping here.
+    expect(results[1]?.status).toBe('accepted');
+    expect(results[1]?.codes).toContain('partial_fill_expected');
   });
 });
 

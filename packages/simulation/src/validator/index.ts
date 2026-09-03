@@ -127,6 +127,7 @@ export const CEO_ONLY_ACTIONS: readonly ActionType[] = [
   'meet_regulator',
   'give_guidance',
   'respond_crisis',
+  'merge_subsidiary',
 ];
 
 /* -------------------------------------------------------------------------- */
@@ -243,8 +244,21 @@ export function validateAction(
   // A shareholder acting in their own name is not claiming the office: their
   // one governance action is to put a matter to the board, which is precisely
   // what a shareholder requisition is.
+  //
+  // A subsidiary is the other exception, and a deliberate one (STAGE 4): its
+  // chief executive is very often a character the controller never appointed —
+  // an NPC's incumbent management, kept on when the company was bought rather
+  // than absorbed. Making the controller re-appoint their own character as CEO
+  // of every subsidiary just to be allowed to direct it would defeat the point
+  // of keeping the subsidiary alive at all, so the controller may take
+  // CEO_ONLY_ACTIONS on a company they control whether or not their character
+  // holds that office. The incumbent CEO is not fired by this and is not
+  // consulted either — `reviewActions` records what that costs the
+  // relationship, the same way any other overruling would.
+  const overrulesSubsidiaryCeo = company.parentCompanyId !== null && company.controllerPlayerId === actor.playerId;
   if (
     !shareholderCapacity &&
+    !overrulesSubsidiaryCeo &&
     CEO_ONLY_ACTIONS.includes(intent.type) &&
     company.ceoCharacterId !== null &&
     actor.characterId !== null &&

@@ -184,6 +184,23 @@ export function deriveConversationKey(role: ConversationRole, principal: Princip
 /** Calls one principal may make in `RATE_LIMIT_WINDOW_MS`. */
 export const RATE_LIMIT_PER_WINDOW = 20;
 
+/**
+ * Calls one principal may make to `/chief-of-staff/quick` in
+ * `RATE_LIMIT_WINDOW_MS` — a **separate** bucket from `RATE_LIMIT_PER_WINDOW`.
+ *
+ * The quick route answers from `offlineChiefOfStaff`: pure arithmetic over the
+ * typed dossier, no transport, no concurrency-limiter permit, no Claude Code
+ * subprocess. It exists specifically so the founder is never staring at a bare
+ * spinner while the real call is still queued — so it must never itself be why
+ * the real call gets a 429. Sharing `RATE_LIMIT_PER_WINDOW` with the model
+ * routes would spend a slot of the *model* budget on a call that never reaches
+ * a model, halving the real budget for exactly the two-request pattern this
+ * route was built to support (`useChiefOfStaff.ts` fires both on every
+ * question). Generous rather than tight: nothing here spawns a subprocess or
+ * queues behind one, so the only thing this bucket needs to bound is a loop.
+ */
+export const RATE_LIMIT_QUICK_PER_WINDOW = 120;
+
 /** The sliding window. One minute. */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 

@@ -77,7 +77,7 @@ import {
   ROLE_LABEL,
   capabilityLabel,
 } from '@/components/screens/company/labels';
-import { useCompanyMetrics, useGame, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useActiveCompany, useCompanyMetrics, useGame, usePlayerView, useSession } from '@/lib/game';
 
 interface RoleRow {
   readonly role: StaffRole;
@@ -89,7 +89,7 @@ interface RoleRow {
 export default function CompanyPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const metrics = useCompanyMetrics();
 
   const { lastOutcome } = useGame();
@@ -365,7 +365,7 @@ export default function CompanyPage(): React.JSX.Element {
         </div>
       ) : null}
 
-      <SectorPanel company={company} />
+      <SectorPanel session={session} company={company} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel

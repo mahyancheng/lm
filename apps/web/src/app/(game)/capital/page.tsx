@@ -26,10 +26,10 @@ import {
   type Column,
 } from '@/components/ui';
 import {
+  useActiveCompany,
   useCompanyMetrics,
   useMarketCap,
   usePlayerCharacter,
-  usePlayerCompany,
   usePlayerView,
   useSession,
 } from '@/lib/game';
@@ -50,7 +50,7 @@ import {
 export default function CapitalPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const metrics = useCompanyMetrics();
   const marketCap = useMarketCap();

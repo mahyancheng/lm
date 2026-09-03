@@ -489,7 +489,7 @@ describe('adjust_research_project', () => {
     expect(result.codes).not.toContain('insufficient_compute');
   });
 
-  it('clamps to what genuinely exists', () => {
+  it('accepts whole and notes what genuinely exists (world 2: availability, not a refusal)', () => {
     const { state, company } = staged();
     const node = openNode(state);
     company.employees.researchers = 10;
@@ -506,13 +506,12 @@ describe('adjust_research_project', () => {
     };
     const [result] = validator.validateBatch(state, [submit(state, intent, company)]);
     if (result === undefined) throw new Error('no result');
-    expect(result.status).toBe('clamped');
-    expect(result.codes).toContain('insufficient_headcount');
-    expect(result.codes).toContain('insufficient_compute');
-    const clamped = result.clampedAction;
-    if (clamped?.type !== 'adjust_research_project') throw new Error('no clamped action');
-    expect(clamped.researchersAssigned).toBe(10);
-    expect(clamped.computeUnits).toBe(1_000);
+    // The instruction runs whole; `applyResearchAdjustments` gives the
+    // programme what is actually free and reports the rest as a
+    // `partial_fill`, rather than the validator clamping it here.
+    expect(result.status).toBe('accepted');
+    expect(result.codes).toContain('partial_fill_expected');
+    expect(result.clampedAction).toBeNull();
   });
 
   it('refuses another company\'s programme and a programme that is over', () => {

@@ -21,8 +21,9 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import type { ActionIntent, ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import { categoryById, quarterLabel } from '@frontier/contracts';
 import {
   RESEARCH_EFFORTS,
   effortPlan,
@@ -52,7 +53,7 @@ import {
   ValidationBanner,
   roundStep,
 } from '@/components/ui';
-import { useGameActions } from '@/lib/game';
+import { setPendingLaunchCategory, useGameActions } from '@/lib/game';
 import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
 import {
   BOTTLENECK_LABEL,
@@ -235,6 +236,12 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
     return [...ids].map((id) => titles.get(id) ?? id);
   }, [graph.edges, node, titles]);
 
+  /* --- product lines this node's achievement gates ------------------------- */
+  const unlockedLines = useMemo(() => {
+    if (node === null) return [];
+    return (node.unlocksCategoryIds ?? []).map((id) => categoryById(id)).filter((category) => category !== undefined);
+  }, [node]);
+
   return (
     <Drawer open={node !== null} onClose={close} title={node?.title ?? ''} subtitle={state.line} width={540}>
       {node === null || style === null ? null : (
@@ -275,6 +282,27 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                     </button>
                   );
                 })}
+              </div>
+            )}
+            {unlockedLines.length === 0 ? null : (
+              <div className="mt-2.5 space-y-1.5">
+                <div className="label-caps-faint">Product lines this gates</div>
+                {unlockedLines.map((category) => (
+                  <div key={category.id} className="flex items-center justify-between gap-2 rounded-chip border border-hair bg-panel px-2.5 py-1.5">
+                    <span className="text-[11.5px] text-ink-dim">{category.label}</span>
+                    {state.kind === 'done' ? (
+                      <Link
+                        href="/products"
+                        onClick={() => setPendingLaunchCategory(category.id)}
+                        className="btn btn-sm tap-target gap-1 sm:min-h-0"
+                      >
+                        Launch this line
+                      </Link>
+                    ) : (
+                      <span className="text-[10.5px] text-ink-faint">Locked until achieved</span>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>

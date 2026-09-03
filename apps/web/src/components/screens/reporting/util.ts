@@ -13,19 +13,39 @@
  */
 
 import type {
+  ActiveModifier,
   BalanceSheet,
   CapTable,
   Company,
   CompanyFundamentals,
+  DominantNarrative,
   Financials,
   MarketInstrument,
   PlayerView,
   PublicDisclosure,
   Quote,
+  ResolutionLine,
+  ResolutionPhase,
+  ResolutionReport,
   SessionState,
+  SimulationInvariant,
   ValuationAnchor,
 } from '@frontier/contracts';
-import { balanceSheetReconciles, ownershipThresholdFor, quarterLabel, type OwnershipThreshold } from '@frontier/contracts';
+import {
+  DOMINANT_NARRATIVES,
+  LEADERBOARD_BOARDS,
+  RESOLUTION_PHASES,
+  SECTOR_IDS,
+  SIMULATION_INVARIANTS,
+  SIM_EVENT_TYPES,
+  WORLD_EVENT_TYPES,
+  balanceSheetReconciles,
+  getTargetPathSpec,
+  ownershipThresholdFor,
+  quarterLabel,
+  targetPathEntityId,
+  type OwnershipThreshold,
+} from '@frontier/contracts';
 import { formatCount as groupCount, formatMoney, formatPct, formatScore } from '@frontier/shared';
 import { isNewEntrant, perSharePriceOf } from '@frontier/simulation';
 import { quotesFor } from '@/lib/game';
@@ -87,6 +107,214 @@ export function bandLabel(value: number, labels: readonly [string, string, strin
   if (value < 0.6) return labels[2];
   if (value < 0.8) return labels[3];
   return labels[4];
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Player-facing text: no raw token reaches the player                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Curated labels for the resolution pipeline's phase ids. Generic `humanise`
+ * would render `product_demand_resolution` as "Product demand resolution",
+ * which is accurate and clumsy; every phase gets a short label here instead,
+ * and any phase the contract adds later still falls back to `humanise` rather
+ * than disappearing.
+ */
+const RESOLUTION_PHASE_LABEL: Readonly<Record<ResolutionPhase, string>> = {
+  world_events: 'World events',
+  gm_modifiers: 'World modifiers',
+  information_reveal: 'Information reveal',
+  action_collection: 'Actions collected',
+  board_resolution: 'Board decisions',
+  capital_resolution: 'Capital moves',
+  government_resolution: 'Government',
+  talent_resolution: 'Talent',
+  research_resolution: 'Research',
+  product_demand_resolution: 'Product demand',
+  financial_resolution: 'Financials',
+  disclosure_resolution: 'Disclosures',
+  market_resolution: 'Markets',
+  social_resolution: 'Social',
+  relationship_update: 'Relationships',
+  leaderboard_update: 'Leaderboard',
+  ledger_commit: 'Ledger commit',
+  snapshot: 'Snapshot',
+};
+
+/**
+ * The plain label for a resolution phase id. Never the raw phase key.
+ *
+ * Takes `string` rather than `ResolutionPhase`: `EnginePhaseTiming.phase` is a
+ * diagnostics field typed loosely (it can carry a sub-phase the eighteen-entry
+ * contract enum does not name), and every caller — a `ResolutionLine.phase` or
+ * a phase timing — should read the same table without a cast at the call site.
+ * Anything not in the table still gets a plain word via `humanise`.
+ */
+export function phaseLabel(phase: string): string {
+  return (RESOLUTION_PHASE_LABEL as Readonly<Record<string, string>>)[phase] ?? humanise(phase);
+}
+
+/** Curated labels for the simulation invariants — `humanise` alone mangles the acronyms and mislabels one. */
+const SIMULATION_INVARIANT_LABEL: Readonly<Record<SimulationInvariant, string>> = {
+  deterministic_replay: 'Deterministic replay',
+  financial_integrity: 'Financial integrity',
+  ownership_integrity: 'Ownership integrity',
+  market_integrity: 'Market integrity',
+  llm_containment: 'Model containment',
+  idempotency: 'Idempotency',
+  information_boundary: 'Information boundary',
+  authoritative_backend: 'Authoritative backend',
+  // Not the US benefits programme: who may read a restricted conversation.
+  social_security: 'Social access control',
+  auditability: 'Auditability',
+  tech_graph_safety: 'Tech graph safety',
+  agent_reproducibility: 'Model reproducibility',
+  failure_mode: 'Failure mode',
+  capital_integrity: 'Capital integrity',
+};
+
+/** The plain label for a simulation invariant id. Never the raw invariant key. */
+export function invariantLabel(invariant: SimulationInvariant): string {
+  return SIMULATION_INVARIANT_LABEL[invariant] ?? humanise(invariant);
+}
+
+/** Curated labels for the press's dominant narrative — matches the map overlay's wording. */
+const DOMINANT_NARRATIVE_LABEL: Readonly<Record<DominantNarrative, string>> = {
+  ai_optimism: 'AI optimism',
+  productivity_miracle: 'Productivity miracle',
+  bubble_concern: 'Bubble concern',
+  safety_alarm: 'Safety alarm',
+  labour_disruption: 'Labour disruption',
+  concentration_backlash: 'Concentration backlash',
+  geopolitical_race: 'Geopolitical race',
+  energy_backlash: 'Energy backlash',
+  scandal_cycle: 'Scandal cycle',
+  neutral: 'No dominant story',
+};
+
+/** The plain label for the press's dominant narrative. Never the raw enum value. */
+export function narrativeLabel(value: DominantNarrative): string {
+  return DOMINANT_NARRATIVE_LABEL[value] ?? humanise(value);
+}
+
+/**
+ * The human label the modifier registry already carries for a target path.
+ *
+ * A fixed path (`world.compute.spotPrice`) reads as the registry's own
+ * one-line description — it is already plain English, written for exactly
+ * this purpose. A pattern path (`company.<id>.reputationPublic`,
+ * `sector.<id>.sentiment`) is prefixed with the company or sector it names, so
+ * "reputationPublic" never reaches the player as a bare metric key.
+ */
+export function targetPathLabel(path: string, session: SessionState): string {
+  const spec = getTargetPathSpec(path);
+  const entity = targetPathEntityId(path);
+  if (entity === null) return spec?.description ?? humanise(path.split('.').pop() ?? path);
+  const subject =
+    entity.entity === 'company'
+      ? (session.companies.find((company) => company.id === entity.id)?.name ?? titleise(entity.id.replace(/^cmp_/, '')))
+      : titleise(entity.id);
+  return `${subject} — ${spec?.description ?? humanise(entity.metric)}`;
+}
+
+/**
+ * Active modifiers one seat may see.
+ *
+ * A world-wide or sector-wide modifier is public by construction — it is the
+ * world moving, and every player is standing in the same world. A modifier
+ * that names a specific company is visible only when it names one of this
+ * seat's own companies: a modifier privately nudging a rival's attrition rate
+ * or cost multiplier is exactly the kind of fact the information boundary
+ * keeps off this seat's screen until the rival, or some other event, makes it
+ * public. This mirrors `eventConsequence`'s own ranking in
+ * `@frontier/simulation`'s public-record projection, restated here because
+ * this list — the whole roster of active modifiers — is not itself projected
+ * anywhere the way `PlayerView` projects companies and disclosures.
+ */
+export function visibleActiveModifiers(modifiers: readonly ActiveModifier[], ownCompanyIds: ReadonlySet<string>): readonly ActiveModifier[] {
+  return modifiers.filter((modifier) => {
+    const entity = targetPathEntityId(modifier.target);
+    if (entity === null || entity.entity !== 'company') return true;
+    return ownCompanyIds.has(entity.id);
+  });
+}
+
+/**
+ * Every enum token the resolution and news screens are known to embed in
+ * prose, mapped to its plain label. Built once from the contracts themselves,
+ * so a value appended to any of these unions is covered automatically.
+ */
+const KNOWN_TOKEN_LABEL: ReadonlyMap<string, string> = new Map<string, string>([
+  ...RESOLUTION_PHASES.map((phase) => [phase, phaseLabel(phase)] as const),
+  ...SIMULATION_INVARIANTS.map((invariant) => [invariant, invariantLabel(invariant)] as const),
+  ...DOMINANT_NARRATIVES.map((value) => [value, narrativeLabel(value)] as const),
+  ...SECTOR_IDS.map((id) => [id, titleise(id)] as const),
+  ...WORLD_EVENT_TYPES.map((type) => [type, humanise(type)] as const),
+  ...SIM_EVENT_TYPES.map((type) => [type, humanise(type)] as const),
+  ...LEADERBOARD_BOARDS.map((board) => [board, humanise(board)] as const),
+]);
+
+/** Anything left that still looks like `some_snake_case_token`. */
+const SNAKE_TOKEN_RE = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g;
+
+/**
+ * Strip every raw identifier out of one piece of player-facing prose.
+ *
+ * The resolution report and the public feed are both built by the engine
+ * interpolating live values into template sentences — "shifted from
+ * `ai_optimism` to `energy_backlash`", a company id used as a name-lookup
+ * fallback — and a screen cannot always reach the call site that wrote the raw
+ * value. This runs after the fact, on the finished sentence:
+ *
+ * 1. A company or character id in `session` becomes its name (longest id
+ *    first, so one id cannot be half-replaced by a shorter id that is a
+ *    prefix of it).
+ * 2. A known enum value (a phase, a narrative, a sector id, an event type...)
+ *    becomes its plain label.
+ * 3. Anything left that still matches `snake_case` — a token neither table
+ *    above knows, from a source this screen does not control — is humanised
+ *    on the spot rather than shown raw. This backstop is what the "no
+ *    snake_case token reaches the player" test relies on: a value can be
+ *    absent from every table above and the player still never sees it as
+ *    written.
+ *
+ * Pure: the same text and the same session delint the same way every time.
+ */
+export function delintText(text: string, session: SessionState): string {
+  let out = text;
+
+  const ids = [
+    ...session.companies.map((entry) => ({ id: entry.id, name: entry.name })),
+    ...session.characters.map((entry) => ({ id: entry.id, name: entry.name })),
+  ]
+    .filter((entry) => out.includes(entry.id))
+    .sort((a, b) => b.id.length - a.id.length);
+  for (const entry of ids) out = out.split(entry.id).join(entry.name);
+
+  return out.replace(SNAKE_TOKEN_RE, (token) => KNOWN_TOKEN_LABEL.get(token) ?? humanise(token));
+}
+
+/** `delintText`, applied to every player-facing string one resolution line carries. */
+function delintLine(line: ResolutionLine, session: SessionState): ResolutionLine {
+  return {
+    ...line,
+    text: delintText(line.text, session),
+    deltaLabel: line.deltaLabel === null ? null : delintText(line.deltaLabel, session),
+  };
+}
+
+/**
+ * `delintText`, applied to a whole resolution report: the headline and every
+ * line of every phase. Grouping and linking are untouched — `phase`,
+ * `subjectId`, `refEventIds` and `tone` carry the meaning the screen sorts and
+ * links on, and none of them are prose.
+ */
+export function delintReport(report: ResolutionReport, session: SessionState): ResolutionReport {
+  return {
+    ...report,
+    headline: delintText(report.headline, session),
+    phases: report.phases.map((phase) => ({ ...phase, lines: phase.lines.map((line) => delintLine(line, session)) })),
+  };
 }
 
 /* -------------------------------------------------------------------------- */

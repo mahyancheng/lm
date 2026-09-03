@@ -12,15 +12,17 @@
  * facts, decomposed, never by asking a model to invent a reason.
  */
 
-import type { ResolutionLine, SimEvent } from '@frontier/contracts';
+import type { ResolutionLine, SessionState, SimEvent } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
 import { Drawer, EmptyState, Tag } from '@/components/ui';
-import { humanise } from '@/components/screens/reporting/util';
+import { delintText, humanise, phaseLabel } from '@/components/screens/reporting/util';
 
 export interface LedgerDrawerProps {
   readonly line: ResolutionLine | null;
   readonly events: readonly SimEvent[];
   readonly startYear: number;
+  /** Resolves ids in `actorId`/`targetId`/payload strings to plain names — see `delintText`. */
+  readonly session: SessionState;
   readonly onClose: () => void;
 }
 
@@ -31,7 +33,7 @@ const VISIBILITY_TONE: Readonly<Record<SimEvent['visibility'], 'gain' | 'info' |
   private: 'neutral',
 };
 
-export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerProps): React.JSX.Element | null {
+export function LedgerDrawer({ line, events, startYear, session, onClose }: LedgerDrawerProps): React.JSX.Element | null {
   if (line === null) return null;
 
   const referenced = line.refEventIds
@@ -43,7 +45,7 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
       open
       onClose={onClose}
       title="What is behind this line"
-      subtitle={`${humanise(line.phase)} · ${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
+      subtitle={`${phaseLabel(line.phase)} · ${line.refEventIds.length} ledger row${line.refEventIds.length === 1 ? '' : 's'}`}
       width={560}
     >
       <div className="flex flex-col gap-4">
@@ -66,7 +68,7 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
                     shown: the line's own text says what happened, and the
                     payload below carries the detail. */}
                 <div className="flex items-center gap-1.5">
-                  <Tag tone={VISIBILITY_TONE[event.visibility]}>{event.visibility}</Tag>
+                  <Tag tone={VISIBILITY_TONE[event.visibility]}>{humanise(event.visibility)}</Tag>
                   <span className="figure text-[10px] text-ink-faint">#{event.sequence}</span>
                 </div>
 
@@ -74,16 +76,30 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
                     tells nobody anything. Two from `sm`, as before. */}
                 <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
                   <Row label="Quarter" value={quarterLabel(startYear, event.quarter)} />
-                  <Row label="Actor" value={event.actorId ?? '—'} />
-                  <Row label="Target" value={event.targetId ?? '—'} />
+                  <Row label="Actor" value={identityLabel(event.actorId, session)} />
+                  <Row label="Target" value={identityLabel(event.targetId, session)} />
                   <Row label="Event id" value={event.eventId} />
                 </dl>
 
                 <div className="mt-2">
                   <div className="label-caps-faint mb-1">Payload</div>
-                  <pre className="scroll-x figure max-h-56 overflow-y-auto rounded-card border border-hair bg-base px-2.5 py-2 text-[10.5px] leading-relaxed text-ink-dim">
-                    {JSON.stringify(event.payload, null, 2)}
-                  </pre>
+                  {/* The container is never JSON prose: every top-level field gets a
+                      plain label. A value stays JSON-formatted where it is not
+                      itself plain text — a number, a nested object, a list — which
+                      is the "stays as JSON" the row's own tamper-evidence depends
+                      on: nothing here is reworded, only labelled. */}
+                  {payloadRows(event.payload, session).length === 0 ? (
+                    <p className="rounded-card border border-hair bg-base px-2.5 py-2 text-[10.5px] text-ink-faint">No fields on this row.</p>
+                  ) : (
+                    <dl className="scroll-x max-h-56 overflow-y-auto rounded-card border border-hair bg-base px-2.5 py-2">
+                      {payloadRows(event.payload, session).map(([key, value]) => (
+                        <div key={key} className="flex items-start justify-between gap-3 border-b border-hair/40 py-1 last:border-b-0">
+                          <dt className="label-caps-faint shrink-0">{humanise(key)}</dt>
+                          <dd className="figure min-w-0 flex-1 text-right text-[10.5px] leading-relaxed break-words text-ink-dim">{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
                 </div>
 
                 <div className="mt-1.5 grid grid-cols-1 gap-x-4 sm:grid-cols-2">
@@ -102,6 +118,33 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
       </div>
     </Drawer>
   );
+}
+
+/**
+ * `event.actorId` / `event.targetId`, resolved to a plain name through
+ * `delintText`. These are raw ids exactly like the ones a resolution line's
+ * prose carries (`cmp_aletheia`, a character id) — the same reason `delintText`
+ * exists at all — so a row here must not print the id verbatim any more than
+ * a line of narrative does. Exported so the id-resolution behaviour is
+ * unit-tested directly, without rendering the drawer.
+ */
+export function identityLabel(id: string | null, session: SessionState): string {
+  return id === null ? '—' : delintText(id, session);
+}
+
+/**
+ * `event.payload` as `[label, renderedValue]` pairs, in the key order the
+ * engine wrote them. A string value is run through `delintText` (a payload
+ * string can itself be — or contain — a raw company/character id, exactly
+ * like a line of resolution prose); anything else — a number, a nested
+ * object, an array — renders as JSON, which is the only part of this row
+ * that still looks like data rather than prose.
+ *
+ * Exported for the same reason as `identityLabel`: this is where the fix
+ * lives, so this is what the test asserts against directly.
+ */
+export function payloadRows(payload: Readonly<Record<string, unknown>>, session: SessionState): readonly (readonly [string, string])[] {
+  return Object.entries(payload).map(([key, value]) => [key, typeof value === 'string' ? delintText(value, session) : JSON.stringify(value)] as const);
 }
 
 function Row({ label, value }: { readonly label: string; readonly value: string }): React.JSX.Element {

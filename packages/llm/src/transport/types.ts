@@ -67,6 +67,28 @@ export function isSkipped(validation: LlmValidationResult): boolean {
 /*  Requests and completions                                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Which lane a call belongs to in the concurrency limiter's priority queue.
+ *
+ * `interactive` is a call a founder is looking directly at — Chief of Staff,
+ * character dialogue, the innovation interpreter — where every extra second is
+ * a second of a person waiting on a reply. `batch` is a call the quarter
+ * resolver fires unattended and in bulk — World Director, NPC strategist,
+ * social author, narrator — where wall-clock time is invisible to anyone
+ * because nothing is rendered until the whole quarter commits.
+ *
+ * The limiter (`transport/limited.ts`) still runs one call at a time; this only
+ * changes *queue order*, never how many run at once. An `interactive` call
+ * jumps ahead of every already-queued `batch` call, and resumes as soon as the
+ * call currently holding the permit finishes — `batch` calls are never starved,
+ * only deprioritised behind a founder who is actively waiting.
+ *
+ * Absent (`undefined`) is treated as `batch`, the conservative default: a
+ * caller that predates this field must not be silently promoted ahead of
+ * someone else's quarter.
+ */
+export type LlmCallClass = 'interactive' | 'batch';
+
 export interface LlmCompletionRequest<T> {
   /** Which in-game role is calling. Diagnostics and per-role transport policy only. */
   readonly role: AgentRole;
@@ -88,6 +110,14 @@ export interface LlmCompletionRequest<T> {
    * Agent SDK can `resume` the same Claude Code session.
    */
   readonly sessionKey: string | null;
+  /**
+   * The priority lane this call queues in. See `LlmCallClass`. The role layer
+   * (`roles.ts`) declares it per role; `withConcurrencyLimit` is the only thing
+   * that reads it. Optional and defaults to `'batch'` so a hand-built request
+   * (most of this package's own tests) still compiles and behaves exactly as
+   * it did before this field existed.
+   */
+  readonly priority?: LlmCallClass;
 }
 
 export interface LlmTokenUsage {

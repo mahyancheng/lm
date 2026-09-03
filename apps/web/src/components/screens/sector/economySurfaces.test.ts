@@ -40,15 +40,15 @@ import {
 } from '@frontier/contracts';
 import {
   DEBT_AMORTISATION_PER_QUARTER,
-  PRICE_DEVIATION_BOUNDS,
+  SEGMENT_REFERENCE_PRICE_USD,
   annualisedRevenueUsd,
   createDefaultEngine,
   createDemoSession,
-  relativePrice,
+  repriceForecast,
 } from '@frontier/simulation';
 import { projectPlayerView } from '../../../lib/game/playerView';
 import { debtServiceView } from '../financials/headroom';
-import { achievableCeilingUsd, repriceCeilingUsd } from '../products/ceiling';
+import { achievableCeilingUsd } from '../products/ceiling';
 import { accordExposurePoints } from '../deal-room/AccordFields';
 import { tollExposurePoints } from './TollTicket';
 import {
@@ -287,18 +287,29 @@ describe('the price ladder', () => {
     expect((you?.fraction ?? 1) < (reference?.fraction ?? 0)).toBe(true);
   });
 
-  it('states the achievable ceiling from the engine’s own saturation point', () => {
-    const reference = 50;
-    const ceiling = achievableCeilingUsd('enterprise', reference);
-    // At the ceiling the engine's elasticity term has just stopped responding.
-    expect(relativePrice(ceiling, reference)).toBeCloseTo(PRICE_DEVIATION_BOUNDS.max, 5);
-    expect(relativePrice(ceiling - 1, reference)).toBeLessThan(PRICE_DEVIATION_BOUNDS.max);
-    expect(achievableCeilingUsd('enterprise', 0)).toBe(0);
+  it('states the achievable ceiling from the engine’s own forecast peak, not a validator band', () => {
+    const state = resolved(createDemoSession(undefined, MULTI_SECTOR), 2);
+    const company = playerOf(state);
+    const product = company.products.find((entry) => entry.isActive);
+    if (product === undefined) throw new Error('no active product');
+    const reference = SEGMENT_REFERENCE_PRICE_USD[product.segment];
+
+    const ceiling = achievableCeilingUsd(state, company.id, product.id, reference, product.pricePerSeat);
+    expect(ceiling).toBeGreaterThan(0);
+    // Guidance, not a bound: the forecast at the ceiling is at least as good as
+    // at either edge of the range it was found in.
+    const atCeiling = repriceForecast(state, company.id, product.id, ceiling);
+    const atZero = repriceForecast(state, company.id, product.id, 0);
+    const atTop = repriceForecast(state, company.id, product.id, Math.max(reference, product.pricePerSeat) * 10);
+    if (atCeiling === null || atZero === null || atTop === null) throw new Error('no forecast');
+    expect(atCeiling.revenueAfterUsd).toBeGreaterThanOrEqual(atZero.revenueAfterUsd);
+    expect(atCeiling.revenueAfterUsd).toBeGreaterThanOrEqual(atTop.revenueAfterUsd);
   });
 
-  it('states the validator’s one-quarter reprice band as the other ceiling', () => {
-    expect(repriceCeilingUsd(10)).toBe(40);
-    expect(repriceCeilingUsd(0)).toBe(0);
+  it('reports zero for a product that cannot be found', () => {
+    const state = resolved(createDemoSession(undefined, MULTI_SECTOR), 2);
+    const company = playerOf(state);
+    expect(achievableCeilingUsd(state, company.id, 'not_a_product', 50, 50)).toBe(0);
   });
 });
 

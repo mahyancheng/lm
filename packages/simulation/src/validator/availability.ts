@@ -59,6 +59,8 @@ import {
 } from './balance';
 import { quarterlyHireCostUsd, reservableUnits } from './rules';
 import { sellersFor } from '../companies/sellers';
+import { categoryOf } from '../companies/categories';
+import { defaultSupplyTerms, suppliersFor } from '../companies/supply';
 
 /* -------------------------------------------------------------------------- */
 /*  Probe shape                                                                */
@@ -257,10 +259,12 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
           type,
           name: `Availability probe ${company.id}`,
           segment: 'enterprise',
+          categoryId: null,
           pricePerSeatUsd: 1_000,
           computeIntensity: 0.5,
           launchMarketingUsd: cash,
           targetQuality: 0.5,
+          supply: [],
         },
         bounds: [usdBound('launchMarketingUsd', 'Launch marketing', cash), usdBound('pricePerSeatUsd', 'Launch price per seat', null)],
         targets: [],
@@ -405,6 +409,56 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
           label: `${entry.company.name} — ${entry.sellableUnits} units at ${Math.round(entry.unitPriceUsd)} each`,
         })),
         maxCashUsd: Math.round(seller.sellableUnits * seller.unitPriceUsd),
+      };
+    }
+
+    case 'invest_capacity':
+      return {
+        intent: { type, kind: 'plant', amountUsd: cash },
+        bounds: [usdBound('amountUsd', 'Capacity investment', cash)],
+        targets: [
+          { id: 'plant', label: 'Plant' },
+          { id: 'fleet', label: 'Fleet' },
+          { id: 'grid', label: 'Grid' },
+        ],
+        maxCashUsd: cash,
+      };
+
+    case 'set_supply_terms': {
+      const suppliable = activeProducts.find((product) => categoryOf(company, product).canSupply);
+      if (suppliable === undefined) {
+        return { intent: null, reason: `Nothing ${company.name} sells can be published as another company's input.`, ...NOTHING };
+      }
+      const category = categoryOf(company, suppliable);
+      const terms = suppliable.supplyTerms ?? defaultSupplyTerms(category);
+      return {
+        intent: { type, productId: suppliable.id, terms: { ...terms, exclusiveCustomerIds: [...terms.exclusiveCustomerIds], blockedCustomerIds: [...terms.blockedCustomerIds] } },
+        bounds: [usdBound('terms.pricePerUnitUsd', `Price per unit (${suppliable.name})`, null)],
+        targets: activeProducts.filter((product) => categoryOf(company, product).canSupply).map((entry) => ({ id: entry.id, label: entry.name })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'choose_supplier': {
+      const withInputs = activeProducts.find((product) => categoryOf(company, product).inputs.length > 0);
+      if (withInputs === undefined) {
+        return { intent: null, reason: `Nothing ${company.name} sells is built on another company's input.`, ...NOTHING };
+      }
+      const category = categoryOf(company, withInputs);
+      const input = category.inputs[0]!;
+      const offers = suppliersFor(draft, company.id, input.categoryId);
+      const best = offers[0] ?? null;
+      return {
+        intent: {
+          type,
+          productId: withInputs.id,
+          inputCategoryId: input.categoryId,
+          supplierCompanyId: best?.company.id ?? null,
+          supplierProductId: best?.product.id ?? null,
+        },
+        bounds: [],
+        targets: offers.slice(0, 24).map((entry) => ({ id: entry.company.id, label: `${entry.company.name} — ${entry.product.name} at ${Math.round(entry.pricePerUnitUsd)} a unit` })),
+        maxCashUsd: null,
       };
     }
 
@@ -763,6 +817,34 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
         },
         bounds: [countBound('purpose', 'Characters of stated purpose', null, MIN_INTRODUCTION_PURPOSE_CHARS)],
         targets: others.slice(0, 24).map((entry) => ({ id: entry.id, label: `${entry.name}${entry.title === '' ? '' : ` — ${entry.title}`}` })),
+        maxCashUsd: null,
+      };
+    }
+
+    /* --------------------------- group control (world 2) ------------ */
+    case 'transfer_between_group': {
+      const targets =
+        company.controllerPlayerId === null
+          ? []
+          : draft.companies.filter((entry) => entry.isActive && entry.id !== company.id && entry.controllerPlayerId === company.controllerPlayerId);
+      const target = targets[0];
+      if (target === undefined) return { intent: null, reason: `${company.name} does not control another company to move anything to.`, ...NOTHING };
+      return {
+        intent: { type, fromCompanyId: company.id, toCompanyId: target.id, cashUsd: Math.max(1, cash), acceleratorUnits: null },
+        bounds: [usdBound('cashUsd', 'Cash to move', cash, 1)],
+        targets: targets.slice(0, 24).map((entry) => ({ id: entry.id, label: entry.name })),
+        maxCashUsd: cash,
+      };
+    }
+
+    case 'merge_subsidiary': {
+      const targets = draft.companies.filter((entry) => entry.isActive && entry.parentCompanyId === company.id);
+      const target = targets[0];
+      if (target === undefined) return { intent: null, reason: `${company.name} has no subsidiary to absorb.`, ...NOTHING };
+      return {
+        intent: { type, subsidiaryCompanyId: target.id },
+        bounds: [],
+        targets: targets.slice(0, 24).map((entry) => ({ id: entry.id, label: entry.name })),
         maxCashUsd: null,
       };
     }

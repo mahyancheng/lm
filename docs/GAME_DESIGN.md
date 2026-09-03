@@ -68,14 +68,15 @@ record is locked out of the largest programmes by
 
 The **quarter** is the principal strategic unit. It is not a menu of scripted
 choices: a single quarter can contain actions across thirteen domains, drawn
-from the 37 members of `ActionIntentSchema`.
+from the members of `ActionIntentSchema` (`ACTION_TYPES`, `@frontier/contracts`).
 
 | Domain | Example action | `ActionIntent.type` |
 |---|---|---|
 | Research | Begin a new reasoning architecture programme | `start_research_project` |
-| Product | Launch an enterprise coding agent | `launch_product` |
+| Product | Launch a product into one of thirty-six industry lines — a frontier model, a warehouse robot, a battery, a grid-storage line | `launch_product` |
 | People | Recruit a rival's chief scientist | `poach_executive` |
 | Compute | Reserve 40,000 accelerators for four quarters | `reserve_compute` |
+| Capacity | Build plant, fleet or grid capacity for a non-compute line | `invest_capacity` |
 | Capital | Raise a Series C or issue corporate debt | `raise_round`, `issue_debt` |
 | Ownership | Purchase 3% of a public rival | `buy_shares` |
 | Board | Lobby directors to approve an acquisition | `lobby_director` |
@@ -96,8 +97,17 @@ decides.
 The experience operates at three scales simultaneously.
 
 **Company scale.** Operating economics: products, employees, compute, offices,
-pricing, marketing, sales, research, debt, cash and customers. See
-[ECONOMY.md](./ECONOMY.md).
+pricing, marketing, sales, research, debt, cash and customers. A product is
+not just a segment (who buys it) but a real industry line — one of the
+thirty-six categories in `PRODUCT_CATEGORIES`, spanning all six sectors: a
+software seat is a different business from a frontier model, which is a
+different business from a chip, a battery, a grid-storage line or a
+last-mile shipment. Each carries its own unit, price, elasticity, churn and
+the capacity it is served from — compute for AI and software lines, invested
+plant, fleet or grid for everything physical. Some lines require a Frontier
+Map node before a company may launch into them at all; some can be sold as
+another company's input, which is the graph the supply-chain layer builds
+real transactions on. See [ECONOMY.md](./ECONOMY.md) §2.
 
 **Capital scale.** Ownership: fundraising, dilution, public equity,
 institutional investors, board seats, acquisitions, shareholder blocs, personal

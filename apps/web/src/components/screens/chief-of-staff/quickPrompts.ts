@@ -48,6 +48,8 @@ const BY_ROUTE: Readonly<Record<string, { readonly label: string; readonly own: 
     own: [
       { label: 'Best and worst line', send: 'Which is our best product line and which is our worst, and what would you do about the worst one?' },
       { label: 'Should we reprice?', send: 'Should we reprice anything this quarter? Tell me the bounds on any change before you propose it.' },
+      { label: 'What could we launch?', send: 'What product lines could we launch right now in our own industry, and what is each locked one waiting on?' },
+      { label: 'Who builds on us?', send: 'Which of our published lines does anyone else build on, and what would cutting them off do to them?' },
     ],
   },
   '/people': {

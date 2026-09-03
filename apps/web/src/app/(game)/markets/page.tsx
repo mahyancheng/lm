@@ -34,7 +34,7 @@ import {
   sectorsPresent,
   type Column,
 } from '@/components/ui';
-import { useGame, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useActiveCompany, useGame, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 import { InstrumentDrawer } from '@/components/screens/markets/InstrumentDrawer';
 import { decompositionsFrom, type DecompositionView } from '@/components/screens/markets/decomposition';
 import { ShortInterestCard, shortInterestBadge } from '@/components/screens/street';
@@ -76,7 +76,7 @@ interface PositionRow {
 export default function MarketsPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const { lastOutcome } = useGame();
   const [openId, setOpenId] = useState<string | null>(null);

@@ -12,8 +12,8 @@
  * listed company files. This file never reaches into `SessionState`.
  */
 
-import type { Company, FinancialQuarter, PlayerView } from '@frontier/contracts';
-import { quarterLabel } from '@frontier/contracts';
+import type { Company, FinancialProductLine, FinancialQuarter, PlayerView } from '@frontier/contracts';
+import { categoryById, quarterLabel } from '@frontier/contracts';
 
 /* -------------------------------------------------------------------------- */
 /*  Selection                                                                  */
@@ -203,6 +203,39 @@ export function revenueStacks(history: readonly FinancialQuarter[], startYear: n
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Product lines, by industry                                                */
+/* -------------------------------------------------------------------------- */
+
+export interface ProductLineGroup {
+  /** The industry line's label (from PRODUCT_CATEGORIES), or a humanised segment name for a line filed before categoryId existed. */
+  readonly label: string;
+  readonly lines: readonly FinancialProductLine[];
+}
+
+/** "developer_api" → "Developer api" — the same humanising every other enum-fallback in this codebase uses, kept local rather than importing the Products screen's segment vocabulary into Financials. */
+function humanSegment(segment: string): string {
+  const spaced = segment.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * One quarter's product lines, grouped by industry line (`categoryId`'s own
+ * `industryLine`) and sorted by that label. A line filed before `categoryId`
+ * existed groups under its segment instead, so an old save still renders —
+ * never a crash, never a dropped row.
+ */
+export function groupProductLines(lines: readonly FinancialProductLine[]): readonly ProductLineGroup[] {
+  const groups = new Map<string, { label: string; lines: FinancialProductLine[] }>();
+  for (const line of lines) {
+    const label = line.categoryId === undefined ? humanSegment(line.segment) : (categoryById(line.categoryId)?.industryLine ?? line.categoryId);
+    const bucket = groups.get(label) ?? { label, lines: [] };
+    bucket.lines.push(line);
+    groups.set(label, bucket);
+  }
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Export                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -318,6 +351,37 @@ export function historyCsv(history: readonly FinancialQuarter[], startYear: numb
         cell(k.sharePriceUsd),
       ].join(','),
     );
+  }
+  return rows.join('\n');
+}
+
+/** Column order of the product-lines CSV export. */
+export const PRODUCT_LINES_CSV_COLUMNS = ['quarter', 'industry_line', 'category_id', 'product', 'unit', 'units', 'price_per_unit', 'revenue', 'gross_margin_pct'] as const;
+
+/**
+ * Every product line across every filed quarter, one row each, carrying the
+ * industry line, its `categoryId` and its `unit` — the figures the flat
+ * whole-company export above has no room for, since it is one row per
+ * quarter rather than one row per line.
+ */
+export function productLinesCsv(history: readonly FinancialQuarter[], startYear: number): string {
+  const rows: string[] = [PRODUCT_LINES_CSV_COLUMNS.join(',')];
+  for (const entry of history) {
+    for (const line of entry.productLines ?? []) {
+      rows.push(
+        [
+          quarterLabel(startYear, entry.quarter),
+          line.categoryId === undefined ? humanSegment(line.segment) : (categoryById(line.categoryId)?.industryLine ?? line.categoryId),
+          line.categoryId ?? '',
+          `"${line.name.replace(/"/g, '""')}"`,
+          line.unit ?? '',
+          cell(line.units),
+          cell(line.priceUsd),
+          cell(line.revenueUsd),
+          cell(line.grossMarginPct * 100),
+        ].join(','),
+      );
+    }
   }
   return rows.join('\n');
 }

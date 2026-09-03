@@ -34,6 +34,7 @@
 /* ------------------------------- transports ------------------------------- */
 
 export type {
+  LlmCallClass,
   LlmCompletion,
   LlmCompletionRequest,
   LlmFailureReason,
@@ -81,7 +82,7 @@ export { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFo
 export type { NullTransportConfig } from './transport/none';
 export { createNullTransport } from './transport/none';
 
-export type { ConcurrencyLimiter } from './transport/limited';
+export type { ConcurrencyLimiter, ConcurrencyRunOptions, LimiterSnapshot } from './transport/limited';
 export {
   DEFAULT_LLM_MAX_CONCURRENCY,
   MAX_CONCURRENCY_ENV,

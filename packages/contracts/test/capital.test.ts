@@ -417,7 +417,18 @@ describe('every enum grew at the end', () => {
     expect(SIM_EVENT_TYPES.slice(start, start + 10)).toEqual(CAPITAL_EVENT_TYPES);
     expect(SIM_EVENT_TYPES[0]).toBe('quarter_opened');
     expect(SIM_EVENT_TYPES[start - 1]).toBe('dividend_paid');
-    expect(SIM_EVENT_TYPES.slice(start + 10)).toEqual(['accelerators_bought']);
+    // `capacity_invested` was appended after `accelerators_bought` when
+    // world 2 gained non-compute capacity (`invest_capacity`), and
+    // `control_changed`/`group_transfer_executed`/`subsidiary_merged` after
+    // that when world 2 gained group control (STAGE 4) — the same
+    // append-only contract, three rows further along.
+    expect(SIM_EVENT_TYPES.slice(start + 10)).toEqual([
+      'accelerators_bought',
+      'capacity_invested',
+      'control_changed',
+      'group_transfer_executed',
+      'subsidiary_merged',
+    ]);
     expect(new Set(SIM_EVENT_TYPES).size).toBe(SIM_EVENT_TYPES.length);
   });
 

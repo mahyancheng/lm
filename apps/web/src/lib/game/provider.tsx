@@ -56,22 +56,42 @@ import type {
 } from '@frontier/contracts';
 import { LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
-import { applySocialTextOverrides, projectResolutionOutcomeForPlayer, selectPostsForAuthoring } from '@frontier/simulation';
-import { llmHealth, requestNpcBundle, requestSocialPost, requestWorldDirector, type LlmHealth } from '@/lib/llm/client';
+import {
+  MAX_LIVE_STRATEGISTS,
+  applySocialTextOverrides,
+  controlledCompaniesOf,
+  projectResolutionOutcomeForPlayer,
+  selectPostsForAuthoring,
+  strategistPriority,
+} from '@frontier/simulation';
+import {
+  LLM_QUARTER_BUDGET_MS,
+  LLM_STRATEGISTS_PER_QUARTER,
+  llmHealth,
+  requestNpcBundle,
+  requestSocialPost,
+  requestWorldDirector,
+  type LlmHealth,
+} from '@/lib/llm/client';
 import {
   DEMO_SEED,
   PLAYER_ID,
-  buildSubmittedAction,
+  buildSubmittedActionForCompany,
   createSession,
   createSequenceAllocator,
-  getEngine,
   needsConfirmation,
   playerCharacterOf,
   playerCompanyOf,
+  resolveActiveCompanyId,
   resolveQuarterSafely,
   seedOf,
+  validateIntentForCompany,
+  validateSubmittedAction,
 } from './engine';
-import { buildNpcStrategistInput, buildSocialAuthorInput, buildWorldDirectorInput, strategistCompanies } from './briefings';
+import { readStoredActiveCompanyId, writeStoredActiveCompanyId } from './activeCompanyStorage';
+import { buildNpcStrategistInput, buildSocialAuthorInput, buildWorldDirectorInput } from './briefings';
+import { formatProgressStatus, type ProgressRow } from './resolveProgress';
+import { clearStrategistPrefetch, hasStrategistPrefetch, startStrategistPrefetch, takeStrategistPrefetch } from './strategistPrefetch';
 import {
   MAX_REPLAY_QUARTERS,
   SUPPORTED_SAVE_VERSIONS,
@@ -139,6 +159,16 @@ export interface QueuedActionEntry {
 
 export interface GameStoreState {
   readonly session: SessionState;
+  /**
+   * The company the player is currently directing — STAGE 5. Client UI state,
+   * not engine state: never an input to `F`, never written to a `sim_event`,
+   * and persisted separately from the save file (see `activeCompanyStorage.ts`
+   * for why). Defaults to the founding company and is reconciled against
+   * `controlledCompaniesOf` on every session change, so a company that leaves
+   * the group — sold, wound up, absorbed — can never be left as the active
+   * one; `useActiveCompany` is the read side.
+   */
+  readonly activeCompanyId: string;
   readonly queuedActions: readonly SubmittedAction[];
   readonly validations: Readonly<Record<string, ActionValidationResult>>;
   /** Every input to every resolved quarter, in order: the save, in memory. */
@@ -188,10 +218,25 @@ export interface GameStoreState {
 
 export interface GameStoreActions {
   newGame(options?: { seed?: number; difficulty?: SessionDifficulty; autoExecuteRoutine?: boolean; setup?: NewGameSetupInput }): void;
-  /** Validate an intent without queuing it. Use for live previews and disabled states. */
-  validateIntent(intent: ActionIntent): ActionValidationResult;
-  /** Validate and queue. Returns the entry so a caller can render the outcome immediately. */
-  queueAction(intent: ActionIntent, options?: { origin?: SubmittedAction['origin']; confirmed?: boolean }): QueuedActionEntry;
+  /**
+   * Validate an intent without queuing it. Use for live previews and disabled
+   * states. Defaults to the active company — the switcher's choice — so a
+   * preview shown while directing a subsidiary answers for the subsidiary,
+   * not the founding company; pass `companyId` to override.
+   */
+  validateIntent(intent: ActionIntent, companyId?: string): ActionValidationResult;
+  /**
+   * Validate and queue. Returns the entry so a caller can render the outcome
+   * immediately. `options.companyId` names who is acting; it defaults to the
+   * active company, so a screen switched to a subsidiary queues on its behalf
+   * without every call site having to say so.
+   */
+  queueAction(
+    intent: ActionIntent,
+    options?: { origin?: SubmittedAction['origin']; confirmed?: boolean; companyId?: string },
+  ): QueuedActionEntry;
+  /** Switch which controlled company the interface is directing. A no-op if this seat does not control it. */
+  setActiveCompany(companyId: string): void;
   unqueueAction(actionId: string): void;
   /** Record the explicit human confirmation a `CONFIRMATION_REQUIRED_ACTIONS` type needs. */
   confirmAction(actionId: string): void;
@@ -257,6 +302,8 @@ type Action =
       droppedCount: number;
       /** One past the highest restored sequence, so new ids never collide with restored ones. */
       nextSequence: number;
+      /** The switcher's stored choice for this session, already reconciled against the replayed session. */
+      activeCompanyId: string;
     }
   | { type: 'load_failed'; notice: string }
   | { type: 'hydrated' }
@@ -275,7 +322,8 @@ type Action =
   | { type: 'resolve_failed'; notice: string }
   | { type: 'settings'; partial: Partial<GameSettings> }
   | { type: 'llm'; health: LlmHealth }
-  | { type: 'notice'; notice: string | null };
+  | { type: 'notice'; notice: string | null }
+  | { type: 'set_active_company'; companyId: string };
 
 const DEFAULT_SETTINGS: GameSettings = {
   seed: DEMO_SEED,
@@ -301,6 +349,7 @@ function initialState(): GameStoreState {
   const session = createSession({ seed: DEFAULT_SETTINGS.seed, difficulty: DEFAULT_SETTINGS.difficulty });
   return {
     session,
+    activeCompanyId: playerCompanyOf(session).id,
     queuedActions: [],
     validations: {},
     actionLog: [],
@@ -345,6 +394,9 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       return {
         ...state,
         session: action.session,
+        // A new game starts directing the founding company: there is nothing
+        // else in the group yet.
+        activeCompanyId: playerCompanyOf(action.session).id,
         settings: action.settings,
         queuedActions: [],
         validations: {},
@@ -395,6 +447,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       return {
         ...state,
         session: action.loaded.session,
+        activeCompanyId: action.activeCompanyId,
         actionLog: action.loaded.log,
         settings,
         queuedActions: action.queue,
@@ -472,6 +525,11 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       return {
         ...state,
         session: outcome.nextState,
+        // Reconciled every commit, not just on load: a quarter can cost the
+        // seat control of the company it was directing — sold, wound up,
+        // absorbed by another controller's move — and the active company must
+        // never be left pointing at one that is no longer part of the group.
+        activeCompanyId: resolveActiveCompanyId(outcome.nextState, state.activeCompanyId),
         previousWorld: state.session.world,
         queuedActions: [],
         validations: {},
@@ -502,6 +560,12 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
 
     case 'notice':
       return { ...state, notice: action.notice };
+
+    case 'set_active_company':
+      // Reconciled here too, not trusted from the caller: `resolveActiveCompanyId`
+      // is cheap and this is the one gate every path to a changed active
+      // company passes through.
+      return { ...state, activeCompanyId: resolveActiveCompanyId(state.session, action.companyId) };
 
     default:
       return state;
@@ -619,7 +683,12 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     const seenIds = new Set<string>();
     for (const entry of loaded.queue) {
       if (entry.quarter !== loaded.session.quarter || seenIds.has(entry.actionId)) continue;
-      const raw = getEngine().validator.validate(loaded.session, entry.intent, entry.actorPlayerId);
+      // Re-validated exactly as recorded — its own actorCompanyId, not the
+      // founding company: STAGE 5 lets a queued action belong to any company
+      // the seat controls, and re-validating every restored entry as the
+      // founding company would wrongly reject (or wrongly accept) one that
+      // was queued for a subsidiary.
+      const raw = validateSubmittedAction(loaded.session, entry);
       if (raw.status === 'rejected') continue;
       seenIds.add(entry.actionId);
       restored.push(entry);
@@ -633,6 +702,11 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     // file an older build could still read), so that one run is skipped.
     persistedLogLength.current = loaded.log.length;
     suppressNextPersist.current = true;
+    // The switcher's own, separately stored choice for this session (see
+    // `activeCompanyStorage.ts`) — reconciled against the replayed session so a
+    // company sold or wound up since it was last chosen never comes back as
+    // the active one.
+    const activeCompanyId = resolveActiveCompanyId(loaded.session, readStoredActiveCompanyId(loaded.session.sessionId));
     dispatch({
       type: 'loaded',
       loaded,
@@ -640,6 +714,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       validations,
       droppedCount: loaded.queue.length - restored.length,
       nextSequence,
+      activeCompanyId,
     });
     return loaded.complete;
   }, [sequences]);
@@ -669,6 +744,77 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       cancelled = true;
     };
   }, []);
+
+  /*
+   * --- prefetch this quarter's strategist calls the moment it opens ----------
+   *
+   * A strategist's plan depends only on state at the start of the quarter and
+   * its own private information (see `strategistPrefetch.ts`), so there is no
+   * reason to wait for End Quarter to ask for it: this effect fires as soon as
+   * `state.session` names a new (session, quarter) pair — a new game, a load,
+   * or the quarter `resolve_done` just opened — and `endQuarter` reaches for
+   * whatever came back instead of firing the same request twice.
+   *
+   * Deliberately **not** keyed on `state.resolving`: `endQuarter` flips that to
+   * true as its very first act, long before it is done reading the prefetch
+   * cache — keying on `resolving` would clear the cache out from under the very
+   * call it was started for. `state.session` itself does not change until
+   * `resolve_done` commits, well after `endQuarter` has read what it needed.
+   *
+   * This effect's cleanup deliberately does **not** call
+   * `clearStrategistPrefetch()` on every re-run any more. `startStrategistPrefetch`
+   * is already idempotent per `(state hash, quarter, companyId)` — it reuses an
+   * existing entry for a key it is asked for again, and aborts only the entries
+   * a new call does *not* ask for (see `strategistPrefetch.ts`). A React effect
+   * re-runs its cleanup and then its body on every change of its own
+   * dependencies, so any re-render that changes one of them — a settings
+   * toggle unrelated to the session, a store update that happens to hand this
+   * effect a new but structurally identical `state.session` object — used to
+   * throw the whole quarter's cache away and immediately re-request it,
+   * because unconditionally wiping the cache first defeated the reuse
+   * `startStrategistPrefetch` was already built to do: the four (or more)
+   * strategist calls for the quarter already in flight were aborted and
+   * re-fired, doubling the load on the shared per-principal rate limit for no
+   * reason tied to anything the player did. Leaving the cache alone here lets
+   * `startStrategistPrefetch`'s own key-based diffing do its job instead: a
+   * same-quarter re-run is a no-op, and a genuine new quarter still prunes the
+   * old entries, because their keys are no longer in the new call's set.
+   *
+   * Not run before hydration decides what the live session even is
+   * (`state.hydrated`), while replaying a load (`state.loading`), or with the
+   * live model off: in every one of those there is nothing this effect should
+   * be prefetching, so it explicitly clears the cache itself in that branch —
+   * `startStrategistPrefetch` is not called to do the pruning for it, since a
+   * `return` before it is not a call with an empty set. The `hydrated` guard
+   * matters for exactly the case above: on a reload with an existing save, the
+   * very first render still holds the *previous* tab's throwaway default
+   * session (`initialState()`) for the handful of milliseconds before the
+   * loader either replaces it or confirms there is nothing to load — without
+   * this guard, that render fired a full batch of strategist calls for a
+   * session about to be discarded, calls the client-side abort in the old
+   * per-run cleanup could only ask nicely to stop (see `strategistPrefetch.ts`)
+   * and which may already have reached the server. Turning the live model
+   * back on, a load finishing, or hydration completing with nothing to load
+   * all run the effect again and repopulate it. The one case still left to a
+   * cleanup is the founder leaving the game (or this provider unmounting)
+   * with the effect's own guard never firing again to clean up after itself —
+   * handled by the mount/unmount-only effect just below.
+   */
+  useEffect(() => {
+    if (!state.hydrated || state.loading || !state.settings.useLiveModel) {
+      clearStrategistPrefetch();
+      return;
+    }
+    const player = playerCompanyOf(state.session);
+    const strategistCap = Math.max(0, Math.min(LLM_STRATEGISTS_PER_QUARTER, MAX_LIVE_STRATEGISTS));
+    const ids = strategistPriority(state.session, player.id, strategistCap);
+    startStrategistPrefetch(state.session, ids);
+  }, [state.session, state.hydrated, state.loading, state.settings.useLiveModel]);
+
+  // Final unmount only — see the long comment above. The effect above prunes
+  // stale entries itself on every subsequent run; this is only for the run
+  // that never happens because the component went away first.
+  useEffect(() => () => clearStrategistPrefetch(), []);
 
   /* --- persist the decision log and the open queue -------------------------- */
   useEffect(() => {
@@ -803,20 +949,20 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   /* --- actions ------------------------------------------------------------- */
 
-  const validateIntent = useCallback((intent: ActionIntent): ActionValidationResult => {
+  const validateIntent = useCallback((intent: ActionIntent, companyId?: string): ActionValidationResult => {
     const current = stateRef.current;
-    return getEngine().validator.validate(current.session, intent, PLAYER_ID);
+    return validateIntentForCompany(current.session, intent, companyId ?? current.activeCompanyId);
   }, []);
 
   const queueAction = useCallback<GameStoreActions['queueAction']>((intent, options) => {
     const current = stateRef.current;
     const confirmed = options?.confirmed ?? !needsConfirmation(intent.type);
-    const submitted = buildSubmittedAction(current.session, intent, sequences.next(), {
+    const actingCompanyId = options?.companyId ?? current.activeCompanyId;
+    const submitted = buildSubmittedActionForCompany(current.session, intent, sequences.next(), actingCompanyId, {
       origin: options?.origin ?? 'player_ui',
       confirmedByHuman: confirmed,
     });
-    const raw = getEngine().validator.validate(current.session, intent, submitted.actorPlayerId);
-    const validation: ActionValidationResult = { ...raw, actionId: submitted.actionId };
+    const validation = validateSubmittedAction(current.session, submitted);
     dispatch({ type: 'queue', action: submitted, validation });
     return {
       action: submitted,
@@ -834,7 +980,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     const current = stateRef.current;
     const entry = current.queuedActions.find((item) => item.actionId === actionId);
     if (entry === undefined) return;
-    const raw = getEngine().validator.validate(current.session, entry.intent, entry.actorPlayerId);
+    const raw = validateSubmittedAction(current.session, entry);
     dispatch({ type: 'confirm', actionId, validation: { ...raw, actionId } });
   }, []);
 
@@ -854,24 +1000,146 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     let npcBundles: NpcActionBundle[] = [];
     let modelAvailable = false;
 
+    /*
+     * Live progress, encoded into `resolveStatus` — a plain string, exactly the
+     * type it has always been — as one line per row plus a headline the
+     * overlay's existing `stageOfStatus` still recognises by its `startsWith`
+     * prefix. This is deliberately not a new field on `GameStoreState`: the
+     * store shape is untouched, only how often, and with how much detail,
+     * `resolve_status` is dispatched.
+     *
+     * A row moves through `pending → running → done`, or `pending → skipped`
+     * when the quarter's own time budget (`LLM_QUARTER_BUDGET_MS`) is spent
+     * before it gets a turn — the report line the resolving overlay shows the
+     * player, not a silent truncation.
+     */
+    const rows: ProgressRow[] = [];
+    let headline = '';
+    let ticker: ReturnType<typeof setInterval> | null = null;
+
+    const renderProgress = (): void => {
+      dispatch({ type: 'resolve_status', status: formatProgressStatus(headline, rows, Date.now()) });
+    };
+    const setHeadline = (text: string): void => {
+      headline = text;
+      renderProgress();
+    };
+    const startTicking = (): void => {
+      if (ticker !== null) return;
+      ticker = setInterval(renderProgress, 1000);
+    };
+    const stopTicking = (): void => {
+      if (ticker === null) return;
+      clearInterval(ticker);
+      ticker = null;
+    };
+    /** Stop waiting for `promise` once `msRemaining` passes, without cancelling it — a queued call is never refused, only stopped being waited on. */
+    const withDeadline = <T,>(promise: Promise<T | null>, msRemaining: number): Promise<T | null> => {
+      if (msRemaining <= 0) return Promise.resolve(null);
+      return new Promise<T | null>((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            resolve(null);
+          }
+        }, msRemaining);
+        promise.then(
+          (value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(value);
+          },
+          () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(null);
+          },
+        );
+      });
+    };
+
     if (current.settings.useLiveModel) {
+      // A fixed budget for the whole batch, not per call: the World Director
+      // and every strategist share it, so a slow Director already leaves less
+      // time for rivals rather than each call getting its own fresh ceiling.
+      const budgetDeadline = Date.now() + LLM_QUARTER_BUDGET_MS;
       try {
         const health = await llmHealth();
         modelAvailable = health.available;
         if (health.available) {
-          dispatch({ type: 'resolve_status', status: 'Consulting the World Director' });
+          setHeadline('Consulting the World Director');
+          const directorRow: ProgressRow = { label: 'World Director', state: 'pending', startedAt: null, doneAt: null, note: null };
+          rows.push(directorRow);
           const directorInput = buildWorldDirectorInput(session, current.previousWorld);
-          if (directorInput !== null) gmProposal = await requestWorldDirector(directorInput);
+          if (directorInput !== null) {
+            directorRow.state = 'running';
+            directorRow.startedAt = Date.now();
+            startTicking();
+            renderProgress();
+            gmProposal = await requestWorldDirector(directorInput);
+            directorRow.state = 'done';
+            directorRow.doneAt = Date.now();
+            renderProgress();
+          }
 
-          dispatch({ type: 'resolve_status', status: 'Rival strategists are planning' });
-          const ids = strategistCompanies(session);
-          const settled = await Promise.all(
-            ids.map(async (companyId) => {
-              const input = buildNpcStrategistInput(session, companyId);
-              return input === null ? null : await requestNpcBundle(input);
-            }),
+          setHeadline('Rival strategists are planning');
+          // Priority order, not the engine's plain size ordering: the rivals
+          // whose plan actually bears on the player's next decision — mid-deal,
+          // head-to-head on a bid, same sector, same region — go first, so when
+          // the budget runs out it is the least-relevant rival that falls back
+          // to policy, never whichever one happened to be asked first.
+          const player = playerCompanyOf(session);
+          const strategistCap = Math.max(0, Math.min(LLM_STRATEGISTS_PER_QUARTER, MAX_LIVE_STRATEGISTS));
+          const ids = strategistPriority(session, player.id, strategistCap);
+          const companyName = (companyId: string): string => session.companies.find((entry) => entry.id === companyId)?.name ?? companyId;
+          const strategistRows = new Map<string, ProgressRow>(
+            ids.map((id) => [id, { label: `${companyName(id)} strategist`, state: 'pending', startedAt: null, doneAt: null, note: null }] as const),
           );
-          npcBundles = settled.filter((bundle): bundle is NpcActionBundle => bundle !== null);
+          rows.push(...strategistRows.values());
+          renderProgress();
+
+          const collected: NpcActionBundle[] = [];
+          for (const id of ids) {
+            const row = strategistRows.get(id);
+            if (row === undefined) continue;
+            const remaining = budgetDeadline - Date.now();
+            if (remaining <= 0) {
+              row.state = 'skipped';
+              row.note = 'on policy (budget)';
+              renderProgress();
+              continue;
+            }
+            row.state = 'running';
+            row.startedAt = Date.now();
+            startTicking();
+            renderProgress();
+
+            // Reach for the call the quarter-open prefetch already started
+            // (`strategistPrefetch.ts`) before firing a fresh one: a strategist's
+            // plan depends only on state at the start of the quarter, which is
+            // exactly `session` here, so the cached answer is the same answer a
+            // live call would give — just already paid for.
+            const bundle = hasStrategistPrefetch(session, id)
+              ? await withDeadline(takeStrategistPrefetch(session, id), remaining)
+              : await (async () => {
+                  const input = buildNpcStrategistInput(session, id);
+                  return input === null ? null : await withDeadline(requestNpcBundle(input), remaining);
+                })();
+
+            if (bundle === null && Date.now() >= budgetDeadline) {
+              row.state = 'skipped';
+              row.note = 'on policy (budget)';
+            } else {
+              row.state = 'done';
+              row.doneAt = Date.now();
+              if (bundle !== null) collected.push(bundle);
+            }
+            renderProgress();
+          }
+          npcBundles = collected;
         }
       } catch {
         // An LLM outage is not an error condition. Fall through to the
@@ -879,16 +1147,24 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
         modelAvailable = false;
         gmProposal = null;
         npcBundles = [];
+      } finally {
+        stopTicking();
       }
     }
 
-    dispatch({ type: 'resolve_status', status: 'Resolving eighteen phases' });
+    setHeadline('Resolving eighteen phases');
+    const engineRow: ProgressRow = { label: 'Resolving eighteen phases', state: 'running', startedAt: Date.now(), doneAt: null, note: null };
+    rows.push(engineRow);
+    renderProgress();
     await nextPaint();
 
     // The record holds the inputs the surviving attempt was *actually* handed:
     // when the model's contribution makes the engine throw and the offline retry
     // succeeds, a replay must reproduce the quarter that happened.
     const attempt = resolveQuarterSafely(session, submitted, gmProposal, npcBundles);
+    engineRow.state = 'done';
+    engineRow.doneAt = Date.now();
+    renderProgress();
     if (attempt.outcome === null) {
       // Both attempts threw, so the fault is in the engine and not in anything
       // the model said. The queue is preserved and the overlay comes down: a
@@ -912,7 +1188,11 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       try {
         const authored = selectPostsForAuthoring(outcome.nextState, session.quarter);
         if (authored.length > 0) {
-          dispatch({ type: 'resolve_status', status: 'The networks are talking' });
+          setHeadline('The networks are talking');
+          const socialRow: ProgressRow = { label: 'Writing the quarter’s posts', state: 'running', startedAt: Date.now(), doneAt: null, note: null };
+          rows.push(socialRow);
+          startTicking();
+          renderProgress();
           // Sequential on purpose: the server bounds concurrent model calls to
           // one by default, so firing these in parallel would only queue them.
           for (const post of authored) {
@@ -922,6 +1202,10 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
             if (draft === null) continue;
             socialTexts.push({ postId: post.id, text: draft.text });
           }
+          stopTicking();
+          socialRow.state = 'done';
+          socialRow.doneAt = Date.now();
+          renderProgress();
         }
       } catch {
         // Words are the least important thing in the quarter. Keep the templates.
@@ -1238,6 +1522,12 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     dispatch({ type: 'settings', partial });
   }, []);
 
+  const setActiveCompany = useCallback((companyId: string) => {
+    const current = stateRef.current;
+    writeStoredActiveCompanyId(current.session.sessionId, companyId);
+    dispatch({ type: 'set_active_company', companyId });
+  }, []);
+
   const dismissNotice = useCallback(() => dispatch({ type: 'notice', notice: null }), []);
 
   const refreshLlmHealth = useCallback(async () => {
@@ -1250,6 +1540,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       newGame,
       validateIntent,
       queueAction,
+      setActiveCompany,
       unqueueAction,
       confirmAction,
       clearQueue,
@@ -1271,6 +1562,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       newGame,
       validateIntent,
       queueAction,
+      setActiveCompany,
       unqueueAction,
       confirmAction,
       clearQueue,
@@ -1328,6 +1620,40 @@ export function useSession(): SessionState {
 export function usePlayerCompany(): Company {
   const session = useSession();
   return useMemo(() => playerCompanyOf(session), [session]);
+}
+
+/**
+ * The company the player is currently *looking at* — STAGE 5's switcher.
+ *
+ * Reads for "the company I am directing right now": products, people,
+ * research, financials, the company screen, boardroom, capital, the deal
+ * room, government, markets tickets, and a network offer that acts on a
+ * company's behalf. Every other screen still means "my own company" —
+ * elimination, the founder-wealth board, the start page — and keeps reading
+ * `usePlayerCompany`.
+ *
+ * Falls back to the founding company for the one render before the store's
+ * own reconciliation (on load, or on a quarter that cost the seat control of
+ * whatever it was directing) has run — never a company outside the group.
+ */
+export function useActiveCompany(): Company {
+  const session = useSession();
+  const { activeCompanyId } = useStore();
+  return useMemo(() => {
+    const found = session.companies.find((company) => company.id === activeCompanyId && company.isActive);
+    return found ?? playerCompanyOf(session);
+  }, [session, activeCompanyId]);
+}
+
+/** The raw `activeCompanyId`, for anything that needs the id rather than the full company (the switcher's own highlight, a route param). */
+export function useActiveCompanyId(): string {
+  return useStore().activeCompanyId;
+}
+
+/** Every company this seat directs, founding company first — the switcher's own list. */
+export function useControlledCompanies(): Company[] {
+  const session = useSession();
+  return useMemo(() => controlledCompaniesOf(session, PLAYER_ID), [session]);
 }
 
 /** The founder character the player is. */

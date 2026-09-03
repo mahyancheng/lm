@@ -26,7 +26,7 @@
  * |-----------------|-----------------------------------------------------------|
  * | `engine`        | `createDefaultEngine` — every subsystem, wired            |
  * | `resolver`      | The eighteen phases, the ledger, the invariant gate        |
- * | `validator`     | All thirty-seven action rules and the board-matter gate    |
+ * | `validator`     | All forty-two action rules and the board-matter gate        |
  * | `scenario`      | The 2027 Q1 demo world                                     |
  * | `economy`       | Macro drift, hazards, world modifiers, information reveal  |
  * | `markets`       | Anchors, beliefs, the return model, trade settlement       |
@@ -60,6 +60,13 @@ export * from './social';
 export * from './targetPaths';
 export { runLookups, reservableUnitsFor } from './lookups';
 export {
+  expectedFill,
+  isShortFill,
+  realisesAvailability,
+  shortFillLine,
+  type ExpectedFill,
+} from './fills';
+export {
   PORTFOLIO_ACTIONS,
   PORTFOLIO_HISTORY_QUARTERS,
   PORTFOLIO_RECONCILIATION_TOLERANCE_USD,
@@ -83,6 +90,8 @@ export type {
   PortfolioValuePoint,
   PriceBasis,
 } from './portfolio';
+export { groupStatementOf, groupStatementsSupported } from './group';
+export type { GroupStatement } from './group';
 
 /**
  * Four subsystems each define an identical `companyById(draft, id)` lookup.

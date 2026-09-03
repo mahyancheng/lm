@@ -133,6 +133,8 @@ describe('the offline responder', () => {
     expect(classifyQuestion('what can I do right now')).toBe('capabilities');
     expect(classifyQuestion('what is our headcount')).toBe('people');
     expect(classifyQuestion('who is on the board')).toBe('board');
+    expect(classifyQuestion('how is the group doing?')).toBe('group');
+    expect(classifyQuestion('give me the consolidated numbers')).toBe('group');
     expect(classifyQuestion('write me a haiku about compute')).toBe('unclassified');
     expect(classifyQuestion('Rewrite the strategy deck in iambic pentameter.')).toBe('unclassified');
   });
@@ -161,6 +163,28 @@ describe('the offline responder', () => {
     expect(answerFromDossier('people', dossier)).toContain('1,240 people');
     expect(answerFromDossier('board', dossier)).toContain('24%');
     expect(answerFromDossier('unclassified', dossier)).toBeNull();
+  });
+
+  it('answers the group question — STAGE 5, offline responder too', () => {
+    // The fixture directs one company: nothing to consolidate, and the
+    // response says so rather than inventing a group.
+    expect(answerFromDossier('group', dossier)).toContain('one company');
+
+    const withSubsidiary = chiefOfStaffDossier({
+      group: {
+        companyCount: 2,
+        revenueUsd: 1_100_000_000,
+        netIncomeUsd: -50_000_000,
+        cashUsd: 2_400_000_000,
+        debtUsd: 500_000_000,
+        headcount: 1_500,
+        marketValueUsd: 21_000_000_000,
+      },
+    });
+    const answer = answerFromDossier('group', withSubsidiary);
+    expect(answer).toContain('2 companies');
+    expect(answer).toContain('$1B');
+    expect(answer).toContain('1,500 people');
   });
 
   it('names the open approach when there is one, rather than the biggest rival', () => {

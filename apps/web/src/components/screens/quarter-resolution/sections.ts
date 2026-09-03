@@ -26,6 +26,7 @@
 
 import type { ResolutionLine, ResolutionPhase, ResolutionReport, SessionState, SimEvent } from '@frontier/contracts';
 import { audienceFor, projectResolutionOutcomeForPlayer } from '@frontier/simulation';
+import { delintReport } from '@/components/screens/reporting/util';
 
 export type SectionId = 'world' | 'competition' | 'company' | 'markets' | 'rank' | 'ledger';
 
@@ -114,10 +115,17 @@ export function playerQuarter(
     ...session.companies.map((company) => company.id),
     ...session.characters.map((character) => character.id),
   ]);
+  // The engine writes some report prose by interpolating a raw enum value or a
+  // name-lookup fallback id straight into a sentence (a narrative shift, an
+  // unresolved company name). Delinting here, once, before the report is
+  // grouped, means every consumer of `PlayerQuarter` — the sections below, the
+  // newspaper headline, the ledger drawer's line quote — sees plain words with
+  // no extra work at the call site.
+  const report = delintReport(projected.report, session);
   return {
-    report: projected.report,
+    report,
     events: projected.events,
-    sections: groupLines(projected.report, ownIds, actorIds),
+    sections: groupLines(report, ownIds, actorIds),
   };
 }
 

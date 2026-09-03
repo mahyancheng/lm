@@ -5,15 +5,16 @@ import { useEffect, useState } from 'react';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
+  useActiveCompany,
   useConnection,
   useFounderNetWorth,
   useLlm,
   useMarketCap,
-  usePlayerCompany,
   usePlayerView,
   useSession,
 } from '@/lib/game';
 import { Icon, cx } from '@/components/ui';
+import { CompanySwitcher } from './CompanySwitcher';
 import { SettingsDrawer } from './SettingsDrawer';
 import { type SettingsSection, onOpenSettings } from './settingsBus';
 
@@ -67,9 +68,13 @@ export interface StatusBarProps {
  */
 export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Element {
   const session = useSession();
-  const company = usePlayerCompany();
+  // Follows the switcher: the bar's "Cash" and "Market cap" readings answer
+  // for whichever company its name and sector are currently showing, not
+  // always the founding one. `netWorth` stays personal — the founder's own
+  // wealth across everything they hold, not one company's balance sheet.
+  const company = useActiveCompany();
   const view = usePlayerView();
-  const marketCap = useMarketCap();
+  const marketCap = useMarketCap(company.id);
   const netWorth = useFounderNetWorth();
   const connection = useConnection();
   const llm = useLlm();
@@ -106,22 +111,14 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
           <Icon name={navOpen ? 'close' : 'menu'} size={18} accent="current" />
         </button>
 
-        {/* The identity. It is the one shrinkable thing in the bar: everything
-            else is a fixed-width control, so the company name truncates rather
-            than pushing the settings button off the right edge — which is
-            exactly what used to widen the document by 14px at 390. */}
-        <Link
-          href="/command-centre"
-          className="tap-target flex min-w-0 items-center gap-2 rounded-chip px-1.5 hover:bg-raised sm:gap-2.5 sm:px-2"
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-chip bg-brand-strong text-white shadow-card">
-            <Icon name="logo" size={16} accent="current" />
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[12.5px] leading-tight font-bold text-ink">{company.name}</span>
-            <span className="label-caps-faint hidden truncate leading-none sm:block">Frontier Capital</span>
-          </span>
-        </Link>
+        {/* The identity, and STAGE 5's switcher: it is the one shrinkable thing
+            in the bar — everything else is a fixed-width control, so the
+            company name truncates rather than pushing the settings button off
+            the right edge — which is exactly what used to widen the document
+            by 14px at 390. `CompanySwitcher` renders the plain link this
+            always was for a seat that controls only its founding company, and
+            a tap target that opens the switcher sheet otherwise. */}
+        <CompanySwitcher />
 
         {/* Phone: quarter over cash, one compact block instead of a link row. */}
         <div className="ml-auto shrink-0 border-l border-hair px-2 text-right sm:hidden">

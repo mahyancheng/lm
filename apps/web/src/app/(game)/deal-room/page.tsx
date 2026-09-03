@@ -37,7 +37,7 @@ import { DealBuilder, type CounterpartyOption, type NamedOption } from '@/compon
 import type { AccordContext } from '@/components/screens/deal-room/AccordFields';
 import { laddersPresent, sectorLadderRows, visibleAccordMembers } from '@/components/screens/sector/model';
 import { DealDrawer } from '@/components/screens/deal-room/DealDrawer';
-import { marketCapOf, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { marketCapOf, useActiveCompany, usePlayerView, useSession } from '@/lib/game';
 
 const STATUS_TONE: Readonly<Record<DealProposal['status'], 'neutral' | 'info' | 'gain' | 'loss' | 'warn'>> = {
   draft: 'neutral',
@@ -59,7 +59,7 @@ interface DistressRow {
 export default function DealRoomPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
 
   const [selected, setSelected] = useState<string | null>(null);
   const [radarPick, setRadarPick] = useState<string | null>(null);

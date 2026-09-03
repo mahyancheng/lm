@@ -35,7 +35,7 @@ import { recomputeMetrics } from './metrics';
 
 export { resolveHiring, fillRate, poachProbability, offerCompUsd, requiredCompUsd, regionalCompUsd, regionalOfferCompUsd } from './hiring';
 export { livedGrossMarginPct, previousTtmUsd, quarterNetIncomeUsd, rollFundamentals, sharesOutstandingFor } from './fundamentals';
-export { MAX_LIVE_STRATEGISTS, strategistCompanyIds } from './strategists';
+export { MAX_LIVE_STRATEGISTS, strategistCompanyIds, strategistPriority } from './strategists';
 export {
   resolveProducts,
   segmentDemand,
@@ -43,13 +43,41 @@ export {
   relativePrice,
   productChurn,
   priceShock,
+  priceMoveShock,
+  priceSaturationDecay,
+  repriceForecast,
   marketingLift,
   customersPerUnit,
   servingComputeUnits,
   heldComputeUnits,
   unclampedGrossMargin,
 } from './products';
+export type { RepriceForecast } from './products';
+export { emitPartialFill, type PartialFillRow } from './partialFill';
 export { resolveComputeOrders, reservedUnitPriceUsd } from './compute';
+export { resolveCapacityOrders } from './capacity';
+export { categoryOf, capacityUsd, launchableLines } from './categories';
+export type { LaunchableLine } from './categories';
+export {
+  NPC_DEFAULT_SUPPLY_MARGIN,
+  SUPPLY_CUT_OFF_NOTICE_QUARTERS,
+  SUPPLY_PRICE_FACTOR_BOUNDS,
+  SWITCH_QUALITY_FACTOR,
+  chooseSupplierDefault,
+  customersFor,
+  defaultSupplyTerms,
+  dependenceOn,
+  effectiveQuality,
+  openMarketSupplyCostUsd,
+  requiredInputUnsupplied,
+  resolveSupplyLedger,
+  resolveSupplyLine,
+  resolveSupplyOrders,
+  supplyChargesByCompany,
+  supplyInputCostUsd,
+  suppliersFor,
+} from './supply';
+export type { ResolvedSupplyLine, SupplyCustomer, SupplyLedgerEntry, SupplyOffer, SupplyStatus } from './supply';
 export {
   ACCELERATOR_SELLER_ARCHETYPES,
   MANUFACTURING_SECTORS,
@@ -115,6 +143,7 @@ export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchE
 export type { MarketingPlan } from './policy';
 export { ARCHETYPE_POLICIES, POSTURE_ADJUSTMENTS, effectivePolicy } from './archetypes';
 export type { ArchetypePolicy, PostureAdjustment, EffectivePolicy } from './archetypes';
+export { controlledCompaniesOf, resolveControlChanges } from './control';
 export * from './balance';
 
 /**

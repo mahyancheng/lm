@@ -72,6 +72,23 @@ export const ProductSegmentSchema = z
   .describe('Which market a product sells into. Each segment has its own demand curve, price sensitivity, churn behaviour and reputation input.');
 export type ProductSegment = z.infer<typeof ProductSegmentSchema>;
 
+/**
+ * What kind of physical or virtual capacity a product category is served from.
+ * "compute" is accelerator-equivalents, exactly as world version 1 always
+ * modelled it. "plant", "fleet" and "grid" are world-2 capacity kinds a company
+ * builds with `invest_capacity`, held in `Company.capacity`. "none" is
+ * uncapacitated: a line whose growth is never bounded by anything the company
+ * owns (a marketplace, a subscription app).
+ */
+export const CAPACITY_KINDS = ['compute', 'plant', 'fleet', 'grid', 'none'] as const;
+
+export const CapacityKindSchema = z
+  .enum(CAPACITY_KINDS)
+  .describe(
+    'The kind of capacity a product category is served from. "compute" is accelerator-equivalents. "plant", "fleet" and "grid" are built by investing in Company.capacity. "none" is never capacity-constrained.',
+  );
+export type CapacityKind = z.infer<typeof CapacityKindSchema>;
+
 export const STAFF_ROLES = ['engineers', 'researchers', 'sales', 'ops', 'execs'] as const;
 
 export const StaffRoleSchema = z
@@ -95,11 +112,66 @@ export type ExecutiveRole = z.infer<typeof ExecutiveRoleSchema>;
 /*  Products                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * One resolved input choice on a product: which upstream category
+ * (`ProductCategoryInput.categoryId` in `productCategories.ts`), bought from
+ * which company and which of that company's products.
+ *
+ * `supplierCompanyId` and `supplierProductId` are required-but-nullable rather
+ * than optional throughout — this shape backs both `Product.supply` (state)
+ * and the `choose_supplier` action (LLM-facing), and an LLM-facing schema must
+ * emit every key. Null means the open market for an input that is not
+ * `required`, or a deliberate refusal to fill a `required` one — see the
+ * `supply` field's own doc comment for exactly how that resolves.
+ */
+export const ProductSupplyLineSchema = z
+  .object({
+    inputCategoryId: z.string().min(1).describe('The upstream category (PRODUCT_CATEGORIES) this line names a supplier for.'),
+    supplierCompanyId: z.string().min(1).nullable().describe('The company this input is bought from, or null for the open market or a deliberately unfilled required input.'),
+    supplierProductId: z.string().min(1).nullable().describe('The specific supplying product, or null exactly when supplierCompanyId is null.'),
+    cutOffNoticeQuarter: QuarterIndexSchema.nullable().describe(
+      'Set by the engine when the supplier has announced it is closing this line to this buyer: the line drops to unsupplied at the start of this quarter, one quarter after the notice. Null when nothing is pending. Never set by an action — a buyer cannot pre-empt its own cut-off.',
+    ),
+  })
+  .describe('One resolved input choice on a product.');
+export type ProductSupplyLine = z.infer<typeof ProductSupplyLineSchema>;
+
+/**
+ * Published terms for a product line as somebody else's input — set with
+ * `set_supply_terms`. Publishing a public API, in the owner's own words, is
+ * `openToAll: true`.
+ */
+export const SupplyTermsSchema = z
+  .object({
+    openToAll: z.boolean().describe('True when any company may build on this line at its published price — a public API.'),
+    pricePerUnitUsd: usd('Price this line charges, matched against its category\'s referencePriceUsd to price every buyer\'s draw. A price above reference costs every customer margin; a price below wins share.'),
+    exclusiveCustomerIds: z.array(z.string()).max(20).describe('Companies allowed to buy when openToAll is false. Ignored when openToAll is true.'),
+    blockedCustomerIds: z.array(z.string()).max(50).describe('Companies refused regardless of openToAll — a deliberate cut-off, which takes effect one quarter after it is set.'),
+  })
+  .describe('Published supply terms for a canSupply product line: whether, and at what price, other companies may build on it.');
+export type SupplyTerms = z.infer<typeof SupplyTermsSchema>;
+
 export const ProductSchema = z
   .object({
     id: z.string().min(1).describe('Product id, e.g. "prd_enterprise_agent".'),
     name: z.string().min(1).max(80).describe('Product name as customers see it.'),
     segment: ProductSegmentSchema,
+    /*
+     * The industry line this product is: PRODUCT_CATEGORIES in
+     * productCategories.ts is the catalogue this id names an entry of. Absent
+     * rather than defaulted, and load-bearing: a defaulted field would
+     * materialise on every world-version-1 product the moment the schema
+     * parsed one, and the frozen world would stop hashing to the value it has
+     * always hashed to. Absent means "derive it" — `defaultCategoryFor(sector,
+     * segment)` in productCategories.ts does that deterministically from the
+     * product's own sector and segment — and every reader calls `categoryOf`
+     * rather than reading this field bare, so the derivation happens on read
+     * and is never written back into a world-version-1 product. World version
+     * 2 always writes a real id here at launch.
+     */
+    categoryId: z.string().min(1).nullable().optional().describe(
+      'Id into PRODUCT_CATEGORIES (productCategories.ts): the industry line this product is, e.g. "ai_frontier_models" or "manufacturing_batteries". Absent on a world-version-1 product or a save from before this field existed; call categoryOf/defaultCategoryFor rather than reading it directly. Never absent on a product launched in world version 2.',
+    ),
     pricePerSeat: usd('List price per seat per quarter. For developer_api products, price per million billed units.'),
     activeCustomers: intCount('Paying seats or accounts at the end of the quarter.'),
     churnQuarterly: unitInterval('Fraction of customers lost this quarter. 0.05 is healthy enterprise, 0.20 is a leaking consumer product.'),
@@ -113,6 +185,34 @@ export const ProductSchema = z
     qualityScore: unitInterval('How good the product is relative to the market frontier. Drives win rates, pricing power and churn.'),
     launchedQuarter: QuarterIndexSchema.describe('Quarter the product went live.'),
     isActive: z.boolean().describe('False once the product has been sunset. Sunset products keep their history for financial comparatives.'),
+    /*
+     * Stage 2b — the supply chain. Optional for exactly the reason `categoryId`
+     * is: a world-version-1 product, and every world-2 product launched before
+     * this field existed, carries neither key at all, so the frozen world (and
+     * every product already sitting in a live save) keeps hashing to what it
+     * always hashed to. Absent is read as "nothing chosen yet" everywhere —
+     * `resolveSupplyLine` in `@frontier/simulation` treats a missing `supply`
+     * entry for a category exactly like an empty array: the input sits on the
+     * open market, which costs nothing beyond what its category's own margin
+     * already assumes and moves no counterparty's revenue. Only an
+     * *explicit* null supplier on a `required` input (a
+     * deliberate `choose_supplier`, or a supplier that cut this buyer off)
+     * books zero units — so this field can never retroactively break a product
+     * that never touched it. World version 2 always writes a real (possibly
+     * empty) array at launch.
+     */
+    supply: z
+      .array(ProductSupplyLineSchema)
+      .max(6)
+      .optional()
+      .describe(
+        'Resolved input choices, one entry per PRODUCT_CATEGORIES input this product has an opinion about. A category input with no entry here is bought on the open market. Absent on a world-version-1 product or one launched before supply chains existed.',
+      ),
+    supplyTerms: SupplyTermsSchema.nullable()
+      .optional()
+      .describe(
+        'Published terms for this line as somebody else\'s input, set with set_supply_terms. Null (or absent) means not published: this line cannot be anyone\'s supplier yet, whatever its category\'s canSupply says. Only meaningful when the category canSupply is true. Absent on a world-version-1 product.',
+      ),
   })
   .describe('One commercial product line. Unit economics are resolved per product each quarter, then rolled up into the company P&L.');
 export type Product = z.infer<typeof ProductSchema>;
@@ -182,6 +282,55 @@ export const ComputeHoldingsSchema = z
   })
   .describe('Compute the company controls, who it was procured from, and how it is allocated.');
 export type ComputeHoldings = z.infer<typeof ComputeHoldingsSchema>;
+
+/**
+ * One capacity investment accepted this quarter and not yet settled.
+ *
+ * Staged by `invest_capacity`'s resolution in the product phase and consumed by
+ * the financial phase, exactly the same two-phase contract
+ * `AcceleratorPurchaseSchema` uses for owned accelerators: the compute (or
+ * here, capacity) phase stages the order, the financial phase is the only phase
+ * that moves cash, lands the capex in `ppe` and in the matching bucket on
+ * `CapacityHoldings`, and depreciates it from there on like any other property.
+ * World version 2 only, and always empty on a committed state.
+ */
+export const PendingCapacityInvestmentSchema = z
+  .object({
+    kind: CapacityKindSchema.exclude(['compute', 'none']),
+    amountUsd: usd('Cash the financial phase will move into property, plant and equipment and into this capacity kind.'),
+  })
+  .describe('A capacity investment accepted this quarter, awaiting settlement in the financial phase.');
+export type PendingCapacityInvestment = z.infer<typeof PendingCapacityInvestmentSchema>;
+
+/**
+ * Non-compute capacity a company has built with `invest_capacity`: plant for
+ * manufacturing lines, fleet for logistics, grid for energy. Each bucket is
+ * cash invested, not a physical unit count — the category catalogue's
+ * `capacityYieldPerUnit` says how many customers a million dollars of it
+ * serves, exactly as `SERVE_CUSTOMERS_PER_ACCELERATOR` says for compute.
+ *
+ * World version 2 only. Optional rather than defaulted for the reason every
+ * other priced-economy field on `Company` is: a defaulted object would
+ * materialise on every world-version-1 company the moment the schema parsed
+ * one, and the frozen world would stop hashing to the value it has always
+ * hashed to.
+ */
+export const CapacityHoldingsSchema = z
+  .object({
+    plantUsd: usd('Cash invested in manufacturing plant: fabs, packaging lines, machine tools.'),
+    fleetUsd: usd('Cash invested in vehicle and vessel fleets: freight, last-mile, ports.'),
+    gridUsd: usd('Cash invested in grid and storage infrastructure: transmission, batteries at grid scale.'),
+    pendingInvestments: z
+      .array(PendingCapacityInvestmentSchema)
+      .max(8)
+      .optional()
+      .describe('Investments accepted this quarter and awaiting settlement. Staged by the product phase, cleared by the financial phase, so a committed state never carries any.'),
+  })
+  .describe('Non-compute capacity the company has built: plant, fleet and grid, each in cash invested.');
+export type CapacityHoldings = z.infer<typeof CapacityHoldingsSchema>;
+
+/** What a company gets when it has never invested in non-compute capacity. */
+export const DEFAULT_CAPACITY_HOLDINGS: CapacityHoldings = { plantUsd: 0, fleetUsd: 0, gridUsd: 0 };
 
 export const OfficeSchema = z
   .object({
@@ -367,6 +516,11 @@ export const FinancialProductLineSchema = z
     priceUsd: usd('List price per unit per quarter.'),
     revenueUsd: usd('INVARIANT: units multiplied by price.'),
     grossMarginPct: unitInterval('This line\'s gross margin, as the product phase resolved it.'),
+    // Appended: written only from world version 2, where every product line
+    // resolves through a real catalogue entry. Absent on a statement filed
+    // before this field existed.
+    categoryId: z.string().min(1).optional().describe('The product\'s industry line at the close of the quarter (PRODUCT_CATEGORIES). Absent on a statement filed before this field existed.'),
+    unit: z.string().min(1).optional().describe('The category\'s unit label at the close of the quarter, e.g. "seat", "1M tokens", "MWh". Absent on a statement filed before this field existed.'),
   })
   .describe('One product line\'s unit economics for one closed quarter.');
 export type FinancialProductLine = z.infer<typeof FinancialProductLineSchema>;
@@ -683,6 +837,9 @@ export const CompanySchema = z
       .describe(
         'What was paid for this company when it was absorbed, written on the company that was bought. Absent for a company nobody has bought. The ledger row is the record of the event; this is the durable residue of it, because the ledger is not part of session state and the portfolio has to state a cost basis quarters later.',
       ),
+    capacity: CapacityHoldingsSchema.optional().describe(
+      'Non-compute capacity built with invest_capacity: plant, fleet and grid. Absent until the company first invests, and absent for every world-version-1 company, for the same hash-freezing reason every field in this block is optional rather than defaulted.',
+    ),
 
     // --- strategy (drives NPC behaviour and describes player companies) ---
     posture: CompanyPostureSchema,
@@ -700,7 +857,9 @@ export const CompanySchema = z
     primarySecurityId: z.string().nullable().describe('Security representing this company\'s ordinary equity, or null before any shares are issued.'),
     instrumentId: z.string().nullable().describe('Market instrument this company trades as, or null while unlisted.'),
     ceoCharacterId: z.string().nullable().describe('Character currently serving as chief executive.'),
-    parentCompanyId: z.string().nullable().describe('Acquirer, when this company has been absorbed as a subsidiary.'),
+    parentCompanyId: z.string().nullable().describe(
+      'Acquirer, once this company has been bought. In world version 2 the company usually stays `isActive` as a live subsidiary — its own books, board and cap table, with the acquirer holding the stake in `assets.investments` — until an explicit `merge_subsidiary` absorbs it; in world version 1, and after that merge, the company is inactive and this is the residual pointer to who took it.',
+    ),
   })
   .describe('An operating company in the session economy.');
 export type Company = z.infer<typeof CompanySchema>;

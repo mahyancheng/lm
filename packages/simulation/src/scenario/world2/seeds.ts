@@ -29,7 +29,7 @@
  */
 
 import type { CapTable, Company, CompanyQuarterMetrics, MarketInstrument, Quote, Region, Sector, ValuationAnchor, ValuationMethod } from '@frontier/contracts';
-import { SHARE_COUNT_LOT, makeId, sharesForMarketCap } from '@frontier/contracts';
+import { SHARE_COUNT_LOT, categoryById, makeId, sharesForMarketCap } from '@frontier/contracts';
 import { sectorRevenueMultipleBand } from '../../economy/sectors';
 import { clamp, clamp01, lerp } from '../../economy/util';
 import { MULTIPLE_INDEX_BOUNDS, qualityScore } from '../../markets/fundamentalValue';
@@ -117,15 +117,38 @@ const SECTOR_COMPUTE_PROFILE: Readonly<Record<Sector, { readonly utilisation: nu
 /*  Seed shape                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/** One input a seed's own line is built on: the category and which rival's product to name. */
+export interface V2SupplyChoiceSeed {
+  readonly inputCategoryId: string;
+  /** Another seed's `slug` — its product id and company id are derived from it. */
+  readonly supplierSlug: string;
+}
+
 export interface V2ProductSeed {
   readonly name: string;
   readonly segment: Company['products'][number]['segment'];
+  /** Id into PRODUCT_CATEGORIES (@frontier/contracts): the industry line this seed sells. */
+  readonly categoryId: string;
   /** Price of one unit per quarter. Customer count is derived from revenue. */
   readonly price: number;
   readonly churn: number;
   readonly growth: number;
   readonly quality: number;
   readonly intensity: number;
+  /**
+   * Stage 2b — the supply chain. `supply` names, for this seed's own line,
+   * which rival's product each declared input is built on; any input the
+   * category declares and this array leaves unnamed is the open market, as
+   * `Product.supply`'s own doc comment says. `supplyOpen` publishes this
+   * line itself as a `canSupply` category's open API from quarter 0 — true
+   * for the frontier labs, the chip and battery makers, the freight
+   * operators and the utilities, so a founder (or an NPC default) can build
+   * on a live supplier the moment the session opens rather than waiting a
+   * quarter for one to publish. Both default to nothing: most lines are
+   * neither a supplier nor built on one, exactly as before this stage.
+   */
+  readonly supply?: readonly V2SupplyChoiceSeed[];
+  readonly supplyOpen?: boolean;
 }
 
 export interface V2CompanySeed {
@@ -294,6 +317,7 @@ export function buildV2Company(seed: V2CompanySeed): Company {
         id: makeId('prd', seed.slug, 'core'),
         name: seed.product.name,
         segment: seed.product.segment,
+        categoryId: seed.product.categoryId,
         pricePerSeat: seed.product.price,
         // Units are read off revenue and price, so the product line and the
         // income statement can never disagree about how big the business is. A
@@ -306,6 +330,13 @@ export function buildV2Company(seed: V2CompanySeed): Company {
         qualityScore: seed.product.quality,
         launchedQuarter: 0,
         isActive: true,
+        supply: (seed.product.supply ?? []).map((entry) => ({
+          inputCategoryId: entry.inputCategoryId,
+          supplierCompanyId: makeId('cmp', entry.supplierSlug),
+          supplierProductId: makeId('prd', entry.supplierSlug, 'core'),
+          cutOffNoticeQuarter: null,
+        })),
+        supplyTerms: supplyTermsFor(seed),
       },
     ],
     employees: {
@@ -371,7 +402,65 @@ export function buildV2Company(seed: V2CompanySeed): Company {
     instrumentId: seed.isPublic ? INS(seed.slug) : null,
     ceoCharacterId: seed.ceoCharacterId,
     parentCompanyId: null,
+    capacity: startingCapacityFor(seed),
   };
+}
+
+/**
+ * Opening non-compute capacity for a seed whose product category is served
+ * from plant, fleet or grid rather than compute.
+ *
+ * `invest_capacity` is a world-2 action nobody has taken on quarter 0, so a
+ * seed whose category needs plant/fleet/grid capacity and starts with none
+ * would be capacity-rationed to zero the moment the product phase first runs
+ * — an established manufacturer crushed for a mechanic it never had the
+ * chance to react to. This seeds exactly enough capacity to serve the
+ * customer base the revenue implies, with a fixed headroom multiple so an
+ * incumbent can grow before it needs to invest, mirroring how compute seeding
+ * (`seed.compute`) already gives every company a real opening position rather
+ * than starting every accelerator count at zero.
+ *
+ * Returns undefined for a "compute" or "none" category: nothing to seed, and
+ * the company never grows the `capacity` key, exactly like a company that has
+ * never invested.
+ */
+// Generous on purpose: nothing in this scenario ever calls invest_capacity on
+// a seed's behalf (there is no deterministic NPC default for it, exactly as
+// there is none for buy_accelerators), so this headroom is the only thing
+// standing between a rival and a capacity ceiling for the rest of the
+// session. The compute pool every rival started with before this catalogue
+// existed was sized the same way — generously, so a long run has real growth
+// to price rather than a flat line the moment the seed's own customer count
+// is exceeded.
+const STARTING_CAPACITY_HEADROOM = 6;
+
+/**
+ * Opening supply terms for a seed whose line `canSupply` and is marked
+ * `supplyOpen`: published from quarter 0, at a fixed margin over its
+ * category's own reference price — the same margin
+ * `NPC_DEFAULT_SUPPLY_MARGIN` in `companies/supply.ts` uses when a
+ * background company publishes for the first time, so a seeded API and one
+ * an NPC default publishes later price the same way. Null for every other
+ * seed, and null when the category cannot supply at all — a fixed belt for
+ * a category catalogue change that ever moved `canSupply`.
+ */
+const SEED_SUPPLY_MARGIN = 1.1;
+
+function supplyTermsFor(seed: V2CompanySeed): Company['products'][number]['supplyTerms'] {
+  if (seed.product.supplyOpen !== true) return null;
+  const category = categoryById(seed.product.categoryId);
+  if (category === undefined || !category.canSupply) return null;
+  return { openToAll: true, pricePerUnitUsd: Math.round(category.referencePriceUsd * SEED_SUPPLY_MARGIN * 100) / 100, exclusiveCustomerIds: [], blockedCustomerIds: [] };
+}
+
+function startingCapacityFor(seed: V2CompanySeed): Company['capacity'] {
+  const category = categoryById(seed.product.categoryId);
+  if (category === undefined || category.capacityKind === 'compute' || category.capacityKind === 'none') return undefined;
+  const customers = seed.revenue > 0 ? Math.max(1, Math.round(seed.revenue / Math.max(1, seed.product.price))) : 0;
+  const requiredM = customers / Math.max(1e-6, category.capacityYieldPerUnit);
+  const usd = Math.round(requiredM * 1_000_000 * STARTING_CAPACITY_HEADROOM);
+  const zeroed = { plantUsd: 0, fleetUsd: 0, gridUsd: 0 };
+  return { ...zeroed, [`${category.capacityKind}Usd`]: usd } as Company['capacity'];
 }
 
 /**
@@ -674,7 +763,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 68,
     attrition: 0.05,
     compute: [36_000, 150_000, 110 * M],
-    product: { name: 'Aletheia Reasoning API', segment: 'developer_api', price: 1_600, churn: 0.06, growth: 0.11, quality: 0.92, intensity: 0.88 },
+    product: { name: 'Aletheia Reasoning API', segment: 'developer_api', categoryId: 'ai_inference_api', price: 1_600, churn: 0.06, growth: 0.11, quality: 0.92, intensity: 0.88, supplyOpen: true },
     anchorMethod: 'technology_option_value',
   },
   {
@@ -719,7 +808,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 79,
     attrition: 0.04,
     compute: [9_000, 42_000, 26 * M],
-    product: { name: 'Sable Assurance Models', segment: 'enterprise', price: 4_200, churn: 0.05, growth: 0.14, quality: 0.84, intensity: 0.76 },
+    product: { name: 'Sable Assurance Models', segment: 'enterprise', categoryId: 'ai_safety_evals', price: 4_200, churn: 0.05, growth: 0.14, quality: 0.84, intensity: 0.76, supplyOpen: true },
     anchorMethod: 'technology_option_value',
   },
   {
@@ -764,7 +853,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 74,
     attrition: 0.03,
     compute: [420_000, 0, 0],
-    product: { name: 'Basalt Reserved Capacity', segment: 'enterprise', price: 5_800, churn: 0.02, growth: 0.07, quality: 0.9, intensity: 0.95 },
+    product: { name: 'Basalt Reserved Capacity', segment: 'enterprise', categoryId: 'ai_cloud_infrastructure', price: 5_800, churn: 0.02, growth: 0.07, quality: 0.9, intensity: 0.95, supplyOpen: true },
     anchorMethod: 'asset_cashflow_utilisation',
   },
   {
@@ -809,7 +898,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 81,
     attrition: 0.04,
     compute: [1_400, 6_000, 7 * M],
-    product: { name: 'Kestrel Evaluation Corpora', segment: 'developer_api', price: 1_100, churn: 0.07, growth: 0.1, quality: 0.85, intensity: 0.4 },
+    product: { name: 'Kestrel Evaluation Corpora', segment: 'developer_api', categoryId: 'ai_data_labelling', price: 1_100, churn: 0.07, growth: 0.1, quality: 0.85, intensity: 0.4, supplyOpen: true },
     anchorMethod: 'revenue_multiple',
   },
 
@@ -856,7 +945,23 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 71,
     attrition: 0.05,
     compute: [6_400, 12_000, 22 * M],
-    product: { name: 'Ironvale Fulfilment Fleet', segment: 'enterprise', price: 9_400, churn: 0.03, growth: 0.09, quality: 0.88, intensity: 0.52 },
+    product: {
+      name: 'Ironvale Fulfilment Fleet',
+      segment: 'enterprise',
+      categoryId: 'robotics_warehouse',
+      price: 9_400,
+      churn: 0.03,
+      growth: 0.09,
+      quality: 0.88,
+      intensity: 0.52,
+      // Sensors are required and Halcyon makes them; the accelerators input
+      // stays on the open market — no seed sells raw accelerators as its own
+      // line, and an unnamed input is never `unsupplied`.
+      supply: [
+        { inputCategoryId: 'manufacturing_sensors', supplierSlug: 'halcyon' },
+        { inputCategoryId: 'manufacturing_batteries', supplierSlug: 'cinder' },
+      ],
+    },
     anchorMethod: 'forward_revenue_quality',
   },
   {
@@ -901,7 +1006,20 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 83,
     attrition: 0.03,
     compute: [2_600, 8_000, 9 * M],
-    product: { name: 'Wrenford General Platform', segment: 'enterprise', price: 26_000, churn: 0.04, growth: 0.16, quality: 0.61, intensity: 0.74 },
+    product: {
+      name: 'Wrenford General Platform',
+      segment: 'enterprise',
+      categoryId: 'robotics_humanoids',
+      price: 26_000,
+      churn: 0.04,
+      growth: 0.16,
+      quality: 0.61,
+      intensity: 0.74,
+      supply: [
+        { inputCategoryId: 'manufacturing_sensors', supplierSlug: 'halcyon' },
+        { inputCategoryId: 'manufacturing_batteries', supplierSlug: 'cinder' },
+      ],
+    },
     anchorMethod: 'technology_option_value',
   },
   {
@@ -946,7 +1064,20 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 66,
     attrition: 0.04,
     compute: [3_200, 4_000, 11 * M],
-    product: { name: 'Sentinel Perimeter Autonomy', segment: 'government', price: 68_000, churn: 0.02, growth: 0.06, quality: 0.86, intensity: 0.58 },
+    product: {
+      name: 'Sentinel Perimeter Autonomy',
+      segment: 'government',
+      categoryId: 'robotics_drones',
+      price: 68_000,
+      churn: 0.02,
+      growth: 0.06,
+      quality: 0.86,
+      intensity: 0.58,
+      supply: [
+        { inputCategoryId: 'manufacturing_batteries', supplierSlug: 'cinder' },
+        { inputCategoryId: 'manufacturing_sensors', supplierSlug: 'halcyon' },
+      ],
+    },
     anchorMethod: 'forward_revenue_quality',
   },
   {
@@ -991,7 +1122,17 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 76,
     attrition: 0.06,
     compute: [400, 0, 3 * M],
-    product: { name: 'Palma Harvest Units', segment: 'enterprise', price: 5_200, churn: 0.06, growth: 0.08, quality: 0.7, intensity: 0.44 },
+    product: {
+      name: 'Palma Harvest Units',
+      segment: 'enterprise',
+      categoryId: 'robotics_industrial_arms',
+      price: 5_200,
+      churn: 0.06,
+      growth: 0.08,
+      quality: 0.7,
+      intensity: 0.44,
+      supply: [{ inputCategoryId: 'manufacturing_sensors', supplierSlug: 'halcyon' }],
+    },
     anchorMethod: 'revenue_multiple',
   },
 
@@ -1038,7 +1179,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 72,
     attrition: 0.03,
     compute: [7_000, 0, 14 * M],
-    product: { name: 'Tessellate Wafer Programmes', segment: 'enterprise', price: 240_000, churn: 0.01, growth: 0.07, quality: 0.93, intensity: 0.24 },
+    product: { name: 'Tessellate Wafer Programmes', segment: 'enterprise', categoryId: 'manufacturing_fabs_packaging', price: 240_000, churn: 0.01, growth: 0.07, quality: 0.93, intensity: 0.24, supplyOpen: true },
     anchorMethod: 'earnings_fcf',
   },
   {
@@ -1083,7 +1224,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 77,
     attrition: 0.02,
     compute: [200, 0, 2 * M],
-    product: { name: 'Halcyon Tolerance Components', segment: 'enterprise', price: 34_000, churn: 0.02, growth: 0.04, quality: 0.91, intensity: 0.18 },
+    product: { name: 'Halcyon Tolerance Components', segment: 'enterprise', categoryId: 'manufacturing_sensors', price: 34_000, churn: 0.02, growth: 0.04, quality: 0.91, intensity: 0.18, supplyOpen: true },
     anchorMethod: 'earnings_fcf',
   },
   {
@@ -1128,7 +1269,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 69,
     attrition: 0.07,
     compute: [300, 0, 3 * M],
-    product: { name: 'Cinder Cell Lines', segment: 'enterprise', price: 18_000, churn: 0.03, growth: 0.13, quality: 0.74, intensity: 0.3 },
+    product: { name: 'Cinder Cell Lines', segment: 'enterprise', categoryId: 'manufacturing_batteries', price: 18_000, churn: 0.03, growth: 0.13, quality: 0.74, intensity: 0.3, supplyOpen: true },
     anchorMethod: 'asset_cashflow_utilisation',
   },
   {
@@ -1173,7 +1314,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 70,
     attrition: 0.04,
     compute: [0, 0, 1 * M],
-    product: { name: 'Rasan Pressure Assemblies', segment: 'enterprise', price: 96_000, churn: 0.02, growth: 0.03, quality: 0.8, intensity: 0.12 },
+    product: { name: 'Rasan Pressure Assemblies', segment: 'enterprise', categoryId: 'manufacturing_machine_tools', price: 96_000, churn: 0.02, growth: 0.03, quality: 0.8, intensity: 0.12, supplyOpen: true },
     anchorMethod: 'earnings_fcf',
   },
 
@@ -1220,7 +1361,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 73,
     attrition: 0.03,
     compute: [0, 0, 4 * M],
-    product: { name: 'Qanat Firm Supply', segment: 'enterprise', price: 42_000, churn: 0.01, growth: 0.05, quality: 0.89, intensity: 0.1 },
+    product: { name: 'Qanat Firm Supply', segment: 'enterprise', categoryId: 'energy_generation', price: 42_000, churn: 0.01, growth: 0.05, quality: 0.89, intensity: 0.1, supplyOpen: true },
     anchorMethod: 'asset_cashflow_utilisation',
   },
   {
@@ -1265,7 +1406,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 75,
     attrition: 0.03,
     compute: [0, 0, 1 * M],
-    product: { name: 'Volta Contracted Generation', segment: 'enterprise', price: 26_000, churn: 0.01, growth: 0.06, quality: 0.82, intensity: 0.08 },
+    product: { name: 'Volta Contracted Generation', segment: 'enterprise', categoryId: 'energy_generation', price: 26_000, churn: 0.01, growth: 0.06, quality: 0.82, intensity: 0.08, supplyOpen: true },
     anchorMethod: 'asset_cashflow_utilisation',
   },
   {
@@ -1310,7 +1451,19 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 74,
     attrition: 0.04,
     compute: [0, 0, 2 * M],
-    product: { name: 'Grimsby Connection Programmes', segment: 'enterprise', price: 320_000, churn: 0.01, growth: 0.09, quality: 0.78, intensity: 0.1 },
+    product: {
+      name: 'Grimsby Connection Programmes',
+      segment: 'enterprise',
+      categoryId: 'energy_grid_storage',
+      price: 320_000,
+      churn: 0.01,
+      growth: 0.09,
+      quality: 0.78,
+      intensity: 0.1,
+      // A battery maker feeding a grid line — the owner's second north star's
+      // own example, wired concretely: Cinder's cells are required here.
+      supply: [{ inputCategoryId: 'manufacturing_batteries', supplierSlug: 'cinder' }],
+    },
     anchorMethod: 'asset_cashflow_utilisation',
   },
   {
@@ -1355,7 +1508,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 72,
     attrition: 0.05,
     compute: [0, 0, 1 * M],
-    product: { name: 'Suryan Solar Estates', segment: 'enterprise', price: 30_000, churn: 0.01, growth: 0.04, quality: 0.8, intensity: 0.08 },
+    product: { name: 'Suryan Solar Estates', segment: 'enterprise', categoryId: 'energy_generation', price: 30_000, churn: 0.01, growth: 0.04, quality: 0.8, intensity: 0.08, supplyOpen: true },
     anchorMethod: 'asset_cashflow_utilisation',
   },
 
@@ -1402,7 +1555,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 64,
     attrition: 0.08,
     compute: [1_200, 0, 9 * M],
-    product: { name: 'Harbourline Line Haul', segment: 'enterprise', price: 74_000, churn: 0.04, growth: 0.03, quality: 0.83, intensity: 0.22 },
+    product: { name: 'Harbourline Line Haul', segment: 'enterprise', categoryId: 'logistics_freight', price: 74_000, churn: 0.04, growth: 0.03, quality: 0.83, intensity: 0.22, supplyOpen: true },
     anchorMethod: 'earnings_fcf',
   },
   {
@@ -1447,7 +1600,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 55,
     attrition: 0.09,
     compute: [0, 0, 3 * M],
-    product: { name: 'Overland Regional Freight', segment: 'enterprise', price: 46_000, churn: 0.07, growth: 0.01, quality: 0.66, intensity: 0.18 },
+    product: { name: 'Overland Regional Freight', segment: 'enterprise', categoryId: 'logistics_freight', price: 46_000, churn: 0.07, growth: 0.01, quality: 0.66, intensity: 0.18, supplyOpen: true },
     anchorMethod: 'earnings_fcf',
   },
   {
@@ -1492,7 +1645,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 68,
     attrition: 0.07,
     compute: [0, 0, 2 * M],
-    product: { name: 'Ganga Corridor Freight', segment: 'enterprise', price: 21_000, churn: 0.05, growth: 0.08, quality: 0.69, intensity: 0.16 },
+    product: { name: 'Ganga Corridor Freight', segment: 'enterprise', categoryId: 'logistics_freight', price: 21_000, churn: 0.05, growth: 0.08, quality: 0.69, intensity: 0.16, supplyOpen: true },
     anchorMethod: 'revenue_multiple',
   },
   {
@@ -1537,7 +1690,20 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 71,
     attrition: 0.09,
     compute: [0, 0, 2 * M],
-    product: { name: 'Dune Same-Day Network', segment: 'consumer', price: 42, churn: 0.14, growth: 0.19, quality: 0.6, intensity: 0.26 },
+    product: {
+      name: 'Dune Same-Day Network',
+      segment: 'consumer',
+      categoryId: 'logistics_last_mile',
+      price: 42,
+      churn: 0.14,
+      growth: 0.19,
+      quality: 0.6,
+      intensity: 0.26,
+      // Last mile itself cannot supply (canSupply is false for this category
+      // — the freight it rides on is the supplying line), so it only builds
+      // on one: the optional line-haul input, on the cheapest freight seed.
+      supply: [{ inputCategoryId: 'logistics_freight', supplierSlug: 'overland' }],
+    },
     anchorMethod: 'revenue_multiple',
   },
 
@@ -1584,7 +1750,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 67,
     attrition: 0.07,
     compute: [2_000, 6_000, 40 * M],
-    product: { name: 'Lumen Everyday', segment: 'consumer', price: 22, churn: 0.11, growth: 0.05, quality: 0.79, intensity: 0.5 },
+    product: { name: 'Lumen Everyday', segment: 'consumer', categoryId: 'consumer_subscriptions', price: 22, churn: 0.11, growth: 0.05, quality: 0.79, intensity: 0.5 },
     anchorMethod: 'forward_revenue_quality',
   },
   {
@@ -1629,7 +1795,17 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 70,
     attrition: 0.06,
     compute: [0, 0, 8 * M],
-    product: { name: 'Tanto Marketplace', segment: 'consumer', price: 36, churn: 0.09, growth: 0.02, quality: 0.75, intensity: 0.34 },
+    product: {
+      name: 'Tanto Marketplace',
+      segment: 'consumer',
+      categoryId: 'consumer_marketplaces',
+      price: 36,
+      churn: 0.09,
+      growth: 0.02,
+      quality: 0.75,
+      intensity: 0.34,
+      supply: [{ inputCategoryId: 'logistics_freight', supplierSlug: 'harbourline' }],
+    },
     anchorMethod: 'forward_revenue_quality',
   },
   {
@@ -1674,7 +1850,7 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 78,
     attrition: 0.08,
     compute: [0, 0, 6 * M],
-    product: { name: 'Copa Mercado App', segment: 'consumer', price: 14, churn: 0.13, growth: 0.17, quality: 0.71, intensity: 0.38 },
+    product: { name: 'Copa Mercado App', segment: 'consumer', categoryId: 'consumer_apps', price: 14, churn: 0.13, growth: 0.17, quality: 0.71, intensity: 0.38 },
     anchorMethod: 'revenue_multiple',
   },
   {
@@ -1719,7 +1895,17 @@ export const V2_COMPANY_SEEDS: readonly V2CompanySeed[] = [
     morale: 76,
     attrition: 0.08,
     compute: [0, 0, 4 * M],
-    product: { name: 'Vasant Direct Store', segment: 'consumer', price: 9, churn: 0.15, growth: 0.15, quality: 0.68, intensity: 0.32 },
+    product: {
+      name: 'Vasant Direct Store',
+      segment: 'consumer',
+      categoryId: 'consumer_marketplaces',
+      price: 9,
+      churn: 0.15,
+      growth: 0.15,
+      quality: 0.68,
+      intensity: 0.32,
+      supply: [{ inputCategoryId: 'logistics_freight', supplierSlug: 'ganga' }],
+    },
     anchorMethod: 'revenue_multiple',
   },
 ];

@@ -16,7 +16,7 @@
  * `session.researchProjects` are never touched by this screen.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
 import { SECTORS, quarterLabel } from '@frontier/contracts';
 import { heldComputeUnits, researchEnvelopeUsd, runningForecast, unmetDependencies } from '@frontier/simulation';
@@ -56,9 +56,10 @@ import {
   type NodeStateKind,
 } from '@/components/screens/research/nodeState';
 import {
+  takePendingResearchNode,
+  useActiveCompany,
   useGameActions,
   useOutcome,
-  usePlayerCompany,
   usePlayerView,
   useQueuedActions,
   useSession,
@@ -84,7 +85,7 @@ function numberFrom(value: unknown): number | null {
 export default function ResearchPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const outcome = useOutcome();
   const queuedEntries = useQueuedActions();
   const { queueAction, validateIntent } = useGameActions();
@@ -97,6 +98,15 @@ export default function ResearchPage(): React.JSX.Element {
   const [budgetResult, setBudgetResult] = useState<ReturnType<typeof validateIntent> | null>(null);
   const [trainingSplit, setTrainingSplit] = useState(company.compute.trainingAllocation);
   const [splitResult, setSplitResult] = useState<ReturnType<typeof validateIntent> | null>(null);
+
+  // A locked line in the Launch flow hands its node id off through
+  // sessionStorage rather than a query param — see deepLink.ts — taken once
+  // on mount so the drawer opens on it without a remount reopening it again.
+  useEffect(() => {
+    const pending = takePendingResearchNode();
+    if (pending !== null) setSelectedId(pending);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const graph = view.techGraph;
   const queued = useMemo(() => queuedEntries.map((entry) => entry.action), [queuedEntries]);

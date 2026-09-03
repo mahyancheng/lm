@@ -97,8 +97,10 @@ import {
   TAX_RATE,
 } from './balance';
 import { enterAdministration, isWoundUp, resolveDistress } from './distress';
+import { categoryOf } from './categories';
 import { closeEliminatedSeats, resolveMarketEntry, type AdministrationRow } from './entrants';
 import { counterpartyRevenueByCompany } from './counterparty';
+import { openMarketSupplyCostUsd, resolveSupplyLedger } from './supply';
 import { negativeCashQuarters, overdraftChargeUsd } from './solvency';
 import { appendFinancialQuarter } from './history';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
@@ -327,6 +329,43 @@ export function resolveFinancials(
   // would land on half the sellers and miss the rest. Empty in world version 1,
   // which has no counterparties.
   const counterparty = counterpartyRevenueByCompany(draft);
+  // The supply-chain ledger, computed once for the whole quarter for the same
+  // reason: it is keyed by seller, and a per-company loop would otherwise
+  // reach half its sellers before their buyers. Empty in world version 1.
+  const supplyLedger = multiSector ? resolveSupplyLedger(draft) : [];
+  const supplyRevenue = new Map<string, number>();
+  const supplyCostByProduct = new Map<string, number>();
+  for (const entry of supplyLedger) {
+    if (entry.costUsd <= 0) continue;
+    supplyRevenue.set(entry.supplierCompany.id, money((supplyRevenue.get(entry.supplierCompany.id) ?? 0) + entry.costUsd));
+    const productKey = `${entry.buyerCompany.id}|${entry.buyerProduct.id}`;
+    supplyCostByProduct.set(productKey, money((supplyCostByProduct.get(productKey) ?? 0) + entry.costUsd));
+    if (entry.capacityShort) {
+      const eventId = emitEvent(
+        draft,
+        ctx,
+        'information_revealed',
+        entry.buyerCompany.id,
+        entry.supplierCompany.id,
+        {
+          kind: 'supply_capacity_short',
+          buyerProductId: entry.buyerProduct.id,
+          supplierProductId: entry.supplierProduct.id,
+          unitsRequested: Math.round(entry.unitsRequested),
+          unitsFilled: Math.round(entry.unitsFilled),
+        },
+        'company',
+      );
+      ctx.log({
+        phase: 'financial_resolution',
+        text: `${entry.supplierCompany.name} could fill ${Math.round(entry.unitsFilled)} of ${Math.round(entry.unitsRequested)} units of ${entry.buyerCompany.name}'s draw on ${entry.supplierProduct.name}; the rest was not on offer this quarter.`,
+        deltaLabel: `${Math.round(entry.unitsFilled)}/${Math.round(entry.unitsRequested)}`,
+        refEventIds: [eventId],
+        tone: 'warning',
+        subjectId: entry.buyerCompany.id,
+      });
+    }
+  }
   const logistics = multiSector ? regionLogistics(draft) : null;
   const accords = activeAccords(draft);
   const priceStacks: CompanyModifierStack[] = [];
@@ -347,11 +386,21 @@ export function resolveFinancials(
     const revenueBySegment = new Map<ProductSegment, number>();
     let productRevenue = 0;
     let supportCost = 0;
+    let supplyCost = 0;
     for (const product of activeProducts(company)) {
       const revenue = product.activeCustomers * product.pricePerSeat;
       productRevenue += revenue;
-      supportCost += revenue * SEGMENT_SUPPORT_COST_SHARE[product.segment];
+      // World 1: category is never resolved here (multiSector gates it), so
+      // this is exactly the original SEGMENT_SUPPORT_COST_SHARE lookup. World
+      // 2: a fabs line and a subscription app both selling into "enterprise"
+      // no longer share one support-cost assumption.
+      const supportCostShare = multiSector ? categoryOf(company, product).supportCostShare : SEGMENT_SUPPORT_COST_SHARE[product.segment];
+      supportCost += revenue * supportCostShare;
       revenueBySegment.set(product.segment, (revenueBySegment.get(product.segment) ?? 0) + revenue);
+      // What this product owes its own suppliers this quarter: every named,
+      // capacity-rationed draw from the ledger above, plus the open-market
+      // share of any input nobody named a supplier for.
+      if (multiSector) supplyCost += (supplyCostByProduct.get(`${company.id}|${product.id}`) ?? 0) + openMarketSupplyCostUsd(draft, company, product);
     }
     const contractRevenue = contractRevenueUsd(draft, ctx, company.id);
     if (contractRevenue > 0) {
@@ -366,7 +415,12 @@ export function resolveFinancials(
     // the same dollar arriving. It is recognised at the seller's own realised
     // margin, taken from the quarter it last filed, so a thin-margin operator
     // does not book infrastructure revenue as pure profit.
-    const interCompanyRevenue = counterparty.get(company.id) ?? 0;
+    // The supply-chain leg reads the same way: a buyer's spend on a named
+    // product-category supplier is that supplier's revenue in the same
+    // quarter, recognised at the supplier's own realised margin — one
+    // intercompany figure, whether it came from renting compute or from
+    // building on somebody else's published API.
+    const interCompanyRevenue = (counterparty.get(company.id) ?? 0) + (supplyRevenue.get(company.id) ?? 0);
     const interCompanyCogs = interCompanyRevenue * (1 - counterpartyMarginOf(company));
 
     /* --- the seller side of the goods chain -------------------------------- */
@@ -404,7 +458,7 @@ export function resolveFinancials(
     // would invent property, so it is excluded and the cash-flow split below
     // continues to subtract exactly the depreciation that was booked.
     const depreciationInCogs = depreciation * compute.servingShare;
-    const cashCogsBeforeSector = Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance;
+    const cashCogsBeforeSector = Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance + supplyCost;
     const sustainingCapital = sustainingCapitalUsd(sector, revenue);
     const sectorCostAdjustment = (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapital;
     // The Rockefeller squeeze: a group that dominates a region's freight charges
@@ -413,7 +467,7 @@ export function resolveFinancials(
     // scaling depreciation would invent property.
     const tollPct = logistics === null ? 0 : tollPaidPct(draft, company, logistics);
     const tollAdjustment = (tollPct / 100) * cashCogsBeforeSector;
-    const cogs = servingCompute + supportCost + compliance + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
+    const cogs = servingCompute + supportCost + compliance + supplyCost + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
 
     // Payroll and marketing were staged by the talent and product phases. The
     // fallbacks below only bite when this phase is run in isolation.
@@ -470,7 +524,12 @@ export function resolveFinancials(
     // plant and equipment rises by the same figure, so equity does not move and
     // the double-entry gate below sees a matched pair.
     const purchases = company.compute.pendingAcceleratorPurchases ?? [];
-    const capex = money(purchases.reduce((total, purchase) => total + purchase.totalUsd, 0));
+    // Plant, fleet and grid: staged by `resolveCapacityOrders` in the product
+    // phase, settled here on exactly the same contract. Undefined on every
+    // world-1 company forever, since invest_capacity is refused there.
+    const capacityInvestments = company.capacity?.pendingInvestments ?? [];
+    const capacityCapexUsd = money(capacityInvestments.reduce((total, investment) => total + investment.amountUsd, 0));
+    const capex = money(purchases.reduce((total, purchase) => total + purchase.totalUsd, 0) + capacityCapexUsd);
     const cashOut = cogsCashPaid + payroll + marketing + rdCash + interestExpense + tax + debtRepayment + capex;
     const unfloored = openingCash + collections - cashOut;
     // World 1 floors cash at zero and finances the gap through its suppliers.
@@ -487,6 +546,20 @@ export function resolveFinancials(
     sheet.assets.receivables = money(closingReceivables);
     sheet.assets.ppe = money(Math.max(0, sheet.assets.ppe - depreciation) + capex);
     if (purchases.length > 0) company.compute.pendingAcceleratorPurchases = [];
+    // Depreciate the capacity buckets at the same rate ppe as a whole
+    // depreciates at, then land this quarter's investments — the same
+    // "decay then add" `sheet.assets.ppe` just did, kept as separate buckets
+    // only so `capacityUsd` can read one kind's balance without walking the
+    // ledger. A company that has never invested never grows this key.
+    if (company.capacity !== undefined) {
+      const decay = 1 - PPE_DEPRECIATION_PER_QUARTER;
+      const investedByKind = { plant: 0, fleet: 0, grid: 0 } as Record<'plant' | 'fleet' | 'grid', number>;
+      for (const investment of capacityInvestments) investedByKind[investment.kind] += investment.amountUsd;
+      company.capacity.plantUsd = money(Math.max(0, company.capacity.plantUsd * decay) + investedByKind.plant);
+      company.capacity.fleetUsd = money(Math.max(0, company.capacity.fleetUsd * decay) + investedByKind.fleet);
+      company.capacity.gridUsd = money(Math.max(0, company.capacity.gridUsd * decay) + investedByKind.grid);
+      if (capacityInvestments.length > 0) company.capacity.pendingInvestments = [];
+    }
     sheet.liabilities.payables = money(closingPayables);
     sheet.liabilities.deferredRevenue = money(Math.max(0, openingDeferred - deferredRelease));
     sheet.liabilities.debt = money(Math.max(0, sheet.liabilities.debt - debtRepayment));

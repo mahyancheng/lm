@@ -20,8 +20,9 @@
  * Products, People and Capital.
  */
 
-import type { Company } from '@frontier/contracts';
+import type { Company, SessionState } from '@frontier/contracts';
 import { REGION_INDEX_BASELINE, SECTOR_META } from '@frontier/contracts';
+import { dependenceOn, isMultiSectorWorld } from '@frontier/simulation';
 import { formatCount, formatPct } from '@frontier/shared';
 import {
   EmptyState,
@@ -39,8 +40,36 @@ import {
 } from '@/components/ui';
 
 export interface SectorPanelProps {
+  readonly session: SessionState;
   readonly company: Company;
   readonly className?: string;
+}
+
+/**
+ * Real, named dependence — distinct from the sector-level graph above it.
+ * Every supplier a product's `supply` array actually names, deduplicated,
+ * with `dependenceOn` (the share of this company's own revenue riding on that
+ * one supplier across every line) run once per name and sorted to the three
+ * that matter most. World 1 has no supply chain, so this is always empty
+ * there.
+ */
+function topDependencies(session: SessionState, company: Company): readonly { readonly supplierCompanyId: string; readonly name: string; readonly pct: number }[] {
+  if (!isMultiSectorWorld(session)) return [];
+  const supplierIds = new Set<string>();
+  for (const product of company.products) {
+    for (const line of product.supply ?? []) {
+      if (line.supplierCompanyId !== null) supplierIds.add(line.supplierCompanyId);
+    }
+  }
+  return [...supplierIds]
+    .map((id) => ({
+      supplierCompanyId: id,
+      name: session.companies.find((entry) => entry.id === id)?.name ?? id,
+      pct: dependenceOn(session, company, id),
+    }))
+    .filter((row) => row.pct > 0)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 3);
 }
 
 /** One half of the supply graph, or a plain sentence when that half is empty. */
@@ -69,11 +98,12 @@ function SupplyRow({
   );
 }
 
-export function SectorPanel({ company, className }: SectorPanelProps): React.JSX.Element {
+export function SectorPanel({ session, company, className }: SectorPanelProps): React.JSX.Element {
   const sector = sectorOf(company);
   const region = regionOf(company);
   const meta = SECTOR_META[sector];
   const readings = regionReadings(region, sector);
+  const dependencies = topDependencies(session, company);
 
   return (
     <Panel
@@ -108,6 +138,19 @@ export function SectorPanel({ company, className }: SectorPanelProps): React.JSX
           A shortage in a sector you buy from cuts what you can actually deliver; a squeeze in a sector you sell to arrives
           as demand that never turns up. Surplus upstream buys nothing extra.
         </p>
+
+        {dependencies.length === 0 ? null : (
+          <div className="mt-3">
+            <div className="label-caps-faint">Named dependence</div>
+            <ul className="mt-1.5 space-y-1">
+              {dependencies.map((row) => (
+                <li key={row.supplierCompanyId} className="text-[11.5px] leading-relaxed text-ink-dim">
+                  <span className="figure font-semibold text-ink">{formatPct(row.pct)}</span> of revenue runs on {row.name}&apos;s line.
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* --- the sector's own economics -------------------------------------- */}

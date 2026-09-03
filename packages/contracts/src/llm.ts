@@ -141,12 +141,34 @@ export const CosFinancesSchema = z
   .describe('What the company is worth, what it earns and what it is spending, with the filed statements behind it.');
 export type CosFinances = z.infer<typeof CosFinancesSchema>;
 
+/**
+ * STAGE 5 — the group, consolidated: every company this seat directs, not
+ * only the one the dossier is otherwise built for. `companyCount` is 1 for a
+ * seat that controls nothing beyond its founding company (world 1 always,
+ * and most of world 2), which is how a required, non-optional field states
+ * "there is no group" rather than omitting itself.
+ */
+export const CosGroupSchema = z
+  .object({
+    companyCount: z.number().int().min(1).describe('How many companies this seat directs, founding company included. 1 means there is nothing to consolidate.'),
+    revenueUsd: z.number().describe('Consolidated revenue, last filed quarter, summed across every controlled company.'),
+    netIncomeUsd: z.number().describe('Consolidated net income, last filed quarter.'),
+    cashUsd: z.number().describe('Consolidated cash on hand right now.'),
+    debtUsd: z.number().describe('Consolidated debt outstanding.'),
+    headcount: z.number().int().min(0).describe('Combined headcount across every controlled company.'),
+    marketValueUsd: z.number().min(0).describe('Consolidated enterprise value: the founding company plus its ownership share of every subsidiary.'),
+  })
+  .describe('The group\'s own consolidated accounts, from groupStatementOf. Ordinary sales between companies in the group are real, priced transactions and stay in these numbers.');
+export type CosGroup = z.infer<typeof CosGroupSchema>;
+
 export const CosProductLineSchema = z
   .object({
     productId: z.string().min(1),
     name: z.string().min(1).max(80),
     segment: ProductSegmentSchema,
-    pricePerSeatUsd: z.number().describe('Current list price per seat per quarter.'),
+    categoryId: z.string().min(1).describe('The industry line this product is (PRODUCT_CATEGORIES), from categoryOf — never absent, even for a world-version-1 product.'),
+    unitLabel: z.string().min(1).describe('What one unit of this line is, e.g. "seat", "1M tokens", "MWh" — the category\'s own unitLabel.'),
+    pricePerSeatUsd: z.number().describe('Current list price per unit per quarter.'),
     activeCustomers: z.number().int().min(0),
     grossMarginPct: unitInterval('Gross margin on this line.'),
     churnQuarterly: unitInterval('Fraction of customers lost last quarter.'),
@@ -429,6 +451,7 @@ export const ChiefOfStaffDossierSchema = z
     quarterLabel: z.string().min(1).max(20).describe('Human label for the open quarter, e.g. "2031 Q2".'),
     posture: CompanyPostureSchema,
     finances: CosFinancesSchema,
+    group: CosGroupSchema,
     products: CosProductsSchema,
     people: CosPeopleSchema,
     governance: CosGovernanceSchema,
@@ -490,6 +513,10 @@ export const LOOKUP_KINDS = [
   'government_programmes',
   'hiring_market',
   'own_position',
+  // Appended for the product screens (stage 3) — enum growth stays at the end.
+  'launchable_lines',
+  'suppliers',
+  'customers',
 ] as const;
 export type LookupKind = (typeof LOOKUP_KINDS)[number];
 
@@ -536,6 +563,29 @@ export const LookupRequestSchema = z
     z
       .object({ kind: z.literal('own_position') })
       .describe('Cash, runway, burn, the solvency clock and the last four filed quarters.'),
+
+    z
+      .object({ kind: z.literal('launchable_lines') })
+      .describe('Product lines in this company\'s own industry: which are open to launch right now, and which are waiting on a Frontier Map node.'),
+
+    z
+      .object({
+        kind: z.literal('suppliers'),
+        inputCategoryId: z.string().min(1).describe('The upstream product category (PRODUCT_CATEGORIES) to find a supplier for.'),
+        productId: z
+          .string()
+          .min(1)
+          .nullable()
+          .describe('Our own product this input feeds, so the row\'s action can name it directly, or null to browse without one.'),
+      })
+      .describe('Companies whose published terms would sell us this input right now, best quality per dollar first.'),
+
+    z
+      .object({
+        kind: z.literal('customers'),
+        productId: z.string().min(1).describe('Our own product, published as a supply line, to find who is building on it.'),
+      })
+      .describe('Companies currently building on one of our own published lines, and what that is worth to us.'),
   ])
   .describe('One question the Chief of Staff wants answered from canonical state before it replies.');
 export type LookupRequest = z.infer<typeof LookupRequestSchema>;
@@ -632,6 +682,45 @@ export const StatementRowSchema = z
   .describe('One filed quarter, as the company filed it.');
 export type StatementRow = z.infer<typeof StatementRowSchema>;
 
+export const LaunchableLineRowSchema = z
+  .object({
+    categoryId: z.string().min(1).describe('Id into PRODUCT_CATEGORIES.'),
+    label: lookupText('The line\'s name, e.g. "Frontier models / LLM".'),
+    sectorId: lookupText('The sector this line belongs to.'),
+    unitLabel: lookupText('What one unit of this line is, e.g. "seat", "1M tokens", "MWh".'),
+    referencePriceUsd: usd('Reference price per unit per quarter, before this company has set one of its own.'),
+    locked: z.boolean().describe('True when a Frontier Map node stands between this company and this line.'),
+    missingNodeTitles: z.array(lookupText('A node title still missing.')).max(4),
+    intent: ActionIntentSchema.nullable().describe('A launch_product intent the validator would accept into this line at its reference price, or null while locked.'),
+  })
+  .describe('One product line this company could consider: open now, or gated on research.');
+export type LaunchableLineRow = z.infer<typeof LaunchableLineRowSchema>;
+
+export const SupplierOfferRowSchema = z
+  .object({
+    companyId: z.string().min(1).describe('The supplier. Name it verbatim in the action.'),
+    name: lookupText('The supplier\'s name.'),
+    productId: z.string().min(1).describe('The specific supplying product.'),
+    productName: lookupText('The supplying product\'s name.'),
+    pricePerUnitUsd: usd('Its published price per unit.'),
+    qualityScorePct: intCount('Its quality out of 100.'),
+    isDirectRival: z.boolean().describe('True when we already sell into the same line ourselves.'),
+    intent: ActionIntentSchema.nullable().describe('The choose_supplier intent that would build the named product on this one, or null when no product was named.'),
+  })
+  .describe('One company that would currently sell us this input, best quality per dollar first.');
+export type SupplierOfferRow = z.infer<typeof SupplierOfferRowSchema>;
+
+export const SupplyCustomerRowSchema = z
+  .object({
+    buyerCompanyId: z.string().min(1),
+    buyerName: lookupText('The buyer\'s name.'),
+    buyerProductName: lookupText('The buyer\'s product built on us.'),
+    unitsFilled: intCount('Units it drew from us this quarter.'),
+    revenueUsd: usd('What it paid us this quarter.'),
+  })
+  .describe('One company currently building on our published line.');
+export type SupplyCustomerRow = z.infer<typeof SupplyCustomerRowSchema>;
+
 /* --- results -------------------------------------------------------------- */
 
 export const LookupResultSchema = z
@@ -711,6 +800,32 @@ export const LookupResultSchema = z
         statements: z.array(StatementRowSchema).max(4),
       })
       .describe('The company\'s own position, from the filed statements.'),
+
+    z
+      .object({
+        kind: z.literal('launchable_lines'),
+        summary: lookupText('One sentence stating the finding.'),
+        rows: z.array(LaunchableLineRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Product lines in this company\'s own industry, open now or gated on research.'),
+
+    z
+      .object({
+        kind: z.literal('suppliers'),
+        summary: lookupText('One sentence stating the finding.'),
+        inputCategoryId: z.string().min(1),
+        rows: z.array(SupplierOfferRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Every company whose published terms would sell us this input right now.'),
+
+    z
+      .object({
+        kind: z.literal('customers'),
+        summary: lookupText('One sentence stating the finding.'),
+        productId: z.string().min(1),
+        rows: z.array(SupplyCustomerRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Every company currently building on one of our own published lines.'),
   ])
   .describe('The answer to one lookup, read off canonical state by the engine. Every figure is a whole number of dollars or units.');
 export type LookupResult = z.infer<typeof LookupResultSchema>;

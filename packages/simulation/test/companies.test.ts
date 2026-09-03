@@ -938,10 +938,12 @@ describe('financial resolution', () => {
             type: 'launch_product',
             name: 'Nexus Studio',
             segment: 'consumer',
+            categoryId: null,
             pricePerSeatUsd: 90,
             computeIntensity: 0.4,
             launchMarketingUsd: 60_000_000,
             targetQuality: 0.8,
+            supply: [],
           }),
         );
       }

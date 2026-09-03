@@ -1,7 +1,7 @@
 /**
  * @frontier/simulation — every action type has to *do* something.
  *
- * The engine accepts thirty-seven kinds of instruction. Accepting one, writing
+ * The engine accepts forty-four kinds of instruction. Accepting one, writing
  * an `action_accepted` row for it and then having no phase read it is worse than
  * refusing it: the player is told their decision was taken, is charged nothing,
  * and nothing about the world differs. Five action types were in exactly that
@@ -235,10 +235,12 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
         type,
         name: 'Ventures Reviewer',
         segment: 'enterprise',
+        categoryId: null,
         pricePerSeatUsd: 180,
         computeIntensity: 0.3,
         launchMarketingUsd: 400_000,
         targetQuality: 0.6,
+        supply: [],
       };
     case 'sunset_product':
       return { type, productId: 'prd_player_assistant', windDownQuarters: 4 };
@@ -265,6 +267,24 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
       // intent is expected to be refused rather than executed. It is here so the
       // table stays exhaustive; the world-2 behaviour is tested in sellers.test.ts.
       return { type, units: 10, maxPricePerUnitUsd: 100_000, sellerCompanyId: null };
+    case 'invest_capacity':
+      // World 1 has no capacity kind but compute, so this is refused there for
+      // the same reason buy_accelerators is; world-2 behaviour is tested in
+      // capacityInvestment.test.ts.
+      return { type, kind: 'plant', amountUsd: 5_000_000 };
+    case 'set_supply_terms':
+      // World 1 has no product categories and no canSupply lines, so this is
+      // refused there for the same reason buy_accelerators is; world-2
+      // behaviour is tested in supplyChain.test.ts.
+      return {
+        type,
+        productId: 'prd_player_assistant',
+        terms: { openToAll: true, pricePerUnitUsd: 100, exclusiveCustomerIds: [], blockedCustomerIds: [] },
+      };
+    case 'choose_supplier':
+      // World 1 has no product categories, so this is refused there for the
+      // same reason; world-2 behaviour is tested in supplyChain.test.ts.
+      return { type, productId: 'prd_player_assistant', inputCategoryId: 'ai_frontier_models', supplierCompanyId: null, supplierProductId: null };
     case 'raise_round':
       return { type, stage: 'series_a', targetAmountUsd: 25_000_000, maxDilutionPct: 0.2 };
     case 'issue_debt':
@@ -381,6 +401,17 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
         targetCharacterId: DEMO_CHARACTERS.nadia,
         purpose: 'To talk about the sovereign programme before the next round opens.',
       };
+    case 'transfer_between_group':
+      // World 1 has no subsidiary concept at all — every company answers to
+      // at most one controller and a seat only ever has one — so this is
+      // refused there for the same reason buy_accelerators is; world-2
+      // behaviour is tested in groupControl.test.ts.
+      return { type, fromCompanyId: DEMO_COMPANIES.player, toCompanyId: DEMO_COMPANIES.meridian, cashUsd: 1_000_000, acceleratorUnits: null };
+    case 'merge_subsidiary':
+      // World 1 has no live subsidiary to merge — an acquisition there
+      // absorbs outright already — so this is refused there for the same
+      // reason; world-2 behaviour is tested in groupControl.test.ts.
+      return { type, subsidiaryCompanyId: DEMO_COMPANIES.meridian };
     default: {
       const exhaustive: never = type;
       throw new Error(`no coverage intent for ${String(exhaustive)}`);
@@ -432,7 +463,14 @@ function substantiveRows(events: readonly SimEvent[]): string[] {
  * than as a skip inside the loop so the exclusion is one line to audit and the
  * assertion below fails the moment it grows silently.
  */
-const WORLD_2_ONLY_ACTIONS = new Set<ActionType>(['buy_accelerators']);
+const WORLD_2_ONLY_ACTIONS = new Set<ActionType>([
+  'buy_accelerators',
+  'invest_capacity',
+  'set_supply_terms',
+  'choose_supplier',
+  'transfer_between_group',
+  'merge_subsidiary',
+]);
 
 describe('every accepted action changes something', () => {
   const engine = createDefaultEngine();
@@ -445,8 +483,17 @@ describe('every accepted action changes something', () => {
   });
 
   it('covers every action type in the contract', () => {
-    expect(ACTION_TYPES.length).toBe(41);
-    expect([...WORLD_2_ONLY_ACTIONS]).toEqual(['buy_accelerators']);
+    // 44 was pinned before transfer_between_group and merge_subsidiary
+    // (group control, STAGE 4) were appended.
+    expect(ACTION_TYPES.length).toBe(46);
+    expect([...WORLD_2_ONLY_ACTIONS]).toEqual([
+      'buy_accelerators',
+      'invest_capacity',
+      'set_supply_terms',
+      'choose_supplier',
+      'transfer_between_group',
+      'merge_subsidiary',
+    ]);
   });
 
   it('refuses the world-2-only actions here rather than silently ignoring them', () => {

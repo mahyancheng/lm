@@ -57,6 +57,7 @@ import { companyCapitalDepthFactor } from '../economy/regions';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { maxTollForCompany } from '../economy/prices';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
+import { emitPartialFill } from '../companies/partialFill';
 import { pendingOfType } from './actions';
 import { routeDeals } from './routing';
 
@@ -337,6 +338,12 @@ export function resolveCapital(draft: SessionState, ctx: ResolverContext): void 
   // pay a dividend with money it needs for a deal it has already agreed.
   resolveDividends(draft, ctx);
   resolveAcquisitions(draft, ctx);
+  // After acquisitions, so a subsidiary created this quarter can immediately
+  // receive a group transfer the same quarter, and before the merge, so a
+  // founder cannot use a same-quarter transfer to move cash out of a
+  // subsidiary in the instant before merging it away.
+  resolveGroupTransfers(draft, ctx);
+  resolveMergeSubsidiary(draft, ctx);
   routeDeals(draft, ctx);
 }
 
@@ -817,20 +824,40 @@ function resolveShareIssues(draft: SessionState, ctx: ResolverContext): void {
     const security = draft.securities.find((s) => s.companyId === company?.id && s.shareClassId === intent.shareClassId) ?? null;
     if (company === null || table === null || shareClass === null || security === null) continue;
 
+    // World 1: the validator already clamped `intent.shares` to the class's
+    // unissued authorisation, so this is always the whole ask there. World 2:
+    // the validator no longer clamps it — the class's headroom is where the
+    // ask actually meets what may be issued, and the shortfall is stated
+    // rather than silently absorbed.
+    const headroom = Math.max(0, shareClass.authorisedShares - shareClass.issuedShares);
+    const shares = isMultiSectorWorld(draft) ? Math.min(intent.shares, headroom) : intent.shares;
+    if (shares < intent.shares) {
+      emitPartialFill(draft, ctx, company.id, {
+        actionType: 'issue_shares',
+        asked: intent.shares,
+        got: shares,
+        unit: 'shares',
+        reason: `Class ${shareClass.label} has ${headroom} shares of unissued authorisation; issuing more of it needs the authorisation raised first.`,
+        phase: 'capital_resolution',
+        targetId: security.id,
+      });
+    }
+    if (shares <= 0) continue;
+
     const market = lastPrice(draft, company);
     const price = Math.max(intent.minPricePerShareUsd, market === null ? intent.minPricePerShareUsd : market * (1 - PRIMARY_ISSUE_DISCOUNT));
-    const proceeds = price * intent.shares;
+    const proceeds = price * shares;
 
     addShares(table, {
       securityId: security.id,
       holderId: makeId('float', security.id),
       holderKind: 'public_float',
-      shares: intent.shares,
+      shares,
       costUsd: proceeds,
       quarter: draft.quarter,
       lockupUntilQuarter: null,
     });
-    setIssued(table, shareClass, shareClass.issuedShares + intent.shares, draft.quarter);
+    setIssued(table, shareClass, shareClass.issuedShares + shares, draft.quarter);
 
     company.financials.cash += proceeds;
     company.balanceSheet.assets.cash += proceeds;
@@ -842,12 +869,12 @@ function resolveShareIssues(draft: SessionState, ctx: ResolverContext): void {
       type: 'shares_issued',
       actorId: company.id,
       targetId: security.id,
-      payload: { shares: intent.shares, pricePerShareUsd: round(price, 4), proceedsUsd: round(proceeds, 2), shareClassId: shareClass.id, reason: 'primary_issue' },
+      payload: { shares, pricePerShareUsd: round(price, 4), proceedsUsd: round(proceeds, 2), shareClassId: shareClass.id, reason: 'primary_issue' },
       visibility: 'public',
     });
     ctx.log({
       phase: 'capital_resolution',
-      text: `${company.name} issued ${intent.shares.toString()} new shares at ${compactUsd(price)}, raising ${compactUsd(proceeds)}.`,
+      text: `${company.name} issued ${shares.toString()} new shares at ${compactUsd(price)}, raising ${compactUsd(proceeds)}.`,
       deltaLabel: `+${compactUsd(proceeds)}`,
       refEventIds: [eventId],
       tone: 'neutral',
@@ -1124,124 +1151,429 @@ function resolveAcquisitions(draft: SessionState, ctx: ResolverContext): void {
       }
     }
 
-    /* --- absorb the target ------------------------------------------------ */
-    acquirer.balanceSheet.assets.cash += target.balanceSheet.assets.cash;
-    acquirer.balanceSheet.assets.ppe += target.balanceSheet.assets.ppe;
-    acquirer.balanceSheet.assets.investments += target.balanceSheet.assets.investments;
-    acquirer.balanceSheet.assets.receivables += target.balanceSheet.assets.receivables;
-    acquirer.balanceSheet.assets.goodwill += target.balanceSheet.assets.goodwill + goodwill;
-    acquirer.balanceSheet.liabilities.debt += target.balanceSheet.liabilities.debt;
-    acquirer.balanceSheet.liabilities.payables += target.balanceSheet.liabilities.payables;
-    acquirer.balanceSheet.liabilities.deferredRevenue += target.balanceSheet.liabilities.deferredRevenue;
-    // Assets less liabilities moved by netAssets + goodwill - cash paid. With
-    // goodwill floored at zero that is the stock consideration plus any bargain
-    // gain, so equity moves by exactly the same amount and the identity holds on
-    // both sides of net asset value.
-    acquirer.balanceSheet.equity += stockComponent + bargainGain;
-
-    acquirer.financials.cash += target.financials.cash;
-    acquirer.financials.debt += target.financials.debt;
-    acquirer.financials.revenueQuarterly += target.financials.revenueQuarterly;
-    acquirer.financials.deferredRevenue += target.financials.deferredRevenue;
-    acquirer.financials.backlogUsd += target.financials.backlogUsd;
-
-    const totalStaffBefore = headcount(acquirer);
-    acquirer.employees.engineers += target.employees.engineers;
-    acquirer.employees.researchers += target.employees.researchers;
-    acquirer.employees.sales += target.employees.sales;
-    acquirer.employees.ops += target.employees.ops;
-    acquirer.employees.execs += target.employees.execs;
-    const totalStaffAfter = Math.max(1, headcount(acquirer));
-    acquirer.employees.avgComp =
-      (acquirer.employees.avgComp * totalStaffBefore + target.employees.avgComp * headcount(target)) / totalStaffAfter;
-    acquirer.employees.attrition = clamp01(acquirer.employees.attrition + ACQUISITION_ATTRITION_PENALTY);
-    acquirer.employees.morale = clamp(acquirer.employees.morale - 4, 0, 100);
-
-    acquirer.compute.ownedAccelerators += target.compute.ownedAccelerators;
-    acquirer.compute.reservedAccelerators += target.compute.reservedAccelerators;
-    acquirer.compute.cloudSpendQuarterly += target.compute.cloudSpendQuarterly;
-    for (const product of target.products) acquirer.products.push({ ...product });
-    for (const [area, strength] of Object.entries(target.techCapabilities)) {
-      const current = acquirer.techCapabilities[area] ?? 0;
-      acquirer.techCapabilities[area] = clamp01(Math.max(current, strength * ACQUISITION_CAPABILITY_RETENTION));
-    }
-
-    // Bounded history: what the antitrust score reads to know this group has
-    // been consolidating. Pruned back to the window every quarter by the metrics
-    // phase, and never written at all in a single-sector world.
+    /* --- what happens to the target ---------------------------------------- */
+    // World 1: absorb outright, exactly as this has always worked — the world
+    // that pins a byte-identical hash never sees the branch below.
+    // World 2: keep the target alive as a subsidiary (STAGE 4). Full
+    // absorption stays available, but only as the explicit later decision
+    // `merge_subsidiary` runs through `absorbTarget` on its own.
+    const info: AcquisitionSettlement = {
+      offerValueUsd: intent.offerValueUsd,
+      cashComponent,
+      stockComponent,
+      sharesIssued,
+      goodwill,
+      bargainGain,
+      netAssets,
+    };
     if (isMultiSectorWorld(draft)) {
-      acquirer.recentAcquisitionQuarters = [...(acquirer.recentAcquisitionQuarters ?? []), draft.quarter].slice(-8);
-      // The durable residue of the ledger row emitted below. A save carries no
-      // `sim_event`s, so without this the portfolio could name a subsidiary
-      // quarters later but never say what it cost.
-      target.acquisition = {
-        acquirerCompanyId: acquirer.id,
-        quarter: draft.quarter,
-        priceUsd: round(intent.offerValueUsd, 2),
-        cashUsd: round(cashComponent, 2),
-        stockUsd: round(stockComponent, 2),
-        goodwillUsd: round(goodwill, 2),
-      };
+      subsidiariseTarget(draft, ctx, acquirer, target, targetTable, info);
+    } else {
+      absorbTarget(draft, ctx, acquirer, target, targetTable, info);
     }
+  }
+}
 
-    /* --- extinguish the target -------------------------------------------- */
-    target.isActive = false;
-    target.parentCompanyId = acquirer.id;
-    target.controllerPlayerId = null;
-    target.financials.cash = 0;
-    target.financials.debt = 0;
-    target.financials.revenueQuarterly = 0;
-    target.financials.deferredRevenue = 0;
-    target.financials.backlogUsd = 0;
-    target.balanceSheet.assets = { cash: 0, ppe: 0, goodwill: 0, investments: 0, receivables: 0 };
-    target.balanceSheet.liabilities = { debt: 0, payables: 0, deferredRevenue: 0 };
-    target.balanceSheet.equity = 0;
-    target.employees = { ...target.employees, engineers: 0, researchers: 0, sales: 0, ops: 0, execs: 0, openRoles: 0 };
-    target.compute = { ...target.compute, ownedAccelerators: 0, reservedAccelerators: 0, cloudSpendQuarterly: 0 };
-    for (const product of target.products) product.isActive = false;
+/** What one acquisition settled — shared between the subsidiary and the absorb path. */
+interface AcquisitionSettlement {
+  readonly offerValueUsd: number;
+  readonly cashComponent: number;
+  readonly stockComponent: number;
+  readonly sharesIssued: number;
+  readonly goodwill: number;
+  readonly bargainGain: number;
+  readonly netAssets: number;
+}
 
-    if (targetTable !== null) {
-      for (const holding of targetTable.holdings) holding.shares = 0;
-      for (const klass of targetTable.shareClasses) setIssued(targetTable, klass, 0, draft.quarter);
-    }
-    for (const project of draft.researchProjects) {
-      if (project.companyId === target.id && (project.status === 'active' || project.status === 'paused')) project.companyId = acquirer.id;
-    }
-    for (const character of draft.characters) {
-      if (character.companyId === target.id) character.companyId = acquirer.id;
-    }
+/**
+ * Fold `target`'s entire balance sheet, staff, compute, products and
+ * capabilities into `acquirer` and extinguish it.
+ *
+ * This is "today's absorb code": the world-1 `acquire_company` path calls it
+ * with the consideration just paid, and world 2's explicit `merge_subsidiary`
+ * calls it later with zero new consideration — the subsidiary was already
+ * paid for when it was created, so only `offerValueUsd` (the stake's cost
+ * basis, for the goodwill/bargain-gain split) carries a value.
+ */
+function absorbTarget(
+  draft: SessionState,
+  ctx: ResolverContext,
+  acquirer: Company,
+  target: Company,
+  targetTable: CapTable | null,
+  info: AcquisitionSettlement,
+): void {
+  const { offerValueUsd, cashComponent, stockComponent, sharesIssued, goodwill, bargainGain, netAssets } = info;
 
-    const eventId = ctx.emit({
-      sessionId: draft.sessionId,
+  acquirer.balanceSheet.assets.cash += target.balanceSheet.assets.cash;
+  acquirer.balanceSheet.assets.ppe += target.balanceSheet.assets.ppe;
+  acquirer.balanceSheet.assets.investments += target.balanceSheet.assets.investments;
+  acquirer.balanceSheet.assets.receivables += target.balanceSheet.assets.receivables;
+  acquirer.balanceSheet.assets.goodwill += target.balanceSheet.assets.goodwill + goodwill;
+  acquirer.balanceSheet.liabilities.debt += target.balanceSheet.liabilities.debt;
+  acquirer.balanceSheet.liabilities.payables += target.balanceSheet.liabilities.payables;
+  acquirer.balanceSheet.liabilities.deferredRevenue += target.balanceSheet.liabilities.deferredRevenue;
+  // Assets less liabilities moved by netAssets + goodwill - cash paid. With
+  // goodwill floored at zero that is the stock consideration plus any bargain
+  // gain, so equity moves by exactly the same amount and the identity holds on
+  // both sides of net asset value.
+  acquirer.balanceSheet.equity += stockComponent + bargainGain;
+
+  acquirer.financials.cash += target.financials.cash;
+  acquirer.financials.debt += target.financials.debt;
+  acquirer.financials.revenueQuarterly += target.financials.revenueQuarterly;
+  acquirer.financials.deferredRevenue += target.financials.deferredRevenue;
+  acquirer.financials.backlogUsd += target.financials.backlogUsd;
+
+  const totalStaffBefore = headcount(acquirer);
+  acquirer.employees.engineers += target.employees.engineers;
+  acquirer.employees.researchers += target.employees.researchers;
+  acquirer.employees.sales += target.employees.sales;
+  acquirer.employees.ops += target.employees.ops;
+  acquirer.employees.execs += target.employees.execs;
+  const totalStaffAfter = Math.max(1, headcount(acquirer));
+  acquirer.employees.avgComp =
+    (acquirer.employees.avgComp * totalStaffBefore + target.employees.avgComp * headcount(target)) / totalStaffAfter;
+  acquirer.employees.attrition = clamp01(acquirer.employees.attrition + ACQUISITION_ATTRITION_PENALTY);
+  acquirer.employees.morale = clamp(acquirer.employees.morale - 4, 0, 100);
+
+  acquirer.compute.ownedAccelerators += target.compute.ownedAccelerators;
+  acquirer.compute.reservedAccelerators += target.compute.reservedAccelerators;
+  acquirer.compute.cloudSpendQuarterly += target.compute.cloudSpendQuarterly;
+  for (const product of target.products) acquirer.products.push({ ...product });
+  for (const [area, strength] of Object.entries(target.techCapabilities)) {
+    const current = acquirer.techCapabilities[area] ?? 0;
+    acquirer.techCapabilities[area] = clamp01(Math.max(current, strength * ACQUISITION_CAPABILITY_RETENTION));
+  }
+
+  // Bounded history: what the antitrust score reads to know this group has
+  // been consolidating. Pruned back to the window every quarter by the metrics
+  // phase, and never written at all in a single-sector world.
+  if (isMultiSectorWorld(draft)) {
+    acquirer.recentAcquisitionQuarters = [...(acquirer.recentAcquisitionQuarters ?? []), draft.quarter].slice(-8);
+    // The durable residue of the ledger row emitted below. A save carries no
+    // `sim_event`s, so without this the portfolio could name a subsidiary
+    // quarters later but never say what it cost.
+    target.acquisition = {
+      acquirerCompanyId: acquirer.id,
       quarter: draft.quarter,
-      type: 'acquisition_completed',
-      actorId: acquirer.id,
-      targetId: target.id,
-      payload: {
-        offerValueUsd: round(intent.offerValueUsd, 2),
-        cashUsd: round(cashComponent, 2),
-        stockUsd: round(stockComponent, 2),
-        sharesIssued,
-        goodwillUsd: round(goodwill, 2),
-        bargainGainUsd: round(bargainGain, 2),
-        netAssetsUsd: round(netAssets, 2),
-      },
-      visibility: 'public',
+      priceUsd: round(offerValueUsd, 2),
+      cashUsd: round(cashComponent, 2),
+      stockUsd: round(stockComponent, 2),
+      goodwillUsd: round(goodwill, 2),
+    };
+  }
+
+  /* --- extinguish the target -------------------------------------------- */
+  target.isActive = false;
+  target.parentCompanyId = acquirer.id;
+  target.controllerPlayerId = null;
+  target.financials.cash = 0;
+  target.financials.debt = 0;
+  target.financials.revenueQuarterly = 0;
+  target.financials.deferredRevenue = 0;
+  target.financials.backlogUsd = 0;
+  target.balanceSheet.assets = { cash: 0, ppe: 0, goodwill: 0, investments: 0, receivables: 0 };
+  target.balanceSheet.liabilities = { debt: 0, payables: 0, deferredRevenue: 0 };
+  target.balanceSheet.equity = 0;
+  target.employees = { ...target.employees, engineers: 0, researchers: 0, sales: 0, ops: 0, execs: 0, openRoles: 0 };
+  target.compute = { ...target.compute, ownedAccelerators: 0, reservedAccelerators: 0, cloudSpendQuarterly: 0 };
+  for (const product of target.products) product.isActive = false;
+
+  if (targetTable !== null) {
+    for (const holding of targetTable.holdings) holding.shares = 0;
+    for (const klass of targetTable.shareClasses) setIssued(targetTable, klass, 0, draft.quarter);
+  }
+  for (const project of draft.researchProjects) {
+    if (project.companyId === target.id && (project.status === 'active' || project.status === 'paused')) project.companyId = acquirer.id;
+  }
+  for (const character of draft.characters) {
+    if (character.companyId === target.id) character.companyId = acquirer.id;
+  }
+
+  const eventId = ctx.emit({
+    sessionId: draft.sessionId,
+    quarter: draft.quarter,
+    type: 'acquisition_completed',
+    actorId: acquirer.id,
+    targetId: target.id,
+    payload: {
+      mode: 'absorbed',
+      offerValueUsd: round(offerValueUsd, 2),
+      cashUsd: round(cashComponent, 2),
+      stockUsd: round(stockComponent, 2),
+      sharesIssued,
+      goodwillUsd: round(goodwill, 2),
+      bargainGainUsd: round(bargainGain, 2),
+      netAssetsUsd: round(netAssets, 2),
+    },
+    visibility: 'public',
+  });
+  ctx.log({
+    phase: 'capital_resolution',
+    text:
+      bargainGain > 0
+        ? `${acquirer.name} acquired ${target.name} for ${compactUsd(offerValueUsd)}, ${compactUsd(
+            bargainGain,
+          )} below the net assets it took on — a bargain purchase, recognised as a gain.`
+        : `${acquirer.name} acquired ${target.name} for ${compactUsd(offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`,
+    deltaLabel: `+${headcount(target)} staff`,
+    refEventIds: [eventId],
+    tone: 'positive',
+    subjectId: acquirer.id,
+  });
+}
+
+/**
+ * World 2's default for `acquire_company`: keep the target alive.
+ *
+ * `acquirer` pays exactly as it would to absorb — the consideration paid to
+ * `target`'s existing holders is unchanged — but instead of merging books,
+ * `target` stays active with its own cash, staff, products, compute, capacity,
+ * board and research: only its cap table and its controller change hands. The
+ * acquirer's balance sheet carries the stake in `assets.investments` at cost,
+ * with any premium over net assets folded into that cost rather than booked
+ * as a separate goodwill asset — the stake, not the underlying business, is
+ * what the acquirer now owns.
+ */
+function subsidiariseTarget(
+  draft: SessionState,
+  ctx: ResolverContext,
+  acquirer: Company,
+  target: Company,
+  targetTable: CapTable | null,
+  info: AcquisitionSettlement,
+): void {
+  const { offerValueUsd, cashComponent, stockComponent, goodwill, bargainGain, netAssets } = info;
+
+  // Cash already left on the consideration step above; investments rise by
+  // the whole price paid, and equity moves only by the stock half — the cash
+  // half is asset-for-asset (cash down, investments up) with no equity change.
+  acquirer.balanceSheet.assets.investments += offerValueUsd;
+  acquirer.balanceSheet.equity += stockComponent;
+
+  // Transfer every outstanding share of target's ordinary equity to the
+  // acquirer: "make an offer for another company" buys out the whole
+  // register, existing float included, the same as the absorb path always
+  // has — the difference here is who ends up holding the shares afterward.
+  const targetSecurity = findSecurity(draft, target.primarySecurityId);
+  const shareClass =
+    targetTable === null || targetSecurity === null
+      ? null
+      : targetTable.shareClasses.find((c) => c.id === targetSecurity.shareClassId) ?? null;
+  if (targetTable !== null && targetSecurity !== null && shareClass !== null) {
+    const issued = shareClass.issuedShares;
+    for (const holding of targetTable.holdings) {
+      if (holding.securityId !== targetSecurity.id) continue;
+      holding.shares = 0;
+      holding.costBasisUsd = 0;
+    }
+    if (issued > 0) {
+      addShares(targetTable, {
+        securityId: targetSecurity.id,
+        holderId: acquirer.id,
+        holderKind: 'company',
+        shares: issued,
+        costUsd: offerValueUsd,
+        quarter: draft.quarter,
+        lockupUntilQuarter: null,
+      });
+    }
+    targetTable.lastUpdatedQuarter = draft.quarter;
+  }
+
+  target.parentCompanyId = acquirer.id;
+  // A player-controlled acquirer now directs the subsidiary directly; an
+  // NPC acquirer's subsidiary is null exactly like the acquirer itself, which
+  // is what makes it eligible for its own archetype/strategist planning —
+  // `resolveControlChanges`' posture sync is what keeps that planning
+  // following the parent's stance rather than developing an independent one.
+  target.controllerPlayerId = acquirer.controllerPlayerId;
+
+  acquirer.recentAcquisitionQuarters = [...(acquirer.recentAcquisitionQuarters ?? []), draft.quarter].slice(-8);
+  target.acquisition = {
+    acquirerCompanyId: acquirer.id,
+    quarter: draft.quarter,
+    priceUsd: round(offerValueUsd, 2),
+    cashUsd: round(cashComponent, 2),
+    stockUsd: round(stockComponent, 2),
+    goodwillUsd: round(goodwill, 2),
+  };
+
+  const eventId = ctx.emit({
+    sessionId: draft.sessionId,
+    quarter: draft.quarter,
+    type: 'acquisition_completed',
+    actorId: acquirer.id,
+    targetId: target.id,
+    payload: {
+      mode: 'subsidiary',
+      offerValueUsd: round(offerValueUsd, 2),
+      cashUsd: round(cashComponent, 2),
+      stockUsd: round(stockComponent, 2),
+      goodwillUsd: round(goodwill, 2),
+      bargainGainUsd: round(bargainGain, 2),
+      netAssetsUsd: round(netAssets, 2),
+      controllerPlayerId: target.controllerPlayerId,
+    },
+    visibility: 'public',
+  });
+  ctx.log({
+    phase: 'capital_resolution',
+    text: `${acquirer.name} took control of ${target.name} for ${compactUsd(offerValueUsd)}. It stays in business as a subsidiary, filing its own accounts.`,
+    deltaLabel: `${compactUsd(offerValueUsd)}`,
+    refEventIds: [eventId],
+    tone: 'positive',
+    subjectId: acquirer.id,
+  });
+}
+
+/* -------------------------------- merge_subsidiary ------------------------------- */
+
+/**
+ * Full absorption of an existing subsidiary — an explicit, later decision, on
+ * the same `absorbTarget` code path a world-1 acquisition has always run.
+ *
+ * The stake was already paid for when the subsidiary was created, so there is
+ * no new consideration: `offerValueUsd` carries the stake's original cost
+ * basis (for the goodwill/bargain-gain split against the subsidiary's
+ * *current* net assets — value it has created or lost since), and the cost
+ * already sitting on the acquirer's `assets.investments` line is removed
+ * first so `absorbTarget` does not add the subsidiary's real net assets on
+ * top of a stake still carried at cost.
+ */
+function resolveMergeSubsidiary(draft: SessionState, ctx: ResolverContext): void {
+  for (const { action, intent } of pendingOfType(draft, 'merge_subsidiary')) {
+    const acquirer = findCompany(draft, action.actorCompanyId);
+    const target = findCompany(draft, intent.subsidiaryCompanyId);
+    if (acquirer === null || target === null || !target.isActive || target.parentCompanyId !== acquirer.id) continue;
+
+    const targetTable = findCapTable(draft, target.id);
+    const stakeCostUsd = target.acquisition?.priceUsd ?? 0;
+    acquirer.balanceSheet.assets.investments = Math.max(0, acquirer.balanceSheet.assets.investments - stakeCostUsd);
+
+    const targetAssets =
+      target.balanceSheet.assets.cash +
+      target.balanceSheet.assets.ppe +
+      target.balanceSheet.assets.goodwill +
+      target.balanceSheet.assets.investments +
+      target.balanceSheet.assets.receivables;
+    const targetLiabilities =
+      target.balanceSheet.liabilities.debt + target.balanceSheet.liabilities.payables + target.balanceSheet.liabilities.deferredRevenue;
+    const netAssets = targetAssets - targetLiabilities;
+    const goodwill = Math.max(0, stakeCostUsd - netAssets);
+    const bargainGain = Math.max(0, netAssets - stakeCostUsd);
+
+    absorbTarget(draft, ctx, acquirer, target, targetTable, {
+      offerValueUsd: stakeCostUsd,
+      cashComponent: 0,
+      stockComponent: 0,
+      sharesIssued: 0,
+      goodwill,
+      bargainGain,
+      netAssets,
+    });
+
+    const eventId = emitControlEvent(draft, ctx, 'subsidiary_merged', acquirer.id, target.id, {
+      subsidiaryCompanyId: target.id,
+      stakeCostUsd: round(stakeCostUsd, 2),
     });
     ctx.log({
       phase: 'capital_resolution',
-      text:
-        bargainGain > 0
-          ? `${acquirer.name} acquired ${target.name} for ${compactUsd(intent.offerValueUsd)}, ${compactUsd(
-              bargainGain,
-            )} below the net assets it took on — a bargain purchase, recognised as a gain.`
-          : `${acquirer.name} acquired ${target.name} for ${compactUsd(intent.offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`,
-      deltaLabel: `+${headcount(target)} staff`,
+      text: `${acquirer.name} fully absorbed ${target.name}: it stops filing its own accounts.`,
+      deltaLabel: null,
       refEventIds: [eventId],
-      tone: 'positive',
+      tone: 'neutral',
       subjectId: acquirer.id,
     });
   }
+}
+
+/* --------------------------- transfer_between_group ------------------------------ */
+
+/**
+ * Move cash or owned accelerators between two companies one controller
+ * directs. The validator has already checked both ends answer to the same
+ * seat; this only ever runs on a pair that passed that check, but the guard
+ * stays here too because a clamp between validation and resolution (a cash
+ * shortfall noted rather than enforced, in world 2) can still leave less to
+ * move than was asked for.
+ */
+function resolveGroupTransfers(draft: SessionState, ctx: ResolverContext): void {
+  for (const { action, intent } of pendingOfType(draft, 'transfer_between_group')) {
+    const from = findCompany(draft, intent.fromCompanyId);
+    const to = findCompany(draft, intent.toCompanyId);
+    if (from === null || to === null || !from.isActive || !to.isActive || from.id === to.id) continue;
+    if (from.id !== action.actorCompanyId) continue;
+
+    if (intent.cashUsd !== null) {
+      const amount = Math.max(0, Math.min(intent.cashUsd, from.financials.cash));
+      if (amount <= 0) continue;
+      // Two separate companies, not two accounts of one: cash leaving `from`
+      // is not offset by a receivable or by anything else on its own sheet,
+      // so it moves equity down exactly the way a dividend payment does —
+      // and up on `to` the same way a dividend receipt does.
+      from.financials.cash = round(from.financials.cash - amount, 2);
+      from.balanceSheet.assets.cash = round(from.balanceSheet.assets.cash - amount, 2);
+      from.balanceSheet.equity = round(from.balanceSheet.equity - amount, 2);
+      to.financials.cash = round(to.financials.cash + amount, 2);
+      to.balanceSheet.assets.cash = round(to.balanceSheet.assets.cash + amount, 2);
+      to.balanceSheet.equity = round(to.balanceSheet.equity + amount, 2);
+
+      const eventId = emitControlEvent(draft, ctx, 'group_transfer_executed', from.id, to.id, {
+        kind: 'cash',
+        amountUsd: round(amount, 2),
+      });
+      ctx.log({
+        phase: 'capital_resolution',
+        text: `${from.name} moved ${compactUsd(amount)} to ${to.name} within the group.`,
+        deltaLabel: `-${compactUsd(amount)}`,
+        refEventIds: [eventId],
+        tone: 'neutral',
+        subjectId: from.id,
+      });
+      continue;
+    }
+
+    if (intent.acceleratorUnits !== null) {
+      const units = Math.max(0, Math.min(intent.acceleratorUnits, from.compute.ownedAccelerators));
+      if (units <= 0) continue;
+      from.compute.ownedAccelerators -= units;
+      to.compute.ownedAccelerators += units;
+
+      const eventId = emitControlEvent(draft, ctx, 'group_transfer_executed', from.id, to.id, {
+        kind: 'accelerators',
+        units,
+      });
+      ctx.log({
+        phase: 'capital_resolution',
+        text: `${from.name} moved ${units} accelerators to ${to.name} within the group.`,
+        deltaLabel: `-${units}`,
+        refEventIds: [eventId],
+        tone: 'neutral',
+        subjectId: from.id,
+      });
+    }
+  }
+}
+
+function emitControlEvent(
+  draft: SessionState,
+  ctx: ResolverContext,
+  type: 'group_transfer_executed' | 'subsidiary_merged',
+  actorId: string,
+  targetId: string,
+  payload: Record<string, unknown>,
+): string {
+  return ctx.emit({
+    sessionId: draft.sessionId,
+    quarter: draft.quarter,
+    type,
+    actorId,
+    targetId,
+    payload,
+    visibility: 'company',
+  });
 }
 
 /* -------------------------------------------------------------------------- */

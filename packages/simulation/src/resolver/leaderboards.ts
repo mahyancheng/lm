@@ -25,7 +25,7 @@ import type {
   ResolverContext,
   SessionState,
 } from '@frontier/contracts';
-import { FOUNDER_INDEX_WEIGHTS, LEADERBOARD_BOARDS, founderIndex } from '@frontier/contracts';
+import { FOUNDER_INDEX_WEIGHTS, LEADERBOARD_BOARDS, founderIndex, grantsControl } from '@frontier/contracts';
 import { percentileRanks } from '@frontier/shared';
 
 /** One subject's raw value on one board, before ranking. */
@@ -76,6 +76,33 @@ export function enterpriseValueOf(draft: SessionState, company: Company): number
   const metrics = metricsFor(draft, company.id);
   if (metrics !== null && metrics.enterpriseValueUsd > 0) return metrics.enterpriseValueUsd;
   return Math.max(0, company.financials.revenueQuarterly * 4 * 6 + company.financials.cash - company.financials.debt);
+}
+
+/**
+ * Enterprise value of `company` plus its share of every company it controls —
+ * a subsidiary kept alive after an acquisition (STAGE 4), or a majority stake
+ * built up without a formal offer.
+ *
+ * One level deep, deliberately: this is a leaderboard ranking, not an
+ * audited consolidation — `groupStatementOf` in `../group` is where the real,
+ * reconciled, fully-eliminated numbers live. `company_value` is the only board
+ * that reads this rather than `enterpriseValueOf` directly; every other use of
+ * enterprise value (market influence, founder wealth, the PE desk) is left
+ * alone so this does not ripple into figures that were never about the group.
+ */
+export function consolidatedEnterpriseValueOf(draft: SessionState, company: Company): number {
+  let value = enterpriseValueOf(draft, company);
+  for (const table of draft.capTables) {
+    if (table.companyId === company.id) continue;
+    const held = table.holdings.reduce((sum, holding) => (holding.holderId === company.id ? sum + holding.shares : sum), 0);
+    if (held <= 0) continue;
+    const issued = table.shareClasses.reduce((sum, klass) => sum + klass.issuedShares, 0);
+    if (!grantsControl(held, issued)) continue;
+    const subsidiary = draft.companies.find((candidate) => candidate.id === table.companyId);
+    if (subsidiary === undefined || !subsidiary.isActive) continue;
+    value += (held / issued) * enterpriseValueOf(draft, subsidiary);
+  }
+  return value;
 }
 
 /** Trailing revenue where available, annualised current revenue otherwise. */
@@ -221,7 +248,7 @@ export function rebuildLeaderboards(draft: SessionState, ctx: ResolverContext): 
     people.map((character) => ({ subjectId: character.id, subjectKind: 'character' as const, label: character.name, value: value(character) }));
 
   const scoresByBoard = new Map<LeaderboardBoard, Scored[]>();
-  scoresByBoard.set('company_value', companyScores((company) => enterpriseValueOf(draft, company)));
+  scoresByBoard.set('company_value', companyScores((company) => consolidatedEnterpriseValueOf(draft, company)));
   scoresByBoard.set('revenue', companyScores((company) => revenueOf(draft, company)));
   scoresByBoard.set('profit', companyScores(operatingIncomeOf));
   scoresByBoard.set('innovation', companyScores((company) => innovationScoreOf(draft, company)));

@@ -39,7 +39,7 @@ import {
 import { BidBuilder } from '@/components/screens/government/BidBuilder';
 import { OpportunityCard } from '@/components/screens/government/OpportunityCard';
 import { opportunitySector, opportunitySectorCounts } from '@/components/screens/government/sectors';
-import { usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useActiveCompany, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
 const MILESTONE_TONE: Readonly<Record<ContractMilestone['status'], 'neutral' | 'gain' | 'warn' | 'loss' | 'info'>> = {
   pending: 'neutral',
@@ -53,7 +53,7 @@ const MILESTONE_TONE: Readonly<Record<ContractMilestone['status'], 'neutral' | '
 export default function GovernmentPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
   const founder = usePlayerCharacter();
   const [composing, setComposing] = useState<ProcurementOpportunity | null>(null);
   const [sector, setSector] = useState<Sector | null>(null);

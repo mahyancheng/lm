@@ -18,6 +18,7 @@
  */
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatQuarter } from '@frontier/shared';
@@ -34,7 +35,7 @@ import {
   TabBar,
   Tag,
 } from '@/components/ui';
-import { usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { useGameActions, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { PLAYER_ID } from '@/lib/game/engine';
 import {
   CompanyChips,
@@ -61,9 +62,11 @@ import {
 } from '@/components/screens/portfolio';
 
 export default function PortfolioPage(): React.JSX.Element {
+  const router = useRouter();
   const session = useSession();
   const view = usePlayerView();
   const company = usePlayerCompany();
+  const { setActiveCompany } = useGameActions();
 
   const [seat, setSeat] = useState<'company' | 'founder'>('company');
   const [tab, setTab] = useState<PortfolioTab | null>(null);
@@ -316,6 +319,21 @@ export default function PortfolioPage(): React.JSX.Element {
                   actions={row.actions}
                   onAct={(action) => act(row, action)}
                   href={row.status === 'absorbed' ? '/company' : '/markets'}
+                  extraActions={
+                    row.status === 'controlled' && session.companies.find((entry) => entry.id === row.companyId)?.controllerPlayerId === PLAYER_ID ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm tap-target gap-1.5 sm:min-h-0"
+                        onClick={() => {
+                          setActiveCompany(row.companyId);
+                          router.push('/company');
+                        }}
+                      >
+                        <Icon name="building" size={13} accent="current" />
+                        Direct this company
+                      </button>
+                    ) : undefined
+                  }
                 />
               ))}
             </div>

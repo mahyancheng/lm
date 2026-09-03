@@ -25,8 +25,18 @@ export function toneOfStatus(status: ActionValidationResult['status']): Tone {
  * note saying where the balance lands. That is a warning, not an error, and it
  * must not read like one — a founder who is told "rejected" and then watches the
  * action run learns to ignore the banner.
+ *
+ * `partial_fill_expected` is the same shape for availability: the instruction
+ * runs whole and the note says what the world is expected to give it —
+ * `expectedFill`'s own words, already in `result.reasons` ("Asked for 40
+ * roles; expect 6.") — never a clamp.
  */
-export const ADVISORY_CODES: readonly ActionValidationResult['codes'][number][] = ['insufficient_cash'];
+export const ADVISORY_CODES: readonly ActionValidationResult['codes'][number][] = ['insufficient_cash', 'partial_fill_expected'];
+
+/** Whether an accepted result's advisory is specifically an expected shortfall. */
+export function hasExpectedShortfall(result: ActionValidationResult): boolean {
+  return result.status === 'accepted' && result.codes.includes('partial_fill_expected');
+}
 
 /** Whether an accepted result carries an advisory note worth colouring. */
 export function hasAdvisory(result: ActionValidationResult): boolean {
@@ -50,6 +60,7 @@ export function ValidationBanner({ result, showClamped = true, compact = false, 
   if (result === null) return null;
 
   const advisory = hasAdvisory(result);
+  const expectedShortfall = hasExpectedShortfall(result);
   const tone = advisory ? 'warn' : toneOfStatus(result.status);
   const boardMatter = result.status === 'clamped' && result.clampedAction?.type === 'submit_board_proposal';
 
@@ -64,7 +75,13 @@ export function ValidationBanner({ result, showClamped = true, compact = false, 
     >
       <div className="flex flex-wrap items-center gap-2">
         <Tag tone={tone} dot>
-          {boardMatter ? 'Requires board approval' : advisory ? 'Accepted — watch the cash' : labelOfStatus(result.status)}
+          {boardMatter
+            ? 'Requires board approval'
+            : expectedShortfall
+              ? 'Accepted — expect a partial fill'
+              : advisory
+                ? 'Accepted — watch the cash'
+                : labelOfStatus(result.status)}
         </Tag>
         {result.codes.map((code) => (
           <span key={code} className="figure text-[10px] text-ink-faint">

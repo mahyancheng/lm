@@ -61,12 +61,12 @@ export function LedgerDrawer({ line, events, startYear, onClose }: LedgerDrawerP
           <ul className="flex flex-col gap-2.5">
             {referenced.map((event) => (
               <li key={event.eventId} className="raised-surface px-3 py-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="figure text-[12px] text-ink">{event.type}</span>
-                  <div className="flex items-center gap-1.5">
-                    <Tag tone={VISIBILITY_TONE[event.visibility]}>{event.visibility}</Tag>
-                    <span className="figure text-[10px] text-ink-faint">#{event.sequence}</span>
-                  </div>
+                {/* The machine name of the row (`event.type`) is deliberately not
+                    shown: the line's own text says what happened, and the
+                    payload below carries the detail. */}
+                <div className="flex items-center gap-1.5">
+                  <Tag tone={VISIBILITY_TONE[event.visibility]}>{event.visibility}</Tag>
+                  <span className="figure text-[10px] text-ink-faint">#{event.sequence}</span>
                 </div>
 
                 {/* One column on a phone: an id truncated to eight characters

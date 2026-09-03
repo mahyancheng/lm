@@ -16,7 +16,7 @@
  * | Role | Fallback |
  * |---|---|
  * | `world_director` | null — the engine materialises the drawn candidates from their family templates. The quarter still has weather; it just has less character. |
- * | `chief_of_staff` | The instruction echoed back as a question requiring confirmation. Nothing is interpreted, nothing is submitted. |
+ * | `chief_of_staff` | The question answered straight off the typed dossier where arithmetic can answer it, and otherwise the instruction echoed back as a question. Nothing is ever interpreted into an action, and nothing is submitted. |
  * | `npc_strategist` | null — the engine runs the deterministic archetype policy for that company's posture. |
  * | `character_dialogue` | A short templated reply consistent with traits and relationship, and **no** commitment. Commitments are never fabricated by a fallback. |
  * | `innovation_interpreter` | A decline with `llm_unavailable`. A node is never added to the Frontier Map without interpretation. |
@@ -32,6 +32,7 @@ import type {
   NarratorInput,
   NarratorOutput,
 } from '@frontier/contracts';
+import { offlineChiefOfStaff } from './chiefOfStaffOffline';
 import { groupLinesByPhase } from './compose/narrator';
 import { truncate } from './compose/render';
 
@@ -43,25 +44,20 @@ export const INNOVATION_DECLINE_REASON = 'llm_unavailable';
 /* -------------------------------------------------------------------------- */
 
 /**
- * Interpret nothing; hand the instruction back as a question.
+ * Answer, or hand the instruction back as a question.
  *
- * The player falls back to the normal controls. Nothing is auto-interpreted,
+ * Delegated to `offlineChiefOfStaff`, which reads the typed dossier and answers
+ * the questions arithmetic can answer — cash, runway, burn, best and worst
+ * product, who is circling us, what needs deciding, what actions are open. It
+ * interprets nothing into an `ActionIntent` under any circumstance:
  * `requiresConfirmation` is true and `confidence` is zero, so the interface
  * presents it as a draft that cannot be submitted by accident.
+ *
+ * Kept as a re-export rather than moved wholesale, because this is the name the
+ * fallback table and every test reach for.
  */
 export function fallbackChiefOfStaff(input: ChiefOfStaffInput): ChiefOfStaffInterpretation {
-  const echoed = truncate(input.playerMessage.trim(), 640);
-  return {
-    interpretedInstructions: [],
-    summary: truncate(
-      `The Chief of Staff is unavailable this quarter, so nothing has been interpreted and nothing has been submitted. Your instruction was recorded exactly as written: "${echoed}" Use the normal controls to make these changes yourself, or try again shortly.`,
-      1200,
-    ),
-    questions: [truncate(`Do you want to submit this through the controls yourself: "${echoed}"?`, 240)],
-    requiresConfirmation: true,
-    confidence: 0,
-    unsupportedRequests: [],
-  };
+  return offlineChiefOfStaff(input);
 }
 
 /* -------------------------------------------------------------------------- */

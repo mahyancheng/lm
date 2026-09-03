@@ -7,7 +7,7 @@
  * propose → confirm.** What the model produced is a set of typed
  * `ActionIntent`s, so the card shows them as rows — the instruction, its terms,
  * and what the validator says about it *before* anything is queued. The
- * mandatory line sits above the controls, and the thirteen always go through
+ * mandatory line sits above the controls, and the fourteen always go through
  * `ConfirmDialog` regardless of what the model set `requiresConfirmation` to.
  *
  * Below confidence 0.7 the whole panel is styled as a draft, because a
@@ -17,9 +17,10 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import type { ActionIntent, ActionType, ActionValidationResult } from '@frontier/contracts';
+import type { ActionIntent, ActionType, ActionValidationResult, CosAvailableAction, CosBound } from '@frontier/contracts';
+import { formatCount, formatMoney } from '@frontier/shared';
 import { ConfirmDialog, Icon, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
-import { needsConfirmation, useGameActions, useSession } from '@/lib/game';
+import { availableActionsForSession, needsConfirmation, useGameActions, useSession } from '@/lib/game';
 import { describeIntent } from '@/components/screens/end-quarter/intents';
 import type { TranscriptEntry } from './transcript';
 
@@ -68,6 +69,40 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
 
 const DRAFT_CONFIDENCE = 0.7;
 
+/**
+ * One bound, in the founder's units.
+ *
+ * The figures come from the engine's own probe of the validator, so this is a
+ * statement about what would actually be accepted rather than a guideline.
+ */
+export function boundLabel(bound: CosBound): string {
+  const format = (value: number): string => {
+    switch (bound.unit) {
+      case 'usd':
+        return formatMoney(value);
+      case 'fraction':
+        return `${Math.round(value * 100)}%`;
+      case 'percent':
+        return `${Math.round(value)}%`;
+      case 'quarters':
+        return `${Math.round(value)}q`;
+      default:
+        return formatCount(Math.round(value));
+    }
+  };
+  const low = bound.min === null ? 'any' : format(bound.min);
+  const high = bound.max === null ? 'no ceiling' : format(bound.max);
+  return `${bound.label}: ${low} to ${high}`;
+}
+
+/** What this action may spend and what it is bounded by, or an empty list. */
+export function limitsOf(availability: CosAvailableAction | null): string[] {
+  if (availability === null) return [];
+  const lines = availability.bounds.map(boundLabel);
+  if (availability.maxCashUsd !== null) lines.unshift(`Commits up to ${formatMoney(availability.maxCashUsd)}`);
+  return lines;
+}
+
 export interface InterpretationCardProps {
   readonly entry: TranscriptEntry;
   readonly startYear: number;
@@ -80,7 +115,7 @@ export interface InterpretationCardProps {
    * player's instruction is already on the screen above it as their own turn.
    *
    * **Presentation only.** Every rule below this line — the validator verdicts,
-   * the per-row queueing, the confirmation gate on the thirteen, the mandatory
+   * the per-row queueing, the confirmation gate on the fourteen, the mandatory
    * line — is identical in both, and must stay identical in both.
    */
   readonly variant?: 'card' | 'speech';
@@ -95,6 +130,15 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
   const session = useSession();
   const [queued, setQueued] = useState<Readonly<Record<number, ActionValidationResult>>>({});
   const [pending, setPending] = useState<{ index: number; intent: ActionIntent } | null>(null);
+  // True while "Do it" is walking the outstanding confirmations one at a time.
+  // Each of the fourteen still takes its own explicit human confirmation; the
+  // only thing being batched is the founder's attention, not their consent.
+  const [runningAll, setRunningAll] = useState(false);
+
+  // The engine's own verdict on what this company could do right now, memoised
+  // per session object. It is what turns "reserve 4,000 accelerators" into
+  // "reserve 4,000 accelerators — the market can free 1,536 this quarter".
+  const availability = useMemo(() => new Map(availableActionsForSession(session).map((entry) => [entry.type, entry])), [session]);
 
   const { interpretation } = entry;
   const draft = interpretation.confidence < DRAFT_CONFIDENCE;
@@ -107,8 +151,9 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
         description: describeIntent(intent, startYear),
         validation: validateIntent(intent),
         needsHuman: needsConfirmation(intent.type),
+        limits: limitsOf(availability.get(intent.type) ?? null),
       })),
-    [interpretation.interpretedInstructions, startYear, validateIntent, session],
+    [availability, interpretation.interpretedInstructions, startYear, validateIntent, session],
   );
 
   const routine = rows.filter((row) => !row.needsHuman && queued[row.index] === undefined);
@@ -193,6 +238,19 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
                       </dl>
                     )}
 
+                    {/* What the engine would actually accept, probed from the
+                        validator rather than described beside it. */}
+                    {row.limits.length === 0 ? null : (
+                      <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
+                        {row.limits.map((limit) => (
+                          <li key={limit} className="icon-knockout-panel flex items-center gap-1 text-[10.5px] text-ink-faint">
+                            <Icon name="ledger" size={12} accent="inherit" />
+                            <span className="figure">{limit}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
                     {done === undefined ? (
                       <div className="flex items-center gap-2">
                         <Link
@@ -274,16 +332,28 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
             that counts.
           </p>
           <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            {/* "Do it" queues everything routine and then walks the outstanding
+                confirmations one dialog at a time. Batching the walk is not
+                batching the consent: each of the fourteen still gets its own
+                terms and its own explicit yes. */}
             <button
               type="button"
               className="btn btn-primary tap-target press-pop w-full sm:w-auto"
-              disabled={routine.length === 0}
+              disabled={routine.length + outstanding.length === 0}
               onClick={() => {
                 for (const row of routine) queueRow(row.index, row.intent, true);
+                const next = outstanding[0];
+                if (next === undefined) return;
+                setRunningAll(outstanding.length > 1);
+                setPending({ index: next.index, intent: next.intent });
               }}
             >
               <Icon name="check" size={16} accent="current" />
-              {routine.length === 0 ? 'Nothing left to approve' : `Approve ${routine.length} routine action${routine.length === 1 ? '' : 's'}`}
+              {routine.length + outstanding.length === 0
+                ? 'Nothing left to approve'
+                : outstanding.length === 0
+                  ? `Do it — ${routine.length} action${routine.length === 1 ? '' : 's'}`
+                  : `Do it — ${routine.length + outstanding.length} action${routine.length + outstanding.length === 1 ? '' : 's'}, ${outstanding.length} to confirm`}
             </button>
             {outstanding.length > 0 ? (
               <span className="icon-knockout-panel flex items-center gap-1.5 text-[11.5px] text-warn">
@@ -299,14 +369,27 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
         open={pending !== null}
         title={pending === null ? 'Confirm' : describeIntent(pending.intent, startYear).label}
         actionType={pending?.intent.type}
-        body="This is one of the thirteen the engine will refuse without an explicit human confirmation. Read the terms; the Chief of Staff proposed them, it did not decide them."
+        body="This is one of the fourteen the engine will refuse without an explicit human confirmation. Read the terms; the Chief of Staff proposed them, it did not decide them."
         terms={pending === null ? [] : describeIntent(pending.intent, startYear).terms.map((entryTerm) => ({ label: entryTerm.label, value: entryTerm.value }))}
         confirmLabel="Confirm and queue"
         tone={pending?.intent.type === 'layoff' ? 'loss' : 'brand'}
-        onCancel={() => setPending(null)}
-        onConfirm={() => {
-          if (pending !== null) queueRow(pending.index, pending.intent, true);
+        onCancel={() => {
           setPending(null);
+          setRunningAll(false);
+        }}
+        onConfirm={() => {
+          if (pending === null) return;
+          const confirmedIndex = pending.index;
+          queueRow(confirmedIndex, pending.intent, true);
+          // Advance to the next outstanding confirmation only when the founder
+          // asked for the whole set. Cancelling any one of them ends the walk.
+          const next = runningAll ? outstanding.find((row) => row.index !== confirmedIndex) : undefined;
+          if (next === undefined) {
+            setPending(null);
+            setRunningAll(false);
+            return;
+          }
+          setPending({ index: next.index, intent: next.intent });
         }}
       />
     </article>

@@ -46,6 +46,7 @@ import {
 import { ConnectionBreakdown } from '@/components/screens/network/ConnectionBreakdown';
 import { PeopleWeb } from '@/components/screens/network/PeopleWeb';
 import { PersonDrawer } from '@/components/screens/network/PersonDrawer';
+import { CONNECTION_LEVERS } from '@/components/screens/network/actions';
 import { buildDirectory, characterName, overridesFor, type DirectoryEntry } from '@/components/screens/network/directory';
 import { CAPITAL_KIND_LABEL, STANCE_LABEL, STANCE_TONE, streetCards, type StanceContext } from '@/components/screens/street';
 import { IconTabs } from '@/components/screens/world/IconTabs';
@@ -476,6 +477,7 @@ export default function NetworkPage(): React.JSX.Element {
 
       <PersonDrawer
         entry={selectedEntry}
+        directory={directory}
         selfId={founder.id}
         selfName={founder.name}
         selfConnection={founder.connectionLevel}

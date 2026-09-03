@@ -86,7 +86,130 @@ describe('chief of staff bounds', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.companyBriefing).toBe('Cash $2.1bn, runway 7 quarters, 1,240 staff.');
   });
+
+  /* --- the typed dossier ------------------------------------------------- */
+
+  it('carries the typed dossier through unchanged', () => {
+    const result = BoundedChiefOfStaffInputSchema.safeParse(chiefOfStaffInput({ dossier: dossier(), screen: '/capital' }));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dossier?.companyName).toBe('Nexus Intelligence');
+      expect(result.data.screen).toBe('/capital');
+    }
+  });
+
+  it('refuses a dossier that names an action the union does not have', () => {
+    const broken = dossier();
+    const result = BoundedChiefOfStaffInputSchema.safeParse(
+      chiefOfStaffInput({ dossier: { ...broken, availableActions: [{ ...broken.availableActions[0], type: 'sack_the_board' }] } }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('refuses a dossier carrying more filed quarters than the role is given', () => {
+    const broken = dossier();
+    const result = BoundedChiefOfStaffInputSchema.safeParse(
+      chiefOfStaffInput({ dossier: { ...broken, finances: { ...broken.finances, history: Array.from({ length: 9 }, () => ({})) } } }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('refuses a screen longer than a route', () => {
+    expect(BoundedChiefOfStaffInputSchema.safeParse(chiefOfStaffInput({ screen: 'x'.repeat(200) })).success).toBe(false);
+  });
 });
+
+/** A minimal dossier the contract accepts. Only the fields these bounds touch matter. */
+function dossier() {
+  return {
+    companyName: 'Nexus Intelligence',
+    founderName: 'Maya Chen',
+    quarterLabel: '2027 Q1',
+    posture: 'balanced' as const,
+    finances: {
+      cashUsd: 1,
+      debtUsd: 0,
+      revenueQuarterlyUsd: 1,
+      quarterlyBurnUsd: 0,
+      runwayQuarters: 1,
+      grossMarginPct: 0.5,
+      operatingMarginPct: 0,
+      history: [],
+    },
+    products: {
+      lines: [],
+      computeOwned: 0,
+      computeReserved: 0,
+      computeUtilisationPct: 0,
+      trainingAllocationPct: 0,
+      reservationExpiryQuarter: null,
+      cloudSpendQuarterlyUsd: 0,
+    },
+    people: {
+      engineers: 0,
+      researchers: 0,
+      sales: 0,
+      ops: 0,
+      execs: 0,
+      total: 0,
+      moralePct: 50,
+      attritionPct: 0,
+      openRoles: 0,
+      payrollQuarterlyUsd: 0,
+      keyCharacters: [],
+    },
+    governance: {
+      hasBoard: false,
+      seatsAuthorised: 0,
+      seatsFilled: 0,
+      founderSeats: 0,
+      founderOwnershipPct: 1,
+      thresholds: [],
+      openProposals: [],
+      isCeo: true,
+    },
+    markets: {
+      isPublic: false,
+      ticker: null,
+      sharePriceUsd: null,
+      marketCapUsd: null,
+      sectorId: 'ai',
+      sectorSentiment: 0,
+      sectorMultiple: 0,
+      sectorDemand: 0,
+      sectorPriceIndex: null,
+      sectorShortage: null,
+      rivals: [],
+    },
+    capital: {
+      funds: [],
+      approaches: [],
+      debtHeadroomUsd: 0,
+      dividendPayoutPct: 0,
+      sharesOutstanding: 0,
+      ipoWindow: 0,
+      ventureLiquidity: 0,
+      debtAvailability: 0,
+    },
+    research: { budgetQuarterlyUsd: 0, projects: [], availableNodes: [] },
+    government: { openProgrammes: [], liveContracts: [], pastPerformance: 0 },
+    feed: [],
+    openDecisions: [],
+    availableActions: [
+      {
+        type: 'hire' as const,
+        available: true,
+        reason: null,
+        becomesBoardMatter: false,
+        requiresConfirmation: false,
+        bounds: [],
+        targets: [],
+        maxCashUsd: null,
+      },
+    ],
+    worldNotes: [],
+  };
+}
 
 describe('other role bounds', () => {
   const npcInput = (overrides: Record<string, unknown> = {}): unknown => ({

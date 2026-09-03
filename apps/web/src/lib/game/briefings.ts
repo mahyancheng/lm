@@ -15,6 +15,7 @@ import type {
   ChiefOfStaffInput,
   NpcStrategistInput,
   SessionState,
+  SimEvent,
   SocialAuthorInput,
   SocialPost,
   WorldDirectorInput,
@@ -24,6 +25,7 @@ import { WORLD_TARGET_PATHS, quarterLabel } from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import { impactBudgetFor, strategistCompanyIds } from '@frontier/simulation';
 import { PLAYER_ID, drawWorldCandidates, playerCompanyOf } from './engine';
+import { buildChiefOfStaffDossier } from './dossier';
 import { metricsFor } from './playerView';
 
 /* -------------------------------------------------------------------------- */
@@ -318,20 +320,32 @@ export function buildSocialAuthorInput(session: SessionState, post: SocialPost):
   };
 }
 
-/** Build the Chief of Staff's input for one player instruction. */
+/**
+ * Build the Chief of Staff's input for one message.
+ *
+ * The typed dossier is the substance; the prose fields below it are kept and
+ * filled from the same state so a caller that predates the dossier — or a
+ * request that had to drop it — still gets a usable briefing. Whichever is
+ * present, the composer is the boundary: nothing private about another company
+ * crosses it.
+ */
 export function buildChiefOfStaffInput(
   session: SessionState,
   playerMessage: string,
   conversationHistory: readonly { role: 'player' | 'chief_of_staff'; text: string }[],
+  options: { readonly screen?: string; readonly ledger?: readonly SimEvent[] } = {},
 ): ChiefOfStaffInput {
   const company = playerCompanyOf(session);
   const seat = session.players.find((player) => player.playerId === PLAYER_ID) ?? null;
+  const dossier = buildChiefOfStaffDossier(session, options.ledger ?? []);
   return {
     sessionId: session.sessionId,
     quarter: session.quarter,
     playerId: PLAYER_ID,
     companyId: company.id,
     playerMessage,
+    ...(options.screen === undefined ? {} : { screen: options.screen.slice(0, 80) }),
+    dossier,
     companyBriefing: companyBriefing(session, company),
     worldBriefing: worldBriefing(session),
     currentBudgets: currentBudgets(company),

@@ -31,7 +31,9 @@ import type {
   SessionState,
   StaffRole,
 } from '@frontier/contracts';
-import { canInitiateContact } from '@frontier/contracts';
+import { heldComputeUnits } from '../companies/products';
+import { checkAccess } from '../relationships/access';
+import { isMultiSectorWorld } from '../economy/sectors';
 
 /* -------------------------------------------------------------------------- */
 /*  Actor                                                                      */
@@ -80,6 +82,15 @@ export class BatchBudget {
   commitCompute(companyId: string, units: number): void {
     if (!Number.isFinite(units) || units <= 0) return;
     this.compute.set(companyId, (this.compute.get(companyId) ?? 0) + units);
+  }
+
+  /**
+   * Accelerator-equivalents earlier actions in this batch already put on new
+   * programmes. Unfloored, unlike `availableCompute`, because a commitment can
+   * legitimately exceed owned-plus-reserved once cloud capacity counts.
+   */
+  committedCompute(companyId: string): number {
+    return this.compute.get(companyId) ?? 0;
   }
 
   /** Staff in a role not already promised to another action this quarter. */
@@ -310,6 +321,22 @@ export function computeCommitted(draft: SessionState, companyId: string): number
   return total;
 }
 
+/**
+ * Accelerator-equivalents a company can still put on a new research programme.
+ *
+ * World 1 counts owned and reserved units, as it always has. World 2 counts
+ * cloud capacity too, at the spot index, because most of its companies start
+ * with nothing but cloud: counting only the accelerators they own clamped every
+ * programme to zero compute and stalled it. The Frontier Map's start form reads
+ * the same figure, so what the slider offers is what the validator accepts.
+ */
+export function researchComputeHeadroom(draft: SessionState, company: Company): number {
+  const held = isMultiSectorWorld(draft)
+    ? Math.floor(heldComputeUnits(draft, company))
+    : company.compute.ownedAccelerators + company.compute.reservedAccelerators;
+  return Math.max(0, held - computeCommitted(draft, company.id));
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Access                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -321,33 +348,24 @@ export interface ReachDecision {
 }
 
 /**
- * Whether `fromId` may open contact with `toId`, applying the connection gap
- * rule from `@frontier/contracts` and any live access override.
+ * Whether `fromId` may open contact with `toId`.
  *
- * The relationships subsystem owns the full decision (`checkAccess`); the
- * validator restates the same two inputs because it must run before any
- * subsystem does, and because it cannot depend on one.
+ * INVARIANT: this is `checkAccess`, not a restatement of it. The validator, the
+ * resolver's `applyIntroductionRequests` and every screen badge must return the
+ * same verdict for the same pair, or the interface offers actions the engine
+ * refuses.
+ *
+ * It used to restate the rule from `canInitiateContact` plus stored
+ * `accessOverrides` alone, which silently dropped the *structural* overrides —
+ * a shared board, a common investor on two cap tables, a consortium, a live
+ * deal, a running story. Those are derived rather than stored, so a founder
+ * whose seed investor also sits on eleven other cap tables was shown thirty-one
+ * reachable people and could queue nothing against any of them: every action
+ * gated on `canReach` was rejected as `target_not_reachable`, and every
+ * introduction was refused because the intermediary was "unreachable" too.
  */
 export function canReach(draft: SessionState, fromId: string | null, toId: string): ReachDecision {
   if (fromId === null) return { allowed: false, reason: 'No acting character, so no approach can be attributed.' };
-  if (fromId === toId) return { allowed: true, reason: 'Self-directed.' };
-
-  const from = findCharacter(draft, fromId);
-  const to = findCharacter(draft, toId);
-  if (from === null || to === null) return { allowed: false, reason: 'One of the two people is not in this world.' };
-
-  for (const override of draft.accessOverrides) {
-    if (override.fromId !== fromId || override.toId !== toId) continue;
-    if (override.expiresQuarter !== null && !override.isPermanent && override.expiresQuarter < draft.quarter) continue;
-    return { allowed: true, reason: `Access granted by ${override.kind.replace(/_/g, ' ')}.` };
-  }
-
-  if (canInitiateContact(from.connectionLevel, to.connectionLevel)) {
-    return { allowed: true, reason: 'Within the connection gap.' };
-  }
-  const gap = Math.abs(from.connectionLevel - to.connectionLevel);
-  return {
-    allowed: false,
-    reason: `${to.name} sits ${Math.round(gap)} connection points above ${from.name}; reaching them needs an introduction.`,
-  };
+  const decision = checkAccess(draft, fromId, toId);
+  return { allowed: decision.allowed, reason: decision.reason };
 }

@@ -92,8 +92,8 @@ export {
 
 /* ------------------------------ session store ----------------------------- */
 
-export type { InMemoryLlmSessionStore, LlmSessionStore } from './sessionStore';
-export { createInMemorySessionStore, createNullSessionStore } from './sessionStore';
+export type { InMemoryLlmMemoryStore, InMemoryLlmSessionStore, LlmMemoryStore, LlmSessionStore } from './sessionStore';
+export { createInMemoryMemoryStore, createInMemorySessionStore, createNullMemoryStore, createNullSessionStore } from './sessionStore';
 
 /* -------------------------------- composers ------------------------------- */
 
@@ -104,7 +104,25 @@ export type { SecretBearingRecord } from './compose/redaction';
 export { INTERNAL_STATE_MARKERS, LlmContextLeakError, assertNoForeignSecretResearch, assertNoInternalMarkers, assertOwnedBy } from './compose/redaction';
 
 export { WORLD_DIRECTOR_SYSTEM, composeWorldDirector } from './compose/worldDirector';
-export { CHIEF_OF_STAFF_SYSTEM, composeChiefOfStaff, enforceConfirmationPolicy } from './compose/chiefOfStaff';
+export {
+  CHIEF_OF_STAFF_SYSTEM,
+  composeChiefOfStaff,
+  enforceConfirmationPolicy,
+  enforceInterpretationPolicy,
+  enforceModePolicy,
+  renderAvailableAction,
+  renderDossier,
+} from './compose/chiefOfStaff';
+export {
+  COS_QUESTION_KINDS,
+  answerFromDossier,
+  bestProduct,
+  classifyQuestion,
+  offlineChiefOfStaff,
+  worstProduct,
+  type CosQuestionKind,
+} from './chiefOfStaffOffline';
+export { forgetBefore, readMemory, rememberExchange, standingPreferenceOf, type ExchangeToRemember } from './chiefOfStaffMemory';
 export type { NpcPastDecision, NpcStrategistEvidence, RivalSignal } from './compose/npcStrategist';
 export { EMPTY_NPC_EVIDENCE, NPC_DECISION_HISTORY_QUARTERS, NPC_STRATEGIST_SYSTEM, composeNpcStrategist } from './compose/npcStrategist';
 export { DIALOGUE_HISTORY_TURNS, DIALOGUE_MEMORY_LIMIT, composeCharacterDialogue, composeCharacterPersona } from './compose/characterDialogue';

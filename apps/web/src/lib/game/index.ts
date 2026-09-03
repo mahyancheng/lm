@@ -66,6 +66,14 @@ export {
 } from './playerView';
 
 export {
+  DOSSIER_FEED_ITEMS,
+  DOSSIER_HISTORY_QUARTERS,
+  availabilityOf,
+  availableActionsForSession,
+  buildChiefOfStaffDossier,
+} from './dossier';
+
+export {
   buildChiefOfStaffInput,
   buildNpcStrategistInput,
   buildWorldDirectorInput,

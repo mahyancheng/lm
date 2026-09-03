@@ -10,7 +10,7 @@
  * controls that queue them.
  *
  * **No free text ever executes.** The three steps are interpret → propose →
- * confirm, in that order, and the thirteen always take an explicit human
+ * confirm, in that order, and the fourteen always take an explicit human
  * confirmation regardless of what the model set `requiresConfirmation` to. With
  * no model configured the panel says so and echoes the instruction back as a
  * question, because asking beats guessing and inventing a decision on a
@@ -20,26 +20,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { quarterLabel } from '@frontier/contracts';
-import { formatMoney } from '@frontier/shared';
+import { formatCount, formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import { AiLabel, Drawer, Icon, KeyValueGrid, PageHeader, Panel, SectionHeading, Tag, type IconName } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { ROUTE_OF_ACTION } from '@/components/screens/chief-of-staff/InterpretationCard';
 import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
-import {
-  appendTranscript,
-  clearTranscript,
-  echoFallback,
-  historyOf,
-  readTranscript,
-  type TranscriptEntry,
-} from '@/components/screens/chief-of-staff/transcript';
+import { useChiefOfStaff } from '@/components/screens/chief-of-staff/useChiefOfStaff';
 import { openSettings } from '@/components/shell/settingsBus';
-import { requestChiefOfStaff } from '@/lib/llm/client';
 import {
-  PLAYER_ID,
-  buildChiefOfStaffInput,
+  buildChiefOfStaffDossier,
   currentBudgets,
   openDecisions,
+  useGame,
   useLlm,
   usePlayerCharacter,
   usePlayerCompany,
@@ -75,19 +67,14 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
   const queue = useQueuedActions();
   const { resolving } = useResolving();
 
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const { lastOutcome } = useGame();
+  const thread = useChiefOfStaff();
+  const { entries, sending } = thread;
   const [message, setMessage] = useState('');
-  const [sending, setSending] = useState(false);
   // Phone only: everything the seat is reading, in a bottom sheet. From `lg`
   // the same content is the right rail and the button that opens it is gone.
   const [briefingOpen, setBriefingOpen] = useState(false);
   const bottom = useRef<HTMLDivElement | null>(null);
-
-  // The transcript lives in the tab, not in game state: hydrate after mount so
-  // the server render and the first client render agree.
-  useEffect(() => {
-    setEntries(readTranscript(session.sessionId));
-  }, [session.sessionId]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -95,6 +82,13 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
 
   const budgets = useMemo(() => currentBudgets(company), [company]);
   const decisions = useMemo(() => openDecisions(session, company), [session, company]);
+
+  // Exactly what the model is handed, built by the same function the request
+  // uses. Showing it is the point: a founder who cannot see what their chief of
+  // staff knows cannot tell a gap in its knowledge from a gap in its judgement.
+  const dossier = useMemo(() => buildChiefOfStaffDossier(session, lastOutcome?.events ?? []), [session, lastOutcome]);
+  const openActions = useMemo(() => dossier.availableActions.filter((entry) => entry.available), [dossier]);
+  const blockedActions = useMemo(() => dossier.availableActions.filter((entry) => !entry.available), [dossier]);
 
   // The floating action-queue tray owns the bottom-right corner of a phone
   // whenever something is queued. The composer lifts above it rather than
@@ -104,34 +98,8 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
   async function send(): Promise<void> {
     const text = message.trim();
     if (text.length === 0 || sending) return;
-    setSending(true);
     setMessage('');
-
-    const history = historyOf(entries);
-    const input = buildChiefOfStaffInput(session, text, history);
-    let interpretation = null;
-    try {
-      // The key names the seat, not just the session: one shared key would
-      // resume one Claude thread for every player in the session, and this
-      // prompt carries the player's whole private company briefing.
-      interpretation = await requestChiefOfStaff(input, {
-        sessionId: session.sessionId,
-        playerId: PLAYER_ID,
-        conversationId: 'main',
-      });
-    } catch {
-      interpretation = null;
-    }
-
-    const entry: TranscriptEntry = {
-      id: `${session.sessionId}:q${session.quarter}:${entries.length}`,
-      quarter: session.quarter,
-      message: text,
-      interpretation: interpretation ?? echoFallback(text),
-      fallback: interpretation === null,
-    };
-    setEntries(appendTranscript(session.sessionId, entry));
-    setSending(false);
+    await thread.send(text);
   }
 
   /** Who is talking, on every card the Chief of Staff owns. Model-authored, so labelled. */
@@ -176,6 +144,47 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
         </ul>
         <p className="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
           These are the lines that make “keep total spend roughly unchanged” an arithmetic instruction rather than a wish.
+        </p>
+      </Panel>
+
+      {/* --- what it can actually do --------------------------------------
+          The list the model is given, verbatim. It is produced by probing the
+          engine's own validator, so an action shown here as unavailable is one
+          the engine would refuse today — not a guess, and not a policy written
+          alongside the rules that could drift from them. */}
+      <Panel
+        title="What it can do for you"
+        subtitle="Probed from the engine's validator, this quarter, for this company"
+        iconName="ledger"
+        iconTone="brand"
+      >
+        <KeyValueGrid
+          columns={2}
+          items={[
+            { label: 'Open to us', value: formatCount(openActions.length) },
+            { label: 'Not possible', value: formatCount(blockedActions.length) },
+            { label: 'Runway', value: formatQuarterCount(dossier.finances.runwayQuarters) },
+            { label: 'Gross margin', value: formatPct(dossier.finances.grossMarginPct) },
+          ]}
+        />
+        <SectionHeading className="mt-3" rule>
+          Not possible right now
+        </SectionHeading>
+        {blockedActions.length === 0 ? (
+          <p className="mt-1.5 text-[12px] text-ink-faint">Every action in the game is open to this company this quarter.</p>
+        ) : (
+          <ul className="mt-1.5 flex flex-col gap-1.5">
+            {blockedActions.slice(0, 6).map((action) => (
+              <li key={action.type} className="text-[11.5px] leading-relaxed">
+                <span className="font-semibold text-ink">{action.type.replace(/_/g, ' ')}</span>
+                <span className="block text-ink-faint">{action.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
+          It is told these reasons in your own words, so &ldquo;can we buy them?&rdquo; gets an answer rather than a proposal the engine would
+          refuse a second later.
         </p>
       </Panel>
 
@@ -267,12 +276,7 @@ export default function ChiefOfStaffPage(): React.JSX.Element {
               Briefing
               {queue.length > 0 ? <span className="figure text-brand">{queue.length}</span> : null}
             </button>
-            <button
-              type="button"
-              className="btn tap-target"
-              disabled={entries.length === 0}
-              onClick={() => setEntries(clearTranscript(session.sessionId))}
-            >
+            <button type="button" className="btn tap-target" disabled={entries.length === 0} onClick={() => thread.clear()}>
               <Icon name="close" size={15} />
               <span className="hidden sm:inline">Clear conversation</span>
               <span className="sm:hidden">Clear</span>

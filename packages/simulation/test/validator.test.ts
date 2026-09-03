@@ -10,7 +10,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ActionIntent, ActionRejectionCode, ActionValidationResult, SessionState, SubmittedAction } from '@frontier/contracts';
 import { ACTION_TYPES, CONFIRMATION_REQUIRED_ACTIONS, SessionStateSchema } from '@frontier/contracts';
-import { CEO_ONLY_ACTIONS, RULES, createActionValidator } from '../src/validator';
+import { CEO_ONLY_ACTIONS, RULES, canReach, createActionValidator } from '../src/validator';
+import { checkAccess } from '../src/relationships/access';
 import { PRICE_MOVE_BAND } from '../src/validator/balance';
 import { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, createDemoSession } from '../src/scenario';
 
@@ -998,10 +999,24 @@ describe('deals and introductions', () => {
   });
 
   it('refuses an introduction the intermediary cannot make, or one with no stated purpose', () => {
+    // Priya is reachable — a shared investor sits on both cap tables — and she
+    // still cannot reach Nadia, so the ask fails on the second leg. This is the
+    // case the rule exists for; picking an intermediary the player cannot even
+    // reach would only test the first leg, which is the next assertion.
+    const viaCannotReach = run(
+      act({
+        type: 'request_introduction',
+        viaCharacterId: DEMO_CHARACTERS.priya,
+        targetCharacterId: DEMO_CHARACTERS.nadia,
+        purpose: 'Sovereign capital for the compute reservation.',
+      }),
+    );
+    expect(codes(viaCannotReach)).toContain('target_not_reachable');
+
     const unreachable = run(
       act({
         type: 'request_introduction',
-        viaCharacterId: DEMO_CHARACTERS.maya,
+        viaCharacterId: DEMO_CHARACTERS.daniel,
         targetCharacterId: DEMO_CHARACTERS.nadia,
         purpose: 'Sovereign capital for the compute reservation.',
       }),
@@ -1012,6 +1027,37 @@ describe('deals and introductions', () => {
       act({ type: 'request_introduction', viaCharacterId: DEMO_CHARACTERS.eleanor, targetCharacterId: DEMO_CHARACTERS.nadia, purpose: 'hi' }),
     );
     expect(codes(vague)).toContain('requirement_not_met');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  Reachability                                                               */
+/* -------------------------------------------------------------------------- */
+
+describe('canReach is checkAccess, not a restatement of it', () => {
+  it('agrees with the relationships subsystem for every ordered pair in the world', () => {
+    const ids = state.characters.filter((character) => character.isActive).map((character) => character.id);
+    expect(ids.length).toBeGreaterThan(2);
+    for (const from of ids) {
+      for (const to of ids) {
+        expect(canReach(state, from, to).allowed).toBe(checkAccess(state, from, to).allowed);
+      }
+    }
+  });
+
+  it('honours a structural override the gap alone would refuse', () => {
+    // A common investor on two cap tables. The gap is far outside the symmetric
+    // band, so only the derived override can be permitting this.
+    const decision = canReach(state, DEMO_CHARACTERS.player, DEMO_CHARACTERS.maya);
+    const player = state.characters.find((character) => character.id === DEMO_CHARACTERS.player);
+    const maya = state.characters.find((character) => character.id === DEMO_CHARACTERS.maya);
+    expect(Math.abs((player?.connectionLevel ?? 0) - (maya?.connectionLevel ?? 0))).toBeGreaterThan(10);
+    expect(state.accessOverrides.some((o) => o.fromId === DEMO_CHARACTERS.player && o.toId === DEMO_CHARACTERS.maya)).toBe(false);
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('still refuses a stranger far above the founder with no route at all', () => {
+    expect(canReach(state, DEMO_CHARACTERS.player, DEMO_CHARACTERS.nadia).allowed).toBe(false);
   });
 });
 

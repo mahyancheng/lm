@@ -21,7 +21,7 @@ export interface ConfirmDialogProps {
   /** The commitment, term by term. This is what the player is actually approving. */
   readonly terms?: readonly ConfirmTerm[];
   /**
-   * The action type being confirmed. When it is one of the thirteen in
+   * The action type being confirmed. When it is one of the fourteen in
    * `CONFIRMATION_REQUIRED_ACTIONS` the dialog says so explicitly.
    */
   readonly actionType?: ActionType;
@@ -63,7 +63,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps): React.JSX.Element {
   const [typed, setTyped] = useState('');
   // The gate is the typed word, so that is where the keyboard should land:
-  // thirteen action types route through here and every one of them is otherwise
+  // fourteen action types route through here and every one of them is otherwise
   // several tab stops away from being confirmable.
   const typedRef = useRef<HTMLInputElement | null>(null);
 

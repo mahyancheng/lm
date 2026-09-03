@@ -393,3 +393,299 @@ export function BarChart({
     </svg>
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Bar series                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export interface BarSeriesCategory {
+  /** The x-axis label, e.g. a quarter. */
+  readonly label: string;
+  /** One value per series, in the same order as `series`. */
+  readonly values: readonly number[];
+}
+
+export interface BarSeriesDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly tone?: Tone;
+}
+
+export interface BarSeriesProps {
+  readonly categories: readonly BarSeriesCategory[];
+  /** One or two series. More than two is unreadable on a phone and is clipped. */
+  readonly series: readonly BarSeriesDefinition[];
+  readonly height?: number;
+  readonly formatValue?: (value: number) => string;
+  /** Whole-number axis ticks, supplied by the caller so the axis is the caller's. */
+  readonly ticks?: readonly number[];
+  readonly showLegend?: boolean;
+  readonly className?: string;
+  readonly ariaLabel?: string;
+}
+
+/**
+ * Grouped vertical bars with a signed zero baseline.
+ *
+ * `BarChart` draws magnitudes from the floor, which is right for a capability
+ * score and wrong for a loss: a quarter that lost money must sit *below* the
+ * line. This draws every bar from a zero baseline, so one glance separates the
+ * quarters that made money from the ones that did not.
+ *
+ * Sized for a 390px phone: the caller passes a height at or under 160 and the
+ * SVG scales to the container width.
+ */
+export function BarSeries({
+  categories,
+  series,
+  height = 140,
+  formatValue,
+  ticks,
+  showLegend = true,
+  className,
+  ariaLabel,
+}: BarSeriesProps): React.JSX.Element {
+  const width = 640;
+  const padLeft = 52;
+  const padRight = 8;
+  const padTop = 8;
+  const padBottom = 20;
+  const lanes = series.slice(0, 2);
+
+  const format = formatValue ?? ((value: number) => formatCount(value));
+  const all = categories.flatMap((category) => category.values.slice(0, lanes.length));
+  const extent = extentOf(all, true);
+  const slot = (width - padLeft - padRight) / Math.max(1, categories.length);
+  const barWidth = Math.max(2, Math.min(26, (slot * 0.66) / Math.max(1, lanes.length)));
+  const zeroY = project(0, extent, height, padTop, padBottom);
+  const axisTicks = ticks ?? [extent.max, 0, extent.min];
+
+  return (
+    <div className={cx('w-full', className)}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        role="img"
+        aria-label={ariaLabel ?? lanes.map((lane) => lane.label).join(', ')}
+        preserveAspectRatio="none"
+      >
+        {axisTicks.map((tick, index) => {
+          const y = project(tick, extent, height, padTop, padBottom);
+          return (
+            <g key={`tick-${index}-${tick}`}>
+              <line
+                x1={padLeft}
+                y1={y}
+                x2={width - padRight}
+                y2={y}
+                stroke="var(--color-hair)"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+              />
+              <text x={padLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--color-ink-faint)" fontFamily="var(--font-mono)">
+                {format(tick)}
+              </text>
+            </g>
+          );
+        })}
+
+        {categories.map((category, categoryIndex) => {
+          const groupWidth = barWidth * lanes.length;
+          const originX = padLeft + categoryIndex * slot + (slot - groupWidth) / 2;
+          return (
+            <g key={`${category.label}-${categoryIndex}`}>
+              {lanes.map((lane, laneIndex) => {
+                const raw = category.values[laneIndex] ?? 0;
+                const value = Number.isFinite(raw) ? raw : 0;
+                const y = project(value, extent, height, padTop, padBottom);
+                const top = Math.min(y, zeroY);
+                const barHeight = Math.max(1, Math.abs(y - zeroY));
+                const tone = lane.tone ?? SERIES_TONES[laneIndex % SERIES_TONES.length] ?? 'brand';
+                return (
+                  <rect
+                    key={lane.id}
+                    x={originX + laneIndex * barWidth}
+                    y={top}
+                    width={Math.max(1, barWidth - 1.5)}
+                    height={barHeight}
+                    rx="2"
+                    fill={TONE_VAR[tone]}
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
+
+        {categories.map((category, index) => {
+          const stride = Math.max(1, Math.ceil(categories.length / 6));
+          if (index % stride !== 0 && index !== categories.length - 1) return null;
+          return (
+            <text
+              key={`x-${category.label}-${index}`}
+              x={padLeft + index * slot + slot / 2}
+              y={height - 5}
+              textAnchor="middle"
+              fontSize="9"
+              fill="var(--color-ink-faint)"
+              fontFamily="var(--font-mono)"
+            >
+              {category.label}
+            </text>
+          );
+        })}
+      </svg>
+
+      {showLegend && lanes.length > 1 ? (
+        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+          {lanes.map((lane, index) => (
+            <span key={lane.id} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
+              <span
+                className="inline-block h-2 w-2 rounded-[2px]"
+                style={{ backgroundColor: TONE_VAR[lane.tone ?? SERIES_TONES[index % SERIES_TONES.length] ?? 'brand'] }}
+              />
+              {lane.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Stacked bars                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface StackedSegment {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+  readonly tone?: Tone;
+}
+
+export interface StackedBarDatum {
+  readonly label: string;
+  readonly segments: readonly StackedSegment[];
+}
+
+export interface StackedBarsProps {
+  readonly data: readonly StackedBarDatum[];
+  readonly height?: number;
+  readonly formatValue?: (value: number) => string;
+  readonly showLegend?: boolean;
+  readonly className?: string;
+  readonly ariaLabel?: string;
+}
+
+/**
+ * One bar per category, split into stacked parts.
+ *
+ * Composition over time: how a total was made up, quarter by quarter. Negative
+ * parts are dropped rather than drawn downward — a stack answers "what is this
+ * total made of", and a part that took away from the total is not part of it.
+ * The figure that carries the negative is the total itself, printed above.
+ */
+export function StackedBars({
+  data,
+  height = 140,
+  formatValue,
+  showLegend = true,
+  className,
+  ariaLabel,
+}: StackedBarsProps): React.JSX.Element {
+  const width = 640;
+  const padLeft = 52;
+  const padRight = 8;
+  const padTop = 8;
+  const padBottom = 20;
+
+  const format = formatValue ?? ((value: number) => formatCount(value));
+  const totals = data.map((datum) => datum.segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0));
+  const ceiling = Math.max(...totals, 1);
+  const slot = (width - padLeft - padRight) / Math.max(1, data.length);
+  const barWidth = Math.max(2, Math.min(28, slot * 0.62));
+  const usable = height - padTop - padBottom;
+
+  const keys: StackedSegment[] = [];
+  for (const datum of data) {
+    for (const segment of datum.segments) {
+      if (!keys.some((entry) => entry.key === segment.key)) keys.push(segment);
+    }
+  }
+
+  return (
+    <div className={cx('w-full', className)}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        role="img"
+        aria-label={ariaLabel ?? 'Composition over time'}
+        preserveAspectRatio="none"
+      >
+        {[ceiling, ceiling / 2, 0].map((tick, index) => {
+          const y = padTop + usable - (tick / ceiling) * usable;
+          return (
+            <g key={`tick-${index}`}>
+              <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="var(--color-hair)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <text x={padLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--color-ink-faint)" fontFamily="var(--font-mono)">
+                {format(Math.round(tick))}
+              </text>
+            </g>
+          );
+        })}
+
+        {data.map((datum, index) => {
+          const x = padLeft + index * slot + (slot - barWidth) / 2;
+          let cursor = padTop + usable;
+          return (
+            <g key={`${datum.label}-${index}`}>
+              {datum.segments.map((segment, segmentIndex) => {
+                const value = Math.max(0, segment.value);
+                const segmentHeight = (value / ceiling) * usable;
+                cursor -= segmentHeight;
+                const tone = segment.tone ?? SERIES_TONES[segmentIndex % SERIES_TONES.length] ?? 'brand';
+                if (segmentHeight <= 0) return null;
+                return <rect key={segment.key} x={x} y={cursor} width={barWidth} height={segmentHeight} fill={TONE_VAR[tone]} />;
+              })}
+            </g>
+          );
+        })}
+
+        {data.map((datum, index) => {
+          const stride = Math.max(1, Math.ceil(data.length / 6));
+          if (index % stride !== 0 && index !== data.length - 1) return null;
+          return (
+            <text
+              key={`x-${datum.label}-${index}`}
+              x={padLeft + index * slot + slot / 2}
+              y={height - 5}
+              textAnchor="middle"
+              fontSize="9"
+              fill="var(--color-ink-faint)"
+              fontFamily="var(--font-mono)"
+            >
+              {datum.label}
+            </text>
+          );
+        })}
+      </svg>
+
+      {showLegend && keys.length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+          {keys.map((segment, index) => (
+            <span key={segment.key} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
+              <span
+                className="inline-block h-2 w-2 rounded-[2px]"
+                style={{ backgroundColor: TONE_VAR[segment.tone ?? SERIES_TONES[index % SERIES_TONES.length] ?? 'brand'] }}
+              />
+              {segment.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}

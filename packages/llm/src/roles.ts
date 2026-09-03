@@ -68,7 +68,7 @@ import {
 import { fnv1a64, stableStringify } from '@frontier/shared';
 import type { z } from 'zod';
 import { composeCharacterDialogue } from './compose/characterDialogue';
-import { composeChiefOfStaff, enforceConfirmationPolicy } from './compose/chiefOfStaff';
+import { composeChiefOfStaff, enforceInterpretationPolicy } from './compose/chiefOfStaff';
 import { composeInnovationInterpreter } from './compose/innovationInterpreter';
 import { composeNarrator } from './compose/narrator';
 import { composeNpcStrategist, type NpcStrategistEvidence } from './compose/npcStrategist';
@@ -294,7 +294,7 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           sessionKey: conversationKey,
           ...scope,
           fallback: () => ({ output: fallbackChiefOfStaff(input), declineReason: null }),
-          postProcess: enforceConfirmationPolicy,
+          postProcess: enforceInterpretationPolicy,
         });
       },
     },
@@ -392,7 +392,7 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
  */
 const LLM_FALLBACK_STRATEGY_TEXT: Record<AgentRole, string> = {
   world_director: 'Apply the candidate skeletons using their event family template modifiers at the drawn severity.',
-  chief_of_staff: 'Fall back to the normal controls: the instruction is echoed back for the player to submit themselves.',
+  chief_of_staff: 'Answer from the typed dossier where arithmetic can, and otherwise echo the instruction back for the player to submit themselves.',
   npc_strategist: 'Run the deterministic archetype policy for that company\'s posture.',
   character_dialogue: 'Return a short templated reply consistent with traits and relationship, and store no commitment.',
   innovation_interpreter: 'Decline the proposal and leave the Frontier Map unchanged.',

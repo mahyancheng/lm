@@ -44,8 +44,9 @@ import { BatchBudget, Verdict, findCompany, shareholderStake, type ValidationAct
 import { applyTypeRules, type RuleContext } from './rules';
 import { authorisedByBoard, boardMatterFor, toBoardProposalIntent } from './boardMatters';
 
-export { BatchBudget, Verdict, canReach, shareholderStake, type ValidationActor, type ReachDecision } from './context';
+export { BatchBudget, Verdict, canReach, researchComputeHeadroom, shareholderStake, type ValidationActor, type ReachDecision } from './context';
 export { RULES, applyTypeRules, quarterlyHireCostUsd, reservableUnits, type RuleContext } from './rules';
+export { availableActionsFor, availableActionTypes, type AvailabilityActor } from './availability';
 export {
   BOARD_MATTER_BY_ACTION,
   BOARD_AUTHORISATION_WINDOW_QUARTERS,

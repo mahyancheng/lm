@@ -501,6 +501,13 @@ export const ACTION_TYPES = [
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /**
+ * The discriminator as a schema, for contracts that talk *about* actions rather
+ * than carrying one — the Chief of Staff's available-actions list, for example.
+ * Derived from `ACTION_TYPES`, so it can never name a type the union does not.
+ */
+export const ActionTypeSchema = z.enum(ACTION_TYPES).describe('One member of the action union, named rather than carried.');
+
+/**
  * Actions that must always be confirmed explicitly by a human, even when the
  * player has enabled "execute routine instructions automatically". Financing,
  * mergers and acquisitions, layoffs, stock issuance, major contracts and large

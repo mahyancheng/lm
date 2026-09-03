@@ -217,6 +217,195 @@ export function balanceSheetReconciles(sheet: BalanceSheet, toleranceUsd: number
   return Math.abs(assets - liabilities - sheet.equity) <= toleranceUsd;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Per-quarter financial statements (world version 2 and later)               */
+/*                                                                            */
+/*  `Financials` is one quarter, overwritten every quarter. `FinancialQuarter` */
+/*  is the filed record of a quarter that has closed, kept as a bounded series */
+/*  so a screen can draw a trend without re-deriving one from the ledger.      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How many closed quarters a company keeps on state. Ten years.
+ *
+ * BOUND: the array is trimmed from the front, oldest first, every time the
+ * financial phase appends. The complete series lives in the snapshots and the
+ * ledger; this is the phone-sized window a screen reads.
+ */
+export const FINANCIAL_HISTORY_QUARTERS = 40;
+
+export const FinancialRevenueBySourceSchema = z
+  .object({
+    productsUsd: usd('Revenue from product lines: active customers multiplied by list price, summed across active products.'),
+    contractsUsd: usd('Revenue from government contract milestones accepted this quarter.'),
+    otherUsd: signedUsd(
+      'Everything else the engine recognised: the goods-chain trade uplift and any price-accord bonus. Signed, because a falling chain price takes revenue away. INVARIANT: products + contracts + other = revenue.',
+    ),
+  })
+  .describe('Where the quarter\'s revenue came from. Internal detail: a listed company files the total, not this split.');
+export type FinancialRevenueBySource = z.infer<typeof FinancialRevenueBySourceSchema>;
+
+export const FinancialOpexByLineSchema = z
+  .object({
+    payrollUsd: usd('Loaded employment cost for the quarter.'),
+    researchUsd: usd('Research and development excluding the training compute booked beside it, so the two lines do not double count.'),
+    marketingUsd: usd('Marketing, demand generation and developer relations.'),
+    computeUsd: usd('Training compute charged to operating expense. Serving compute is a cost of revenue and is inside COGS, not here.'),
+    otherUsd: signedUsd('The remainder, so the lines always sum to the operating expense total. INVARIANT: payroll + research + marketing + compute + other = opex.'),
+  })
+  .describe('Operating expense by line. Internal detail: a listed company files the total, not this split.');
+export type FinancialOpexByLine = z.infer<typeof FinancialOpexByLineSchema>;
+
+export const FinancialIncomeStatementSchema = z
+  .object({
+    revenueUsd: usd('Total revenue recognised in the quarter.'),
+    revenueBySource: FinancialRevenueBySourceSchema.optional().describe(
+      'Absent on a filed statement a rival may read. Absent means withheld, never zero.',
+    ),
+    cogsUsd: usd('Cost of revenue: serving compute, support, delivery and compliance.'),
+    grossProfitUsd: signedUsd('Revenue less cost of revenue.'),
+    opexUsd: usd('Total operating expense: payroll, marketing and research and development.'),
+    opexByLine: FinancialOpexByLineSchema.optional().describe('Absent on a filed statement a rival may read.'),
+    ebitdaUsd: signedUsd('Operating income before depreciation. INVARIANT: ebitda = operatingIncome + depreciation.'),
+    depreciationUsd: usd('Depreciation charged against property, plant and equipment this quarter. The only non-cash charge the engine books.'),
+    operatingIncomeUsd: signedUsd('Gross profit less operating expense. INVARIANT: operatingIncome = grossProfit - opex.'),
+    interestUsd: usd('Interest paid on outstanding debt.'),
+    taxUsd: usd('Tax charged on a positive pre-tax result. Zero for a loss-making quarter.'),
+    netIncomeUsd: signedUsd('The bottom line. INVARIANT: netIncome = operatingIncome - interest - tax.'),
+  })
+  .describe('The income statement for one closed quarter, in whole dollars.');
+export type FinancialIncomeStatement = z.infer<typeof FinancialIncomeStatementSchema>;
+
+export const FinancialBalanceSheetSchema = z
+  .object({
+    cashUsd: usd('Cash and equivalents at the close.'),
+    receivablesUsd: usd('Invoiced and not yet collected.'),
+    computeAssetsUsd: usd('Property, plant and equipment net of depreciation — principally accelerators and datacentre build.'),
+    otherAssetsUsd: usd('Goodwill and investments carried at book value.'),
+    totalAssetsUsd: usd('INVARIANT: cash + receivables + computeAssets + otherAssets.'),
+    debtUsd: usd('Interest-bearing debt outstanding.'),
+    deferredRevenueUsd: usd('Collected for work not yet delivered.'),
+    otherLiabilitiesUsd: usd('Payables, including unpaid compute bills.'),
+    totalLiabilitiesUsd: usd('INVARIANT: debt + deferredRevenue + otherLiabilities.'),
+    equityUsd: signedUsd('Shareholders\' equity. INVARIANT: totalAssets - totalLiabilities = equity, within FINANCIAL_STATEMENT_TOLERANCE_USD.'),
+  })
+  .describe('The balance sheet at the close of one quarter, restated flat so a screen renders it without arithmetic.');
+export type FinancialBalanceSheet = z.infer<typeof FinancialBalanceSheetSchema>;
+
+export const FinancialCashFlowSchema = z
+  .object({
+    openingCashUsd: usd('Cash carried into the financial phase.'),
+    operatingUsd: signedUsd('Cash generated by operations: collections less everything the quarter paid out other than debt principal and capital expenditure.'),
+    investingUsd: signedUsd('Cash spent on capital assets. Negative when the company bought compute.'),
+    financingUsd: signedUsd('Debt principal repaid, negative, plus anything drawn.'),
+    netChangeUsd: signedUsd('INVARIANT: operating + investing + financing = netChange = endingCash - openingCash.'),
+    endingCashUsd: usd('Cash at the close of the quarter.'),
+  })
+  .describe('The cash-flow statement for one closed quarter. Reconciles to the cash line of the balance sheet by construction.');
+export type FinancialCashFlow = z.infer<typeof FinancialCashFlowSchema>;
+
+export const FinancialKpisSchema = z
+  .object({
+    headcount: intCount('Total employees across the five staff roles at the close.'),
+    grossMarginPct: unitInterval('Gross profit over revenue. Zero for a pre-revenue quarter.'),
+    revenueGrowthQoQ: rateFraction('Revenue against the previous closed quarter, where 0.08 is +8%. Zero when there is no previous quarter on this series.', -1, 5),
+    revenueGrowthYoY: rateFraction('Revenue against the quarter four back on this series. Zero before four quarters of history exist.', -1, 10),
+    runwayQuarters: z.number().min(0).max(200).describe('Quarters of cash left at this quarter\'s burn. Capped at 200 for a cash-generative company.'),
+    runRateUsd: usd('Annualised revenue: this quarter multiplied by four. The ARR figure the screen prints.'),
+    marketCapUsd: usd('Market capitalisation at the close.').nullable().describe('Market capitalisation at the close, or null before the market has priced this company.'),
+    sharePriceUsd: usd('Closing share price.').nullable().describe('Closing share price from the tape, or null while unlisted.'),
+  })
+  .describe('The handful of derived figures a Financials screen leads with. Every one is computed by the engine, never by a screen.');
+export type FinancialKpis = z.infer<typeof FinancialKpisSchema>;
+
+export const FinancialProductLineSchema = z
+  .object({
+    productId: z.string().min(1),
+    name: z.string().min(1).max(80),
+    segment: ProductSegmentSchema,
+    units: intCount('Paying seats or accounts at the close of the quarter.'),
+    priceUsd: usd('List price per unit per quarter.'),
+    revenueUsd: usd('INVARIANT: units multiplied by price.'),
+    grossMarginPct: unitInterval('This line\'s gross margin, as the product phase resolved it.'),
+  })
+  .describe('One product line\'s unit economics for one closed quarter.');
+export type FinancialProductLine = z.infer<typeof FinancialProductLineSchema>;
+
+/**
+ * One closed quarter's complete accounts for one company.
+ *
+ * Written by the financial phase from the figures that phase has already
+ * computed — never recomputed, and never by a model. Every optional block is
+ * optional because a *projection* removes it: a listed rival files the
+ * statements at a coarser grain, and a private rival files nothing at all. An
+ * absent block means withheld; it never means zero.
+ */
+export const FinancialQuarterSchema = z
+  .object({
+    quarter: QuarterIndexSchema.describe('The quarter these accounts close.'),
+    income: FinancialIncomeStatementSchema,
+    balance: FinancialBalanceSheetSchema,
+    cashFlow: FinancialCashFlowSchema,
+    kpis: FinancialKpisSchema,
+    productLines: z
+      .array(FinancialProductLineSchema)
+      .max(64)
+      .optional()
+      .describe('Per-line economics, ordered by product id. Absent on a filed statement a rival may read: nobody files this.'),
+  })
+  .describe('A company\'s filed accounts for one closed quarter. Bounded to FINANCIAL_HISTORY_QUARTERS entries on the company.');
+export type FinancialQuarter = z.infer<typeof FinancialQuarterSchema>;
+
+/** Tolerance in dollars for the statement identities. Same one dollar the live sheet uses. */
+export const FINANCIAL_STATEMENT_TOLERANCE_USD = BALANCE_SHEET_TOLERANCE_USD;
+
+/**
+ * Every identity a committed statement must satisfy. Pure; safe in the engine
+ * and used by the tests that guard the financial phase.
+ */
+export function financialQuarterReconciles(
+  entry: FinancialQuarter,
+  toleranceUsd: number = FINANCIAL_STATEMENT_TOLERANCE_USD,
+): boolean {
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= toleranceUsd;
+  const b = entry.balance;
+  const c = entry.cashFlow;
+  const i = entry.income;
+  return (
+    near(b.totalAssetsUsd, b.cashUsd + b.receivablesUsd + b.computeAssetsUsd + b.otherAssetsUsd) &&
+    near(b.totalLiabilitiesUsd, b.debtUsd + b.deferredRevenueUsd + b.otherLiabilitiesUsd) &&
+    near(b.totalAssetsUsd - b.totalLiabilitiesUsd, b.equityUsd) &&
+    near(c.operatingUsd + c.investingUsd + c.financingUsd, c.netChangeUsd) &&
+    near(c.netChangeUsd, c.endingCashUsd - c.openingCashUsd) &&
+    near(c.endingCashUsd, b.cashUsd) &&
+    near(i.grossProfitUsd, i.revenueUsd - i.cogsUsd) &&
+    near(i.operatingIncomeUsd, i.grossProfitUsd - i.opexUsd) &&
+    near(i.ebitdaUsd, i.operatingIncomeUsd + i.depreciationUsd) &&
+    near(i.netIncomeUsd, i.operatingIncomeUsd - i.interestUsd - i.taxUsd) &&
+    (i.revenueBySource === undefined ||
+      near(i.revenueUsd, i.revenueBySource.productsUsd + i.revenueBySource.contractsUsd + i.revenueBySource.otherUsd)) &&
+    (i.opexByLine === undefined ||
+      near(
+        i.opexUsd,
+        i.opexByLine.payrollUsd + i.opexByLine.researchUsd + i.opexByLine.marketingUsd + i.opexByLine.computeUsd + i.opexByLine.otherUsd,
+      ))
+  );
+}
+
+/**
+ * The same statement as a listed company files it: totals, no internal split.
+ *
+ * A projection removes and never rewrites, so this drops the two breakdowns and
+ * the product lines and leaves every surviving figure exactly as the engine
+ * committed it. A *private* company files nothing, so its history is absent
+ * entirely rather than passed through here.
+ */
+export function filedFinancialQuarter(entry: FinancialQuarter): FinancialQuarter {
+  const { revenueBySource: _bySource, opexByLine: _byLine, ...income } = entry.income;
+  const { productLines: _lines, ...rest } = entry;
+  return { ...rest, income };
+}
+
 export const ProfitAndLossSchema = z
   .object({
     companyId: z.string().min(1),
@@ -371,6 +560,14 @@ export const CompanySchema = z
     fundamentals: CompanyFundamentalsSchema.default(DEFAULT_COMPANY_FUNDAMENTALS).describe(
       'Rolled-up figures the share price is anchored to. Written by the metrics phase, read by the market phase. Defaults to DEFAULT_COMPANY_FUNDAMENTALS so a world-version-1 save parses unchanged.',
     ),
+
+    financialHistory: z
+      .array(FinancialQuarterSchema)
+      .max(FINANCIAL_HISTORY_QUARTERS)
+      .optional()
+      .describe(
+        'Closed-quarter accounts, oldest first, bounded to FINANCIAL_HISTORY_QUARTERS with the oldest dropped. Optional rather than defaulted for the reason the priced-economy block below is: a defaulted array would materialise on every world-version-1 company the moment the schema parsed one and that frozen world would stop hashing to the value it has always hashed to. Absent means the world does not keep statements, or that this seat may not read them.',
+      ),
 
     // --- priced economy (world version 2 and later) ---
     //

@@ -13,10 +13,10 @@
  * programmes" — is shown before the action is queued, not after.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
 import { PUBLICATION_MODES, quarterLabel } from '@frontier/contracts';
-import { heldComputeUnits } from '@frontier/simulation';
+import { projectRequirements, researchComputeHeadroom } from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import {
   Drawer,
@@ -74,12 +74,38 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
   const ownConfidence = node === null ? undefined : node.confidenceByCompany[company.id];
 
   /* --- ticket bounds ------------------------------------------------------ */
+  // The bounds are the validator's own figures, so the sliders never offer
+  // what the engine would clamp away: compute headroom counts what the company
+  // holds (cloud included from world version 2) less running programmes, and
+  // free researchers are those not already on one.
+  const requirements = node === null ? null : projectRequirements(session, node);
+  const computeHeadroom = researchComputeHeadroom(session, company);
+  const researchersOnProgrammes = projects
+    .filter((project) => project.status === 'active' || project.status === 'paused')
+    .reduce((total, project) => total + project.talentAllocated, 0);
+  const freeResearchers = Math.max(0, company.employees.researchers - researchersOnProgrammes);
+
+  // A programme opens resourced to run: the node's own requirement, capped by
+  // what is free. Zero compute was the old default, and a programme started at
+  // zero compute stalls at the floor for its whole life.
+  const nodeId = node?.id ?? null;
+  const wantedCompute = requirements === null ? 0 : Math.min(computeHeadroom, requirements.computeUnits);
+  const wantedResearchers = requirements === null ? 0 : Math.min(freeResearchers, requirements.researchers);
+  useEffect(() => {
+    if (nodeId === null) return;
+    setComputeUnits(String(wantedCompute));
+    setResearchers(String(wantedResearchers));
+    // Reseed only when the node changes; a founder's own edits must survive a
+    // re-render of the same node.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeId]);
+
   const budgetValue = Math.max(0, Number.parseFloat(budget) || 0);
   const computeValue = Math.max(0, Math.round(Number.parseFloat(computeUnits) || 0));
   const researcherValue = Math.max(0, Math.round(Number.parseFloat(researchers) || 0));
   const budgetMax = Math.max(company.financials.cash, budgetValue, 250_000);
-  const computeMax = Math.max(Math.round(heldComputeUnits(session, company)), computeValue, 10);
-  const researcherMax = Math.max(company.employees.researchers, researcherValue, 1);
+  const computeMax = Math.max(computeHeadroom, computeValue, 1);
+  const researcherMax = Math.max(freeResearchers, researcherValue, 1);
 
   const startIntent =
     node === null
@@ -176,6 +202,16 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                 items={[
                   { label: 'Arrival window', value: `${node.estimatedWindow[0]}–${node.estimatedWindow[1]}` },
                   { label: 'Compute intensity', value: formatPct(node.computeIntensity) },
+                  {
+                    label: 'Compute wanted',
+                    value: `${formatCount(requirements?.computeUnits ?? 0)} units`,
+                    hint: `${formatCount(computeHeadroom)} free across owned, reserved and cloud`,
+                  },
+                  {
+                    label: 'Researchers wanted',
+                    value: formatCount(requirements?.researchers ?? 0),
+                    hint: `${formatCount(freeResearchers)} not on another programme`,
+                  },
                   { label: 'Cost estimate (low)', value: formatMoney(node.researchCostRange[0]) },
                   { label: 'Cost estimate (high)', value: formatMoney(node.researchCostRange[1]) },
                   { label: 'Novelty', value: formatPct(node.novelty), hint: 'Distance from what the world already believes' },
@@ -239,8 +275,9 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
             <div>
               <SectionHeading rule>Start a programme</SectionHeading>
               {/* Bounds are the validator's, not the form's: cash caps the
-                  budget, held capacity caps compute, and the researcher clamp
-                  ("the rest are on other programmes") shows live below. */}
+                  budget, free capacity (owned, reserved and, from world
+                  version 2, cloud) caps compute, free researchers cap the
+                  headcount, and the validator's own verdict shows live below. */}
               <div className="mt-2 grid gap-2.5 sm:grid-cols-3">
                 <SliderField
                   label="Budget / quarter"

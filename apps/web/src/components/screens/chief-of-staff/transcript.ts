@@ -28,6 +28,28 @@ export interface TranscriptEntry {
 
 const memory = new Map<string, TranscriptEntry[]>();
 
+/**
+ * Who to tell when a transcript changes.
+ *
+ * The thread is now on two surfaces at once — the dedicated screen and the
+ * drawer that opens over every other screen — and both must show the same
+ * conversation. Without this, sending from the drawer would leave the screen
+ * behind it holding a stale copy until it remounted.
+ */
+const listeners = new Set<() => void>();
+
+/** Subscribe to transcript changes. Returns the unsubscribe. */
+export function subscribeTranscript(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
+
 function storageKey(sessionId: string): string {
   return `frontier.cos.${sessionId}`;
 }
@@ -46,6 +68,7 @@ export function writeTranscript(sessionId: string, entries: readonly TranscriptE
   const next = [...entries];
   memory.set(sessionId, next);
   persist(sessionId, next);
+  notify();
   return next;
 }
 
@@ -64,7 +87,9 @@ export function historyOf(entries: readonly TranscriptEntry[]): { role: 'player'
   const turns: { role: 'player' | 'chief_of_staff'; text: string }[] = [];
   for (const entry of entries) {
     turns.push({ role: 'player', text: entry.message });
-    turns.push({ role: 'chief_of_staff', text: entry.interpretation.summary });
+    // The reply is what the founder read; the summary is the diff underneath
+    // it. History carries the reply so the thread reads as a conversation.
+    turns.push({ role: 'chief_of_staff', text: entry.interpretation.reply });
   }
   return turns.slice(-12);
 }
@@ -90,6 +115,11 @@ function clip(value: string, max: number): string {
 export function echoFallback(message: string): ChiefOfStaffInterpretation {
   const asked = clip(message, 160);
   return {
+    mode: 'answer',
+    reply: clip(
+      `I could not reach the server, so I have translated nothing and submitted nothing. What I heard was: "${asked}"`,
+      2000,
+    ),
     interpretedInstructions: [],
     summary: clip(
       `I could not reach a model, so I have translated nothing. What I heard was: "${asked}" — tell me which control you want and I will point you at it, or use the tickets beside this panel. No binding action has been submitted yet.`,

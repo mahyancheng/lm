@@ -40,6 +40,10 @@
  * the long-term memory.
  */
 
+import type { ChiefOfStaffMemory } from '@frontier/contracts';
+import { EMPTY_CHIEF_OF_STAFF_MEMORY } from '@frontier/contracts';
+import { readMemory } from './chiefOfStaffMemory';
+
 export interface LlmSessionStore {
   /** The Claude Code session id last recorded for this conversation, or null. Never throws. */
   get(sessionKey: string): Promise<string | null>;
@@ -93,6 +97,81 @@ export function createNullSessionStore(): LlmSessionStore {
   return {
     async get(): Promise<string | null> {
       return null;
+    },
+    async set(): Promise<void> {
+      /* intentionally empty */
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Conversation memory                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The durable half of a Chief of Staff thread, keyed by the same opaque
+ * conversation key the session store uses.
+ *
+ * Separate interface, same key space, and deliberately so. A Claude session id
+ * is a credential-shaped handle to a transcript that any restart may
+ * invalidate; a memory is the founder's own standing preferences and the last
+ * few exchanges, and it has to survive exactly the events that take the
+ * transcript. Storing both under one method would make the shorter-lived one
+ * the lifetime of the pair.
+ *
+ * The same contract applies: neither method may throw, and a store that cannot
+ * reach its backend returns the empty memory and swallows the write. Losing
+ * continuity degrades a conversation; it must never fail a quarter.
+ */
+export interface LlmMemoryStore {
+  /** The memory recorded for this conversation, or the empty memory. Never throws. */
+  get(sessionKey: string): Promise<ChiefOfStaffMemory>;
+  /** Record the memory for this conversation. Last write wins. Never throws. */
+  set(sessionKey: string, memory: ChiefOfStaffMemory): Promise<void>;
+}
+
+/** An in-memory memory store with inspection helpers, for demo mode and tests. */
+export interface InMemoryLlmMemoryStore extends LlmMemoryStore {
+  readonly size: number;
+  /** Synchronous peek, for assertions. */
+  peek(sessionKey: string): ChiefOfStaffMemory;
+  clear(): void;
+}
+
+/**
+ * Process-local memory store.
+ *
+ * Correct for demo mode — which is what the Pi runs — and for tests. Everything
+ * written here is re-parsed on read, so a corrupted or stale entry degrades to
+ * the empty memory rather than reaching a prompt unvalidated.
+ */
+export function createInMemoryMemoryStore(initial: Readonly<Record<string, ChiefOfStaffMemory>> = {}): InMemoryLlmMemoryStore {
+  const map = new Map<string, ChiefOfStaffMemory>(Object.entries(initial));
+
+  return {
+    get size() {
+      return map.size;
+    },
+    async get(sessionKey: string): Promise<ChiefOfStaffMemory> {
+      return readMemory(map.get(sessionKey));
+    },
+    async set(sessionKey: string, memory: ChiefOfStaffMemory): Promise<void> {
+      map.set(sessionKey, readMemory(memory));
+    },
+    peek(sessionKey: string): ChiefOfStaffMemory {
+      return readMemory(map.get(sessionKey));
+    },
+    clear(): void {
+      map.clear();
+    },
+  };
+}
+
+/** A store that remembers nothing. Every turn starts from the empty memory. */
+export function createNullMemoryStore(): LlmMemoryStore {
+  return {
+    async get(): Promise<ChiefOfStaffMemory> {
+      return EMPTY_CHIEF_OF_STAFF_MEMORY;
     },
     async set(): Promise<void> {
       /* intentionally empty */

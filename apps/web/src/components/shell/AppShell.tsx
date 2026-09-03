@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NAV_GROUPS, isGamePath, navGroupFor, navItemFor, navSiblingsFor, primaryHrefOf } from '@/lib/nav';
 import { useGame, useGameActions, useQueuedActions } from '@/lib/game';
 import { ActionQueueTray, Icon, cx } from '@/components/ui';
+import { ChiefOfStaffDock } from './ChiefOfStaffDock';
 import { NavRail } from './NavRail';
 import { StatusBar } from './StatusBar';
 import { ResolvingOverlay } from './ResolvingOverlay';
@@ -169,6 +170,7 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
         })}
       </nav>
 
+      <ChiefOfStaffDock />
       <ActionQueueTray />
       <ResolvingOverlay />
 

@@ -159,7 +159,7 @@ describe('chief of staff composer', () => {
     expect(prompt).toContain('Get us profitable');
     expect(prompt).toContain('Automatic execution is off');
     expect(system).toContain('raise_round');
-    expect(system).toContain('You interpret. You never submit.');
+    expect(system).toContain('You interpret and advise. You never submit.');
   });
 
   it('describes the auto-execute carve-out when it is enabled', () => {
@@ -169,7 +169,16 @@ describe('chief of staff composer', () => {
 });
 
 describe('confirmation policy', () => {
-  const base = { interpretedInstructions: [], summary: 'nothing to do here', questions: [], requiresConfirmation: false, confidence: 0.9, unsupportedRequests: [] };
+  const base = {
+    mode: 'act' as const,
+    reply: 'Nothing needs doing.',
+    interpretedInstructions: [],
+    summary: 'nothing to do here',
+    questions: [],
+    requiresConfirmation: false,
+    confidence: 0.9,
+    unsupportedRequests: [],
+  };
 
   it('leaves a routine interpretation alone', () => {
     const result = enforceConfirmationPolicy({ ...base, interpretedInstructions: [{ type: 'set_research_budget', budgetUsd: 1_000_000 }] });

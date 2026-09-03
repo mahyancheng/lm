@@ -23,6 +23,7 @@ import {
   Panel,
   ProgressBar,
   StatCard,
+  TabBar,
   Tag,
   cx,
   type Column,
@@ -33,6 +34,8 @@ import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
 import { StatementTable, type StatementRow } from '@/components/screens/reporting/StatementTable';
 import { balanceSheetView, humanise, incomeStatementOf } from '@/components/screens/reporting/util';
 import { HistoryPanel } from '@/components/screens/financials/HistoryPanel';
+import { FinancialHistory } from '@/components/screens/financials/FinancialHistory';
+import { financialHistoryFor } from '@/components/screens/financials/history';
 import { debtServiceView } from '@/components/screens/financials/headroom';
 import { ModifierStackCard } from '@/components/screens/company/ModifierStackCard';
 
@@ -93,6 +96,13 @@ export default function FinancialsPage(): React.JSX.Element {
   const quotes = company.instrumentId === null ? [] : tape;
 
   const [selection, setSelection] = useState<SelectionKey | null>(null);
+  // The current quarter first, because that is the quarter a decision is made
+  // in. History is one tap away and carries everything the engine has filed.
+  const [tab, setTab] = useState<'now' | 'history'>('now');
+
+  // The player's own statements, in full. `financialHistoryFor` reads the
+  // projection, so the same call on a rival id returns what that rival filed.
+  const filedHistory = useMemo(() => financialHistoryFor(view, company.id), [view, company.id]);
 
   const pnl = useMemo(() => incomeStatementOf(company.financials), [company.financials]);
   const sheet = useMemo(() => balanceSheetView(company.balanceSheet), [company.balanceSheet]);
@@ -278,271 +288,289 @@ export default function FinancialsPage(): React.JSX.Element {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Revenue" iconName="coins" value={formatMoney(pnl.revenue)} delta={metrics?.revenueGrowthYoY} hint="Recognised this quarter" />
-        <StatCard
-          label="Gross profit"
-          iconName="ledger"
-          value={formatMoney(pnl.grossProfit)}
-          tone={pnl.grossProfit >= 0 ? undefined : 'loss'}
-          hint={`Margin ${formatPct(pnl.grossMarginPct)}`}
-        />
-        <StatCard
-          label="Operating"
-          iconName="chart"
-          value={formatMoney(pnl.operatingIncome)}
-          tone={pnl.operatingIncome >= 0 ? 'gain' : 'loss'}
-          hint={`Margin ${formatPct(pnl.operatingMarginPct)}`}
-        />
-        <StatCard
-          label="Before tax"
-          iconName="stamp"
-          value={formatMoney(pnl.preTaxIncome)}
-          tone={pnl.preTaxIncome >= 0 ? 'gain' : 'loss'}
-          hint="After interest"
-        />
-        <StatCard
-          label="Cash movement"
-          iconName="vault"
-          value={formatMoney(company.financials.quarterlyBurn)}
-          tone={company.financials.quarterlyBurn >= 0 ? 'gain' : 'loss'}
-          hint={`Closing cash ${formatMoney(company.financials.cash)} · next quarter you owe ${formatMoney(service.totalUsd)}`}
-        />
-        <StatCard
-          label="Runway"
-          iconName="gauge"
-          value={metrics === null ? '—' : formatQuarterCount(metrics.runwayQuarters)}
-          tone={metrics === null ? undefined : metrics.runwayQuarters < 6 ? 'warn' : undefined}
-          hint={metrics === null ? 'Computed at the first resolution' : 'At the current burn'}
-        />
-      </div>
+      <TabBar
+        tabs={[
+          { id: 'now', label: 'This quarter' },
+          { id: 'history', label: 'History', badge: filedHistory.length === 0 ? undefined : filedHistory.length },
+        ]}
+        value={tab}
+        onChange={(id) => setTab(id === 'history' ? 'history' : 'now')}
+        ariaLabel="Financial statements"
+      />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel
-          title="Profit and loss"
-          iconName="ledger"
-          subtitle={`Quarter ${quarterLabel(session.startYear, session.quarter)} · figures in dollars`}
-        >
-          <StatementTable rows={pnlRows} valueHeader="Amount" secondaryHeader="Margin" />
-        </Panel>
-
-        <Panel
-          title="Balance sheet"
-          iconName="boardTable"
-          subtitle="Assets less liabilities must equal equity within one dollar, or the quarter does not commit."
-          actions={
-            <Tag tone={sheet.reconciles ? 'gain' : 'loss'} dot>
-              {sheet.reconciles ? 'Passed' : `Off by ${formatMoney(sheet.discrepancy)}`}
-            </Tag>
-          }
-        >
-          <StatementTable rows={balanceRows} valueHeader="Amount" />
-          <p className="mt-3 text-[11px] text-ink-faint">
-            Residual assets − liabilities − equity: <span className="figure text-ink-dim">{formatMoney(sheet.discrepancy, 'full')}</span>
-          </p>
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Cash flow" iconName="vault" subtitle="Movement over the quarter, as reported.">
-          <StatementTable rows={cashRows} valueHeader="Amount" />
-
-          {/* V7: the second bankruptcy trigger, drawn beside the number it
-              constrains. Cash below the quarter's debt service is what forces a
-              bridge round, so it is a bar rather than a sentence. */}
-          <div className="mt-3 border-t border-hair pt-3">
-            <ProgressBar
-              label="Next quarter you owe, against cash on hand"
-              value={Math.min(service.totalUsd, Math.max(0, company.financials.cash))}
-              max={Math.max(1, company.financials.cash, service.totalUsd)}
-              tone={service.headroomUsd < 0 ? 'loss' : service.coveredQuarters < 4 ? 'warn' : 'gain'}
-              valueLabel={`${formatMoney(service.totalUsd)} of ${formatMoney(company.financials.cash)}`}
-            />
-            <div className="mt-2 grid grid-cols-2 gap-2.5">
-              <FactCard
-                label="Next quarter you owe"
-                value={formatMoney(service.totalUsd)}
-                hint={`${formatMoney(service.principalUsd)} principal · ${formatMoney(service.interestUsd)} interest`}
-              />
-              <FactCard
-                label="Headroom after it"
-                value={formatMoney(service.headroomUsd)}
-                tone={service.headroomUsd < 0 ? 'loss' : undefined}
-                hint={
-                  service.headroomUsd < 0
-                    ? 'Below the service, the engine forces a bridge round and the posture goes to survival.'
-                    : `${formatQuarterCount(service.coveredQuarters)} of service covered at this balance.`
-                }
-              />
-            </div>
-          </div>
-        </Panel>
-
-        <Panel
-          title="Debt schedule"
-          iconName="coins"
-          iconTone={coverage !== null && coverage < 1 ? 'loss' : 'neutral'}
-          className="lg:col-span-2"
-          subtitle="Outstanding principal, its cost and how well it is covered."
-        >
-          {company.financials.debt <= 0 ? (
-            <EmptyState
-              compact
-              icon="coins"
-              title="No interest-bearing debt"
-              message="Nothing is drawn. A debt issue can be attempted from the Capital screen; the rate clears against the world's credit spreads and debt availability."
-              action={
-                <Link href="/capital" className="btn tap-target gap-1.5">
-                  <Icon name="coins" size={16} accent="current" />
-                  Open Capital
-                </Link>
-              }
-            />
-          ) : (
-            <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
-              <FactCard label="Principal outstanding" value={formatMoney(company.financials.debt)} />
-              <FactCard label="Interest this quarter" value={formatMoney(company.financials.interestExpense)} />
-              <FactCard
-                label="Implied annual rate"
-                value={impliedRate === null ? '—' : formatPct(impliedRate)}
-                hint="Quarterly interest annualised over principal."
-              />
-              <FactCard
-                label="Interest coverage"
-                value={coverage === null ? '—' : formatMultiple(coverage)}
-                tone={coverage === null ? undefined : coverage >= 2 ? 'gain' : coverage >= 1 ? 'warn' : 'loss'}
-                hint="Operating income over interest expense."
-              />
-              <FactCard label="Debt on balance sheet" value={formatMoney(company.balanceSheet.liabilities.debt)} />
-              <FactCard
-                label="Net cash"
-                value={formatMoney(company.financials.cash - company.financials.debt)}
-                tone={company.financials.cash - company.financials.debt >= 0 ? 'gain' : 'loss'}
-              />
-              <FactCard
-                label="Credit spreads (world)"
-                value={formatPct(view.world.macro.creditSpreads)}
-                hint="Over the policy rate; widening spreads reprice every future issue."
-              />
-              <FactCard label="Policy rate (world)" value={formatPct(view.world.macro.policyRate)} />
-              <FactCard
-                label="Debt availability"
-                value={formatPct(view.world.capitalMarkets.debtAvailability)}
-                hint="Lender willingness to extend credit to AI companies."
-              />
-            </div>
-          )}
-        </Panel>
-      </div>
-
-      {/* P0-2's named surface: the toll is a signed line in an itemised cost
-          stack, or the exemption line when your own group is the one charging
-          it. Every row opens the ledger entry behind it on the Company screen. */}
-      {costStack === null ? null : (
-        <Panel
-          title="What the quarter cost to serve"
-          iconName="ledger"
-          iconTone="loss"
-          subtitle="Cash cost of goods at a neutral energy basis, and every modifier the chain and the freight put on top of it."
-        >
-          <ModifierStackCard
-            stack={costStack}
-            baseLabel="Cost of serving"
-            totalLabel="Cash cost of goods"
-            emptyMessage="Written when a quarter resolves."
+      {tab === 'now' ? (
+        <>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          <StatCard label="Revenue" iconName="coins" value={formatMoney(pnl.revenue)} delta={metrics?.revenueGrowthYoY} hint="Recognised this quarter" />
+          <StatCard
+            label="Gross profit"
+            iconName="ledger"
+            value={formatMoney(pnl.grossProfit)}
+            tone={pnl.grossProfit >= 0 ? undefined : 'loss'}
+            hint={`Margin ${formatPct(pnl.grossMarginPct)}`}
           />
-        </Panel>
-      )}
+          <StatCard
+            label="Operating"
+            iconName="chart"
+            value={formatMoney(pnl.operatingIncome)}
+            tone={pnl.operatingIncome >= 0 ? 'gain' : 'loss'}
+            hint={`Margin ${formatPct(pnl.operatingMarginPct)}`}
+          />
+          <StatCard
+            label="Before tax"
+            iconName="stamp"
+            value={formatMoney(pnl.preTaxIncome)}
+            tone={pnl.preTaxIncome >= 0 ? 'gain' : 'loss'}
+            hint="After interest"
+          />
+          <StatCard
+            label="Cash movement"
+            iconName="vault"
+            value={formatMoney(company.financials.quarterlyBurn)}
+            tone={company.financials.quarterlyBurn >= 0 ? 'gain' : 'loss'}
+            hint={`Closing cash ${formatMoney(company.financials.cash)} · next quarter you owe ${formatMoney(service.totalUsd)}`}
+          />
+          <StatCard
+            label="Runway"
+            iconName="gauge"
+            value={metrics === null ? '—' : formatQuarterCount(metrics.runwayQuarters)}
+            tone={metrics === null ? undefined : metrics.runwayQuarters < 6 ? 'warn' : undefined}
+            hint={metrics === null ? 'Computed at the first resolution' : 'At the current burn'}
+          />
+        </div>
 
-      <Panel
-        title="Product lines"
-        iconName="box"
-        flush
-        subtitle="Unit economics per line. Recognised revenue is reported at company level, so no line here restates it."
-      >
-        <DataTable
-          columns={productColumns}
-          rows={activeProducts}
-          rowKey={(row) => row.id}
-          rowHref={() => '/products'}
-          cardMode="auto"
-          cardTitleKey="name"
-          dense
-          empty={<EmptyState compact icon="box" title="No active products" message="Launch a product from the Products screen." />}
-        />
-      </Panel>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel
+            title="Profit and loss"
+            iconName="ledger"
+            subtitle={`Quarter ${quarterLabel(session.startYear, session.quarter)} · figures in dollars`}
+          >
+            <StatementTable rows={pnlRows} valueHeader="Amount" secondaryHeader="Margin" />
+          </Panel>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Contracted revenue" iconName="stamp" subtitle="What is billed but not earned, and what is won but not billed.">
-          <div className="grid grid-cols-2 gap-2.5">
-            <FactCard
-              label="Deferred revenue"
-              value={formatMoney(company.financials.deferredRevenue)}
-              hint="Collected for work not yet delivered."
-            />
-            <FactCard
-              label="Backlog"
-              value={formatMoney(company.financials.backlogUsd)}
-              hint="Contracted future revenue not yet billed."
-            />
-            <FactCard
-              label="Awarded, not recognised"
-              value={formatMoney(contractedRemaining)}
-              hint="Across every live government contract."
-            />
-            <FactCard
-              label="Government revenue share"
-              value={metrics === null ? '—' : formatPct(metrics.governmentRevenueShare)}
-              hint="Stability and constraint arrive together."
-            />
-          </div>
-          {company.financials.backlogUsd > 0 ? (
-            <ProgressBar
-              className="mt-3"
-              label="Backlog against a quarter of revenue"
-              value={company.financials.backlogUsd}
-              max={Math.max(company.financials.backlogUsd, company.financials.revenueQuarterly * 4)}
-              valueLabel={formatMoney(company.financials.backlogUsd)}
-              tone="info"
-            />
-          ) : null}
-        </Panel>
+          <Panel
+            title="Balance sheet"
+            iconName="boardTable"
+            subtitle="Assets less liabilities must equal equity within one dollar, or the quarter does not commit."
+            actions={
+              <Tag tone={sheet.reconciles ? 'gain' : 'loss'} dot>
+                {sheet.reconciles ? 'Passed' : `Off by ${formatMoney(sheet.discrepancy)}`}
+              </Tag>
+            }
+          >
+            <StatementTable rows={balanceRows} valueHeader="Amount" />
+            <p className="mt-3 text-[11px] text-ink-faint">
+              Residual assets − liabilities − equity: <span className="figure text-ink-dim">{formatMoney(sheet.discrepancy, 'full')}</span>
+            </p>
+          </Panel>
+        </div>
 
-        <Panel
-          title="Government contracts"
-          iconName="capitol"
-          className="lg:col-span-2"
-          flush
-          actions={
-            <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setSelection('contracts')}>
-              <Icon name="ledger" size={15} accent="current" />
-              Ledger
-            </button>
-          }
-        >
-          <DataTable
-            columns={contractColumns}
-            rows={view.contracts}
-            rowKey={(row) => row.id}
-            rowHref={() => '/government'}
-            cardMode="auto"
-            cardTitleKey="id"
-            dense
-            empty={
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Panel title="Cash flow" iconName="vault" subtitle="Movement over the quarter, as reported.">
+            <StatementTable rows={cashRows} valueHeader="Amount" />
+
+            {/* V7: the second bankruptcy trigger, drawn beside the number it
+                constrains. Cash below the quarter's debt service is what forces a
+                bridge round, so it is a bar rather than a sentence. */}
+            <div className="mt-3 border-t border-hair pt-3">
+              <ProgressBar
+                label="Next quarter you owe, against cash on hand"
+                value={Math.min(service.totalUsd, Math.max(0, company.financials.cash))}
+                max={Math.max(1, company.financials.cash, service.totalUsd)}
+                tone={service.headroomUsd < 0 ? 'loss' : service.coveredQuarters < 4 ? 'warn' : 'gain'}
+                valueLabel={`${formatMoney(service.totalUsd)} of ${formatMoney(company.financials.cash)}`}
+              />
+              <div className="mt-2 grid grid-cols-2 gap-2.5">
+                <FactCard
+                  label="Next quarter you owe"
+                  value={formatMoney(service.totalUsd)}
+                  hint={`${formatMoney(service.principalUsd)} principal · ${formatMoney(service.interestUsd)} interest`}
+                />
+                <FactCard
+                  label="Headroom after it"
+                  value={formatMoney(service.headroomUsd)}
+                  tone={service.headroomUsd < 0 ? 'loss' : undefined}
+                  hint={
+                    service.headroomUsd < 0
+                      ? 'Below the service, the engine forces a bridge round and the posture goes to survival.'
+                      : `${formatQuarterCount(service.coveredQuarters)} of service covered at this balance.`
+                  }
+                />
+              </div>
+            </div>
+          </Panel>
+
+          <Panel
+            title="Debt schedule"
+            iconName="coins"
+            iconTone={coverage !== null && coverage < 1 ? 'loss' : 'neutral'}
+            className="lg:col-span-2"
+            subtitle="Outstanding principal, its cost and how well it is covered."
+          >
+            {company.financials.debt <= 0 ? (
               <EmptyState
                 compact
-                icon="capitol"
-                title="No contracts in flight"
-                message="Awards create backlog before they create revenue. Open procurements are on the Government screen."
+                icon="coins"
+                title="No interest-bearing debt"
+                message="Nothing is drawn. A debt issue can be attempted from the Capital screen; the rate clears against the world's credit spreads and debt availability."
+                action={
+                  <Link href="/capital" className="btn tap-target gap-1.5">
+                    <Icon name="coins" size={16} accent="current" />
+                    Open Capital
+                  </Link>
+                }
               />
-            }
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-3">
+                <FactCard label="Principal outstanding" value={formatMoney(company.financials.debt)} />
+                <FactCard label="Interest this quarter" value={formatMoney(company.financials.interestExpense)} />
+                <FactCard
+                  label="Implied annual rate"
+                  value={impliedRate === null ? '—' : formatPct(impliedRate)}
+                  hint="Quarterly interest annualised over principal."
+                />
+                <FactCard
+                  label="Interest coverage"
+                  value={coverage === null ? '—' : formatMultiple(coverage)}
+                  tone={coverage === null ? undefined : coverage >= 2 ? 'gain' : coverage >= 1 ? 'warn' : 'loss'}
+                  hint="Operating income over interest expense."
+                />
+                <FactCard label="Debt on balance sheet" value={formatMoney(company.balanceSheet.liabilities.debt)} />
+                <FactCard
+                  label="Net cash"
+                  value={formatMoney(company.financials.cash - company.financials.debt)}
+                  tone={company.financials.cash - company.financials.debt >= 0 ? 'gain' : 'loss'}
+                />
+                <FactCard
+                  label="Credit spreads (world)"
+                  value={formatPct(view.world.macro.creditSpreads)}
+                  hint="Over the policy rate; widening spreads reprice every future issue."
+                />
+                <FactCard label="Policy rate (world)" value={formatPct(view.world.macro.policyRate)} />
+                <FactCard
+                  label="Debt availability"
+                  value={formatPct(view.world.capitalMarkets.debtAvailability)}
+                  hint="Lender willingness to extend credit to AI companies."
+                />
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* P0-2's named surface: the toll is a signed line in an itemised cost
+            stack, or the exemption line when your own group is the one charging
+            it. Every row opens the ledger entry behind it on the Company screen. */}
+        {costStack === null ? null : (
+          <Panel
+            title="What the quarter cost to serve"
+            iconName="ledger"
+            iconTone="loss"
+            subtitle="Cash cost of goods at a neutral energy basis, and every modifier the chain and the freight put on top of it."
+          >
+            <ModifierStackCard
+              stack={costStack}
+              baseLabel="Cost of serving"
+              totalLabel="Cash cost of goods"
+              emptyMessage="Written when a quarter resolves."
+            />
+          </Panel>
+        )}
+
+        <Panel
+          title="Product lines"
+          iconName="box"
+          flush
+          subtitle="Unit economics per line. Recognised revenue is reported at company level, so no line here restates it."
+        >
+          <DataTable
+            columns={productColumns}
+            rows={activeProducts}
+            rowKey={(row) => row.id}
+            rowHref={() => '/products'}
+            cardMode="auto"
+            cardTitleKey="name"
+            dense
+            empty={<EmptyState compact icon="box" title="No active products" message="Launch a product from the Products screen." />}
           />
         </Panel>
-      </div>
 
-      <Panel title="History" iconName="chart" subtitle="Per-quarter series, from the public record and the tape.">
-        <HistoryPanel view={view} companyId={company.id} startYear={session.startYear} quotes={quotes} />
-      </Panel>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Panel title="Contracted revenue" iconName="stamp" subtitle="What is billed but not earned, and what is won but not billed.">
+            <div className="grid grid-cols-2 gap-2.5">
+              <FactCard
+                label="Deferred revenue"
+                value={formatMoney(company.financials.deferredRevenue)}
+                hint="Collected for work not yet delivered."
+              />
+              <FactCard
+                label="Backlog"
+                value={formatMoney(company.financials.backlogUsd)}
+                hint="Contracted future revenue not yet billed."
+              />
+              <FactCard
+                label="Awarded, not recognised"
+                value={formatMoney(contractedRemaining)}
+                hint="Across every live government contract."
+              />
+              <FactCard
+                label="Government revenue share"
+                value={metrics === null ? '—' : formatPct(metrics.governmentRevenueShare)}
+                hint="Stability and constraint arrive together."
+              />
+            </div>
+            {company.financials.backlogUsd > 0 ? (
+              <ProgressBar
+                className="mt-3"
+                label="Backlog against a quarter of revenue"
+                value={company.financials.backlogUsd}
+                max={Math.max(company.financials.backlogUsd, company.financials.revenueQuarterly * 4)}
+                valueLabel={formatMoney(company.financials.backlogUsd)}
+                tone="info"
+              />
+            ) : null}
+          </Panel>
+
+          <Panel
+            title="Government contracts"
+            iconName="capitol"
+            className="lg:col-span-2"
+            flush
+            actions={
+              <button type="button" className="btn btn-ghost tap-target gap-1.5 px-2" onClick={() => setSelection('contracts')}>
+                <Icon name="ledger" size={15} accent="current" />
+                Ledger
+              </button>
+            }
+          >
+            <DataTable
+              columns={contractColumns}
+              rows={view.contracts}
+              rowKey={(row) => row.id}
+              rowHref={() => '/government'}
+              cardMode="auto"
+              cardTitleKey="id"
+              dense
+              empty={
+                <EmptyState
+                  compact
+                  icon="capitol"
+                  title="No contracts in flight"
+                  message="Awards create backlog before they create revenue. Open procurements are on the Government screen."
+                />
+              }
+            />
+          </Panel>
+        </div>
+        </>
+      ) : filedHistory.length > 0 ? (
+        <FinancialHistory history={filedHistory} startYear={session.startYear} companyName={company.name} />
+      ) : (
+        // A world that files no statements still has two genuine per-quarter
+        // series: the earnings on the public record and the tape.
+        <Panel title="History" iconName="chart" subtitle="Per-quarter series, from the public record and the tape.">
+          <HistoryPanel view={view} companyId={company.id} startYear={session.startYear} quotes={quotes} />
+        </Panel>
+      )}
 
       <LedgerDrawer
         open={selection !== null}

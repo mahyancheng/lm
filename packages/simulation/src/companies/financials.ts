@@ -42,6 +42,13 @@
  *   books them.
  * - Cash is moved **only here**. Government awards create backlog and deferred
  *   revenue earlier; they become cash in this phase.
+ *
+ * ## The filed statement
+ *
+ * In a multi-sector world this phase also FILES the quarter it just closed as a
+ * `FinancialQuarter` on the company (`history.ts`), from these same figures and
+ * no others. The two market fields on that statement are stamped later, in the
+ * metrics phase, because the market has not priced the quarter yet at eleven.
  */
 
 import type {
@@ -88,6 +95,7 @@ import {
   TAX_RATE,
 } from './balance';
 import { resolveDistress } from './distress';
+import { appendFinancialQuarter } from './history';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
 import { companyEnergyCostFactor } from '../economy/regions';
@@ -622,6 +630,32 @@ export function resolveFinancials(
     }
 
     const runway = quarterlyBurn < 0 ? clamp(ratio(sheet.assets.cash, -quarterlyBurn, RUNWAY_CAP_QUARTERS), 0, RUNWAY_CAP_QUARTERS) : RUNWAY_CAP_QUARTERS;
+
+    /* --- the filed statement ----------------------------------------------- */
+    // Every figure below is one this phase has already computed; `history.ts`
+    // restates them and does no economics of its own. Gated on the multi-sector
+    // world so a world-version-1 company never grows the key and the frozen
+    // world keeps hashing to the value it has always hashed to.
+    if (multiSector) {
+      appendFinancialQuarter(company, ctx.quarter, {
+        revenueUsd: revenue,
+        productRevenueUsd: productRevenue,
+        contractRevenueUsd: contractRevenue,
+        cogsUsd: cogs,
+        payrollUsd: payroll,
+        marketingUsd: marketing,
+        researchUsd: rdSpend,
+        trainingComputeUsd: trainingCompute,
+        depreciationUsd: depreciation,
+        interestUsd: interestExpense,
+        taxUsd: tax,
+        netIncomeUsd: netIncome,
+        openingCashUsd: openingCash,
+        capexUsd: capex,
+        debtRepaidUsd: debtRepayment,
+        runwayQuarters: runway,
+      });
+    }
 
     // Distress is decided before the cash event is written, so the ledger row
     // carries the consequence as well as the cause.

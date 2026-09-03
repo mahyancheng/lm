@@ -29,8 +29,8 @@ import { achieveNodes } from './nodes';
 import { updateTechConfidence } from './confidence';
 import { integrateInnovationProposal } from './innovation';
 
-export { advanceProjects, resourcingFactors, setbackProbability } from './progress';
-export type { ResourcingFactors } from './progress';
+export { advanceProjects, projectRequirements, resourcingFactors, setbackProbability } from './progress';
+export type { ProjectRequirements, ResourcingFactors } from './progress';
 export { achieveNodes, dependencySatisfied, unmetDependencies } from './nodes';
 export { updateTechConfidence } from './confidence';
 export { integrateInnovationProposal, assessPlausibility, assessCostUsd, reachableCapitalUsd } from './innovation';

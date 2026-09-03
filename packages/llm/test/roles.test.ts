@@ -106,6 +106,8 @@ describe('role wiring', () => {
 
   it('forces confirmation on the interpretation even when the model said otherwise', async () => {
     const transport = createMockTransport(() => ({
+      mode: 'act',
+      reply: 'Cutting 40 engineering roles with one quarter of severance, as you asked.',
       interpretedInstructions: [{ type: 'layoff', role: 'engineers', count: 40, severanceQuartersOfPay: 1 }],
       summary: 'Reduce engineering headcount by 40 with one quarter of severance. Nothing has been submitted yet.',
       questions: [],

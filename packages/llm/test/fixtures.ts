@@ -13,6 +13,7 @@ import type {
   AgentRole,
   Character,
   CharacterUtteranceContext,
+  ChiefOfStaffDossier,
   ChiefOfStaffInput,
   InnovationInterpreterInput,
   Memory,
@@ -453,3 +454,171 @@ export const VALID_INNOVATION_PROPOSAL = {
   initialVisibility: 'company_private' as const,
   rationale: 'Nexus already holds the planning capability and the reserved compute; the missing piece is an environment, which is cheap relative to the frontier run it would replace.',
 };
+
+/* -------------------------------------------------------------------------- */
+/*  Chief of Staff dossier                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A typed dossier for Nexus, small enough to read and complete enough to answer
+ * every canonical question the offline responder handles.
+ *
+ * Deliberately arithmetically consistent — $2.1bn of cash against $300m a
+ * quarter really is seven quarters — because a fixture whose numbers disagree
+ * would let a broken responder pass.
+ */
+export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}): ChiefOfStaffDossier {
+  return {
+    companyName: 'Nexus Intelligence',
+    founderName: 'Maya Chen',
+    quarterLabel: '2027 Q2',
+    posture: 'balanced',
+    finances: {
+      cashUsd: 2_100_000_000,
+      debtUsd: 400_000_000,
+      revenueQuarterlyUsd: 900_000_000,
+      quarterlyBurnUsd: -300_000_000,
+      runwayQuarters: 7,
+      grossMarginPct: 0.62,
+      operatingMarginPct: -0.12,
+      history: [],
+    },
+    products: {
+      lines: [
+        {
+          productId: 'prd_enterprise_agent',
+          name: 'Nexus Enterprise Agent',
+          segment: 'enterprise',
+          pricePerSeatUsd: 900,
+          activeCustomers: 620_000,
+          grossMarginPct: 0.71,
+          churnQuarterly: 0.04,
+          qualityScore: 0.72,
+          revenueQuarterlyUsd: 558_000_000,
+          isActive: true,
+        },
+        {
+          productId: 'prd_consumer_copilot',
+          name: 'Nexus Copilot',
+          segment: 'consumer',
+          pricePerSeatUsd: 40,
+          activeCustomers: 3_100_000,
+          grossMarginPct: 0.21,
+          churnQuarterly: 0.19,
+          qualityScore: 0.55,
+          revenueQuarterlyUsd: 124_000_000,
+          isActive: true,
+        },
+      ],
+      computeOwned: 40_000,
+      computeReserved: 180_000,
+      computeUtilisationPct: 0.88,
+      trainingAllocationPct: 0.6,
+      reservationExpiryQuarter: 9,
+      cloudSpendQuarterlyUsd: 120_000_000,
+    },
+    people: {
+      engineers: 620,
+      researchers: 240,
+      sales: 260,
+      ops: 110,
+      execs: 10,
+      total: 1_240,
+      moralePct: 64,
+      attritionPct: 0.06,
+      openRoles: 35,
+      payrollQuarterlyUsd: 210_000_000,
+      keyCharacters: [{ characterId: MAYA_ID, name: 'Maya Chen', role: 'founder', title: 'Chief Executive', isCeo: true }],
+    },
+    governance: {
+      hasBoard: true,
+      seatsAuthorised: 7,
+      seatsFilled: 5,
+      founderSeats: 2,
+      founderOwnershipPct: 0.24,
+      thresholds: [{ label: 'board control', fraction: 0.5, reached: false }],
+      openProposals: [
+        { proposalId: 'prp_buyback', kind: 'buyback', title: 'Repurchase $200m of stock', status: 'tabled', decisionQuarter: 2, amountUsd: 200_000_000 },
+      ],
+      isCeo: true,
+    },
+    markets: {
+      isPublic: true,
+      ticker: 'NXS',
+      sharePriceUsd: 140,
+      marketCapUsd: 18_000_000_000,
+      sectorId: 'ai',
+      sectorSentiment: 0.61,
+      sectorMultiple: 12.4,
+      sectorDemand: 1.08,
+      sectorPriceIndex: 104,
+      sectorShortage: 10,
+      rivals: [
+        {
+          companyId: ORBIT_ID,
+          name: 'Orbit Dynamics',
+          ticker: 'ORB',
+          sectorId: 'ai',
+          isPublic: true,
+          revenueQuarterlyUsd: 1_400_000_000,
+          marketCapUsd: 31_000_000_000,
+          enterpriseReputation: 74,
+        },
+      ],
+    },
+    capital: {
+      funds: [
+        { entityId: 'fund_seawall', name: 'Seawall Capital', kind: 'hedge_fund', dryPowderUsd: 3_000_000_000, holdsStakePct: 0.06, thesis: 'Short the story, own the cash flow.' },
+      ],
+      approaches: [],
+      debtHeadroomUsd: 900_000_000,
+      dividendPayoutPct: 0,
+      sharesOutstanding: 128_000_000,
+      ipoWindow: 0.5,
+      ventureLiquidity: 0.42,
+      debtAvailability: 0.55,
+    },
+    research: {
+      budgetQuarterlyUsd: 180_000_000,
+      projects: [],
+      availableNodes: [{ nodeId: 'tech_agentic_planning', title: 'Agentic Planning' }],
+    },
+    government: { openProgrammes: [], liveContracts: [], pastPerformance: 62 },
+    feed: [],
+    openDecisions: ['Board proposal BP-14 on the buyback expires next quarter.'],
+    availableActions: [
+      {
+        type: 'set_research_budget',
+        available: true,
+        reason: null,
+        becomesBoardMatter: false,
+        requiresConfirmation: false,
+        bounds: [{ field: 'budgetUsd', label: 'Quarterly research budget', min: 0, max: 2_100_000_000, unit: 'usd' }],
+        targets: [],
+        maxCashUsd: 2_100_000_000,
+      },
+      {
+        type: 'raise_round',
+        available: true,
+        reason: null,
+        becomesBoardMatter: true,
+        requiresConfirmation: true,
+        bounds: [{ field: 'maxDilutionPct', label: 'Dilution ceiling', min: 0, max: 0.5, unit: 'fraction' }],
+        targets: [],
+        maxCashUsd: null,
+      },
+      {
+        type: 'ipo',
+        available: false,
+        reason: 'Nexus Intelligence is already listed.',
+        becomesBoardMatter: false,
+        requiresConfirmation: true,
+        bounds: [],
+        targets: [],
+        maxCashUsd: null,
+      },
+    ],
+    worldNotes: ['Compute tight, capital selective, enterprise demand holding.'],
+    ...overrides,
+  };
+}

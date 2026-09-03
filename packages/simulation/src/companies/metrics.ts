@@ -33,12 +33,14 @@ import {
 import { DISCLOSURE_THRESHOLD_PCT } from '../markets/settlement';
 import { RUNWAY_CAP_QUARTERS, TAX_RATE } from './balance';
 import { previousTtmUsd, rollFundamentals } from './fundamentals';
+import { stampMarketKpis } from './history';
 import { activeAccords, chargesTollPct, isAccordMember, regionLogistics } from '../economy/prices';
 import { isMultiSectorWorld, sectorOf, supplyBySector } from '../economy/sectors';
 import { activeCompanies, activeProducts, clamp, emitEvent, money, ratio, totalHeadcount, unit } from './util';
 
 /** Recompute the derived metrics for every active company. */
 export function recomputeMetrics(draft: SessionState, ctx: ResolverContext): void {
+  const multiSector = isMultiSectorWorld(draft);
   const previous = new Map<string, CompanyQuarterMetrics>();
   for (const metric of draft.companyMetrics) previous.set(metric.companyId, metric);
 
@@ -61,13 +63,18 @@ export function recomputeMetrics(draft: SessionState, ctx: ResolverContext): voi
     const anchor = draft.valuationAnchors.find((a) => a.companyId === company.id);
     const instrument = company.instrumentId === null ? undefined : draft.marketInstruments.find((i) => i.id === company.instrumentId);
     let marketCap = 0;
+    // The closing price of the same quote the market capitalisation is read
+    // from, so the filed share price and the filed market cap can never come
+    // from two different prints.
+    let latestPriceUsd: number | null = null;
     if (instrument !== undefined) {
-      let latest: { quarter: number; marketCapUsd: number } | undefined;
+      let latest: { quarter: number; marketCapUsd: number; price: number } | undefined;
       for (const quote of draft.quotes) {
         if (quote.instrumentId !== instrument.id) continue;
-        if (latest === undefined || quote.quarter > latest.quarter) latest = { quarter: quote.quarter, marketCapUsd: quote.marketCapUsd };
+        if (latest === undefined || quote.quarter > latest.quarter) latest = { quarter: quote.quarter, marketCapUsd: quote.marketCapUsd, price: quote.price };
       }
       marketCap = latest?.marketCapUsd ?? 0;
+      latestPriceUsd = latest?.price ?? null;
     }
     if (marketCap <= 0) {
       // Unlisted: the last private round's post-money, then the anchor, then a
@@ -114,6 +121,13 @@ export function recomputeMetrics(draft: SessionState, ctx: ResolverContext): voi
     // market phase of the *next* quarter reads this, which is what makes a price
     // trace to reported fundamentals rather than to a fresh guess.
     company.fundamentals = rollFundamentals(draft, company, row, previousTtmUsd(company, prior), TAX_RATE);
+
+    // The financial phase (11) filed this quarter's statement before the market
+    // priced it (13), so the two market figures are set here and only here. No
+    // statement is created: a world that keeps none is a no-op.
+    if (multiSector) {
+      stampMarketKpis(company, ctx.quarter, row.marketCapUsd, latestPriceUsd);
+    }
   }
 
   draft.companyMetrics = next;

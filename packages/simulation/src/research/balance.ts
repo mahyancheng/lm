@@ -22,6 +22,20 @@ export const BASE_PROJECT_COMPUTE_UNITS = 60_000;
 /** Researchers a programme of compute intensity 1.0 wants. */
 export const BASE_PROJECT_RESEARCHERS = 120;
 
+/**
+ * The same two requirements at world version 2's scale.
+ *
+ * World 1 is six frontier labs holding tens of thousands of accelerators and
+ * hundreds of researchers, and the figures above are sized to them. World 2
+ * opens with a player holding a few hundred to a few thousand accelerator-
+ * equivalents and single-digit researchers, so against 60,000 units and 120
+ * people every programme sat at the floors and never moved. These bases put a
+ * mid-intensity node within reach of a well-run small company and leave the
+ * largest rivals over-supplied, which is the oversupply bonus's job.
+ */
+export const WORLD2_PROJECT_COMPUTE_UNITS = 1_200;
+export const WORLD2_PROJECT_RESEARCHERS = 10;
+
 /** Progress multiplier floor when a programme is entirely unfunded. */
 export const FUNDING_FLOOR = 0.25;
 /** Progress multiplier floor when a programme has no compute at all. */

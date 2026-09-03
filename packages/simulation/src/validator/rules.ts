@@ -64,6 +64,7 @@ import {
   heldShares,
   installedComputeBase,
   lockupUntil,
+  researchComputeHeadroom,
   researchersCommitted,
   type ValidationActor,
 } from './context';
@@ -193,7 +194,10 @@ const startResearchProject: Rule<'start_research_project'> = (intent, verdict, c
     );
   }
 
-  const freeCompute = Math.max(0, ctx.budget.availableCompute(ctx.company) - computeCommitted(ctx.draft, ctx.company.id));
+  // Headroom is what the company holds (cloud included from world version 2)
+  // less running programmes; what earlier actions in this batch already put on
+  // new programmes comes off on top of that.
+  const freeCompute = Math.max(0, researchComputeHeadroom(ctx.draft, ctx.company) - ctx.budget.committedCompute(ctx.company.id));
   if (intent.computeUnits > freeCompute) {
     verdict.clamp(
       (draft) => {

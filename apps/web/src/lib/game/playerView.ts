@@ -19,6 +19,7 @@
  * all of which the player legitimately sees in full.
  */
 
+import { filedFinancialQuarter } from '@frontier/contracts';
 import type {
   Company,
   Leaderboard,
@@ -71,6 +72,8 @@ export function redactRival(company: Company): Partial<Company> {
     parentCompanyId: company.parentCompanyId,
   };
 
+  // A private company files nothing, so its statements are ABSENT rather than
+  // blurred — the same rule the rest of this file follows.
   if (!company.isPublic) return base;
 
   return {
@@ -80,6 +83,11 @@ export function redactRival(company: Company): Partial<Company> {
     fundamentals: company.fundamentals,
     governmentPastPerformance: company.governmentPastPerformance,
     posture: company.posture,
+    // A listed company files its statements, at the grain a filing has:
+    // `filedFinancialQuarter` drops the revenue split, the operating-expense
+    // split and the product lines and rewrites nothing else. Absent entirely
+    // when the world keeps no statements.
+    financialHistory: company.financialHistory?.map(filedFinancialQuarter),
   };
 }
 

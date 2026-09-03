@@ -122,21 +122,52 @@ former is simulation.
 
 ### 3.2 Chief of Staff
 
-- **Input:** `ChiefOfStaffInputSchema` — the player's message, prose company and
-  world briefings, current budget lines (so "keep total burn roughly unchanged"
-  can be honoured arithmetically), open decisions, conversation history and
-  whether auto-execute is enabled.
-- **Output:** `ChiefOfStaffInterpretationSchema` — up to 12 `ActionIntent`s, a
+The Chief of Staff answers questions, gives advice and translates instructions.
+`mode` on the output says which of the three this reply is — `answer`, `plan`,
+`act` — and only the last two carry actions.
+
+- **Input:** `ChiefOfStaffInputSchema` — the player's message, the route they
+  asked from, a **typed dossier** (`ChiefOfStaffDossierSchema`), the compact
+  server-side `memory` of this thread, and the prose company and world
+  briefings, budget lines, open decisions, conversation history and
+  auto-execute flag that predate it. The prose fields are filled from the same
+  state as the dossier and kept for callers that send no dossier.
+- **Output:** `ChiefOfStaffInterpretationSchema` — a `mode`, the `reply` the
+  founder reads, up to 12 `ActionIntent`s (empty in `answer` mode), a
   plain-language `summary` for a glance-check, `questions` it needs answered,
   `requiresConfirmation`, a `confidence` (below 0.7 the interface presents a
   draft) and `unsupportedRequests`, said plainly rather than silently dropped.
 
-`requiresConfirmation` is advisory only. The binding rule is the thirteen types
+**The dossier** carries finances with the last eight filed `FinancialQuarter`s,
+product lines, people, board and ownership, markets, capital, research,
+government, the ten public-record items that name this company, what is waiting
+on the founder — and `availableActions`. That last section is produced by
+`availableActionsFor` in `@frontier/simulation`, which **probes the engine's own
+validator** once per action type: an entry says whether the action would be
+accepted today, the validator's own sentence when it would not, whether it
+becomes a board matter, the bounds on every numeric field (tightened to whatever
+the validator's clamp allowed) and the legal targets. It is derived, never
+described alongside the rules, so it cannot drift from them. The role is
+instructed to propose nothing the list marks unavailable.
+
+**Memory.** The Claude session is resumed by the derived conversation key, and a
+bounded `ChiefOfStaffMemory` is held server-side under the same key: the last
+eight exchanges and up to six standing preferences, each stamped with the
+quarter it came from. That is what survives the restarts and compactions that
+take a transcript.
+
+**Offline.** With no transport the route does not answer null. `offlineChiefOfStaff`
+answers cash, runway, burn, best and worst product, who is circling us, what
+needs deciding and what is possible, by arithmetic over the same dossier, and
+interprets nothing into an action. Answering is safe without a model;
+translating an instruction into a binding proposal is not.
+
+`requiresConfirmation` is advisory only. The binding rule is the fourteen types
 in `CONFIRMATION_REQUIRED_ACTIONS`, checked by the engine: `raise_round`,
-`issue_debt`, `buyback`, `issue_shares`, `ipo`, `acquire_company`, `layoff`,
-`bid_government`, `submit_board_proposal`, `propose_deal`, `accept_deal`,
-`sell_shares`, `buy_shares`. Any of those with `confirmedByHuman === false` is
-rejected with `confirmation_required`.
+`issue_debt`, `buyback`, `issue_shares`, `ipo`, `set_dividend_policy`,
+`acquire_company`, `layoff`, `bid_government`, `submit_board_proposal`,
+`propose_deal`, `accept_deal`, `sell_shares`, `buy_shares`. Any of those with
+`confirmedByHuman === false` is rejected with `confirmation_required`.
 
 ### 3.3 NPC strategist
 

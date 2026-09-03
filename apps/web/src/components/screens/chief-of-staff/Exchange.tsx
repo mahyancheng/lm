@@ -10,7 +10,7 @@
  *
  * The card inside the speech card is the unchanged `InterpretationCard`: the
  * validator's verdict on every row, the per-row queueing, the confirmation gate
- * on the thirteen and the mandatory line all behave exactly as they do
+ * on the fourteen and the mandatory line all behave exactly as they do
  * elsewhere. Only the frame is different. Nothing about the conversational
  * framing may make a binding action easier to reach than it was — and it does
  * not: the same three steps, interpret → propose → confirm, in the same order.
@@ -26,6 +26,27 @@ export interface ExchangeProps {
   readonly entry: TranscriptEntry;
   readonly founder: Character;
   readonly startYear: number;
+  /** Compact framing for the drawer: smaller portraits, no repeated chrome. */
+  readonly dense?: boolean;
+}
+
+/** How a reply is labelled: an answer, advice, or an instruction carried out. */
+const MODE_LABEL: Readonly<Record<TranscriptEntry['interpretation']['mode'], string>> = {
+  answer: 'Answer',
+  plan: 'Advice',
+  act: 'Instruction',
+};
+
+/**
+ * Whether there is a diff worth showing under the reply.
+ *
+ * A pure answer — no actions, no questions, nothing unsupported — is words, and
+ * wrapping words in a control surface with an "approve" button under them would
+ * invite a founder to approve a sentence.
+ */
+export function hasProposal(entry: TranscriptEntry): boolean {
+  const { interpretedInstructions, questions, unsupportedRequests } = entry.interpretation;
+  return interpretedInstructions.length > 0 || questions.length > 0 || unsupportedRequests.length > 0;
 }
 
 /**
@@ -43,7 +64,8 @@ export function chiefMood(confidence: number, fallback: boolean): PortraitMood {
   return 'guarded';
 }
 
-export function Exchange({ entry, founder, startYear }: ExchangeProps): React.JSX.Element {
+export function Exchange({ entry, founder, startYear, dense = false }: ExchangeProps): React.JSX.Element {
+  const { interpretation } = entry;
   return (
     <div className="flex flex-col gap-3">
       {/* --- what you said -------------------------------------------------- */}
@@ -53,7 +75,7 @@ export function Exchange({ entry, founder, startYear }: ExchangeProps): React.JS
         <SpeechCard side="right" className="min-w-0 max-w-[85%]" bodyClassName="px-3 py-2">
           <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">{entry.message}</p>
         </SpeechCard>
-        <Portrait characterId={founder.id} role={founder.role} size="md" isPlayer decorative className="mt-1" />
+        <Portrait characterId={founder.id} role={founder.role} size={dense ? 'sm' : 'md'} isPlayer decorative className="mt-1" />
       </div>
 
       {/* --- what came back ------------------------------------------------- */}
@@ -62,10 +84,10 @@ export function Exchange({ entry, founder, startYear }: ExchangeProps): React.JS
           characterId={CHIEF_OF_STAFF.id}
           name={CHIEF_OF_STAFF.name}
           role={CHIEF_OF_STAFF.role}
-          size="lg"
+          size={dense ? 'md' : 'lg'}
           idle
           className="mt-1"
-          mood={chiefMood(entry.interpretation.confidence, entry.fallback)}
+          mood={chiefMood(interpretation.confidence, entry.fallback)}
           ring={entry.fallback ? 'warn' : 'brand'}
         />
         <SpeechCard
@@ -76,11 +98,19 @@ export function Exchange({ entry, founder, startYear }: ExchangeProps): React.JS
               <span className="text-[12px] font-semibold text-ink">{CHIEF_OF_STAFF.name}</span>
               <span className="text-[10px] text-ink-faint">{CHIEF_OF_STAFF.title}</span>
               <AiLabel />
+              <Tag tone={interpretation.mode === 'act' ? 'brand' : 'neutral'}>{MODE_LABEL[interpretation.mode]}</Tag>
               {entry.fallback ? <Tag tone="loss">No model reached</Tag> : null}
             </>
           }
         >
-          <InterpretationCard entry={entry} startYear={startYear} variant="speech" />
+          {/* The words come first and stand alone. The diff below them is the
+              control surface; a reply with nothing to approve shows none. */}
+          <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{interpretation.reply}</p>
+          {hasProposal(entry) ? (
+            <div className="mt-2.5">
+              <InterpretationCard entry={entry} startYear={startYear} variant="speech" />
+            </div>
+          ) : null}
         </SpeechCard>
       </div>
     </div>

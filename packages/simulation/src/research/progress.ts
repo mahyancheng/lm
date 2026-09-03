@@ -44,8 +44,34 @@ import {
   SETBACK_PROGRESS_LOSS,
   SETBACK_TALENT_WEIGHT,
   TALENT_FLOOR,
+  WORLD2_PROJECT_COMPUTE_UNITS,
+  WORLD2_PROJECT_RESEARCHERS,
 } from './balance';
+import { isMultiSectorWorld } from '../economy/sectors';
 import { capabilityCoverage, clamp, emitEvent, findCompany, findNode, money, projectVisibility, ratio, unit, usdLabel } from './util';
+
+/** What a programme against one node wants each quarter to run at full speed. */
+export interface ProjectRequirements {
+  readonly computeUnits: number;
+  readonly researchers: number;
+}
+
+/**
+ * The compute and researchers a node wants, at this world's scale.
+ *
+ * World 1 reads the original bases so its pinned hash is untouched; world 2
+ * reads the smaller ones. Exported because the Frontier Map's start form seeds
+ * its sliders from it: a programme should open resourced to run, not at zero.
+ */
+export function projectRequirements(draft: SessionState, node: TechNode): ProjectRequirements {
+  const multiSector = isMultiSectorWorld(draft);
+  const computeBase = multiSector ? WORLD2_PROJECT_COMPUTE_UNITS : BASE_PROJECT_COMPUTE_UNITS;
+  const researcherBase = multiSector ? WORLD2_PROJECT_RESEARCHERS : BASE_PROJECT_RESEARCHERS;
+  return {
+    computeUnits: Math.max(1, Math.round(computeBase * Math.max(0.05, node.computeIntensity))),
+    researchers: Math.max(1, Math.round(researcherBase * (0.5 + node.computeIntensity))),
+  };
+}
 
 /** The resourcing a programme received this quarter, each expressed 0..~1.2. */
 export interface ResourcingFactors {
@@ -73,8 +99,12 @@ export function resourcingFactors(draft: SessionState, project: ResearchProject,
   const company = findCompany(draft, project.companyId);
   const [low, high] = node.researchCostRange;
   const expectedQuarterlyCost = Math.max(1, (low + high) / 2 / Math.max(1, project.expectedQuarters));
-  const requiredCompute = Math.max(1, BASE_PROJECT_COMPUTE_UNITS * Math.max(0.05, node.computeIntensity));
-  const requiredResearchers = Math.max(1, BASE_PROJECT_RESEARCHERS * (0.5 + node.computeIntensity));
+  // World 1 keeps the unrounded figures its pinned hash was struck on; world 2
+  // reads the scaled, whole-number requirements the start form shows.
+  const multiSector = isMultiSectorWorld(draft);
+  const scaled = projectRequirements(draft, node);
+  const requiredCompute = multiSector ? scaled.computeUnits : Math.max(1, BASE_PROJECT_COMPUTE_UNITS * Math.max(0.05, node.computeIntensity));
+  const requiredResearchers = multiSector ? scaled.researchers : Math.max(1, BASE_PROJECT_RESEARCHERS * (0.5 + node.computeIntensity));
 
   // Rising training efficiency means a unit of compute buys more capability.
   const efficiency = 0.55 + 0.9 * draft.world.aiFrontier.trainingEfficiency;

@@ -25,8 +25,20 @@ export type { StatCardProps } from './StatCard';
 export { DataTable } from './DataTable';
 export type { Column, DataTableProps } from './DataTable';
 
-export { BarChart, LineChart, Sparkline } from './Charts';
-export type { BarChartProps, BarDatum, LineChartProps, LineSeries, SparklineProps } from './Charts';
+export { BarChart, BarSeries, LineChart, Sparkline, StackedBars } from './Charts';
+export type {
+  BarChartProps,
+  BarDatum,
+  BarSeriesCategory,
+  BarSeriesDefinition,
+  BarSeriesProps,
+  LineChartProps,
+  LineSeries,
+  SparklineProps,
+  StackedBarDatum,
+  StackedBarsProps,
+  StackedSegment,
+} from './Charts';
 
 export { DeltaBadge } from './DeltaBadge';
 export type { DeltaBadgeProps } from './DeltaBadge';

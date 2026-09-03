@@ -290,12 +290,29 @@ eleven quarters" — and lets the player commit or walk away.
 
 ## 5. Chief of Staff interaction contract
 
+The Chief of Staff is reachable from **every screen**: a floating button within
+thumb reach above the tab bar opens a drawer carrying the same thread, the same
+interpretation cards and the same approval rules as the dedicated screen. The
+drawer's quick prompts are the current screen's own ("explain these numbers",
+"should we raise?"), and the route is sent with the message so "this screen"
+resolves to something. Being reachable from everywhere changes how a founder
+asks; it changes nothing about what a model may do.
+
+A reply is one of three modes. `answer` is words and no actions — those render
+as prose with no approve button under them, because a founder must never be
+invited to approve a sentence. `plan` and `act` carry actions and render the
+diff below the reply.
+
 Three steps, always in this order, with no shortcuts:
 **interpret → propose → confirm.**
 
-**Interpret.** The player types freely. The Chief of Staff receives the message
-plus company and world briefings, current budget lines, open decisions and
-conversation history.
+**Interpret.** The player types freely. The Chief of Staff receives the message,
+the screen it was asked from, and a typed dossier: finances with the last eight
+filed quarters, products, people, board and ownership, markets, capital,
+research, government, the public record that names the company, what is waiting
+on the founder, and the actions available to this company right now with their
+bounds — probed from the engine's own validator, so an action shown as
+impossible is one the engine would refuse today.
 
 **Propose.** It returns a `ChiefOfStaffInterpretation`, which the UI renders as a
 diff — old value, new value, one line per change — never as prose the player has
@@ -316,6 +333,12 @@ Compensation ceiling: current policy +20%
 No binding action has been submitted yet.
 [Approve] [Edit]
 ```
+
+Each row also prints what the engine would actually accept — "Commits up to
+$4,000,000", "Engineers at market pay: 1 to 31" — taken from the same probe. A
+**Do it** control queues every routine row at once and then walks the
+outstanding confirmations one dialog at a time; batching the walk is not
+batching the consent.
 
 The last line is mandatory copy. `questions` render as an inline prompt block —
 asking is better than guessing. `unsupportedRequests` render plainly, because

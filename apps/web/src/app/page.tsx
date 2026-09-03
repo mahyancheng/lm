@@ -31,6 +31,7 @@ import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { AdvancedSetup, SetupChat } from '@/components/screens/start';
 import { Icon, IconChip, Panel, Tag, cx, type IconName } from '@/components/ui';
+import { SettingsDrawer } from '@/components/shell/SettingsDrawer';
 
 /* -------------------------------------------------------------------------- */
 /*  Illustration                                                               */
@@ -243,6 +244,8 @@ export default function LandingPage(): React.JSX.Element {
   const [slotBusy, setSlotBusy] = useState<number | null>(null);
   /** The slot whose Delete is armed: destroying a save takes two taps, not one. */
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  /** The AI panel, reachable before a company exists: the landing route has no status bar to host it. */
+  const [aiOpen, setAiOpen] = useState(false);
 
   // The full inspection, not `readSaveFile`: that helper folds an
   // unsupported-version save into null, and this page must tell "nothing here"
@@ -355,6 +358,18 @@ export default function LandingPage(): React.JSX.Element {
             <div className="text-[14px] font-extrabold tracking-tight text-ink">Frontier Capital</div>
             <div className="label-caps-faint leading-none">An AI-industry business sim</div>
           </div>
+          {/* Connecting Claude used to need a founded company first — the panel
+              lives in the game's status bar. A first-time player expects it at
+              setup, so the same drawer opens from here. */}
+          <button
+            type="button"
+            className="btn tap-target press-pop ml-auto"
+            onClick={() => setAiOpen(true)}
+            aria-label="AI settings"
+          >
+            <Icon name="live" size={15} accent={llm.available ? 'gain' : 'neutral'} />
+            {llm.available ? `Live · ${llm.model ?? llm.transportKind}` : 'Set up AI'}
+          </button>
         </header>
 
         {/* --- hero -------------------------------------------------------- */}
@@ -719,14 +734,15 @@ SUPABASE_SERVICE_ROLE_KEY=`}
               demo, so its company count is not what a new game will hold — the
               engine fact is the one worth stating here. */}
           <span>Engine: deterministic and in-browser — the same resolver a shared session runs on the server.</span>
-          <span className="flex items-center gap-1.5">
+          <button type="button" className="flex min-h-11 items-center gap-1.5 text-left hover:text-brand" onClick={() => setAiOpen(true)}>
             <Icon name="live" size={13} accent={llm.available ? 'gain' : 'neutral'} />
             {llm.available
-              ? `Live model configured (${llm.transportKind}${llm.model === null ? '' : `, ${llm.model}`}).`
-              : 'No model configured — every role falls back deterministically and the game plays in full.'}
-          </span>
+              ? `Live model configured (${llm.transportKind}${llm.model === null ? '' : `, ${llm.model}`}). Tap to manage.`
+              : 'No model configured — every role falls back deterministically and the game plays in full. Tap to connect Claude.'}
+          </button>
         </footer>
       </div>
+      <SettingsDrawer open={aiOpen} onClose={() => setAiOpen(false)} focus="ai" />
     </div>
   );
 }

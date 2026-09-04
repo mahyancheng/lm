@@ -19,6 +19,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ALL_BACKGROUNDS, CURRENT_WORLD_VERSION, NewGameSetupSchema, REGIONS, defaultRegionFor, missingSetupSlots } from '@frontier/contracts';
+import { backgroundCardsFor } from '@frontier/simulation';
 import { createSession, getEngine } from './engine';
 import {
   EMPTY_SETUP_PROPOSAL,
@@ -36,6 +37,7 @@ import {
   setupQuickReplies,
   setupSummaryLine,
   setupUnderstood,
+  type SetupQuickReply,
 } from './setupChat';
 
 /* -------------------------------------------------------------------------- */
@@ -226,6 +228,32 @@ describe('choices made by tapping', () => {
     const robotics = applySetupChoice(EMPTY_SETUP_PROPOSAL, 'sector', 'robotics');
     expect(setupQuickReplies('backgroundId', robotics).map((chip) => chip.value)).toEqual(['warehouse_robotics', 'humanoid_lab']);
     expect(setupQuickReplies('companyName', robotics)).toHaveLength(0);
+  });
+
+  it('puts the opening figures of the world it is about to build on every background chip', () => {
+    // The picker is the first screen of a new game and these are the only
+    // numbers on it. They come from the scenario, for the region the founder
+    // chose, so a card can never claim something the session would contradict.
+    const robotics = applySetupChoice(EMPTY_SETUP_PROPOSAL, 'sector', 'robotics');
+    const inNorthAmerica = applySetupChoice(robotics, 'region', 'north_america');
+    const chips = setupQuickReplies('backgroundId', inNorthAmerica);
+    const cards = backgroundCardsFor('robotics', 'north_america', CURRENT_WORLD_VERSION);
+    expect(chips.map((chip) => chip.highlights)).toEqual(cards.map((card) => card.highlights));
+    for (const chip of chips) expect(chip.highlights ?? []).toHaveLength(4);
+
+    // A humanoid laboratory is funded very differently depending on what its
+    // people cost, so the same card in another region is a different card.
+    const inSouthAsia = setupQuickReplies('backgroundId', applySetupChoice(robotics, 'region', 'south_asia'));
+    const cashIn = (replies: readonly SetupQuickReply[]): string | undefined =>
+      replies.find((chip) => chip.value === 'humanoid_lab')?.highlights?.find((entry) => entry.label === 'Cash')?.value;
+    expect(cashIn(chips)).not.toBe(cashIn(inSouthAsia));
+  });
+
+  it('falls back to the sector default region, which is the region it would build in anyway', () => {
+    const energy = applySetupChoice(EMPTY_SETUP_PROPOSAL, 'sector', 'energy');
+    expect(setupQuickReplies('backgroundId', energy).map((chip) => chip.highlights)).toEqual(
+      backgroundCardsFor('energy', defaultRegionFor('energy'), CURRENT_WORLD_VERSION).map((card) => card.highlights),
+    );
   });
 
   it('orders the region chips by how well they suit the chosen sector', () => {

@@ -27,6 +27,33 @@
  *     cubic with horizontal tangents, running only through the node-free
  *     channels between columns and the node-free rows the dummy slots hold.
  *
+ * Two things changed when the node canvas was built on this same pipeline.
+ *
+ * First, it is now generic: the slot machinery only ever needed an `id` on a
+ * node and a `from`/`to`/`kind` on an edge, so `layoutNodes` takes any pair of
+ * shapes that carry those, and `layoutGraph` is the Frontier Map's one-line
+ * application of it.
+ *
+ * Second, **which edges may push a node rightwards is now the caller's
+ * decision**, through `gates`. The pipeline used to layer over every edge kind,
+ * which on a graph with weak edges — "this makes that credible", "evidence
+ * about this updates belief in that" — buries the real prerequisite depth under
+ * an accumulation of hints. The node canvas therefore gates on `consumes` and
+ * `requires` and nothing else, and passes the node table's own `tier` as a
+ * `layerHint`: the table guarantees `consumes` strictly decreases tier, so a
+ * node's tier is a truthful floor for its column and relaxation can only push
+ * it further right, never left.
+ *
+ * The Frontier Map deliberately does **not** take that treatment. Measured on
+ * the demo graph: layering over `depends` alone puts 28 crossings on a picture
+ * that has 0 today, because every `unlocks` and `informs` edge that the tighter
+ * layering turns level or backwards leaves the column channels and is routed in
+ * a detour lane under the grid, where nothing untangles it. The crossing bound
+ * in `graphLayout.test.ts` is a ratchet that may be lowered and never raised,
+ * and a defect that is only visible in the abstract does not earn 28 crossings
+ * on the screen. World 3's research map is the node table projected and carries
+ * no edges at all, so the legacy behaviour outlives only the two frozen worlds.
+ *
  * `UI_SYSTEM.md` §4 remains the encoding contract, with one deliberate change:
  * a card carries exactly one encoding. Nine pastel fills, nine coloured borders
  * and a height that grew with compute intensity was the noise the map was
@@ -61,8 +88,20 @@ const ORDERING_SWEEPS = 4;
 /** A back edge — only possible if the graph gained a cycle — gets its own lane. */
 const DETOUR_LANE_PITCH = 14;
 
-export interface LaidOutNode {
-  readonly node: TechNode;
+/** The least a node must carry to be laid out: an identity. */
+export interface LayoutNodeLike {
+  readonly id: string;
+}
+
+/** The least an edge must carry: two ends and a kind, for a stable key. */
+export interface LayoutEdgeLike {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: string;
+}
+
+export interface LaidOutNodeOf<N> {
+  readonly node: N;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -72,8 +111,8 @@ export interface LaidOutNode {
   readonly row: number;
 }
 
-export interface LaidOutEdge {
-  readonly edge: TechEdge;
+export interface LaidOutEdgeOf<E> {
+  readonly edge: E;
   /** Stable identity for React keys and for hover/focus matching. */
   readonly key: string;
   readonly path: string;
@@ -83,14 +122,48 @@ export interface LaidOutEdge {
   readonly toY: number;
 }
 
-export interface GraphLayout {
-  readonly nodes: readonly LaidOutNode[];
-  readonly edges: readonly LaidOutEdge[];
+export interface GraphLayoutOf<N, E> {
+  readonly nodes: readonly LaidOutNodeOf<N>[];
+  readonly edges: readonly LaidOutEdgeOf<E>[];
   readonly width: number;
   readonly height: number;
   readonly layerCount: number;
   readonly rowCount: number;
 }
+
+/** The Frontier Map's own instantiation, so every existing caller reads unchanged. */
+export type LaidOutNode = LaidOutNodeOf<TechNode>;
+export type LaidOutEdge = LaidOutEdgeOf<TechEdge>;
+export type GraphLayout = GraphLayoutOf<TechNode, TechEdge>;
+
+/** How a caller tells the pipeline what gates a column and where a column starts. */
+export interface LayoutOptions<N, E> {
+  /**
+   * Which edges are allowed to push a node rightwards. Everything else is still
+   * drawn. Default: every edge, which is what a caller that has no weak edges
+   * wants and what the pipeline did before the distinction existed.
+   */
+  readonly gates?: (edge: E) => boolean;
+  /**
+   * A floor for a node's column, from something the caller knows independently
+   * of the edges — the node table's `tier`, for the canvas. Relaxation may push
+   * a node further right than its hint; nothing may pull it left of it.
+   */
+  readonly layerHint?: (node: N) => number | undefined;
+  /** Card geometry, when it differs from the Frontier Map's. */
+  readonly nodeWidth?: number;
+  readonly nodeHeight?: number;
+  /** Horizontal gap between columns. */
+  readonly columnGap?: number;
+}
+
+/**
+ * The gating edge a graph of beliefs *would* use: a dependency, and nothing
+ * weaker. Exported for a caller that wants prerequisite depth rather than the
+ * Frontier Map's every-edge depth — see the note at the top of this file for
+ * why the map itself does not use it.
+ */
+export const TECH_LAYER_EDGE = (edge: TechEdge): boolean => edge.kind === 'depends';
 
 /**
  * Longest-path depth per node, over every edge kind.
@@ -99,11 +172,18 @@ export interface GraphLayout {
  * a graph the interpreter has extended could in principle contain a cycle, and
  * a layout that hangs is worse than a layout that flattens one.
  */
-export function depthsOf(nodes: readonly TechNode[], edges: readonly TechEdge[]): Map<string, number> {
+export function depthsOf<N extends LayoutNodeLike, E extends LayoutEdgeLike>(
+  nodes: readonly N[],
+  edges: readonly E[],
+  options: LayoutOptions<N, E> = {},
+): Map<string, number> {
+  const gates = options.gates ?? ((): boolean => true);
   const ids = new Set(nodes.map((node) => node.id));
-  const live = edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to);
+  const live = edges.filter((edge) => gates(edge) && ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to);
   const depth = new Map<string, number>();
-  for (const node of nodes) depth.set(node.id, 0);
+  // The hint is a floor, applied before any relaxation: a node never sits left
+  // of the column its own tier claims, and relaxation can only push it right.
+  for (const node of nodes) depth.set(node.id, Math.max(0, Math.floor(options.layerHint?.(node) ?? 0)));
 
   const ceiling = Math.max(1, Math.min(nodes.length, 64));
   for (let pass = 0; pass < ceiling; pass += 1) {
@@ -129,7 +209,7 @@ export function depthsOf(nodes: readonly TechNode[], edges: readonly TechEdge[])
  * technology is in. A card holds two lines of title and one line of state, and
  * that is a fixed amount of room.
  */
-export function heightOf(_node: TechNode): number {
+export function heightOf(_node?: unknown): number {
   return MAX_NODE_HEIGHT;
 }
 
@@ -137,11 +217,11 @@ export function heightOf(_node: TechNode): number {
 /*  The pipeline                                                               */
 /* -------------------------------------------------------------------------- */
 
-interface Slot {
+interface Slot<N> {
   readonly id: string;
   readonly layer: number;
   /** Null for a dummy: an invisible slot a long edge passes through. */
-  readonly node: TechNode | null;
+  readonly node: N | null;
   order: number;
   row: number;
   /** Vertical centre, on the shared row grid. */
@@ -219,23 +299,42 @@ function roundedPolyline(points: readonly Point[], radius: number): string {
   return d;
 }
 
-/** Lay the whole graph out. Pure, and stable for a given graph. */
+/**
+ * Lay the Frontier Map out. Pure, and stable for a given graph.
+ *
+ * Every edge kind gates, which is the behaviour this map has always had and the
+ * behaviour its pinned crossing bound was measured against.
+ */
 export function layoutGraph(graph: TechGraph): GraphLayout {
-  const nodes = [...graph.nodes];
-  const depth = depthsOf(nodes, graph.edges);
+  return layoutNodes(graph.nodes, graph.edges);
+}
+
+/** Lay any node-and-edge pair out. Pure, and stable for a given input. */
+export function layoutNodes<N extends LayoutNodeLike, E extends LayoutEdgeLike>(
+  inputNodes: readonly N[],
+  inputEdges: readonly E[],
+  options: LayoutOptions<N, E> = {},
+): GraphLayoutOf<N, E> {
+  const nodes = [...inputNodes];
+  const graphEdges = inputEdges;
+  const nodeWidth = options.nodeWidth ?? NODE_WIDTH;
+  const nodeHeight = options.nodeHeight ?? MAX_NODE_HEIGHT;
+  const columnGap = options.columnGap ?? COLUMN_GAP;
+  const rowPitch = nodeHeight + ROW_GAP;
+  const depth = depthsOf(nodes, graphEdges, options);
 
   /* --- 1. slots, one per node plus one dummy per crossed column ----------- */
 
-  const slots = new Map<string, Slot>();
+  const slots = new Map<string, Slot<N>>();
   for (const node of nodes) {
     slots.set(node.id, { id: node.id, layer: depth.get(node.id) ?? 0, node, order: 0, row: 0, centreY: 0 });
   }
 
   const segments: Segment[] = [];
   const chains = new Map<string, string[]>();
-  const detours: { readonly key: string; readonly edge: TechEdge }[] = [];
+  const detours: { readonly key: string; readonly edge: E }[] = [];
 
-  graph.edges.forEach((edge, index) => {
+  graphEdges.forEach((edge, index) => {
     const from = slots.get(edge.from);
     const to = slots.get(edge.to);
     // An edge whose endpoint the projection redacted is simply not drawn.
@@ -354,22 +453,22 @@ export function layoutGraph(graph: TechGraph): GraphLayout {
       const slot = slots.get(id);
       if (slot === undefined) return;
       slot.row = start + index;
-      slot.centreY = MARGIN + slot.row * ROW_PITCH + MAX_NODE_HEIGHT / 2;
+      slot.centreY = MARGIN + slot.row * rowPitch + nodeHeight / 2;
     });
   }
 
-  const columnX = (layer: number): number => MARGIN + layer * (NODE_WIDTH + COLUMN_GAP);
+  const columnX = (layer: number): number => MARGIN + layer * (nodeWidth + columnGap);
 
-  const placed = new Map<string, LaidOutNode>();
+  const placed = new Map<string, LaidOutNodeOf<N>>();
   for (const node of nodes) {
     const slot = slots.get(node.id);
     if (slot === undefined) continue;
-    const height = heightOf(node);
+    const height = nodeHeight;
     placed.set(node.id, {
       node,
       x: columnX(slot.layer),
       y: slot.centreY - height / 2,
-      width: NODE_WIDTH,
+      width: nodeWidth,
       height,
       layer: slot.layer,
       row: slot.row,
@@ -425,13 +524,13 @@ export function layoutGraph(graph: TechGraph): GraphLayout {
 
   /* --- 5. routing ---------------------------------------------------------- */
 
-  const gridBottom = MARGIN + rowCount * ROW_PITCH - ROW_GAP;
+  const gridBottom = MARGIN + rowCount * rowPitch - ROW_GAP;
   const laneOf = new Map<string, number>();
   [...detours].sort((a, b) => a.key.localeCompare(b.key)).forEach((detour, index) => laneOf.set(detour.key, index));
 
-  const laidOutEdges: LaidOutEdge[] = [];
+  const laidOutEdges: LaidOutEdgeOf<E>[] = [];
 
-  graph.edges.forEach((edge, index) => {
+  graphEdges.forEach((edge, index) => {
     const key = `${edge.from}>${edge.to}:${edge.kind}#${index}`;
     const source = placed.get(edge.from);
     const target = placed.get(edge.to);
@@ -474,7 +573,7 @@ export function layoutGraph(graph: TechGraph): GraphLayout {
       if (slot === undefined) continue;
       const x = columnX(slot.layer);
       // Straight across the column, on a row no card occupies.
-      points.push({ x, y: slot.centreY }, { x: x + NODE_WIDTH, y: slot.centreY });
+      points.push({ x, y: slot.centreY }, { x: x + nodeWidth, y: slot.centreY });
     }
     points.push({ x: toX, y: toY });
 
@@ -489,7 +588,7 @@ export function layoutGraph(graph: TechGraph): GraphLayout {
     laidOutEdges.push({ edge, key, path, fromX, fromY, toX, toY });
   });
 
-  const width = MARGIN * 2 + layerCount * NODE_WIDTH + Math.max(0, layerCount - 1) * COLUMN_GAP;
+  const width = MARGIN * 2 + layerCount * nodeWidth + Math.max(0, layerCount - 1) * columnGap;
   const height = gridBottom + MARGIN + (detours.length === 0 ? 0 : DETOUR_LANE_PITCH * (detours.length + 1));
 
   return {

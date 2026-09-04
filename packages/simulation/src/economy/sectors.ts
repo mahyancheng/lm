@@ -35,6 +35,7 @@
 import type { Company, SessionState } from '@frontier/contracts';
 import {
   DEFAULT_SECTOR,
+  NODE_ECONOMY_WORLD_VERSION,
   SECTORS,
   SECTOR_META,
   sectorInputs,
@@ -61,6 +62,24 @@ export const MULTI_SECTOR_WORLD_VERSION = 2;
  */
 export function isMultiSectorWorld(state: SessionState): boolean {
   return state.config.worldVersion >= MULTI_SECTOR_WORLD_VERSION;
+}
+
+/**
+ * The first world version whose economy is the one node table. Taken from the
+ * contracts rather than restated, so the two can never drift apart.
+ */
+export const NODE_ECONOMY_VERSION: number = NODE_ECONOMY_WORLD_VERSION;
+
+/**
+ * Whether this session runs the node economy.
+ *
+ * A second gate, deliberately not a reuse of `isMultiSectorWorld`. That one
+ * means "version 2 or later" and world 2 is frozen: repurposing it would drag a
+ * live world-2 game into world-3 behaviour the quarter this shipped. Every
+ * world-3 branch in the engine asks this and only this.
+ */
+export function isNodeEconomyWorld(state: SessionState): boolean {
+  return state.config.worldVersion >= NODE_ECONOMY_VERSION;
 }
 
 /** The sector a company operates in, total even for a save that predates the field. */

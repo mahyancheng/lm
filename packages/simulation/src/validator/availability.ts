@@ -43,10 +43,17 @@ import type {
 } from '@frontier/contracts';
 import {
   ACTION_TYPES,
+  DATA_COLLECTION_LEVELS,
   DIVIDEND_MAX_PAYOUT_PCT,
+  ECONOMIC_NODES,
+  ECONOMIC_NODES_BY_ID,
   TOLL_MAX_PCT,
+  nodeMarketPriceUsd,
+  holdsNode,
+  requiresClosure,
   requiresExplicitConfirmation,
 } from '@frontier/contracts';
+import { isNodeEconomyWorld } from '../economy/sectors';
 import { BatchBudget, findCompany, floatShares, type ValidationActor } from './context';
 import { validateAction } from './index';
 import {
@@ -55,10 +62,11 @@ import {
   MAX_ROUND_DILUTION_PCT,
   MIN_INTRODUCTION_PURPOSE_CHARS,
   MIN_IPO_FLOAT_PCT,
-  RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
 import { quarterlyHireCostUsd, reservableUnits } from './rules';
 import { sellersFor } from '../companies/sellers';
+import { LICENCE_ROYALTY_BOUNDS, NPC_LICENCE_ROYALTY_FLOOR_PCT, licenceOfferOf, ownsNodeOutright } from '../graph/licensing';
+import { launchableNodes, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
 import { categoryOf } from '../companies/categories';
 import { defaultSupplyTerms, suppliersFor } from '../companies/supply';
 
@@ -253,23 +261,39 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
       };
     }
 
-    case 'launch_product':
+    case 'launch_product': {
+      // World 3: a launch names a NODE this company may produce, and the probe
+      // offers exactly those — the same `launchableNodes` list the screen and
+      // the `launchable_lines` lookup read, so an option the Chief of Staff
+      // offers is an option the validator accepts. World 1 and 2 keep the
+      // segment-shaped probe with no targets, which is all their catalogue
+      // could answer.
+      const openNodes = isNodeEconomyWorld(draft)
+        ? launchableNodes(draft, company).filter((entry) => !entry.locked && !entry.alreadySold)
+        : [];
+      const first = openNodes[0] ?? null;
       return {
         intent: {
           type,
           name: `Availability probe ${company.id}`,
-          segment: 'enterprise',
-          categoryId: null,
-          pricePerSeatUsd: 1_000,
+          segment: first?.node.buyerSegment ?? 'enterprise',
+          categoryId: first?.node.id ?? null,
+          pricePerSeatUsd: first === null ? 1_000 : Math.max(1, Math.round(nodeMarketPriceUsd(draft, first.node.id))),
           computeIntensity: 0.5,
           launchMarketingUsd: cash,
           targetQuality: 0.5,
           supply: [],
         },
-        bounds: [usdBound('launchMarketingUsd', 'Launch marketing', cash), usdBound('pricePerSeatUsd', 'Launch price per seat', null)],
-        targets: [],
+        bounds: [
+          usdBound('launchMarketingUsd', 'Launch marketing', cash),
+          usdBound('pricePerSeatUsd', isNodeEconomyWorld(draft) ? 'Launch price per unit' : 'Launch price per seat', null),
+        ],
+        targets: openNodes
+          .slice(0, 24)
+          .map((entry) => ({ id: entry.node.id, label: `${entry.node.label} — ${Math.round(nodeMarketPriceUsd(draft, entry.node.id))} a ${entry.node.unitLabel} on the market` })),
         maxCashUsd: cash,
       };
+    }
 
     case 'sunset_product': {
       const product = activeProducts[0];
@@ -359,7 +383,7 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
     /* ---------------------------- compute --------------------------- */
     case 'reserve_compute': {
       const marketCap = reservableUnits(draft);
-      const unitCost = RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice;
+      const unitCost = reservedRentUsd(draft);
       const affordable = unitCost <= 0 ? marketCap : Math.min(marketCap, Math.floor(cash / unitCost));
       return {
         intent: { type, units: Math.max(1, affordable), quarters: 4, maxPricePerUnitUsd: Math.round(unitCost * 1.2), providerCompanyId: null },
@@ -440,6 +464,38 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
     }
 
     case 'choose_supplier': {
+      // World 3: an input is a NODE the company's own line consumes, so the
+      // probe walks the table rather than the world-2 catalogue. Both branches
+      // end in the same `suppliersFor` call, which is itself node-aware in
+      // world 3 — one lookup, two id spaces, and they cannot be confused
+      // because every node id carries a table prefix.
+      if (isNodeEconomyWorld(draft)) {
+        const line = activeProducts.find((product) => {
+          const nodeId = lineNodeIdOf(product);
+          return nodeId !== null && (ECONOMIC_NODES_BY_ID[nodeId]?.consumes.length ?? 0) > 0;
+        });
+        const lineNodeId = line === undefined ? null : lineNodeIdOf(line);
+        const inputNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId]?.consumes[0];
+        if (line === undefined || inputNode === undefined) {
+          return { intent: null, reason: `Nothing ${company.name} makes consumes an input somebody else could supply.`, ...NOTHING };
+        }
+        const nodeOffers = suppliersFor(draft, company.id, inputNode.nodeId);
+        const bestNode = nodeOffers[0] ?? null;
+        return {
+          intent: {
+            type,
+            productId: line.id,
+            inputCategoryId: inputNode.nodeId,
+            supplierCompanyId: bestNode?.company.id ?? null,
+            supplierProductId: bestNode?.product.id ?? null,
+          },
+          bounds: [],
+          targets: nodeOffers
+            .slice(0, 24)
+            .map((entry) => ({ id: entry.company.id, label: `${entry.company.name} — ${ECONOMIC_NODES_BY_ID[inputNode.nodeId]?.label ?? inputNode.nodeId} at ${Math.round(entry.pricePerUnitUsd)} a unit` })),
+          maxCashUsd: null,
+        };
+      }
       const withInputs = activeProducts.find((product) => categoryOf(company, product).inputs.length > 0);
       if (withInputs === undefined) {
         return { intent: null, reason: `Nothing ${company.name} sells is built on another company's input.`, ...NOTHING };
@@ -845,6 +901,91 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
         intent: { type, subsidiaryCompanyId: target.id },
         bounds: [],
         targets: targets.slice(0, 24).map((entry) => ({ id: entry.id, label: entry.name })),
+        maxCashUsd: null,
+      };
+    }
+
+    /* --------------------------- world 3 ----------------------------- */
+    case 'abandon_research_project': {
+      const open = draft.researchProjects.filter(
+        (project) => project.companyId === company.id && (project.status === 'active' || project.status === 'paused'),
+      );
+      const project = open[0];
+      if (project === undefined) return { intent: null, reason: `${company.name} has no open research programme to close.`, ...NOTHING };
+      return {
+        intent: { type, projectId: project.id },
+        bounds: [],
+        targets: open.slice(0, 24).map((entry) => ({ id: entry.id, label: draft.techGraph.nodes.find((node) => node.id === entry.targetNodeId)?.title ?? entry.targetNodeId })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'set_data_policy': {
+      if (!isNodeEconomyWorld(draft)) return { intent: null, reason: 'Customer data is only collected in the node economy.', ...NOTHING };
+      // The offer is the position the company is not already on, so the probe
+      // never proposes a no-op the validator would refuse as a duplicate.
+      const current = company.dataPolicy ?? 'standard';
+      const level = current === 'standard' ? 'aggressive' : 'standard';
+      return {
+        intent: { type, collectionLevel: level },
+        bounds: [],
+        targets: DATA_COLLECTION_LEVELS.filter((entry) => entry !== current).map((entry) => ({ id: entry, label: entry })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'license_node': {
+      if (!isNodeEconomyWorld(draft)) return { intent: null, reason: 'Nodes are only owned, and therefore only licensed, in the node economy.', ...NOTHING };
+      // The licence worth offering is the one that unblocks something this
+      // company is already trying to sell, so the wanted set is walked first
+      // and everything else somebody owns comes after it.
+      const wanted = new Set<string>();
+      for (const product of company.products) {
+        if (!product.isActive) continue;
+        const nodeId = lineNodeIdOf(product);
+        if (nodeId === null) continue;
+        for (const required of requiresClosure(nodeId)) wanted.add(required);
+      }
+      const candidates: { nodeId: string; label: string; owner: string; ownerName: string; royaltyPct: number; needed: boolean }[] = [];
+      for (const node of ECONOMIC_NODES) {
+        if (holdsNode(company, node.id, draft.quarter)) continue;
+        const owner = draft.companies.find((candidate) => candidate.isActive && candidate.id !== company.id && ownsNodeOutright(candidate, node.id));
+        if (owner === undefined) continue;
+        const offer = licenceOfferOf(owner, node.id);
+        candidates.push({
+          nodeId: node.id,
+          label: node.label,
+          owner: owner.id,
+          ownerName: owner.name,
+          royaltyPct: offer?.royaltyPct ?? NPC_LICENCE_ROYALTY_FLOOR_PCT,
+          needed: wanted.has(node.id),
+        });
+      }
+      const ordered = [...candidates.filter((entry) => entry.needed), ...candidates.filter((entry) => !entry.needed)];
+      const best = ordered[0];
+      if (best === undefined) return { intent: null, reason: 'Nobody else owns a node this company could licence.', ...NOTHING };
+      return {
+        intent: { type, nodeId: best.nodeId, ownerCompanyId: best.owner, royaltyPct: best.royaltyPct },
+        bounds: [percentBound('royaltyPct', 'Royalty', LICENCE_ROYALTY_BOUNDS.min, LICENCE_ROYALTY_BOUNDS.max)],
+        targets: ordered.slice(0, 24).map((entry) => ({ id: entry.nodeId, label: `${entry.label} — ${entry.ownerName}` })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'publish_licence_terms': {
+      if (!isNodeEconomyWorld(draft)) return { intent: null, reason: 'Nodes are only owned, and therefore only licensed, in the node economy.', ...NOTHING };
+      const owned = ECONOMIC_NODES.filter((node) => ownsNodeOutright(company, node.id));
+      // The offer proposed is one this company is not already making, so the
+      // probe never suggests the no-op the validator refuses as a duplicate.
+      const fresh = owned.find((node) => {
+        const offer = licenceOfferOf(company, node.id);
+        return offer === null || offer.royaltyPct !== NPC_LICENCE_ROYALTY_FLOOR_PCT || !offer.openToAll;
+      });
+      if (fresh === undefined) return { intent: null, reason: `${company.name} already publishes terms for everything it owns.`, ...NOTHING };
+      return {
+        intent: { type, nodeId: fresh.id, royaltyPct: NPC_LICENCE_ROYALTY_FLOOR_PCT, openToAll: true },
+        bounds: [percentBound('royaltyPct', 'Royalty', LICENCE_ROYALTY_BOUNDS.min, LICENCE_ROYALTY_BOUNDS.max)],
+        targets: owned.slice(0, 24).map((node) => ({ id: node.id, label: node.label })),
         maxCashUsd: null,
       };
     }

@@ -25,7 +25,16 @@
  */
 
 import type { NewGameSetup, SessionState, SessionStateInput } from '@frontier/contracts';
-import { CURRENT_WORLD_VERSION, NewGameSetupSchema, SessionStateSchema, makeId } from '@frontier/contracts';
+import { NewGameSetupSchema, SessionStateSchema, makeId } from '@frontier/contracts';
+import type { WorldVersion } from '@frontier/contracts';
+
+/**
+ * World 2 pins its own version rather than reading `CURRENT_WORLD_VERSION`.
+ * When world 3 became what a new game is created at, a session built here would
+ * otherwise have started declaring itself world 3 and taken world-3 branches it
+ * was never built for — and its pinned opening hash would have moved.
+ */
+const WORLD_2_VERSION: WorldVersion = 2;
 import { DEMO_PLAYER_ID } from '../demo';
 import {
   INS,
@@ -79,7 +88,7 @@ export const W2_DEFAULT_SETUP: NewGameSetup = NewGameSetupSchema.parse({
   backgroundId: 'enterprise_ai',
   sector: 'ai',
   region: 'north_america',
-  worldVersion: CURRENT_WORLD_VERSION,
+  worldVersion: WORLD_2_VERSION,
 });
 
 /**
@@ -134,7 +143,7 @@ export function world2SessionInput(seed: number = W2_SEED, setupInput?: NewGameS
       significantCompanyCount: 16,
       backgroundCompanyCount: 0,
       scenarioId: 'frontier_multisector_2027',
-      worldVersion: CURRENT_WORLD_VERSION,
+      worldVersion: WORLD_2_VERSION,
       startYear: 2027,
       quarterLimit: null,
       enableReferenceMarket: false,

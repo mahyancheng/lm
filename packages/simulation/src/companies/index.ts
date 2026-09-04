@@ -67,7 +67,7 @@ export {
   customersFor,
   defaultSupplyTerms,
   dependenceOn,
-  effectiveQuality,
+  categoryEffectiveQuality,
   openMarketSupplyCostUsd,
   requiredInputUnsupplied,
   resolveSupplyLedger,
@@ -137,9 +137,9 @@ export {
   seedCapitalUsd,
 } from './entrants';
 export type { AdministrationRow, MarketEntry } from './entrants';
-export { applyNpcDefaults, bidTarget } from './npc';
+export { NPC_MIN_GROSS_MARGIN, NPC_PRICE_MOVE_FLOOR, NPC_PRICE_TRACKING, applyNpcDefaults, bidTarget } from './npc';
 export { recomputeMetrics, recomputeAntitrustExposure, recomputeControlStatus } from './metrics';
-export { marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';
+export { NODE_DISCRETIONARY_GROSS_PROFIT_SHARE, discretionaryCeilingUsd, marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';
 export type { MarketingPlan } from './policy';
 export { ARCHETYPE_POLICIES, POSTURE_ADJUSTMENTS, effectivePolicy } from './archetypes';
 export type { ArchetypePolicy, PostureAdjustment, EffectivePolicy } from './archetypes';

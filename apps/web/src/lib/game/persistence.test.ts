@@ -18,7 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GmProposalBatch, NpcActionBundle, SessionState, SubmittedAction } from '@frontier/contracts';
-import { NewGameSetupSchema } from '@frontier/contracts';
+import { NewGameSetupSchema, RETIRED_WORLD_SAVE_MESSAGE } from '@frontier/contracts';
 import { applySocialTextOverrides, selectPostsForAuthoring } from '@frontier/simulation';
 import { buildSubmittedAction, createSession, getEngine } from './engine';
 import {
@@ -100,6 +100,21 @@ function bundleFor(companyId: string): NpcActionBundle {
   };
 }
 
+/**
+ * The world every fixture that is READ BACK is built in.
+ *
+ * This build opens a save from world 3 and refuses anything below it, so a
+ * fixture written in the frozen demo world is refused before the assertion
+ * under test is reached — and none of the format assertions below is about
+ * which world the file holds.
+ */
+const W3_SETUP = NewGameSetupSchema.parse({
+  companyName: 'Northwind AI',
+  founderName: 'Rae Fontaine',
+  backgroundId: 'consumer_ai',
+  worldVersion: 3,
+});
+
 function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'] = null): SaveFile {
   return {
     version: SAVE_VERSION,
@@ -115,6 +130,11 @@ function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'
     queue: [],
     savedAtIso: null,
   };
+}
+
+/** The same file in a world this build will open again. */
+function storedFileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'] = null): SaveFile {
+  return { ...fileOf(log, checkpoint), setup: W3_SETUP, worldVersion: 3 };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -143,18 +163,18 @@ describe('a save records every input to F, not just the player half', () => {
 });
 
 describe('a quarter the model wrote words for', () => {
-  /** The multi-sector world, which is the one whose characters post at all. */
+  /** A world whose characters post at all — and which this build still opens. */
   const W2_SETUP = NewGameSetupSchema.parse({
     companyName: 'Acme AI',
     founderName: 'Dana Vale',
     backgroundId: 'enterprise_ai',
     sector: 'ai',
     region: 'north_america',
-    worldVersion: 2,
+    worldVersion: 3,
   });
 
   function w2File(log: readonly QuarterRecord[]): SaveFile {
-    return { ...fileOf(log), setup: W2_SETUP, worldVersion: 2 };
+    return { ...fileOf(log), setup: W2_SETUP, worldVersion: 3 };
   }
 
   it('replays to the same words, and without the record to the engine\'s own', () => {
@@ -320,12 +340,12 @@ describe('a quota failure prunes only what the checkpoint already absorbed', () 
       } as Storage,
     };
 
-    expect(writeSaveFile({ ...fileOf(log, checkpoint), savedQuarter: 4 })).toBe(true);
+    expect(writeSaveFile({ ...storedFileOf(log, checkpoint), savedQuarter: 4 })).toBe(true);
     expect(readSaveFile()?.log.map((record) => record.quarter)).toEqual([2, 3]);
 
     // Without a checkpoint there is nothing safe to drop, so it fails instead.
     refusals = 2;
-    expect(writeSaveFile(fileOf(log))).toBe(false);
+    expect(writeSaveFile(storedFileOf(log))).toBe(false);
   });
 });
 
@@ -374,20 +394,22 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
     expect(globals.window?.localStorage.getItem(SAVE_KEY)).toBe(future);
   });
 
-  it('migrates a v1 file rather than discarding it', () => {
+  it('refuses a v1 file, in words, and does not write over it', () => {
+    // A v1 file predates the world-version field entirely, so it is a world-1
+    // file — a world this build no longer opens. It is refused as
+    // `unsupported`, which is the status that is preserved, and the refusal
+    // carries the sentence the player is shown rather than a null and a shrug.
     const start = createSession({ seed: SEED });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
-    globals.window?.localStorage.setItem(
-      SAVE_KEY,
-      JSON.stringify({ version: 1, seed: SEED, difficulty: 'standard', actionLog: [[a]], savedQuarter: 1 }),
-    );
+    const stored = JSON.stringify({ version: 1, seed: SEED, difficulty: 'standard', actionLog: [[a]], savedQuarter: 1 });
+    globals.window?.localStorage.setItem(SAVE_KEY, stored);
 
-    const file = readSaveFile();
-    expect(file?.log).toHaveLength(1);
-    expect(file?.log[0]?.quarter).toBe(0);
-    expect(file?.log[0]?.actions).toHaveLength(1);
-    expect(file?.log[0]?.gmProposal).toBeNull();
-    expect(replay(file as SaveFile).complete).toBe(true);
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('unsupported');
+    expect(inspection.file).toBeNull();
+    expect(inspection.reason).toBe(RETIRED_WORLD_SAVE_MESSAGE);
+    expect(readSaveFile()).toBeNull();
+    expect(globals.window?.localStorage.getItem(SAVE_KEY)).toBe(stored);
   });
 
   it('records the new-game setup and rebuilds the renamed company on replay', () => {
@@ -414,24 +436,23 @@ describe('a file this build cannot read is preserved, never overwritten', () => 
     expect(player?.archetype).toBe('consumer_ai');
   });
 
-  it('reads a v2 file (no setup) as the default world', () => {
+  it('refuses a v2 file, which has no setup and is therefore world 1', () => {
     const start = createSession({ seed: SEED });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     globals.window?.localStorage.setItem(
       SAVE_KEY,
       JSON.stringify({ version: 2, seed: SEED, difficulty: 'standard', log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }], checkpoint: null, savedQuarter: 1 }),
     );
-    const file = readSaveFile();
-    expect(file?.setup).toBeNull();
-    const loaded = replay(file as SaveFile);
-    expect(loaded.complete).toBe(true);
-    expect(loaded.session.companies.find((company) => company.controllerPlayerId !== null)?.name).toBe('Player Ventures');
+    const inspection = inspectSave();
+    expect(inspection.status).toBe('unsupported');
+    expect(inspection.reason).toBe(RETIRED_WORLD_SAVE_MESSAGE);
+    expect(readSaveFile()).toBeNull();
   });
 
   it('round-trips an export through an import', () => {
     const start = createSession({ seed: SEED });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
-    writeSaveFile(fileOf([{ quarter: 0, actions: [a], gmProposal: QUIET_GM, npcBundles: [], socialTexts: [] }]));
+    writeSaveFile(storedFileOf([{ quarter: 0, actions: [a], gmProposal: QUIET_GM, npcBundles: [], socialTexts: [] }]));
 
     const text = exportSave();
     expect(text).not.toBeNull();
@@ -479,7 +500,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
       seed: SEED,
       difficulty: 'standard',
       autoExecuteRoutine: false,
-      setup: null,
+      setup: W3_SETUP,
       log: [{ quarter: 0, actions: [resolved], gmProposal: null, npcBundles: [], socialTexts: [] }],
       queue: [queued],
       session: outcome.nextState,
@@ -511,7 +532,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
         version: SAVE_VERSION,
         seed: SEED,
         difficulty: 'standard',
-        setup: null,
+        setup: W3_SETUP,
         log: [],
         checkpoint: null,
         savedQuarter: 0,
@@ -525,7 +546,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
   it('reads a queue that is not an array as empty', () => {
     globals.window?.localStorage.setItem(
       SAVE_KEY,
-      JSON.stringify({ version: SAVE_VERSION, seed: SEED, difficulty: 'standard', log: [], queue: 'oops' }),
+      JSON.stringify({ version: SAVE_VERSION, seed: SEED, difficulty: 'standard', setup: W3_SETUP, log: [], queue: 'oops' }),
     );
     expect(readSaveFile()?.queue).toEqual([]);
   });
@@ -533,7 +554,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
 
 describe('a founding save with no resolved quarters', () => {
   it('replays an empty log to quarter 0 with the setup applied, as a complete load', () => {
-    const setup = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
+    const setup = W3_SETUP;
     const session = createSession({ seed: SEED, setup });
     const file = buildSaveFile({
       seed: SEED,
@@ -562,6 +583,9 @@ describe('a founding save with no resolved quarters', () => {
 
 describe('files from other builds of the save format', () => {
   it('reads a v3 file as ok, with an empty queue and no timestamp', () => {
+    // A v3 file predates the queue and the timestamp, not the world: what is
+    // under test is the format's two absent fields, so the setup names a world
+    // this build still opens and the file's age does the rest.
     const start = createSession({ seed: SEED });
     const a = buildSubmittedAction(start, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     globals.window?.localStorage.setItem(
@@ -571,7 +595,7 @@ describe('files from other builds of the save format', () => {
         seed: SEED,
         difficulty: 'standard',
         autoExecuteRoutine: false,
-        setup: null,
+        setup: W3_SETUP,
         log: [{ quarter: 0, actions: [a], gmProposal: null, npcBundles: [], socialTexts: [] }],
         checkpoint: null,
         savedQuarter: 1,
@@ -589,7 +613,7 @@ describe('files from other builds of the save format', () => {
     expect(loaded.queue).toEqual([]);
   });
 
-  it('reads a v4 file as world 1: the world version postdates it', () => {
+  it('refuses a v4 file: the world-version field postdates it, so it is world 1', () => {
     const start = createSession({ seed: SEED });
     globals.window?.localStorage.setItem(
       SAVE_KEY,
@@ -599,7 +623,8 @@ describe('files from other builds of the save format', () => {
         difficulty: 'standard',
         autoExecuteRoutine: false,
         // A v4 setup carries no sector, region or world version; the schema
-        // defaults fill all three, and its default world version is 1.
+        // defaults fill all three, and its default world version is 1 — a world
+        // this build no longer opens.
         setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' },
         log: [],
         checkpoint: null,
@@ -610,16 +635,11 @@ describe('files from other builds of the save format', () => {
     );
 
     const inspection = inspectSave();
-    expect(inspection.status).toBe('ok');
+    expect(inspection.status).toBe('unsupported');
     expect(inspection.version).toBe(4);
-    expect(inspection.file?.worldVersion).toBe(1);
-    expect(inspection.file?.setup?.worldVersion).toBe(1);
-    // And it still replays into the frozen world it was made in.
-    const loaded = replay(inspection.file as SaveFile);
-    expect(loaded.complete).toBe(true);
-    expect(loaded.worldVersion).toBe(1);
-    expect(loaded.session.config.worldVersion).toBe(1);
-    expect(loaded.session.companies).toHaveLength(start.companies.length);
+    expect(inspection.file).toBeNull();
+    expect(inspection.reason).toBe(RETIRED_WORLD_SAVE_MESSAGE);
+    expect(start.companies.length).toBeGreaterThan(0);
   });
 
   it('round-trips a v5 file, carrying the world its setup names', () => {
@@ -629,7 +649,7 @@ describe('files from other builds of the save format', () => {
       backgroundId: 'humanoid_lab',
       sector: 'robotics',
       region: 'east_asia',
-      worldVersion: 2,
+      worldVersion: 3,
     });
     const session = createSession({ seed: SEED, setup });
     const file = buildSaveFile({
@@ -643,24 +663,24 @@ describe('files from other builds of the save format', () => {
       now: () => STAMP,
     });
     expect(file.version).toBe(SAVE_VERSION);
-    expect(file.worldVersion).toBe(2);
+    expect(file.worldVersion).toBe(3);
     expect(writeSaveFile(file)).toBe(true);
 
     // The serialiser writes the field in the same place `JSON.stringify` does.
     expect(serializeSaveFile(file)).toBe(JSON.stringify(file));
 
     const read = readSaveFile() as SaveFile;
-    expect(read.worldVersion).toBe(2);
+    expect(read.worldVersion).toBe(3);
     expect(read.setup?.sector).toBe('robotics');
     expect(read.setup?.region).toBe('east_asia');
     // A slot picker labels the world without parsing a checkpoint.
     expect(writeSlotFile(1, file)).toBe(true);
-    expect(slotSummaries()[0]?.worldVersion).toBe(2);
+    expect(slotSummaries()[0]?.worldVersion).toBe(3);
 
     const loaded = replay(read);
     expect(loaded.complete).toBe(true);
-    expect(loaded.worldVersion).toBe(2);
-    expect(loaded.session.config.worldVersion).toBe(2);
+    expect(loaded.worldVersion).toBe(3);
+    expect(loaded.session.config.worldVersion).toBe(3);
     expect(loaded.session.companies.find((company) => company.controllerPlayerId !== null)?.name).toBe('Kestrel Dynamics');
   });
 
@@ -672,7 +692,7 @@ describe('files from other builds of the save format', () => {
         seed: SEED,
         difficulty: 'standard',
         autoExecuteRoutine: false,
-        setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 1 },
+        setup: { companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 3 },
         // A hand-edited file: the setup is what `createSession` dispatches on,
         // so this number may not be allowed to say otherwise.
         worldVersion: 2,
@@ -683,7 +703,7 @@ describe('files from other builds of the save format', () => {
         savedAtIso: STAMP,
       }),
     );
-    expect(inspectSave().file?.worldVersion).toBe(1);
+    expect(inspectSave().file?.worldVersion).toBe(3);
   });
 
   it('treats versions on either side of [1..5] as unsupported and never writes over them', () => {
@@ -711,8 +731,8 @@ describe('the write path is cheap without changing a byte of the format', () => 
       seed: SEED,
       difficulty: 'standard',
       autoExecuteRoutine: true,
-      setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai' }),
-      worldVersion: 1,
+      setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai', worldVersion: 3 }),
+      worldVersion: 3,
       log: [{ quarter: 0, actions: [action], gmProposal: QUIET_GM, npcBundles: [bundleFor('c1')], socialTexts: [] }],
       checkpoint: { quarter: 0, state: start },
       savedQuarter: 1,
@@ -749,10 +769,10 @@ describe('the write path is cheap without changing a byte of the format', () => 
   });
 
   it('writes again after a delete, even when the body matches the last write', () => {
-    const file = fileOf([]);
+    const file = storedFileOf([]);
     expect(writeSaveFile(file)).toBe(true);
     globals.window?.localStorage.removeItem(SAVE_KEY);
-    expect(writeSaveFile(fileOf([]))).toBe(true);
+    expect(writeSaveFile(storedFileOf([]))).toBe(true);
     expect(globals.window?.localStorage.getItem(SAVE_KEY)).not.toBeNull();
     expect(inspectSave().status).toBe('ok');
   });
@@ -770,7 +790,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
 });
 
 describe('manual slots beside the autosave', () => {
-  const SETUP = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
+  const SETUP = W3_SETUP;
 
   function slotFile(): SaveFile {
     const session = createSession({ seed: SEED, setup: SETUP });

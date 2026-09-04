@@ -39,6 +39,20 @@ const SEED = 424242;
 /** A stamp no real clock produces mid-test, so it can only appear via the injected `now`. */
 const STAMP = '2030-01-02T03:04:05.000Z';
 
+/**
+ * The world every fixture that is READ BACK is built in.
+ *
+ * This build opens a save from world 3 and refuses anything below it, so a
+ * fixture written in the frozen demo world would be refused before any of these
+ * assertions were reached — and none of them is about which world it is.
+ */
+const W3_SETUP = NewGameSetupSchema.parse({
+  companyName: 'Northwind AI',
+  founderName: 'Rae Fontaine',
+  backgroundId: 'consumer_ai',
+  worldVersion: 3,
+});
+
 /* -------------------------------------------------------------------------- */
 /*  A localStorage and a DOM that exist in node                                */
 /* -------------------------------------------------------------------------- */
@@ -252,7 +266,9 @@ describe('newGame founds a company that survives a refresh', () => {
 
 describe('the open queue rides the autosave', () => {
   it('restores a stored queue, re-validating each entry and counting the dropped one in the notice', async () => {
-    const session = createSession({ seed: SEED });
+    // World 3: the only world this build opens a save from. The queue, not the
+    // world, is what this test is about.
+    const session = createSession({ seed: SEED, setup: W3_SETUP });
     const keepA = buildSubmittedAction(session, { type: 'set_research_budget', budgetUsd: 400_000 }, 0);
     const keepB = buildSubmittedAction(session, { type: 'set_research_budget', budgetUsd: 600_000 }, 1);
     // Parses cleanly as a SubmittedAction but fails validation on load: no
@@ -262,7 +278,7 @@ describe('the open queue rides the autosave', () => {
       seed: SEED,
       difficulty: 'standard',
       autoExecuteRoutine: false,
-      setup: null,
+      setup: W3_SETUP,
       log: [],
       queue: [keepA, keepB, ghost],
       session,
@@ -308,8 +324,8 @@ describe('the open queue rides the autosave', () => {
 describe('manual slots through the store', () => {
   it('saves to a slot, loads it back over the autosave, and deletes it', async () => {
     const { state, actions } = await mountGame();
-    const northwind = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
-    const vantage = NewGameSetupSchema.parse({ companyName: 'Vantage Labs', founderName: 'Ida Brandt', backgroundId: 'enterprise_ai' });
+    const northwind = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 3 });
+    const vantage = NewGameSetupSchema.parse({ companyName: 'Vantage Labs', founderName: 'Ida Brandt', backgroundId: 'enterprise_ai', worldVersion: 3 });
 
     await act(async () => {
       actions().newGame({ seed: SEED, setup: northwind });
@@ -364,8 +380,8 @@ describe('manual slots through the store', () => {
  * value, which is exactly what the sync layer hands it.
  */
 describe('loadSaveFile adopts a save that came from elsewhere', () => {
-  const NORTHWIND = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai' });
-  const SOUTHGATE = NewGameSetupSchema.parse({ companyName: 'Southgate Labs', founderName: 'Ivo Marsh', backgroundId: 'consumer_ai' });
+  const NORTHWIND = NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 3 });
+  const SOUTHGATE = NewGameSetupSchema.parse({ companyName: 'Southgate Labs', founderName: 'Ivo Marsh', backgroundId: 'consumer_ai', worldVersion: 3 });
 
   /**
    * Found one company, take its save file, then found another over the top.
@@ -440,23 +456,25 @@ describe('loadSaveFile adopts a save that came from elsewhere', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('the active company', () => {
-  const WORLD2_SETUP = NewGameSetupSchema.parse({
+  const GROUP_SETUP = NewGameSetupSchema.parse({
     companyName: 'Kestrel Dynamics',
     founderName: 'Rae Fontaine',
     backgroundId: 'humanoid_lab',
     sector: 'robotics',
     region: 'east_asia',
-    worldVersion: 2,
+    // World 3: this build opens a save from no earlier world, and group control
+    // works there exactly as it does in world 2.
+    worldVersion: 3,
   });
 
-  /** A world-2 session where the seat also controls one NPC company, as a live subsidiary would leave it. */
+  /** A session where the seat also controls one NPC company, as a live subsidiary would leave it. */
   function sessionWithSubsidiary(): { session: SessionState; foundingId: string; subsidiaryId: string } {
-    const session = createSession({ seed: SEED, setup: WORLD2_SETUP });
+    const session = createSession({ seed: SEED, setup: GROUP_SETUP });
     const foundingId = playerCompanyOf(session).id;
     const subsidiary = session.companies.find(
       (company) => company.isActive && company.id !== foundingId && company.controllerPlayerId === null,
     );
-    if (subsidiary === undefined) throw new Error('world 2 seed carries no other active company to make a subsidiary of.');
+    if (subsidiary === undefined) throw new Error('the seed carries no other active company to make a subsidiary of.');
     subsidiary.controllerPlayerId = PLAYER_ID;
     return { session, foundingId, subsidiaryId: subsidiary.id };
   }
@@ -468,8 +486,8 @@ describe('the active company', () => {
       seed: SEED,
       difficulty: 'standard',
       autoExecuteRoutine: false,
-      setup: WORLD2_SETUP,
-      worldVersion: 2,
+      setup: GROUP_SETUP,
+      worldVersion: 3,
       log: [],
       checkpoint: { quarter: session.quarter, state: session },
       savedQuarter: session.quarter,
@@ -493,7 +511,7 @@ describe('the active company', () => {
   it('a new game starts directing the founding company', async () => {
     const { state, actions } = await mountGame();
     await act(async () => {
-      actions().newGame({ seed: SEED, setup: WORLD2_SETUP });
+      actions().newGame({ seed: SEED, setup: GROUP_SETUP });
     });
     expect(state().activeCompanyId).toBe(playerCompanyOf(state().session).id);
   });
@@ -553,7 +571,7 @@ describe('the active company', () => {
     // The same session, sold or wound out of the group — same sessionId (it
     // is derived from the seed alone), so the previously stored choice still
     // names a company this seat no longer controls when it is reloaded.
-    const soldOff = createSession({ seed: SEED, setup: WORLD2_SETUP });
+    const soldOff = createSession({ seed: SEED, setup: GROUP_SETUP });
     expect(soldOff.sessionId).toBe(session.sessionId);
     expect(writeSaveFile(fileFor(soldOff))).toBe(true);
 

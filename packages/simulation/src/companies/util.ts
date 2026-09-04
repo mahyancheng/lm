@@ -207,7 +207,17 @@ export function sectorDemand(draft: SessionState, sectorId: string): number {
 /**
  * The reference price a product's own price is judged against: the
  * customer-weighted mean price of every active product in the same segment
- * across the session — in effect the segment's average revenue per customer.
+ * across the session.
+ *
+ * WORLDS 1 AND 2. In world 3 a price is judged against its own node's market
+ * price, because the customer-weighted mean of a buyer segment spans all six
+ * sectors — about $21,000 for enterprise — and a wafer fab judged against it
+ * was never being told anything about the wafer market. The world-3 demand
+ * pass never reaches this function; the predation pass reads
+ * `nodeMarketPriceUsd` instead, and falls back here only for a line with no
+ * node at all.
+ *
+ * The world-1 and world-2 definition, unchanged — in effect the segment's average revenue per customer.
  *
  * Weighting by customers rather than taking a flat mean keeps one exotic
  * product (a handful of very large capacity contracts, say) from dragging the

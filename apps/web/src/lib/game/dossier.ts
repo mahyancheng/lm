@@ -33,10 +33,15 @@ import type {
   SessionState,
   SimEvent,
 } from '@frontier/contracts';
-import { OWNERSHIP_THRESHOLDS, quarterLabel } from '@frontier/contracts';
+import { OWNERSHIP_THRESHOLDS, economicNodeById, holdsNode, nodeMarketPriceUsd, quarterLabel } from '@frontier/contracts';
 import {
   availableActionsFor,
   categoryOf,
+  dataPolicyOf,
+  isNodeEconomyWorld,
+  lineNodeIdOf,
+  totalDataPetabytes,
+  unitCostOf,
   consolidatedEnterpriseValueOf,
   controlledCompaniesOf,
   groupStatementOf,
@@ -57,24 +62,46 @@ export const DOSSIER_FEED_ITEMS = 10;
 /*  Sections                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function productLinesOf(company: Company): CosProductLine[] {
-  return company.products.slice(0, 24).map((product) => ({
-    productId: product.id,
-    name: product.name,
-    segment: product.segment,
-    categoryId: categoryOf(company, product).id,
-    unitLabel: categoryOf(company, product).unitLabel,
-    pricePerSeatUsd: product.pricePerSeat,
-    activeCustomers: product.activeCustomers,
-    grossMarginPct: product.grossMarginPct,
-    churnQuarterly: product.churnQuarterly,
-    qualityScore: product.qualityScore,
-    // Price times seats, which is what the founder means by "what does that
-    // line bring in". The engine's own recognised revenue is on the filed
-    // statement; this is the run rate they can reason about.
-    revenueQuarterlyUsd: product.pricePerSeat * product.activeCustomers,
-    isActive: product.isActive,
-  }));
+/**
+ * The company's lines, in the vocabulary of whichever economy it is in.
+ *
+ * In the node economy a line sells a NODE: `categoryId` carries the node id,
+ * `unitLabel` carries the node's own unit — "wafer", "MWh", "rack", never the
+ * buyer segment's "seat" — and the line's unit cost and the node's market price
+ * are on it, because "what does this cost me and what does the market pay" is
+ * the question the role is asked most. Before world 3 those three read as an
+ * industry line, its catalogue unit, and zero.
+ */
+function productLinesOf(session: SessionState, company: Company): CosProductLine[] {
+  const nodeEconomy = isNodeEconomyWorld(session);
+  return company.products.slice(0, 24).map((product) => {
+    const nodeId = nodeEconomy ? lineNodeIdOf(product) : null;
+    const node = nodeId === null ? undefined : economicNodeById(nodeId);
+    const cost = nodeId === null ? null : unitCostOf(session, company, nodeId);
+    return {
+      productId: product.id,
+      name: product.name,
+      segment: product.segment,
+      categoryId: node?.id ?? categoryOf(company, product).id,
+      unitLabel: node?.unitLabel ?? categoryOf(company, product).unitLabel,
+      pricePerSeatUsd: product.pricePerSeat,
+      activeCustomers: product.activeCustomers,
+      grossMarginPct: product.grossMarginPct,
+      churnQuarterly: product.churnQuarterly,
+      qualityScore: product.qualityScore,
+      // Price times units, which is what the founder means by "what does that
+      // line bring in". The engine's own recognised revenue is on the filed
+      // statement; this is the run rate they can reason about.
+      revenueQuarterlyUsd: product.pricePerSeat * product.activeCustomers,
+      isActive: product.isActive,
+      unitCostUsd: Math.max(0, Math.round(product.unitCostUsd ?? cost?.unitCostUsd ?? 0)),
+      marketPriceUsd: nodeId === null ? 0 : Math.max(0, Math.round(nodeMarketPriceUsd(session, nodeId))),
+      unitsSoldQuarterly: Math.max(0, Math.round(product.unitsSoldQuarterly ?? product.activeCustomers)),
+      backlogUnits: Math.max(0, Math.round(product.backlogUnits ?? 0)),
+      installedBase: Math.max(0, Math.round(product.installedBase ?? 0)),
+      ownsNode: nodeId !== null && holdsNode(company, nodeId, session.quarter),
+    };
+  });
 }
 
 function keyPeopleOf(session: SessionState, company: Company): CosPerson[] {
@@ -307,13 +334,19 @@ export function buildChiefOfStaffDossier(
     group: groupSectionOf(session),
 
     products: {
-      lines: productLinesOf(company),
+      lines: productLinesOf(session, company),
       computeOwned: company.compute.ownedAccelerators,
       computeReserved: company.compute.reservedAccelerators,
       computeUtilisationPct: company.compute.computeUtilisation,
       trainingAllocationPct: company.compute.trainingAllocation,
       reservationExpiryQuarter: company.compute.reservationExpiryQuarter,
       cloudSpendQuarterlyUsd: company.compute.cloudSpendQuarterly,
+      // What the company is entitled to make, and what it knows about its
+      // customers. Both are zero-shaped outside the node economy rather than
+      // absent, so the role reads one dossier in every world.
+      ownedNodeCount: isNodeEconomyWorld(session) ? (company.ownedNodes ?? []).length + (company.licences ?? []).length : 0,
+      dataPetabytes: isNodeEconomyWorld(session) ? Math.round(totalDataPetabytes(company)) : 0,
+      dataPolicy: isNodeEconomyWorld(session) ? dataPolicyOf(company) : 'standard',
     },
 
     people: {

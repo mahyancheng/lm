@@ -418,16 +418,27 @@ describe('every enum grew at the end', () => {
     expect(SIM_EVENT_TYPES[0]).toBe('quarter_opened');
     expect(SIM_EVENT_TYPES[start - 1]).toBe('dividend_paid');
     // `capacity_invested` was appended after `accelerators_bought` when
-    // world 2 gained non-compute capacity (`invest_capacity`), and
+    // world 2 gained non-compute capacity (`invest_capacity`),
     // `control_changed`/`group_transfer_executed`/`subsidiary_merged` after
-    // that when world 2 gained group control (STAGE 4) — the same
-    // append-only contract, three rows further along.
+    // that when world 2 gained group control (STAGE 4), and `node_price_set`
+    // after that when world 3 gained the node market, and the four research and
+    // data rows after that when world 3 put research on the one graph, and the
+    // two licensing rows after that when it made the right to produce somebody
+    // else's node a thing you can buy — the same append-only contract, ten rows
+    // further along.
     expect(SIM_EVENT_TYPES.slice(start + 10)).toEqual([
       'accelerators_bought',
       'capacity_invested',
       'control_changed',
       'group_transfer_executed',
       'subsidiary_merged',
+      'node_price_set',
+      'research_paused',
+      'research_abandoned',
+      'node_owned',
+      'data_resolved',
+      'node_licensed',
+      'node_licence_lapsed',
     ]);
     expect(new Set(SIM_EVENT_TYPES).size).toBe(SIM_EVENT_TYPES.length);
   });
@@ -448,8 +459,21 @@ describe('every enum grew at the end', () => {
     expect(ACTION_ORIGINS[0]).toBe('player_ui');
   });
 
-  it('appends two deal obligations that the union actually carries', () => {
-    expect(DEAL_OBLIGATION_KINDS.slice(-2)).toEqual(['term_sheet', 'buyout_offer']);
+  it('appends three deal obligations that the union actually carries', () => {
+    // `node_licence` was appended after the two capital-entity obligations when
+    // world 3 put licensing on the ordinary deal path. An append, never an
+    // insertion: a saved deal names its obligations by string.
+    expect(DEAL_OBLIGATION_KINDS.slice(-3)).toEqual(['term_sheet', 'buyout_offer', 'node_licence']);
+    const licence = DealObligationSchema.parse({
+      kind: 'node_licence',
+      nodeId: 'sys_ai_accelerator',
+      ownerCompanyId: 'cmp_owner',
+      licenseeCompanyId: 'cmp_licensee',
+      royaltyPct: 8,
+      quarters: 12,
+      upfrontUsd: 970_000_000,
+    });
+    expect(licence.kind).toBe('node_licence');
     const termSheet = DealObligationSchema.parse({
       kind: 'term_sheet',
       entityId: 'fund_seawall',

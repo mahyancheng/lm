@@ -166,8 +166,8 @@ export const CosProductLineSchema = z
     productId: z.string().min(1),
     name: z.string().min(1).max(80),
     segment: ProductSegmentSchema,
-    categoryId: z.string().min(1).describe('The industry line this product is (PRODUCT_CATEGORIES), from categoryOf — never absent, even for a world-version-1 product.'),
-    unitLabel: z.string().min(1).describe('What one unit of this line is, e.g. "seat", "1M tokens", "MWh" — the category\'s own unitLabel.'),
+    categoryId: z.string().min(1).describe('What this line sells: a node id (ECONOMIC_NODES) in the node economy, an industry line (PRODUCT_CATEGORIES) before it. Never absent.'),
+    unitLabel: z.string().min(1).describe('What one unit of this line is, e.g. "wafer", "MWh", "seat" — the node\'s own unitLabel, never the buyer segment\'s.'),
     pricePerSeatUsd: z.number().describe('Current list price per unit per quarter.'),
     activeCustomers: z.number().int().min(0),
     grossMarginPct: unitInterval('Gross margin on this line.'),
@@ -175,6 +175,12 @@ export const CosProductLineSchema = z
     qualityScore: unitInterval('How good it is relative to the market frontier.'),
     revenueQuarterlyUsd: z.number().describe('Price times customers: what the line brings in per quarter.'),
     isActive: z.boolean().describe('False once the line has been sunset.'),
+    unitCostUsd: usd('What one unit costs to make, from the cost roll-up — the same number cost of goods books. 0 outside the node economy, where cost is not held per unit.'),
+    marketPriceUsd: usd('The node\'s one settled market price this quarter. A price is judged against this, never against a segment average. 0 outside the node economy.'),
+    unitsSoldQuarterly: intCount('Units sold last quarter. Equal to activeCustomers on every node line by construction.'),
+    backlogUnits: intCount('Ordered and not yet shipped. 0 for anything but a unit-sale line.'),
+    installedBase: intCount('Durable units still in service, which retire into next quarter\'s replacement demand. 0 for anything but a unit-sale line.'),
+    ownsNode: z.boolean().describe('Whether the company owns or licences the node it is producing. False outside the node economy.'),
   })
   .describe('One product line as the founder would discuss it.');
 export type CosProductLine = z.infer<typeof CosProductLineSchema>;
@@ -188,8 +194,11 @@ export const CosProductsSchema = z
     trainingAllocationPct: unitInterval('Share of capacity pointed at training rather than serving.'),
     reservationExpiryQuarter: QuarterIndexSchema.nullable().describe('Quarter the current reservation lapses, or null.'),
     cloudSpendQuarterlyUsd: z.number().describe('On-demand cloud spend per quarter.'),
+    ownedNodeCount: intCount('How many nodes the company owns or licences outright: everything it is entitled to produce. 0 outside the node economy.'),
+    dataPetabytes: intCount('Customer data held, in petabytes, across every sector. Improves quality and feeds any line that consumes a dataset.'),
+    dataPolicy: z.string().min(1).describe('How much is collected from customers: "minimal", "standard" or "aggressive". Aggressive buys data and costs churn and reputation.'),
   })
-  .describe('What the company sells and the capacity it sells it on.');
+  .describe('What the company sells, what it is entitled to make, and the capacity and data it sells on.');
 export type CosProducts = z.infer<typeof CosProductsSchema>;
 
 export const CosPersonSchema = z
@@ -517,6 +526,11 @@ export const LOOKUP_KINDS = [
   'launchable_lines',
   'suppliers',
   'customers',
+  // Appended for the node economy: "what does this cost me to build?" and
+  // "what do I need to research to enter robotics?" — the two questions the
+  // world-3 screens answer that the world-2 catalogue had no vocabulary for.
+  'unit_cost',
+  'entry_path',
 ] as const;
 export type LookupKind = (typeof LOOKUP_KINDS)[number];
 
@@ -586,6 +600,21 @@ export const LookupRequestSchema = z
         productId: z.string().min(1).describe('Our own product, published as a supply line, to find who is building on it.'),
       })
       .describe('Companies currently building on one of our own published lines, and what that is worth to us.'),
+
+    z
+      .object({
+        kind: z.literal('unit_cost'),
+        nodeId: z.string().min(1).describe('The node to cost, an id into ECONOMIC_NODES, e.g. "sys_ai_accelerator". Works for a node we already make and for one we are only considering.'),
+      })
+      .describe('What one unit of a node would cost this company to make: every input and conversion line, biggest first, and where each comes from.'),
+
+    z
+      .object({
+        kind: z.literal('entry_path'),
+        sector: lookupText('The sector to enter, e.g. "robotics", or "" to ask about one node instead.'),
+        nodeId: lookupText('One node to reach, an id into ECONOMIC_NODES, or "" to ask about a whole sector.'),
+      })
+      .describe('What this company would have to own before it could make anything in a sector, and the three ways to get each piece: research it, licence it, or buy the output.'),
   ])
   .describe('One question the Chief of Staff wants answered from canonical state before it replies.');
 export type LookupRequest = z.infer<typeof LookupRequestSchema>;
@@ -723,6 +752,35 @@ export type SupplyCustomerRow = z.infer<typeof SupplyCustomerRowSchema>;
 
 /* --- results -------------------------------------------------------------- */
 
+export const UnitCostRowSchema = z
+  .object({
+    key: z.string().min(1).describe('The row\'s stable key: an input node id, or one of "power", "labour", "capacity", "support", or a licence key.'),
+    label: lookupText('What the row is called, e.g. "Wafer, 300mm" or "Power".'),
+    amountUsd: usd('What this row contributes to one unit\'s cost.'),
+    sharePct: intCount('That amount as a whole percentage of the unit cost.'),
+    sourceKind: z.enum(['make', 'buy', 'market', 'conversion']).describe('Where it comes from: our own line, a named seller, the open market, or conversion (power, labour, capacity, support, licence).'),
+    sourceName: lookupText('The counterparty\'s name when there is one, or "".'),
+  })
+  .describe('One line of a unit-cost roll-up. The rows sum to the unit cost exactly; there is no second calculation.');
+export type UnitCostRow = z.infer<typeof UnitCostRowSchema>;
+
+export const EntryStepRowSchema = z
+  .object({
+    nodeId: z.string().min(1).describe('The node that has to be owned, an id into ECONOMIC_NODES.'),
+    label: lookupText('Its name.'),
+    tier: intCount('Its tier, 0 (a raw resource) to 6 (a finished application).'),
+    researchable: z.boolean().describe('Whether a research programme can reach it at all.'),
+    researchLowUsd: usd('Low end of the table\'s estimate for a programme against it.'),
+    researchHighUsd: usd('High end of the same estimate.'),
+    licensorName: lookupText('The cheapest owner currently licensing it, or "" when nobody is.'),
+    licensorRoyaltyPct: intCount('That owner\'s royalty as a whole percentage of revenue. 0 when nobody licenses it.'),
+    sellerName: lookupText('A company that would sell us the finished output instead, or "".'),
+    sellerAskUsd: usd('What that seller asks per unit. 0 when nobody sells it.'),
+    intent: ActionIntentSchema.nullable().describe('A start_research intent the validator would accept against this node right now, or null when something else has to happen first.'),
+  })
+  .describe('One thing standing between this company and a sector, with all three ways through it priced.');
+export type EntryStepRow = z.infer<typeof EntryStepRowSchema>;
+
 export const LookupResultSchema = z
   .discriminatedUnion('kind', [
     z
@@ -826,6 +884,33 @@ export const LookupResultSchema = z
         rows: z.array(SupplyCustomerRowSchema).max(MAX_LOOKUP_ROWS),
       })
       .describe('Every company currently building on one of our own published lines.'),
+
+    z
+      .object({
+        kind: z.literal('unit_cost'),
+        summary: lookupText('One sentence stating the finding, naming the biggest line.'),
+        nodeId: z.string().min(1),
+        label: lookupText('The node\'s name.'),
+        unitLabel: lookupText('What one unit of it is, e.g. "wafer", "MWh", "rack".'),
+        unitCostUsd: usd('What one unit costs this company to make, at today\'s input prices.'),
+        marketPriceUsd: usd('The node\'s one settled market price this quarter.'),
+        grossMarginPct: intCount('The whole-percent gross margin selling at the market price would leave. 0 when the market price is 0.'),
+        madeInHouseSharePct: intCount('Whole percent of the input bill this company makes rather than buys.'),
+        blockedInputs: z.array(lookupText('An input nobody in the world owns, so the line would ship nothing.')).max(8),
+        rows: z.array(UnitCostRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('What one unit of a node costs this company to make, itemised. This is the number cost of goods books.'),
+
+    z
+      .object({
+        kind: z.literal('entry_path'),
+        summary: lookupText('One sentence stating the finding.'),
+        sector: lookupText('The sector asked about, or "".'),
+        nodeId: lookupText('The node asked about, or "".'),
+        alreadyIn: z.boolean().describe('True when this company can already make something there.'),
+        rows: z.array(EntryStepRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('What this company would have to own to enter a sector, and how to get each piece.'),
   ])
   .describe('The answer to one lookup, read off canonical state by the engine. Every figure is a whole number of dollars or units.');
 export type LookupResult = z.infer<typeof LookupResultSchema>;

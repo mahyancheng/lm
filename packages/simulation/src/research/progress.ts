@@ -10,8 +10,13 @@
  *       × computeFactor(allocated compute vs the node's intensity, scaled by
  *                       world.aiFrontier.trainingEfficiency)
  *       × talentFactor(researchers assigned × capability coverage)
+ *       × dataFactor(petabytes held in the node's sector vs what it asks for)
  *       × noise
  * ```
+ *
+ * The data factor is exactly 1 below world version 3, where no node asks for
+ * data and nothing collects any, so both frozen worlds run at the pace they
+ * always have.
  *
  * Progress is not linear and can go backwards: a failed run destroys part of the
  * accumulated progress, adds a quarter to the internal estimate and takes a bite
@@ -47,7 +52,10 @@ import {
   WORLD2_PROJECT_COMPUTE_UNITS,
   WORLD2_PROJECT_RESEARCHERS,
 } from './balance';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { economicNodeById } from '@frontier/contracts';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
+import { dataAdequacy, dataPetabytesOf } from '../graph/data';
+import { pauseIfUnheld } from './ownership';
 import { BOTTLENECK_NOUN, bottleneckOf, quartersAtPace } from './reading';
 import { capabilityCoverage, clamp, emitEvent, findCompany, findNode, money, projectVisibility, ratio, unit, usdLabel } from './util';
 
@@ -79,10 +87,22 @@ export interface ResourcingFactors {
   readonly funding: number;
   readonly compute: number;
   readonly talent: number;
+  /**
+   * How well supplied with relevant customer data the programme is.
+   *
+   * Exactly 1 below world version 3, where no node asks for data and nothing
+   * collects any — so the pace a world-1 or world-2 programme runs at is the
+   * product it has always been.
+   */
+  readonly data: number;
   readonly coverage: number;
   readonly expectedQuarterlyCostUsd: number;
   readonly requiredComputeUnits: number;
   readonly requiredResearchers: number;
+  /** Petabytes the node asks for. Zero below world 3, and for a node that needs none. */
+  readonly requiredDataPb: number;
+  /** Petabytes the company holds in this node's sector. */
+  readonly availableDataPb: number;
 }
 
 /** A saturating adequacy curve: full marks at the required level, a little more above it. */
@@ -114,14 +134,25 @@ export function resourcingFactors(draft: SessionState, project: ResearchProject,
   const coverage = company === undefined ? 0 : capabilityCoverage(company, node.talentRequirements);
   const headcountAdequacy = adequacy(project.talentAllocated, requiredResearchers, TALENT_FLOOR);
 
+  // The fourth factor, world 3 only. A programme against a node that asks for
+  // data is hostage to the data its company has actually collected, exactly as
+  // it is hostage to the compute it can get hold of. Below world 3 no node asks
+  // for any, so `requiredDataPb` is zero and the factor is exactly 1.
+  const economicNode = isNodeEconomyWorld(draft) ? economicNodeById(node.id) : undefined;
+  const requiredDataPb = economicNode?.dataRequiredPb ?? 0;
+  const availableDataPb = company === undefined || economicNode === undefined ? 0 : dataPetabytesOf(company, economicNode.sector);
+
   return {
     funding: adequacy(project.budgetQuarterly, expectedQuarterlyCost, FUNDING_FLOOR),
     compute: adequacy(effectiveCompute, requiredCompute, COMPUTE_FLOOR),
     talent: headcountAdequacy * ((1 - CAPABILITY_COVERAGE_WEIGHT) + CAPABILITY_COVERAGE_WEIGHT * coverage),
+    data: dataAdequacy(availableDataPb, requiredDataPb),
     coverage,
     expectedQuarterlyCostUsd: expectedQuarterlyCost,
     requiredComputeUnits: requiredCompute,
     requiredResearchers,
+    requiredDataPb,
+    availableDataPb,
   };
 }
 
@@ -144,10 +175,16 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
     const node = findNode(draft, project.targetNodeId);
     if (node === undefined) continue;
 
+    // World 3: a programme whose requirements the company no longer holds is
+    // paused before a penny of this quarter's budget is spent, rather than
+    // pinned at ninety-eight percent for ever. Draws no random number, so the
+    // call sequence of every other programme is untouched.
+    if (isNodeEconomyWorld(draft) && pauseIfUnheld(draft, ctx, project, node)) continue;
+
     const factors = resourcingFactors(draft, project, node);
     const plannedRate = 1 / Math.max(1, project.expectedQuarters);
     const noise = rng.range(PROGRESS_NOISE_BAND.min, PROGRESS_NOISE_BAND.max);
-    const delta = plannedRate * factors.funding * factors.compute * factors.talent * noise;
+    const delta = plannedRate * factors.funding * factors.compute * factors.talent * factors.data * noise;
 
     const setbackOdds = setbackProbability(node, factors);
     const setback = rng.next() < setbackOdds;
@@ -227,7 +264,7 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
         // What it is now, how long the rest takes at this pace, and the one
         // thing slowing it — the same three figures the Frontier Map shows.
         const donePct = Math.round(project.progress * 100);
-        const left = quartersAtPace(1 - project.progress, plannedRate, factors.funding * factors.compute * factors.talent);
+        const left = quartersAtPace(1 - project.progress, plannedRate, factors.funding * factors.compute * factors.talent * factors.data);
         const short = bottleneckOf(factors);
         ctx.log({
           phase: 'research_resolution',

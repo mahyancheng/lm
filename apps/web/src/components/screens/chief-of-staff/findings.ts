@@ -49,6 +49,8 @@ export const FINDING_TITLE: Readonly<Record<LookupResult['kind'], string>> = {
   launchable_lines: 'What we could launch',
   suppliers: 'Who could supply us',
   customers: 'Who builds on us',
+  unit_cost: 'What this costs to build',
+  entry_path: 'The way into this',
 };
 
 /** "compute market and own position", for the line shown while the lookups run. */
@@ -217,6 +219,49 @@ export function cardFor(finding: LookupResult): FindingCard {
         lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
           label: `${row.buyerName} — ${row.buyerProductName}`,
           value: `${formatMoney(row.revenueUsd)} · ${formatCount(row.unitsFilled)} units`,
+        })),
+      };
+    }
+
+    case 'unit_cost': {
+      // The figure is the unit cost, because that is the number the founder
+      // asked for; the caption puts it beside the market price, which is the
+      // only reference a price is judged against in the node economy.
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.unit_cost,
+        figure: formatMoney(finding.unitCostUsd),
+        caption:
+          finding.marketPriceUsd <= 0
+            ? `to make one ${finding.unitLabel} of ${finding.label}`
+            : `a ${finding.unitLabel} of ${finding.label}, against ${formatMoney(finding.marketPriceUsd)} on the market`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: row.sourceName === '' ? row.label : `${row.label} — ${row.sourceName}`,
+          value: `${formatMoney(row.amountUsd)} · ${row.sharePct}%`,
+          counterparty: row.sourceName === '' ? undefined : row.sourceName,
+        })),
+      };
+    }
+
+    case 'entry_path': {
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.entry_path,
+        figure: finding.alreadyIn ? 'In already' : finding.rows.length === 0 ? 'Nothing in the way' : formatCount(finding.rows.length),
+        caption: finding.alreadyIn
+          ? 'we can already make something there'
+          : finding.rows.length === 0
+            ? 'we can own everything it needs'
+            : `node${finding.rows.length === 1 ? '' : 's'} to own before we could make anything`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: row.label,
+          value: row.researchable
+            ? `research ${formatMoney(row.researchLowUsd)}–${formatMoney(row.researchHighUsd)}`
+            : row.licensorName !== ''
+              ? `licence from ${row.licensorName} at ${row.licensorRoyaltyPct}%`
+              : 'not reachable by research',
+          intent: row.intent,
+          counterparty: row.licensorName === '' ? undefined : row.licensorName,
         })),
       };
     }

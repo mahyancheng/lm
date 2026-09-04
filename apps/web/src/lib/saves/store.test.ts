@@ -61,9 +61,9 @@ function saveFile(options: FileOptions = {}): Record<string, unknown> {
       backgroundId: 'consumer_ai',
       sector: 'ai',
       region: 'north_america',
-      worldVersion: 2,
+      worldVersion: 3,
     },
-    worldVersion: 2,
+    worldVersion: 3,
     log: [],
     checkpoint: null,
     savedQuarter: options.savedQuarter ?? 4,
@@ -204,7 +204,7 @@ describe('write and read', () => {
     expect(result.envelope.savedAtIso).toBe('2027-01-01T00:00:00.000Z');
     expect(result.envelope.companyName).toBe('Acme AI');
     expect(result.envelope.founderName).toBe('Dana Vale');
-    expect(result.envelope.worldVersion).toBe(2);
+    expect(result.envelope.worldVersion).toBe(3);
     expect(result.envelope.byteLength).toBe(Buffer.byteLength(JSON.stringify(file), 'utf8'));
 
     // Verbatim: what comes back parses to exactly what went in.

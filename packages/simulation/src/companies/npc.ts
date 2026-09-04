@@ -19,7 +19,7 @@
  */
 
 import type { ActionIntent, Company, ProcurementOpportunity, ResolverContext, SessionState, StaffRole, SubmittedAction } from '@frontier/contracts';
-import { makeId } from '@frontier/contracts';
+import { makeId, nodeMarketPriceUsd } from '@frontier/contracts';
 // The two procurement gates a default bid has to clear are restated by the
 // government subsystem as data, so they are imported rather than duplicated
 // here: a change to the clearance table must move NPC bidding with it.
@@ -38,10 +38,12 @@ import {
   effectivePolicy,
   type EffectivePolicy,
 } from './archetypes';
-import { RUNWAY_CAP_QUARTERS } from './balance';
+import { PPE_DEPRECIATION_PER_QUARTER, RUNWAY_CAP_QUARTERS } from './balance';
 import { categoryOf } from './categories';
 import { chooseSupplierDefault, defaultSupplyTerms, resolveSupplyLine } from './supply';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
+import { CAPACITY_UNIT_USD, createNodeCostCache, drawPerUnitOf, lineNodeIdOf, lineNodeOf } from '../graph/lines';
+import { unitCostOf } from '../graph/cost';
 import { activeCompanies, activeProducts, capabilityIndex, clamp, emitEvent, money, ratio, roleHeadcount, totalHeadcount, unit } from './util';
 
 /** True when some other source already queued an action for this company this quarter. */
@@ -133,6 +135,51 @@ function bidIntent(draft: SessionState, company: Company, opportunity: Procureme
  * Deterministic archetype behaviour for background and significant companies
  * that received no instructions this quarter.
  */
+/**
+ * How much of a shortfall a background company closes in one quarter. A third:
+ * enough that a persistent backlog is answered inside a year, slow enough that
+ * one noisy quarter does not build a plant nobody needs.
+ */
+export const NPC_CAPACITY_CATCH_UP = 1 / 3;
+
+/** The most of its cash a background company will put into capacity in one quarter. */
+export const NPC_CAPACITY_CASH_SHARE = 0.1;
+
+/**
+ * What one background company builds this quarter, per capacity bucket.
+ *
+ * Two claims on the bucket, in this order: the depreciation it just lost, which
+ * it replaces so its own run rate holds, and a share of what its unfilled
+ * orders would need, which is how a backlog turns into plant. Bounded by cash,
+ * so a company in trouble builds nothing.
+ */
+export function capacityInvestmentsFor(draft: SessionState, company: Company): ActionIntent[] {
+  const wanted = new Map<'plant' | 'fleet' | 'grid', number>();
+  for (const product of activeProducts(company)) {
+    const node = lineNodeOf(product);
+    if (node === undefined) continue;
+    const kind = node.capacityKind;
+    if (kind !== 'plant' && kind !== 'fleet' && kind !== 'grid') continue;
+    const draw = drawPerUnitOf(node, product);
+    const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
+    const backlog = Math.max(0, product.backlogUnits ?? 0);
+    const replaceUsd = units * draw * CAPACITY_UNIT_USD * PPE_DEPRECIATION_PER_QUARTER;
+    const growUsd = backlog * draw * CAPACITY_UNIT_USD * NPC_CAPACITY_CATCH_UP;
+    wanted.set(kind, (wanted.get(kind) ?? 0) + replaceUsd + growUsd);
+  }
+  const budget = Math.max(0, company.balanceSheet.assets.cash) * NPC_CAPACITY_CASH_SHARE;
+  const total = [...wanted.values()].reduce((sum, value) => sum + value, 0);
+  if (total <= 0 || budget <= 0) return [];
+  const scale = Math.min(1, budget / total);
+  const out: ActionIntent[] = [];
+  for (const kind of ['plant', 'fleet', 'grid'] as const) {
+    const amountUsd = money((wanted.get(kind) ?? 0) * scale);
+    if (amountUsd <= 0) continue;
+    out.push({ type: 'invest_capacity', kind, amountUsd });
+  }
+  return out;
+}
+
 export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): void {
   const rng = ctx.rng;
   let sequence = draft.pendingActions.length;
@@ -197,7 +244,7 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
     // a real input builds on the best quality-per-dollar offer that is not a
     // direct rival — sticky once chosen, so a background economy's supply
     // graph does not reshuffle itself for no reason every quarter.
-    if (isMultiSectorWorld(draft)) {
+    if (isMultiSectorWorld(draft) && !isNodeEconomyWorld(draft)) {
       for (const product of products) {
         const category = categoryOf(company, product);
         if (category.canSupply && (product.supplyTerms === null || product.supplyTerms === undefined)) {
@@ -293,5 +340,113 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
       tone: 'neutral',
       subjectId: company.id,
     });
+  }
+
+  // Last, and for every company the playbook above skipped as well: capacity
+  // maintenance is not strategy. A major with a live strategist still replaces
+  // the plant that wore out this quarter, and so does one whose strategist did
+  // not answer. Without it every rival's output falls by the depreciation rate
+  // every quarter for the life of the game, and the world shrinks for no
+  // decision anybody took.
+  applyNodeDefaults(draft, ctx, sequence);
+}
+
+/**
+ * The margin below which a background company will not sell.
+ *
+ * A rival whose inputs have grown dearer raises its price rather than shipping
+ * at a loss quarter after quarter. Without this the node market can walk a
+ * seeded line under its own cost and nobody in the world reacts — which is not
+ * a market, it is a slow bankruptcy nobody chose.
+ */
+export const NPC_MIN_GROSS_MARGIN = 0.2;
+
+/**
+ * How much of the gap to its node's market price a company nobody is directing
+ * closes in one quarter.
+ *
+ * A third: a rival answers the market inside a year rather than inside a
+ * quarter, so a price is a decision with weather behind it rather than a
+ * spreadsheet cell that snaps. Without any tracking at all a seeded line was
+ * struck at launch and never moved again while the node market ran away from
+ * it — enterprise software held at $1,500 against a node running $1,605,
+ * $1,740, $1,845, $1,950 over four quarters — and since every input rolls up at
+ * the market price, the whole world sold into a rising market at last year's
+ * money and quietly went broke doing it.
+ */
+export const NPC_PRICE_TRACKING = 1 / 3;
+
+/** A price move smaller than this is not worth a ledger line or a churn shock. */
+export const NPC_PRICE_MOVE_FLOOR = 0.02;
+
+/**
+ * Queue the two decisions no company delegates: replacing the capacity that
+ * wore out, and refusing to sell under cost.
+ *
+ * Runs for every company nobody is playing, majors included: neither is
+ * strategy, and a major whose strategist did not answer still has to keep its
+ * plant standing and its prices above its bill of materials. Skipped per action
+ * where the company has already been told what to do this quarter, and skipped
+ * entirely below world 3, which has no node lines to read a cost off. Draws no
+ * random numbers, so adding it cannot move any other phase's sequence.
+ */
+export function applyNodeDefaults(draft: SessionState, ctx: ResolverContext, startSequence: number): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  const cache = createNodeCostCache(draft);
+  let sequence = startSequence;
+  for (const company of activeCompanies(draft)) {
+    if (company.controllerPlayerId !== null) continue;
+    const told = (type: ActionIntent['type'], productId?: string): boolean =>
+      draft.pendingActions.some(
+        (action) =>
+          action.quarter === ctx.quarter &&
+          action.actorCompanyId === company.id &&
+          action.intent.type === type &&
+          (productId === undefined || (action.intent as { productId?: string }).productId === productId),
+      );
+
+    const intents: ActionIntent[] = told('invest_capacity') ? [] : [...capacityInvestmentsFor(draft, company)];
+
+    // The cost is read at the prices the company can actually see — last
+    // quarter's, because the node market prices this quarter after the actions
+    // are collected. That is what a buyer knows when it sets a price.
+    for (const product of activeProducts(company)) {
+      const nodeId = lineNodeIdOf(product);
+      if (nodeId === null || told('set_product_price', product.id)) continue;
+      const unitCostUsd = unitCostOf(draft, company, nodeId, cache).unitCostUsd;
+      if (!(unitCostUsd > 0)) continue;
+      const floorUsd = Math.round((unitCostUsd / (1 - NPC_MIN_GROSS_MARGIN)) * 100) / 100;
+      // Where the line wants to be: at the price its own node settled at, and
+      // never under its own cost floor. The node price is the one anchor world 3
+      // has — every input this line buys is rolled up at it — so a line that
+      // ignores it is selling at a price from a world that no longer exists.
+      const marketUsd = nodeMarketPriceUsd(draft, nodeId);
+      const targetUsd = Math.max(floorUsd, marketUsd);
+      const before = product.pricePerSeat;
+      if (!(targetUsd > 0) || !(before > 0)) continue;
+      const nextUsd = Math.max(floorUsd, Math.round((before + (targetUsd - before) * NPC_PRICE_TRACKING) * 100) / 100);
+      if (Math.abs(nextUsd - before) <= before * NPC_PRICE_MOVE_FLOOR) continue;
+      intents.push({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: nextUsd });
+    }
+
+    if (intents.length === 0) continue;
+
+    const actorCharacterId = company.ceoCharacterId ?? makeId('chr', company.id, 'leadership');
+    for (let i = 0; i < intents.length; i += 1) {
+      const intent = intents[i];
+      if (intent === undefined) continue;
+      draft.pendingActions.push({
+        actionId: makeId('act', draft.sessionId, ctx.quarter, 'npc_capacity', company.id, i),
+        sessionId: draft.sessionId,
+        quarter: ctx.quarter,
+        sequence: sequence++,
+        actorPlayerId: null,
+        actorCompanyId: company.id,
+        actorCharacterId,
+        origin: 'npc_default',
+        intent,
+        confirmedByHuman: false,
+      });
+    }
   }
 }

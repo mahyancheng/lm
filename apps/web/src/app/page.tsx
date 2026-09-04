@@ -597,12 +597,14 @@ export default function LandingPage(): React.JSX.Element {
               {!hydrated ? (
                 <p className="text-[12.5px] text-ink-faint">Checking this browser for a saved session…</p>
               ) : savePreserved ? (
-                // Not "no saved session": there is one, from a newer build, and
-                // every write path preserves it. Starting a new company is safe
-                // — that game simply plays unsaved and says so.
+                // Not "no saved session": there is one this build cannot read —
+                // written by a newer build, or made in a world this one retired
+                // — and every write path preserves it. `reason` says which, in
+                // the engine's own words, so a refusal reads as a decision
+                // rather than as a crash.
                 <p className="text-[12.5px] leading-relaxed text-ink-faint">
-                  A saved session written by a newer build lives in this browser. This build cannot read it, and it is preserved exactly as
-                  it is — starting a new company will not touch it, but that game will not be saved.
+                  {saveState?.reason ??
+                    'A saved session written by a newer build lives in this browser. This build cannot read it, and it is preserved exactly as it is — starting a new company will not touch it, but that game will not be saved.'}
                 </p>
               ) : autosaveRow !== null && autosaveRow.source === 'server' ? (
                 // The merged view, and the whole point of the feature: this
@@ -729,10 +731,12 @@ export default function LandingPage(): React.JSX.Element {
                             <div className="flex items-center gap-2.5">
                               <IconChip name="warning" tone="warn" size="sm" />
                               <div className="min-w-0 flex-1">
-                                <p className="text-[12.5px] font-bold text-ink">Slot {slot} — saved by a newer build</p>
+                                <p className="text-[12.5px] font-bold text-ink">
+                                  Slot {slot} — {row.reason === null ? 'saved by a newer build' : 'saved in an earlier world'}
+                                </p>
                                 <p className="text-[10.5px] leading-relaxed text-ink-faint">
-                                  Preserved exactly as it is; this build cannot read it, and it is neither sent to the host nor replaced by
-                                  what the host holds.
+                                  {row.reason ?? 'This build cannot read it.'} Preserved exactly as it is: it is neither sent to the host nor
+                                  replaced by what the host holds.
                                 </p>
                               </div>
                             </div>

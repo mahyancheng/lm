@@ -61,6 +61,14 @@ import { isMultiSectorWorld, sectorEconomy } from '../src/economy/sectors';
  */
 const FROZEN_WORLD_1_HASH = 'a0e39d23dd0c7c3a';
 
+/**
+ * The hash of world 2, recorded before world 3 existed. World 2 is not deleted
+ * and not migrated: a game in progress has to be able to finish, so its opening
+ * state is pinned exactly as world 1's is. Every later stage of world 3 runs
+ * against this line.
+ */
+const FROZEN_WORLD_2_HASH = '0a7e6c69c78e50c8';
+
 const setupFor = (backgroundId: string, region: string) =>
   NewGameSetupSchema.parse({
     companyName: 'Probe Ventures',
@@ -103,6 +111,10 @@ describe('the frozen world', () => {
 
 describe('the world-2 scenario', () => {
   const state = createWorld2Session();
+
+  it('still hashes to what it hashed to before world 3 existed', () => {
+    expect(hashState(createWorld2Session())).toBe(FROZEN_WORLD_2_HASH);
+  });
 
   it('is a fixed point for a seed, and differs between seeds', () => {
     expect(hashState(createWorld2Session())).toBe(hashState(createWorld2Session()));

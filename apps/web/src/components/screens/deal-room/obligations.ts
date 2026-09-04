@@ -28,6 +28,9 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
   // offers a fund sends and are read here, not drafted here.
   term_sheet: 'Term sheet',
   buyout_offer: 'Buyout offer',
+  // Written by the licensing router, never by the player: a licence is asked
+  // for with `license_node`, which computes the fee and the term.
+  node_licence: 'Node licence',
 };
 
 /**
@@ -38,7 +41,7 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
  * do with either, so neither appears in the picker.
  */
 export const BUILDABLE_OBLIGATION_KINDS: readonly ObligationKind[] = DEAL_OBLIGATION_KINDS.filter(
-  (kind) => kind !== 'term_sheet' && kind !== 'buyout_offer',
+  (kind) => kind !== 'term_sheet' && kind !== 'buyout_offer' && kind !== 'node_licence',
 );
 
 export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
@@ -53,6 +56,7 @@ export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
   term_sheet: 'A priced offer of primary capital. Every number on it was computed by the fund, and it is answerable next quarter.',
   buyout_offer: 'An approach to buy control. The premium is struck over the higher of your last close and your fundamental anchor.',
   price_accord: 'Every member earns a bonus on the part of its revenue the sector chain reprices — and carries the antitrust exposure of a cartel.',
+  node_licence: 'The right to produce one node its owner keeps. A fee on signature, a royalty every quarter, and no right to licence it on.',
 };
 
 /**

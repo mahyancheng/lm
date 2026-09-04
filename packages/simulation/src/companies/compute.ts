@@ -51,11 +51,8 @@
  */
 
 import type { Company, ResolverContext, SessionState } from '@frontier/contracts';
-import {
-  RESERVATION_RENEWAL_CASH_COVER_QUARTERS,
-  RESERVATION_RENEWAL_QUARTERS,
-  RESERVED_UNIT_COST_USD_PER_QUARTER,
-} from './balance';
+import { RESERVATION_RENEWAL_CASH_COVER_QUARTERS, RESERVATION_RENEWAL_QUARTERS } from './balance';
+import { reservedRentUsd } from '../graph/lines';
 import { resolveCloudSeller, resolveComputeSeller, sellerPriceFactor } from './sellers';
 import { emitPartialFill } from './partialFill';
 import { isMultiSectorWorld } from '../economy/sectors';
@@ -64,7 +61,7 @@ import { activeCompanies, companyActions, count, emitEvent, intentsOfType, money
 
 /** What one reserved accelerator-equivalent costs this quarter, at the world's index. */
 export function reservedUnitPriceUsd(draft: SessionState): number {
-  return money(RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice);
+  return money(reservedRentUsd(draft));
 }
 
 /**

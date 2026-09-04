@@ -3,9 +3,9 @@
  *
  * The `CapitalDesksSubsystem`: eleven institutions, five hooks, no new phase.
  *
- * `RESOLUTION_PHASES` stays at eighteen. Adding a phase would shift every phase
- * stream after it and break every existing replay, so every behaviour here fits
- * inside the phases that already exist:
+ * No new phase for the desks. Every behaviour here fits inside the phases that
+ * already exist, and hooking into them rather than adding a phase is what keeps
+ * a fund's whole behaviour on the stream of the phase it acts in:
  *
  * | phase | hook | what it does |
  * |---|---|---|

@@ -30,14 +30,15 @@
  * Written only in a multi-sector world (`isMultiSectorWorld`), because a
  * world-version-1 company that grew a `financialHistory` key would stop hashing
  * to the value the frozen world has always hashed to. The array is trimmed from
- * the front at `FINANCIAL_HISTORY_QUARTERS`; the complete series lives in the
+ * the front at `FINANCIAL_HISTORY_KEPT_QUARTERS`; the complete series lives in the
  * snapshots and the ledger.
  */
 
 import type { Company, FinancialProductLine, FinancialQuarter } from '@frontier/contracts';
-import { FINANCIAL_HISTORY_QUARTERS } from '@frontier/contracts';
+import { FINANCIAL_HISTORY_KEPT_QUARTERS } from '@frontier/contracts';
 import { activeProducts, clamp, count, money, signedMoney, totalHeadcount, unit } from './util';
 import { categoryOf } from './categories';
+import { lineNodeOf } from '../graph/lines';
 
 /**
  * Everything the financial phase already knows, handed over verbatim.
@@ -54,6 +55,20 @@ export interface FinancialQuarterInput {
   readonly payrollUsd: number;
   readonly marketingUsd: number;
   readonly researchUsd: number;
+  /**
+   * World 3's idle-capacity charge: capacity the company owns and production
+   * did not absorb. An operating expense with no line of its own, so it lands
+   * in `opexByLine.otherUsd` — which is exactly what that remainder is for.
+   * Absent (zero) in worlds 1 and 2.
+   */
+  readonly idleCapacityUsd?: number;
+  /**
+   * World 3's data-custody charge: what holding the customer data this company
+   * has collected costs it this quarter. An operating expense with no line of
+   * its own, so it lands in `opexByLine.otherUsd` beside the idle-capacity
+   * charge. Absent (zero) in worlds 1 and 2, which collect no data.
+   */
+  readonly dataCustodyUsd?: number;
   /** Training compute charged to research. Serving compute is inside `cogsUsd`. */
   readonly trainingComputeUsd: number;
   readonly depreciationUsd: number;
@@ -84,7 +99,9 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
   const payroll = money(input.payrollUsd);
   const marketing = money(input.marketingUsd);
   const research = money(input.researchUsd);
-  const opex = money(payroll + marketing + research);
+  const idleCapacity = money(input.idleCapacityUsd ?? 0);
+  const dataCustody = money(input.dataCustodyUsd ?? 0);
+  const opex = money(payroll + marketing + research + idleCapacity + dataCustody);
   const depreciation = money(input.depreciationUsd);
   const operatingIncome = signedMoney(grossProfit - opex);
   const interest = money(input.interestUsd);
@@ -132,21 +149,27 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
   const priorYearRevenue = yearAgo?.income.revenueUsd ?? 0;
 
   const lines: FinancialProductLine[] = activeProducts(company)
-    .map((product) => ({
-      productId: product.id,
-      name: product.name,
-      segment: product.segment,
-      units: count(product.activeCustomers),
-      priceUsd: money(product.pricePerSeat),
-      revenueUsd: money(count(product.activeCustomers) * money(product.pricePerSeat)),
-      grossMarginPct: unit(product.grossMarginPct),
-      // This statement is only ever filed in a multi-sector world (the caller
-      // gates `appendFinancialQuarter` on `isMultiSectorWorld`), so a category
-      // always resolves — the product's own if it launched with one, else the
-      // deterministic sector/segment default.
-      categoryId: categoryOf(company, product).id,
-      unit: categoryOf(company, product).unitLabel,
-    }))
+    .map((product) => {
+      // World 3 states the node the line sells and its own unit; world 2 states
+      // the category. The units are the ones the demand phase stamped, never a
+      // second reading of the customer count — `activeCustomers x price`
+      // appeared in six places in world 2 and disagreed with the income
+      // statement in two of them.
+      const node = lineNodeOf(product);
+      const units = count(product.unitsSoldQuarterly ?? product.activeCustomers);
+      const category = node === undefined ? categoryOf(company, product) : null;
+      return {
+        productId: product.id,
+        name: product.name,
+        segment: product.segment,
+        units,
+        priceUsd: money(product.pricePerSeat),
+        revenueUsd: money(units * money(product.pricePerSeat)),
+        grossMarginPct: unit(product.grossMarginPct),
+        categoryId: category?.id ?? node?.id ?? '',
+        unit: category?.unitLabel ?? node?.unitLabel ?? 'units',
+      };
+    })
     .sort((a, b) => (a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0))
     .slice(0, 64);
 
@@ -220,7 +243,12 @@ export function appendFinancialQuarter(company: Company, quarter: number, input:
   kept.push(entry);
   kept.sort((a, b) => a.quarter - b.quarter);
   // BOUND: oldest first out. The full series is in the snapshots and the ledger.
-  company.financialHistory = kept.length > FINANCIAL_HISTORY_QUARTERS ? kept.slice(kept.length - FINANCIAL_HISTORY_QUARTERS) : kept;
+  // Trimmed to the KEPT window rather than to the schema's own bound: the schema
+  // still accepts the longer series a save written before this may hold, and the
+  // engine writes back the shorter one, which is what a quarter can afford to
+  // hash eighteen times.
+  company.financialHistory =
+    kept.length > FINANCIAL_HISTORY_KEPT_QUARTERS ? kept.slice(kept.length - FINANCIAL_HISTORY_KEPT_QUARTERS) : kept;
   return entry;
 }
 

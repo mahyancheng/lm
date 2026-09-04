@@ -130,6 +130,7 @@ const RESOLUTION_PHASE_LABEL: Readonly<Record<ResolutionPhase, string>> = {
   government_resolution: 'Government',
   talent_resolution: 'Talent',
   research_resolution: 'Research',
+  node_market_resolution: 'Node prices',
   product_demand_resolution: 'Product demand',
   financial_resolution: 'Financials',
   disclosure_resolution: 'Disclosures',

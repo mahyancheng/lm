@@ -9,7 +9,7 @@
  *
  * | index                | multiplies                                          |
  * |----------------------|-----------------------------------------------------|
- * | `talentCostIndex`    | the compensation a role costs (`companies/hiring`)   |
+ * | `talentCostIndex`    | the compensation a role costs (`companies/hiring`) — and, from world version 3, the industry the company is in rides in through the same accessor rather than beside it |
  * | `energyCostIndex`    | the energy line of compute cost (`companies/financials`) — and, from world version 2, the energy sector's own goods price rides in through the same accessor rather than beside it |
  * | `procurementAppetite`| how often competitions open (`government`)           |
  * | `capitalDepth`       | how readily a round clears (`resolver/capital`)       |
@@ -25,7 +25,7 @@
 import type { Company, SessionState } from '@frontier/contracts';
 import { DEFAULT_REGION, REGION_INDEX_BASELINE, regionMeta, regionSectorAffinity, sectorPriceIndex, type Region } from '@frontier/contracts';
 import { clamp } from './util';
-import { isMultiSectorWorld, sectorOf } from './sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld, sectorOf } from './sectors';
 
 /* -------------------------------------------------------------------------- */
 /*  Bounds                                                                     */
@@ -90,9 +90,49 @@ export function regionSectorFitFactor(region: Region, sector: Parameters<typeof 
 /*  Company-scoped wrappers (the ones the phases call)                         */
 /* -------------------------------------------------------------------------- */
 
-/** Compensation multiplier for this company's region. Exactly 1 in world version 1. */
+/**
+ * What a sector's payroll costs relative to the frontier AI labour market.
+ *
+ * `MARKET_BASE_COMP_USD` is an AI-laboratory salary band — $380,000 for an
+ * engineer, $620,000 for a researcher — and until world 3 every company in the
+ * world converged on it, because `requiredCompUsd` reads the role and the
+ * region and nothing else. In world 2 that was survivable: payroll was a
+ * standing charge and nothing else read it. In world 3 the roll-up prices the
+ * LABOUR IN A UNIT off `employees.avgComp`, so the same number decides whether
+ * a line is above or below its own cost — and the node table's `labourPerUnit`
+ * figures are struck against what the industry in question actually pays.
+ *
+ * Left sector-blind the two disagreed by up to eight times, and the disagreement
+ * killed companies: a line-haul network seeded at a $100,000 average was dragged
+ * toward $637,000 at eighteen percent a quarter, its labour line went from
+ * $0.50 of a $2.35 parcel to $2.10 of it, and the business was under water by
+ * its fourth quarter with no decision taken and nothing on any screen naming
+ * why. A courier does not pay frontier-laboratory salaries, and after this it
+ * does not have to.
+ *
+ * The ratios are the ordinary ones: a frontier laboratory pays multiples of a
+ * haulier for the same seniority. AI is the numeraire at exactly 1, so nothing
+ * about the AI backgrounds moves.
+ *
+ * World 3 only. Worlds 1 and 2 return exactly what they always returned.
+ */
+export const SECTOR_TALENT_COST_FACTOR: Readonly<Record<ReturnType<typeof sectorOf>, number>> = {
+  ai: 1,
+  robotics: 0.65,
+  consumer: 0.45,
+  manufacturing: 0.4,
+  energy: 0.35,
+  logistics: 0.25,
+};
+
+/**
+ * Compensation multiplier for this company's region, and from world version 3
+ * for the industry it is in. Exactly 1 in world version 1.
+ */
 export function companyTalentCostFactor(state: SessionState, company: Company): number {
-  return isMultiSectorWorld(state) ? regionTalentCostFactor(regionOf(company)) : 1;
+  if (!isMultiSectorWorld(state)) return 1;
+  const regional = regionTalentCostFactor(regionOf(company));
+  return isNodeEconomyWorld(state) ? regional * SECTOR_TALENT_COST_FACTOR[sectorOf(company)] : regional;
 }
 
 /**

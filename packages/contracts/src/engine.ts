@@ -27,6 +27,7 @@ import type { BoardTally } from './governance';
 import type { BidScoreBreakdown } from './government';
 import type { InnovationProposal, InnovationIntegrationResult, TechConfidenceUpdate } from './tech';
 import type { AccessDecision } from './people';
+import type { NodeCostCache } from './nodes';
 import type { EngagementResult } from './social';
 import type { ActionIntent, ActionValidationResult, NpcActionBundle, SubmittedAction } from './actions';
 import type { InvariantCheckResult, ResolutionLine, ResolutionReport, SimEvent, SimEventDraft } from './sim';
@@ -82,6 +83,18 @@ export interface ResolverContext {
   emit(draft: SimEventDraft): string;
   /** Add a line to the Quarter Resolution report. */
   log(line: ResolutionLineDraft): void;
+  /**
+   * World 3's unit-cost memo table, created once per quarter resolution and
+   * handed to every phase of it.
+   *
+   * Optional because it is meaningless in worlds 1 and 2 and because a caller
+   * outside the resolver — a screen explaining a cost, a test — is entitled to
+   * ask for a roll-up without one. Absent means "do not memoise", which is
+   * correct and merely slower. It is deliberately not a module-level cache: one
+   * that outlived a resolution would leak one save's prices into another's and
+   * break replay.
+   */
+  readonly costCache?: NodeCostCache;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -133,6 +146,16 @@ export interface EconomySubsystem {
    * randomness: it draws nothing, and it is a no-op in a single-sector world.
    */
   priceSectors(draft: SessionState, ctx: ResolverContext): void;
+  /**
+   * Price every node of the world-3 table from last quarter's supply and
+   * demand, and store the indices on the draft.
+   *
+   * Its own phase, `node_market_resolution`, immediately before product demand:
+   * world-level, ledger-writing, and settled before any company sells a single
+   * unit against it. A no-op below world version 3, so the frozen worlds never
+   * grow a `nodePrices` key. Pure with respect to randomness: it draws nothing.
+   */
+  priceNodes(draft: SessionState, ctx: ResolverContext): void;
   /** Run hazard calculation, eligibility, cooldown and contradiction checks, then draw candidate skeletons within the severity budget. May legitimately return an empty array: a quiet quarter is a valid outcome. */
   computeEventCandidates(draft: SessionState, ctx: ResolverContext): WorldEventCandidate[];
   /** Apply every active modifier to its target path, clamping to the registered bounds and emitting a ledger row per application. */

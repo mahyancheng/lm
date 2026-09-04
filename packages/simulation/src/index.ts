@@ -25,9 +25,10 @@
  * | Module          | Contains                                                  |
  * |-----------------|-----------------------------------------------------------|
  * | `engine`        | `createDefaultEngine` — every subsystem, wired            |
- * | `resolver`      | The eighteen phases, the ledger, the invariant gate        |
+ * | `resolver`      | The nineteen phases, the ledger, the invariant gate        |
  * | `validator`     | All forty-two action rules and the board-matter gate        |
  * | `scenario`      | The 2027 Q1 demo world                                     |
+ * | `graph`         | World 3: lines, the node market, the unit-cost roll-up     |
  * | `economy`       | Macro drift, hazards, world modifiers, information reveal  |
  * | `markets`       | Anchors, beliefs, the return model, trade settlement       |
  * | `companies`     | People, products, financials, archetype behaviour          |
@@ -47,6 +48,9 @@ export type { FrontierEngine } from './engine';
 export * from './resolver';
 export * from './validator';
 export * from './scenario';
+
+/* --- world 3's node economy ------------------------------------------------ */
+export * from './graph';
 
 /* --- the subsystems ------------------------------------------------------- */
 export * from './economy';

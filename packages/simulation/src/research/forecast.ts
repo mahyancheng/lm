@@ -168,7 +168,7 @@ export function effortIntent(
 /** How far a programme is from what the node asks for, in the units the player set. */
 export interface ResearchShortfall {
   readonly kind: ResearchBottleneck;
-  /** What the programme has: dollars per quarter, accelerator-equivalents, or researchers. */
+  /** What the programme has: dollars per quarter, accelerator-equivalents, researchers or petabytes. */
   readonly have: number;
   /** What the node wants, in the same unit. */
   readonly want: number;
@@ -207,6 +207,10 @@ function shortfallOf(
   if (bottleneck === 'compute') {
     return { kind: 'compute', have: Math.round(plan.computeUnits), want: Math.round(factors.requiredComputeUnits), capabilityGap: false };
   }
+  if (bottleneck === 'data') {
+    // Petabytes, in the same unit the map prints: "short of data: 120 of 400 PB".
+    return { kind: 'data', have: Math.round(factors.availableDataPb), want: Math.round(factors.requiredDataPb), capabilityGap: false };
+  }
   const want = Math.round(factors.requiredResearchers);
   const have = Math.round(plan.researchersAssigned);
   return { kind: 'talent', have, want, capabilityGap: have >= want };
@@ -244,8 +248,8 @@ function probeProject(companyId: string, node: TechNode, plan: ProgrammePlan, ex
 export function programmeForecast(draft: SessionState, company: Company, node: TechNode, plan: ProgrammePlan): ProgrammeForecast {
   const planned = plannedProgrammeQuarters(node, plan.budgetUsd);
   const factors = resourcingFactors(draft, probeProject(company.id, node, plan, planned), node);
-  const shape: ForecastFactors = { funding: factors.funding, compute: factors.compute, talent: factors.talent };
-  const pace = factors.funding * factors.compute * factors.talent;
+  const shape: ForecastFactors = { funding: factors.funding, compute: factors.compute, talent: factors.talent, data: factors.data };
+  const pace = factors.funding * factors.compute * factors.talent * factors.data;
   const expectedQuarters = quartersAtPace(1, 1 / Math.max(1, planned), pace);
   const quarterlyCostUsd = Math.round(Math.max(0, plan.budgetUsd));
   const bottleneck = bottleneckOf(shape);
@@ -289,8 +293,8 @@ export interface RunningForecast {
  */
 export function runningForecast(draft: SessionState, project: ResearchProject, node: TechNode): RunningForecast {
   const factors = resourcingFactors(draft, project, node);
-  const shape: ForecastFactors = { funding: factors.funding, compute: factors.compute, talent: factors.talent };
-  const pace = factors.funding * factors.compute * factors.talent;
+  const shape: ForecastFactors = { funding: factors.funding, compute: factors.compute, talent: factors.talent, data: factors.data };
+  const pace = factors.funding * factors.compute * factors.talent * factors.data;
   const remaining = Math.max(0, 1 - unit(project.progress));
   const bottleneck = bottleneckOf(shape);
   const plan: ProgrammePlan = {

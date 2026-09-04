@@ -25,7 +25,8 @@
  */
 
 import type { Company, SessionState } from '@frontier/contracts';
-import { CLOUD_UNIT_COST_USD_PER_QUARTER, RESERVED_UNIT_COST_USD_PER_QUARTER } from './balance';
+import { CLOUD_UNIT_COST_USD_PER_QUARTER } from './balance';
+import { reservedRentUsd } from '../graph/lines';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { activeCompanies, money } from './util';
 
@@ -41,7 +42,7 @@ export interface CounterpartyCharge {
 export function reservationChargeUsd(draft: SessionState, company: Company): number {
   const compute = company.compute;
   const factor = Math.max(0.1, compute.reservationProviderFactor ?? 1);
-  return money(compute.reservedAccelerators * RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice * factor);
+  return money(compute.reservedAccelerators * reservedRentUsd(draft) * factor);
 }
 
 /** What this company is paying its cloud provider this quarter. */

@@ -280,12 +280,16 @@ describe('programmeForecast', () => {
     expect(uncovered.shortfall?.capabilityGap).toBe(true);
   });
 
-  it('bottleneckOf takes the lowest factor and nothing when all three are met', () => {
-    expect(bottleneckOf({ funding: 1, compute: 1, talent: 1 })).toBeNull();
-    expect(bottleneckOf({ funding: 1.12, compute: 1, talent: 1 })).toBeNull();
-    expect(bottleneckOf({ funding: 0.9, compute: 0.4, talent: 0.8 })).toBe('compute');
-    expect(bottleneckOf({ funding: 0.3, compute: 0.4, talent: 0.8 })).toBe('funding');
-    expect(bottleneckOf({ funding: 1, compute: 1, talent: 0.64 })).toBe('talent');
+  // `data` is world 3's fourth factor and is exactly 1 in worlds 1 and 2, where
+  // no node asks for any, so it is passed at 1 here and can never be the
+  // bottleneck — which is the point of the addition.
+  it('bottleneckOf takes the lowest factor and nothing when all four are met', () => {
+    expect(bottleneckOf({ funding: 1, compute: 1, talent: 1, data: 1 })).toBeNull();
+    expect(bottleneckOf({ funding: 1.12, compute: 1, talent: 1, data: 1 })).toBeNull();
+    expect(bottleneckOf({ funding: 0.9, compute: 0.4, talent: 0.8, data: 1 })).toBe('compute');
+    expect(bottleneckOf({ funding: 0.3, compute: 0.4, talent: 0.8, data: 1 })).toBe('funding');
+    expect(bottleneckOf({ funding: 1, compute: 1, talent: 0.64, data: 1 })).toBe('talent');
+    expect(bottleneckOf({ funding: 1, compute: 1, talent: 1, data: 0.6 })).toBe('data');
   });
 
   it('bands a setback probability into three plain words', () => {

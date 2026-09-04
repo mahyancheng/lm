@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { NpcActionBundle, NpcStrategistInput } from '@frontier/contracts';
+import { NewGameSetupSchema } from '@frontier/contracts';
 import type { GameStoreState } from './provider';
 
 const requestNpcBundle = vi.fn();
@@ -137,13 +138,21 @@ async function settle(state: () => GameStoreState): Promise<void> {
   expect(state().loading).toBe(false);
 }
 
+/** World 3: the only world this build opens a save from. */
+const W3_SETUP = NewGameSetupSchema.parse({
+  companyName: 'Northwind AI',
+  founderName: 'Rae Fontaine',
+  backgroundId: 'consumer_ai',
+  worldVersion: 3,
+});
+
 function writeExistingSave(): string {
-  const session = createSession({ seed: SEED });
+  const session = createSession({ seed: SEED, setup: W3_SETUP });
   const file = buildSaveFile({
     seed: SEED,
     difficulty: 'standard',
     autoExecuteRoutine: false,
-    setup: null,
+    setup: W3_SETUP,
     log: [],
     queue: [],
     session,

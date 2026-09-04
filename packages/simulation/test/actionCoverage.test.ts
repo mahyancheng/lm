@@ -407,6 +407,23 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
       // refused there for the same reason buy_accelerators is; world-2
       // behaviour is tested in groupControl.test.ts.
       return { type, fromCompanyId: DEMO_COMPANIES.player, toCompanyId: DEMO_COMPANIES.meridian, cashUsd: 1_000_000, acceleratorUnits: null };
+    case 'abandon_research_project': {
+      // Whatever programme the demo world is running: closing one is legal in
+      // every world, and the world-3 consequences are tested separately.
+      const open = state.researchProjects.find((project) => project.companyId === DEMO_COMPANIES.player && project.status === 'active');
+      return { type, projectId: open?.id ?? 'rsp_missing' };
+    }
+    case 'set_data_policy':
+      // World 3 only: there is no customer data to collect below it, so this
+      // is refused here for the same reason buy_accelerators is.
+      return { type, collectionLevel: 'aggressive' };
+    case 'license_node':
+      // World 3 only: nothing below it owns a node, so there is nothing to
+      // licence and this is refused here for the same reason.
+      return { type, nodeId: 'sys_ai_accelerator', ownerCompanyId: DEMO_COMPANIES.nexus, royaltyPct: 8 };
+    case 'publish_licence_terms':
+      // World 3 only, for the same reason.
+      return { type, nodeId: 'sys_ai_accelerator', royaltyPct: 8, openToAll: true };
     case 'merge_subsidiary':
       // World 1 has no live subsidiary to merge — an acquisition there
       // absorbs outright already — so this is refused there for the same
@@ -463,13 +480,19 @@ function substantiveRows(events: readonly SimEvent[]): string[] {
  * than as a skip inside the loop so the exclusion is one line to audit and the
  * assertion below fails the moment it grows silently.
  */
-const WORLD_2_ONLY_ACTIONS = new Set<ActionType>([
+const LATER_WORLD_ONLY_ACTIONS = new Set<ActionType>([
   'buy_accelerators',
   'invest_capacity',
   'set_supply_terms',
   'choose_supplier',
   'transfer_between_group',
   'merge_subsidiary',
+  // World 3 only: world 1 collects no customer data at all.
+  'set_data_policy',
+  // World 3 only: nothing below it owns a node, so nothing below it can
+  // licence one out or ask to licence one in.
+  'license_node',
+  'publish_licence_terms',
 ]);
 
 describe('every accepted action changes something', () => {
@@ -484,20 +507,25 @@ describe('every accepted action changes something', () => {
 
   it('covers every action type in the contract', () => {
     // 44 was pinned before transfer_between_group and merge_subsidiary
-    // (group control, STAGE 4) were appended.
-    expect(ACTION_TYPES.length).toBe(46);
-    expect([...WORLD_2_ONLY_ACTIONS]).toEqual([
+    // (group control, STAGE 4) were appended, 46 before world 3 appended
+    // abandon_research_project and set_data_policy, and 48 before it appended
+    // license_node and publish_licence_terms.
+    expect(ACTION_TYPES.length).toBe(50);
+    expect([...LATER_WORLD_ONLY_ACTIONS]).toEqual([
       'buy_accelerators',
       'invest_capacity',
       'set_supply_terms',
       'choose_supplier',
       'transfer_between_group',
       'merge_subsidiary',
+      'set_data_policy',
+      'license_node',
+      'publish_licence_terms',
     ]);
   });
 
-  it('refuses the world-2-only actions here rather than silently ignoring them', () => {
-    for (const type of WORLD_2_ONLY_ACTIONS) {
+  it('refuses the later-world actions here rather than silently ignoring them', () => {
+    for (const type of LATER_WORLD_ONLY_ACTIONS) {
       const state = stageWorld();
       const action = submit(state, intentFor(type, state));
       const outcome = engine.resolver.resolveQuarter(state, [action], null, []);
@@ -512,7 +540,7 @@ describe('every accepted action changes something', () => {
     // exists to name one cannot be accepted here. Its consumption is proved in
     // `sellers.test.ts`, against a world-2 session, to the same standard: the
     // quarter commits, no invariant fails, and the world differs afterwards.
-    if (WORLD_2_ONLY_ACTIONS.has(type)) continue;
+    if (LATER_WORLD_ONLY_ACTIONS.has(type)) continue;
     it(`${type} is consumed by a phase`, () => {
       const state = stageWorld();
       const action = submit(state, intentFor(type, state));

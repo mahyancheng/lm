@@ -17,6 +17,15 @@
  * | `reservation`  | the same companies                        | the same capacity           |
  * | `accelerators` | manufacturers: chip makers, semiconductors| a quarter of fab output     |
  *
+ * **World 3 answers the accelerator row differently, and that is the whole
+ * redesign.** Who may sell an accelerator is not an archetype list and not a
+ * sector list: it is *whoever owns `sys_ai_accelerator` and runs a line on it*.
+ * What they may sell is what that line actually made last quarter, and what
+ * they charge is the node's own market price — one price per node — times their
+ * own region and load. `makesAccelerators`, `acceleratorOutputUnits` and the
+ * three constants underneath them are therefore not on any world-3 path; they
+ * stay for world 2, which is frozen and still runs on them.
+ *
  * The seller list is **derived, never stored**: it is a function of who is
  * active, what they hold, and what they are using. Sorting is `price, then id`,
  * so "the cheapest seller with capacity" is one company and always the same one.
@@ -30,6 +39,7 @@
  */
 
 import type { Company, ComputeOffering, SessionState } from '@frontier/contracts';
+import { COMPUTE_CAPACITY_NODE_ID, holdsNode } from '@frontier/contracts';
 import {
   ACCELERATOR_FAB_OUTPUT_SHARE,
   ACCELERATOR_SPOT_SHARE,
@@ -41,7 +51,8 @@ import {
 } from './balance';
 import { customersPerUnit, heldComputeUnits } from './products';
 import { INFRASTRUCTURE_ARCHETYPES } from '../markets/valuation';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { acceleratorListUsd, cloudRentUsd, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { regionOf, regionalEnergyIndex } from '../economy/regions';
 import { clamp, money, unit } from './util';
 
@@ -55,9 +66,43 @@ export const MANUFACTURING_SECTORS: readonly string[] = ['semiconductors', 'manu
 /** Archetypes that make accelerators rather than merely running them. */
 export const ACCELERATOR_SELLER_ARCHETYPES: readonly string[] = ['chip_maker'];
 
-/** True when this company builds accelerators somebody else could buy. */
+/**
+ * True when this company builds accelerators somebody else could buy.
+ *
+ * WORLD 2 ONLY. An archetype is a label, not a capability, and asking a label
+ * whether a company can make a chip is exactly the guesswork the node table
+ * replaces. `sellsAcceleratorNode` is the world-3 answer.
+ */
 export function makesAccelerators(company: Company): boolean {
   return ACCELERATOR_SELLER_ARCHETYPES.includes(company.archetype) || MANUFACTURING_SECTORS.includes(company.sectorId);
+}
+
+/**
+ * World 3: this company holds the accelerator node and is running a line on it.
+ *
+ * Both halves matter. Holding it without a line means it *could* build a fab
+ * and has not; a line without holding it cannot exist, because the launch gate
+ * asks `canProduce` — but a licence can lapse under a live line, and when it
+ * does the company stops being a seller the same quarter.
+ */
+export function sellsAcceleratorNode(draft: SessionState, company: Company): boolean {
+  if (!holdsNode(company, COMPUTE_CAPACITY_NODE_ID, draft.quarter)) return false;
+  return company.products.some((product) => product.isActive && lineNodeIdOf(product) === COMPUTE_CAPACITY_NODE_ID);
+}
+
+/**
+ * World 3: what that line actually shipped last quarter, which is the honest
+ * statement of what it can ship this one. World 2 estimated output from a share
+ * of plant valued at a designer list price (`acceleratorOutputUnits`); here the
+ * line has a real run rate and there is nothing to estimate.
+ */
+export function acceleratorLineOutputUnits(company: Company): number {
+  let units = 0;
+  for (const product of company.products) {
+    if (!product.isActive || lineNodeIdOf(product) !== COMPUTE_CAPACITY_NODE_ID) continue;
+    units += Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
+  }
+  return Math.floor(units);
 }
 
 /** True when this company runs capacity somebody else could rent. */
@@ -95,7 +140,7 @@ export function sellableCapacityUnits(draft: SessionState, company: Company): nu
 }
 
 /**
- * Accelerators this manufacturer could ship this quarter.
+ * Accelerators this manufacturer could ship this quarter. WORLD 2 ONLY.
  *
  * Bounded by its scale rather than by an inventory nobody models: a share of the
  * plant it carries, valued at list, scaled by the world's fabrication capacity.
@@ -171,18 +216,28 @@ export function acceleratorSupplyFactor(draft: SessionState): number {
  * another rather than all of them quoting the index.
  */
 export function acceleratorUnitPriceUsd(draft: SessionState, seller: Company): number {
+  // World 3: the node market has already priced this quarter's scarcity, once,
+  // for everybody. Multiplying the spot index and the supply factor on top of
+  // it would price the same shortage three times, so the only thing left to
+  // apply is what makes one seller different from another.
+  if (isNodeEconomyWorld(draft)) return money(acceleratorListUsd(draft) * sellerPriceFactor(draft, seller));
   const spot = 1 - ACCELERATOR_SPOT_SHARE + ACCELERATOR_SPOT_SHARE * draft.world.compute.spotPrice;
   return money(ACCELERATOR_UNIT_PRICE_USD * spot * acceleratorSupplyFactor(draft) * sellerPriceFactor(draft, seller));
 }
 
-/** What one reserved accelerator-equivalent costs per quarter from this seller. */
+/**
+ * What one reserved accelerator-equivalent costs per quarter from this seller.
+ * The rent is `reservedRentUsd` in every world — the node table's own answer in
+ * world 3, the designer constant times the world index in worlds 1 and 2 — so
+ * the price quoted here is always the price the buyer's books charge.
+ */
 export function reservationUnitPriceUsd(draft: SessionState, seller: Company): number {
-  return money(RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice * sellerPriceFactor(draft, seller));
+  return money(reservedRentUsd(draft) * sellerPriceFactor(draft, seller));
 }
 
 /** What one accelerator-equivalent of on-demand cloud costs per quarter from this seller. */
 export function cloudUnitPriceUsd(draft: SessionState, seller: Company): number {
-  return money(CLOUD_UNIT_COST_USD_PER_QUARTER * draft.world.compute.spotPrice * sellerPriceFactor(draft, seller));
+  return money(cloudRentUsd(draft) * sellerPriceFactor(draft, seller));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -207,13 +262,14 @@ function sellerOf(draft: SessionState, company: Company, offering: ComputeOfferi
   const energyFactorPct = Math.round(regionalEnergyIndex(draft, regionOf(company)));
   const utilisationPct = Math.round(unit(company.compute.computeUtilisation) * 100);
   if (offering === 'accelerators') {
-    if (!makesAccelerators(company)) return null;
+    const nodeEconomy = isNodeEconomyWorld(draft);
+    if (!(nodeEconomy ? sellsAcceleratorNode(draft, company) : makesAccelerators(company))) return null;
     const price = acceleratorUnitPriceUsd(draft, company);
     return {
       company,
       offering,
       unitPriceUsd: price,
-      sellableUnits: acceleratorOutputUnits(draft, company),
+      sellableUnits: nodeEconomy ? acceleratorLineOutputUnits(company) : acceleratorOutputUnits(draft, company),
       quarterlyCostPerUnitUsd: money(price * PPE_DEPRECIATION_PER_QUARTER),
       energyFactorPct,
       utilisationPct,

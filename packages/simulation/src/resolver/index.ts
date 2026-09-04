@@ -3,7 +3,7 @@
  *
  * `F` in `S_{t+1} = F(S_t, A_player, A_agents, M_world, ε_seed)`.
  *
- * Eighteen phases, in the order `RESOLUTION_PHASES` declares them, each one
+ * Nineteen phases, in the order `RESOLUTION_PHASES` declares them, each one
  * forking its own random stream and calling the subsystems that own it. The
  * order is part of the contract, not decoration: an acquisition approved by a
  * board in phase five alters the purchaser's cash in phase six, before the
@@ -66,7 +66,9 @@ import { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } fro
 import { collectActions, pendingOfType, reviewActions } from './actions';
 import type { NpcBundleInput } from './actions';
 import {
+  applyDataPolicies,
   applyIntroductionRequests,
+  applyResearchAbandonments,
   applyResearchAdjustments,
   ensureBoardProposals,
   ensureGovernmentBids,
@@ -89,8 +91,11 @@ export {
   ensureGovernmentBids,
   ensureResearchProjects,
   applyResearchAdjustments,
+  applyResearchAbandonments,
+  applyDataPolicies,
   ensureSocialPosts,
   routeDeals,
+  routeNodeLicences,
   applyIntroductionRequests,
   INTRODUCTION_THRESHOLD,
 } from './routing';
@@ -214,7 +219,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
         visibility: 'public',
       });
 
-      /* --- the eighteen phases ---------------------------------------------- */
+      /* --- the nineteen phases ----------------------------------------------- */
       const timings: EnginePhaseTiming[] = [];
       let balanceCheckCount = 0;
 
@@ -282,6 +287,12 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             // Re-resourcing lands before the quarter is advanced, so the fix a
             // founder made this quarter is the resourcing this quarter runs on.
             applyResearchAdjustments(draft, ctx);
+            // Closing a programme lands before it too, so a programme abandoned
+            // this quarter costs nothing this quarter. Both are world 3's only
+            // way out of a blocked programme and cost nothing in worlds 1 and 2,
+            // which never submit either action.
+            applyResearchAbandonments(draft, ctx);
+            applyDataPolicies(draft, ctx);
             subsystems.research.advanceProjects(draft, ctx);
             subsystems.research.achieveNodes(draft, ctx);
             subsystems.research.updateTechConfidence(draft, ctx);
@@ -290,6 +301,13 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             }
             break;
           }
+
+          case 'node_market_resolution':
+            // World 3 only, and the whole phase: every node in the table is
+            // priced from last quarter's supply and demand before a single unit
+            // is sold against those prices. A no-op in worlds 1 and 2.
+            subsystems.economy.priceNodes(draft, ctx);
+            break;
 
           case 'product_demand_resolution':
             subsystems.companies.resolveProducts(draft, ctx);
@@ -428,7 +446,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
       pruneHistory(draft);
       draft.pendingActions = [];
       // Capital orders are this quarter's working set, exactly like pending
-      // actions: written in phase four, settled in phase thirteen, gone at
+      // actions: written in phase four, settled in phase fourteen, gone at
       // commit. The key is only touched where it already exists, so world 1
       // still grows no `capitalOrders`.
       if (draft.capitalOrders !== undefined) draft.capitalOrders = [];
@@ -679,22 +697,40 @@ function snapshotOf(state: SessionState, phase: 'pre_resolution' | 'post_commit'
 export const SETTLED_RECORD_HORIZON_QUARTERS = 12;
 
 /**
+ * How many quarters of the written public record the session carries.
+ *
+ * Twelve, against `quoteHistoryQuarters`'s twenty-four, because the two are not
+ * the same kind of thing. A quote is four numbers a price chart draws, and six
+ * years of them is a few kilobytes; a disclosure carries a headline, a body of
+ * up to fifteen hundred characters and a metric bag, and six years of them for
+ * every listed company in a twenty-seven-company world is two hundred
+ * kilobytes of state that the whole session is hashed over once per ledger
+ * phase, eighteen times a quarter. Nothing reads back further than a few
+ * quarters — credibility is settled against a claim two quarters old, the news
+ * screen shows the quarter, the desks read this quarter's filings — so three
+ * years is generous, and the full record is in the ledger where it belongs.
+ */
+export const DISCLOSURE_WINDOW_QUARTERS = 12;
+
+/**
  * Trim the rolling windows. History is not lost: quotes, disclosures, posts and
  * settled procurement records older than the window live on in snapshots and in
  * the ledger, which is where the audit trail belongs.
  *
- * Two windows, not one. Quotes, disclosures and social posts follow
- * `quoteHistoryQuarters`, which a session configures. Procurement records follow
+ * Three windows, not one. Quotes, posts and stories follow
+ * `quoteHistoryQuarters`, which a session configures; the written public record
+ * follows the shorter `DISCLOSURE_WINDOW_QUARTERS`; procurement records follow
  * `SETTLED_RECORD_HORIZON_QUARTERS` and are only ever dropped once they are
  * *settled* — nothing still open, still evaluating, still active or still
  * referenced by something open is ever removed, however old it is.
  */
 function pruneHistory(draft: SessionState): void {
   pruneSettledProcurement(draft);
+  const oldestDisclosure = draft.quarter - DISCLOSURE_WINDOW_QUARTERS;
+  if (oldestDisclosure > 0) draft.disclosures = draft.disclosures.filter((disclosure) => disclosure.quarter >= oldestDisclosure);
   const oldest = draft.quarter - draft.quoteHistoryQuarters;
   if (oldest <= 0) return;
   draft.quotes = draft.quotes.filter((quote) => quote.quarter >= oldest);
-  draft.disclosures = draft.disclosures.filter((disclosure) => disclosure.quarter >= oldest);
   draft.socialPosts = draft.socialPosts.filter((post) => post.quarter >= oldest);
   draft.mediaStories = draft.mediaStories.filter((story) => story.quarter >= oldest);
 }

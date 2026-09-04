@@ -30,6 +30,7 @@ import type {
 import {
   GmProposalBatchSchema,
   LEGACY_WORLD_VERSION,
+  RETIRED_WORLD_SAVE_MESSAGE,
   NewGameSetupSchema,
   NpcActionBundleSchema,
   SESSION_DIFFICULTIES,
@@ -37,6 +38,7 @@ import {
   SocialTextOverrideSchema,
   SubmittedActionSchema,
   WORLD_VERSIONS,
+  worldVersionIsSupported,
 } from '@frontier/contracts';
 
 export const SAVE_VERSION = 5;
@@ -144,6 +146,12 @@ export interface SaveInspection {
   readonly status: SaveStatus;
   readonly version: number | null;
   readonly file: SaveFile | null;
+  /**
+   * Why the file was refused, in words a player can read, or null when there is
+   * nothing to explain. Required-and-nullable rather than optional so every
+   * construction site has to decide what it says.
+   */
+  readonly reason: string | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -260,12 +268,12 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
   // Exactly the original guard: an array is an object here, so it falls through
   // to the version check and is refused as `unsupported`, never as absent.
   if (value === null || typeof value !== 'object') {
-    return { status: 'unreadable', version: null, file: null };
+    return { status: 'unreadable', version: null, file: null, reason: null };
   }
   const parsed = value as Record<string, unknown>;
 
   const version = typeof parsed.version === 'number' ? parsed.version : null;
-  if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) return { status: 'unsupported', version, file: null };
+  if (version === null || !SUPPORTED_SAVE_VERSIONS.includes(version)) return { status: 'unsupported', version, file: null, reason: null };
 
   const defaultSeed = options.defaultSeed ?? FALLBACK_SEED;
   const seed = typeof parsed.seed === 'number' && Number.isFinite(parsed.seed) ? parsed.seed : defaultSeed;
@@ -282,9 +290,19 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
       ? parsed.savedQuarter
       : (log[log.length - 1]?.quarter ?? -1) + 1;
 
+  // A save from a world this build retired is refused, not migrated — and
+  // refused as `unsupported`, which is the status that is preserved and never
+  // written over. The file stays exactly where it is; a build that can read it
+  // still can.
+  const worldVersion = worldVersionOf(setup, parsed.worldVersion);
+  if (!worldVersionIsSupported(worldVersion)) {
+    return { status: 'unsupported', version, file: null, reason: RETIRED_WORLD_SAVE_MESSAGE };
+  }
+
   return {
     status: 'ok',
     version,
+    reason: null,
     file: {
       version: SAVE_VERSION,
       seed,
@@ -292,7 +310,7 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
       autoExecuteRoutine: parsed.autoExecuteRoutine === true,
       setup,
       // v5 records it; a v1–v4 file states it through its setup, or is world 1.
-      worldVersion: worldVersionOf(setup, parsed.worldVersion),
+      worldVersion,
       log,
       checkpoint,
       savedQuarter,
@@ -313,7 +331,7 @@ export function inspectSaveText(raw: string, options: SaveParseOptions = {}): Sa
   try {
     value = JSON.parse(raw) as unknown;
   } catch {
-    return { status: 'unreadable', version: null, file: null };
+    return { status: 'unreadable', version: null, file: null, reason: null };
   }
   return inspectSaveValue(value, options);
 }
@@ -343,6 +361,8 @@ export interface SaveFileSummary {
   readonly savedAtIso: string | null;
   /** Quarter the run ended in, or null while the seat is still playing. */
   readonly endedQuarter: number | null;
+  /** Why this file cannot be opened, in words, or null when it can. */
+  readonly reason: string | null;
 }
 
 /** Nothing stored. Every field but `status` is null. */
@@ -357,6 +377,7 @@ export const ABSENT_SAVE_SUMMARY: SaveFileSummary = {
   worldVersion: null,
   savedAtIso: null,
   endedQuarter: null,
+  reason: null,
 };
 
 export function summariseSaveValue(value: unknown): SaveFileSummary {
@@ -369,9 +390,26 @@ export function summariseSaveValue(value: unknown): SaveFileSummary {
     return { ...ABSENT_SAVE_SUMMARY, status: 'unsupported', version };
   }
   const setup = parseSetup(parsed.setup);
+  const worldVersion = worldVersionOf(setup, parsed.worldVersion);
+  if (!worldVersionIsSupported(worldVersion)) {
+    // Named, not blank: a picker row for a retired world still says whose
+    // company it was and when it was saved, and says why it cannot be opened.
+    return {
+      ...ABSENT_SAVE_SUMMARY,
+      status: 'unsupported',
+      version,
+      worldVersion,
+      companyName: setup?.companyName ?? null,
+      founderName: setup?.founderName ?? null,
+      savedQuarter: typeof parsed.savedQuarter === 'number' && Number.isInteger(parsed.savedQuarter) ? parsed.savedQuarter : null,
+      savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
+      reason: RETIRED_WORLD_SAVE_MESSAGE,
+    };
+  }
   return {
     status: 'ok',
     version,
+    reason: null,
     savedQuarter:
       typeof parsed.savedQuarter === 'number' && Number.isInteger(parsed.savedQuarter) ? parsed.savedQuarter : null,
     seed: typeof parsed.seed === 'number' && Number.isFinite(parsed.seed) ? parsed.seed : null,
@@ -380,7 +418,7 @@ export function summariseSaveValue(value: unknown): SaveFileSummary {
       : null,
     companyName: setup?.companyName ?? null,
     founderName: setup?.founderName ?? null,
-    worldVersion: worldVersionOf(setup, parsed.worldVersion),
+    worldVersion,
     savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
     endedQuarter:
       typeof parsed.endedQuarter === 'number' && Number.isInteger(parsed.endedQuarter) && parsed.endedQuarter >= 0

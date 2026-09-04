@@ -153,6 +153,11 @@ function dossier() {
       trainingAllocationPct: 0,
       reservationExpiryQuarter: null,
       cloudSpendQuarterlyUsd: 0,
+      // The node economy's half of the section. Zero-shaped, which is exactly
+      // what the dossier builder produces for a company outside world 3.
+      ownedNodeCount: 0,
+      dataPetabytes: 0,
+      dataPolicy: 'standard',
     },
     people: {
       engineers: 0,

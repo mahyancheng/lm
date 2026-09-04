@@ -20,7 +20,7 @@
 
 export { createRng, rngPath } from './rng';
 
-export { fnv1a64, stableStringify, hashState, createStateHasher } from './hash';
+export { fnv1a64, stableStringify, hashCanonical, hashState, createStateHasher } from './hash';
 export type { StableStringifyOptions } from './hash';
 
 export {

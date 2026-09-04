@@ -87,8 +87,10 @@ describe('why it is slow', () => {
     expect(shortfallLine(shortfall)).toBe('Short of money: $1,000,000 a quarter against $4,000,000 the work needs.');
   });
 
-  it('has a one-word label for every bottleneck', () => {
-    expect(BOTTLENECK_LABEL).toEqual({ funding: 'money', compute: 'compute', talent: 'researchers' });
+  it('has a plain-words label for every bottleneck', () => {
+    // Four resourcing factors since world 3: a node that wants petabytes is
+    // short of the data its own customers would have produced.
+    expect(BOTTLENECK_LABEL).toEqual({ funding: 'money', compute: 'compute', talent: 'researchers', data: 'customer data' });
   });
 });
 

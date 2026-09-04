@@ -207,6 +207,18 @@ function checkFinancialIntegrity(draft: SessionState, opening: SessionState, eve
 /** The keys the financial phase's cost row states the whole quarter's cost in. */
 const COST_KEYS = ['cogsUsd', 'payrollUsd', 'marketingUsd', 'rdSpendUsd', 'interestUsd', 'taxUsd'] as const;
 
+/**
+ * Cost keys a row may or may not carry.
+ *
+ * `idleCapacityUsd` and `dataCustodyUsd` exist only in world 3, where a
+ * capacity charge no production absorbed, and the standing cost of holding
+ * customer data lawfully, are each an operating expense of their own. A world-1 or world-2
+ * row carries no such key and must not be marked unverifiable for it, so an
+ * absent optional key contributes nothing rather than raising a flag — which is
+ * exactly the opposite of how a required key is read.
+ */
+const OPTIONAL_COST_KEYS = ['idleCapacityUsd', 'dataCustodyUsd'] as const;
+
 /** What one company's ledger rows say moved its equity this quarter. */
 interface EquityMovement {
   revenue: number;
@@ -289,6 +301,10 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
         if (isStagingRow(event)) break;
         actor.sawCost = true;
         for (const key of COST_KEYS) add(event, actor, key, (value) => (actor.cost += value));
+        for (const key of OPTIONAL_COST_KEYS) {
+          const value = money(event, key);
+          if (value !== null) actor.cost += value;
+        }
         break;
       case 'cash_flow_resolved':
         actor.sawCashFlow = true;
@@ -365,6 +381,22 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
           if (receiver !== null && value !== null) receiver.capital += value;
         }
         break;
+      case 'node_licensed': {
+        // Publishing terms moves nothing at all. A GRANTED licence moves the
+        // signing fee out of the licensee and into the owner in the capital
+        // phase, exactly as a group transfer moves cash — two live companies,
+        // nothing on either sheet to offset it, so equity moves on both.
+        if (event.payload.published === true) break;
+        const value = money(event, 'upfrontUsd');
+        if (value === null) {
+          actor.unverifiable = 'node_licensed carries no numeric upfrontUsd';
+          break;
+        }
+        actor.capital += value;
+        const licensee = event.targetId === null ? null : entry(event.targetId);
+        if (licensee !== null) licensee.capital -= value;
+        break;
+      }
       case 'subsidiary_merged':
         // The `acquisition_completed` row this pairs with already prices the
         // subsidiary's own investments crossing over into `absorbedInvestments`

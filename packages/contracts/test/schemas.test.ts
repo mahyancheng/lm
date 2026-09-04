@@ -748,8 +748,8 @@ describe('constants and invariants', () => {
     expect(EvaluationWeightsSchema.safeParse(bad).success).toBe(false);
   });
 
-  it('lists the eighteen resolution phases in pipeline order', () => {
-    expect(RESOLUTION_PHASES).toHaveLength(18);
+  it('lists the nineteen resolution phases in pipeline order', () => {
+    expect(RESOLUTION_PHASES).toHaveLength(19);
     expect(RESOLUTION_PHASES[0]).toBe('world_events');
     expect(RESOLUTION_PHASES[1]).toBe('gm_modifiers');
     expect(RESOLUTION_PHASES[RESOLUTION_PHASES.length - 2]).toBe('ledger_commit');
@@ -794,14 +794,54 @@ describe('constants and invariants', () => {
   // addition is an append or an optional, so a save written against 1.2.0 still
   // parses and still hashes to what it hashed to.
   //
+  // 1.5.0 adds the world-3 node economy: `nodes.ts`, `nodeGraph.ts` and
+  // `nodeOwnership.ts`, plus `Company.ownedNodes` and `Company.licences`.
+  //
+  // 1.6.0 adds the world-3 node market and the unit-cost roll-up: the
+  // `node_market_resolution` phase and the `node_price_set` ledger type (both
+  // appended, never inserted), `SessionState.nodePrices` and `Product.nodeId`
+  // (both optional, so both frozen worlds still hash to what they always
+  // hashed to), and the derived `UnitCostLine` / `UnitCostResult` read models
+  // the screens render a cost with.
   // 1.4.0 adds the supply chain: `Product.supply` and `Product.supplyTerms`
   // (both optional, so a product parsed before this stage carries neither key
   // and reads as "nothing chosen — open market"), `set_supply_terms` and
   // `choose_supplier` action variants, and `launch_product.supply`. Every
   // addition is an append or an optional; a save written against 1.3.0 still
   // parses and still hashes to what it hashed to.
+  //
+  // 1.7.0 books the node economy: `Product` grows `unitsSoldQuarterly`,
+  // `installedBase`, `backlogUnits`, `contractRemainingQuarters`,
+  // `contractBilledUsd`, `unitCostUsd`, `craftQuality` and `qualityTier`. All
+  // eight are optional for the reason `nodeId` is — a defaulted key would
+  // materialise on every world-1 and world-2 product and move both frozen
+  // worlds' hashes.
+  //
+  // 1.8.0 puts research on the one graph and makes customer data an asset:
+  // `Company.dataAssets` and `Company.dataPolicy`, the
+  // `abandon_research_project` and `set_data_policy` actions, and the
+  // `research_paused` / `research_abandoned` / `node_owned` / `data_resolved`
+  // ledger rows, and `Financials.dataCustodyUsd` — what holding that data
+  // lawfully costs, booked as an operating expense so cost of goods stays the
+  // roll-up and nothing else. Every company field is optional for the reason
+  // every world-3 field is, and both enum lists are appended to rather than
+  // inserted into.
+  //
+  // 1.9.0 makes the right to produce somebody else's node purchasable:
+  // `Company.licenceOffers` beside the licences stage 1 already carried, the
+  // `node_licence` deal obligation, the `license_node` and
+  // `publish_licence_terms` actions, and the `node_licensed` /
+  // `node_licence_lapsed` ledger rows. `Company.ownedNodes` also grew its bound
+  // from 48 to 96, because an acquisition unions two companies' ownership and a
+  // cap below what a legal acquisition produces would make the result unsavable.
+  //
+  // 1.10.0 gives the Chief of Staff the node economy's vocabulary: the
+  // `unit_cost` and `entry_path` lookups, with `UnitCostRow` and
+  // `EntryStepRow`. Both are appended to `LOOKUP_KINDS` and to both
+  // discriminated unions rather than inserted, which is what the append-only
+  // test below polices.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.4.0');
+    expect(CONTRACTS_VERSION).toBe('1.10.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {
@@ -1178,12 +1218,16 @@ describe('world version 2 company and graph defaults', () => {
     expect(nodesInSector(graph, 'energy')).toHaveLength(0);
   });
 
-  it('defaults a session config to world version 1 and accepts 2', () => {
+  // Changed deliberately when world 3 arrived: the union now admits 3, a new
+  // game is created at 3, and 4 is the first version that does not exist.
+  // Everything about worlds 1 and 2 in this test is unchanged.
+  it('defaults a session config to world version 1 and accepts 2 and 3', () => {
     expect(WorldVersionSchema.parse(undefined)).toBe(1);
     expect(WorldVersionSchema.parse(2)).toBe(2);
-    expect(WorldVersionSchema.safeParse(3).success).toBe(false);
+    expect(WorldVersionSchema.parse(3)).toBe(3);
+    expect(WorldVersionSchema.safeParse(4).success).toBe(false);
     expect(LEGACY_WORLD_VERSION).toBe(1);
-    expect(CURRENT_WORLD_VERSION).toBe(2);
+    expect(CURRENT_WORLD_VERSION).toBe(3);
     const parsed = SessionStateSchema.parse(minimalSessionState);
     expect(parsed.config.worldVersion).toBe(1);
   });
@@ -1307,7 +1351,9 @@ describe('chat-driven setup proposals', () => {
     const setup = newGameSetupFromProposal(proposal);
     expect(setup?.region).toBe(defaultRegionFor('logistics'));
     expect(setup?.backgroundId).toBe('freight_network');
-    expect(setup?.worldVersion).toBe(2);
+    // A game founded through the chat is created at CURRENT_WORLD_VERSION,
+    // which world 3 moved from 2 to 3.
+    expect(setup?.worldVersion).toBe(CURRENT_WORLD_VERSION);
   });
 
   it('repairs a background that belongs to the wrong sector', () => {

@@ -60,6 +60,8 @@ import type {
   ResolverContext,
   SessionState,
   ActiveModifier,
+  NodeCostCache,
+  UnitCostResult,
 } from '@frontier/contracts';
 import type { CompanyModifierStack, ModifierRow } from '@frontier/contracts';
 import {
@@ -71,9 +73,10 @@ import {
   makeId,
   sectorPriceFactor,
   sectorTradeShare,
+  economicNodeById,
 } from '@frontier/contracts';
 import { accordBonusPctFor, activeAccords, chargesTollPct, regionLogistics, tollPaidPct } from '../economy/prices';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { regionOf, regionalEnergyIndex } from '../economy/regions';
 import {
   BALANCE_ROUNDING_EPSILON_USD,
@@ -103,6 +106,9 @@ import { counterpartyRevenueByCompany } from './counterparty';
 import { openMarketSupplyCostUsd, resolveSupplyLedger } from './supply';
 import { negativeCashQuarters, overdraftChargeUsd } from './solvency';
 import { appendFinancialQuarter } from './history';
+import { cloudRentUsd, createNodeCostCache, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
+import { totalDataPetabytes } from '../graph/data';
+import { unitCostOf } from '../graph/cost';
 import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
 import { companyEnergyCostFactor } from '../economy/regions';
@@ -119,6 +125,43 @@ import {
   unit,
   usdLabel,
 } from './util';
+
+/**
+ * How much of a company's capacity charge has to go unabsorbed before the
+ * quarter report says so. A fifth: below that it is the ordinary slack every
+ * plant carries, and a phone has better things to print.
+ */
+export const IDLE_CAPACITY_REPORT_SHARE = 0.2;
+
+/**
+ * How much of a landed cost of goods is freight, and therefore tollable.
+ *
+ * Fifteen percent: high for a chip, low for a pallet of packaging, and the one
+ * number that keeps a regional logistics toll a real cost without letting it
+ * eat a fifth of every manufacturer's bill of materials.
+ */
+export const NODE_TOLL_FREIGHT_SHARE = 0.15;
+
+/**
+ * The most of the cash left after a quarter's bills that may go into holding
+ * capacity flat.
+ *
+ * Half. Sustaining capital is real and a company that skips it shrinks, but no
+ * board signs off maintenance that empties the account: without this bound a
+ * capital-heavy business spent its closing balance down to exactly zero every
+ * quarter for four years, which is arithmetic rather than a decision.
+ */
+export const SUSTAINING_CAPITAL_CASH_SHARE = 0.5;
+
+/**
+ * How little of the quarter's write-off a company has to replace before the
+ * report says its capacity is shrinking.
+ *
+ * Four fifths. Holding capacity flat is the ordinary case and says nothing;
+ * funding most of it is slippage; funding well under it is a business getting
+ * smaller, which is a fact the founder is owed in words.
+ */
+export const MAINTENANCE_REPORT_SHARE = 0.8;
 
 /** Compute cost decomposition for one company for one quarter. */
 export interface ComputeCostBreakdown {
@@ -143,6 +186,26 @@ export interface ComputeCostBreakdown {
  * Depreciation is taken against property, plant and equipment rather than
  * against a unit count, so the non-cash charge always matches an asset the
  * balance sheet actually carries.
+ *
+ * ## The energy line, and why world 3 does not have one
+ *
+ * `capacityRateUsd` already says it: "a node's own `energyMwhPerUnit` is its
+ * power line, and charging it twice is exactly the kind of double count the
+ * roll-up exists to prevent". The line above is the second charge. In world 3
+ * every node that draws power carries `energyMwhPerUnit`, priced at the grid
+ * node's own market price through the company's own regional factor, and it is
+ * allocated to the units that drew it; `$420 an accelerator a quarter` is world
+ * 2's model of the same electricity, and it is allocated to nothing.
+ *
+ * It landed as **idle capacity** — a charge against no output, on a resource
+ * the roll-up was already billing. On an AI infrastructure company holding
+ * eleven thousand accelerators against a training-run line that itself declares
+ * 330 MWh a run, it was four to seven million dollars a quarter of idle
+ * capacity out of a twenty-million-dollar run rate: enough on its own to make
+ * that background insolvent by its fifth quarter with no player input.
+ *
+ * Zero in world 3 and exactly what it always was in worlds 1 and 2, which have
+ * no `energyMwhPerUnit` and would otherwise lose their only energy charge.
  */
 export function computeCost(draft: SessionState, company: Company): ComputeCostBreakdown {
   const world = draft.world;
@@ -153,17 +216,18 @@ export function computeCost(draft: SessionState, company: Company): ComputeCostB
   // and anything bought at the index — it is exactly 1.
   const reservedFactor = Math.max(0.1, compute.reservationProviderFactor ?? 1);
   const cloudFactor = Math.max(0.1, compute.cloudProviderFactor ?? 1);
-  const reserved = compute.reservedAccelerators * RESERVED_UNIT_COST_USD_PER_QUARTER * world.compute.reservedPrice * reservedFactor;
+  // World 3 reads the rent off the node table (`reservedRentUsd`); worlds 1
+  // and 2 get exactly the constant times the index they always got.
+  const reserved = compute.reservedAccelerators * reservedRentUsd(draft) * reservedFactor;
   const cloud = compute.cloudSpendQuarterly * world.compute.spotPrice;
-  const cloudUnits = ratio(
-    compute.cloudSpendQuarterly,
-    CLOUD_UNIT_COST_USD_PER_QUARTER * Math.max(0.1, world.compute.spotPrice) * cloudFactor,
-  );
+  const cloudUnits = ratio(compute.cloudSpendQuarterly, cloudRentUsd(draft, 0.1) * cloudFactor);
   const units = compute.ownedAccelerators + compute.reservedAccelerators + cloudUnits;
   // Electricity is the one input whose price is genuinely local: the world index
   // sets the trend, the company's region sets what it actually pays. The regional
   // factor is exactly 1 in world version 1.
-  const energy = units * ENERGY_USD_PER_ACCELERATOR_QUARTER * world.energy.electricityPrice * companyEnergyCostFactor(draft, company);
+  const energy = isNodeEconomyWorld(draft)
+    ? 0
+    : units * ENERGY_USD_PER_ACCELERATOR_QUARTER * world.energy.electricityPrice * companyEnergyCostFactor(draft, company);
   return {
     ownedDepreciationUsd: ownedDepreciation,
     reservedUsd: reserved,
@@ -189,9 +253,68 @@ export function computeCost(draft: SessionState, company: Company): ComputeCostB
  */
 export function lastQuarterNetIncomeUsd(company: Company): number {
   const f = company.financials;
-  const operatingIncome = f.revenueQuarterly - f.cogs - f.payroll - f.marketing - f.rdSpend;
+  const operatingIncome = f.revenueQuarterly - f.cogs - f.payroll - f.marketing - f.rdSpend - (f.idleCapacityUsd ?? 0) - (f.dataCustodyUsd ?? 0);
   const preTax = operatingIncome - f.interestExpense;
   return signedMoney(preTax > 0 ? preTax * (1 - TAX_RATE) : preTax);
+}
+
+/**
+ * One conversion line of a unit cost, by key.
+ *
+ * The roll-up's own itemisation is the single source: reading `labour` and
+ * `capacity` back out of it is how the profit and loss nets them against the
+ * payroll and depreciation it is already booking, without restating either
+ * formula.
+ */
+function conversionLineUsd(cost: UnitCostResult, key: 'labour' | 'capacity'): number {
+  return cost.lines.find((line) => line.key === key)?.amountUsd ?? 0;
+}
+
+/**
+ * What this company's world-3 contract lines recognise this quarter: one
+ * quarter of every live contract on the book, at the price it was signed at.
+ * The advance for the whole term went into deferred revenue when it was signed.
+ */
+function contractRecognisedUsd(company: Company): number {
+  let total = 0;
+  for (const product of activeProducts(company)) {
+    const nodeId = lineNodeIdOf(product);
+    if (nodeId === null) continue;
+    if (economicNodeById(nodeId)?.saleKind !== 'contract') continue;
+    total += Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers) * product.pricePerSeat;
+  }
+  return total;
+}
+
+/**
+ * Every royalty a licensed line owes its node's owner this quarter, keyed by
+ * the OWNER.
+ *
+ * Built before the company loop for the reason the compute and supply ledgers
+ * are: it is keyed by the company being paid, and a per-company loop would
+ * reach half the owners before their licensees. The figure is read straight off
+ * the licensee's own cost breakdown — the `licence:` lines of the roll-up — so
+ * the dollars the owner books as revenue are exactly the dollars the licensee
+ * booked as cost of goods, itemised in the breakdown the founder is already
+ * reading. Empty below world version 3, which has no licences.
+ */
+function royaltyRevenueByCompany(draft: SessionState, cache: NodeCostCache | undefined): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!isNodeEconomyWorld(draft)) return out;
+  for (const company of activeCompanies(draft)) {
+    if ((company.licences ?? []).length === 0) continue;
+    for (const product of activeProducts(company)) {
+      const nodeId = lineNodeIdOf(product);
+      if (nodeId === null) continue;
+      const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
+      if (units <= 0) continue;
+      for (const line of unitCostOf(draft, company, nodeId, cache).lines) {
+        if (!line.key.startsWith('licence:') || line.sourceCompanyId === null) continue;
+        out.set(line.sourceCompanyId, money((out.get(line.sourceCompanyId) ?? 0) + units * line.amountUsd));
+      }
+    }
+  }
+  return out;
 }
 
 /** Contract revenue recognised this quarter: milestones the government phase accepted. */
@@ -214,6 +337,26 @@ function complianceCostUsd(draft: SessionState, companyId: string): number {
     total += contract.complianceBurdenQuarterlyUsd;
   }
   return total;
+}
+
+/**
+ * What it costs to hold personal data lawfully, per petabyte per quarter, at
+ * the tightest privacy regime.
+ *
+ * Forty thousand dollars: encryption at rest and in transit, access logging,
+ * retention and deletion machinery, an audit somebody signs, and the standing
+ * legal cost of being the custodian. Scaled by `world.regulation.privacy`, so a
+ * permissive world charges almost nothing for the same hoard and a strict one
+ * makes a large stock a liability as well as an asset — which is the cost side
+ * of collecting everything.
+ */
+export const DATA_CUSTODY_USD_PER_PB_QUARTER = 40_000;
+
+/** The standing cost of the data this company holds. Zero below world 3, which holds none. */
+function dataCustodyCostUsd(draft: SessionState, company: Company): number {
+  if (!isNodeEconomyWorld(draft)) return 0;
+  const privacy = Math.max(0, Math.min(1, draft.world.regulation.privacy));
+  return totalDataPetabytes(company) * DATA_CUSTODY_USD_PER_PB_QUARTER * privacy;
 }
 
 /** Research cash committed to active programmes this quarter. */
@@ -323,16 +466,27 @@ export function resolveFinancials(
   // neutral or empty in world version 1.
   const economy = sectorEconomy(draft);
   const multiSector = isMultiSectorWorld(draft);
+  // World 3 books cost of goods off the node roll-up. The cache is built here
+  // and shared by every company in the loop: the roll-up is memoised per
+  // company and node, never module-level, so it cannot leak between saves.
+  const nodeEconomy = isNodeEconomyWorld(draft);
+  const costCache = nodeEconomy ? createNodeCostCache(draft) : undefined;
   // What every company owes another company for compute this quarter, keyed by
   // the *seller*. Built before the loop because the loop is in company order and
   // a seller may be reached before its buyer: a credit computed inside the loop
   // would land on half the sellers and miss the rest. Empty in world version 1,
   // which has no counterparties.
   const counterparty = counterpartyRevenueByCompany(draft);
+  // What every licensee owes the owner of the node it produces under, keyed by
+  // the owner. World 3 only, and it shares the cost cache above.
+  const royalties = royaltyRevenueByCompany(draft, costCache);
   // The supply-chain ledger, computed once for the whole quarter for the same
   // reason: it is keyed by seller, and a per-company loop would otherwise
   // reach half its sellers before their buyers. Empty in world version 1.
-  const supplyLedger = multiSector ? resolveSupplyLedger(draft) : [];
+  // World 3 does not run the world-2 category supply ledger at all: the same
+  // dollars are inside the node roll-up, and charging both would be exactly the
+  // double count this stage exists to end.
+  const supplyLedger = multiSector && !nodeEconomy ? resolveSupplyLedger(draft) : [];
   const supplyRevenue = new Map<string, number>();
   const supplyCostByProduct = new Map<string, number>();
   for (const entry of supplyLedger) {
@@ -387,7 +541,39 @@ export function resolveFinancials(
     let productRevenue = 0;
     let supportCost = 0;
     let supplyCost = 0;
+    // World 3's four running totals: what the lines cost to make, and the two
+    // conversion components that have to be netted against a charge the company
+    // is already booking elsewhere — labour against payroll, capacity against
+    // depreciation and rented compute. EVERY DOLLAR OF CONVERSION COST IS
+    // BOOKED EXACTLY ONCE, AT THE POINT OF EXTERNAL SALE.
+    let nodeCogs = 0;
+    let labourAllocated = 0;
+    let capacityAllocated = 0;
+    let contractBilled = 0;
     for (const product of activeProducts(company)) {
+      if (nodeEconomy) {
+        const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
+        const revenue = units * product.pricePerSeat;
+        productRevenue += revenue;
+        revenueBySegment.set(product.segment, (revenueBySegment.get(product.segment) ?? 0) + revenue);
+        const nodeId = lineNodeIdOf(product);
+        if (nodeId === null) {
+          // Not a node line: nothing was produced against the graph, so the
+          // only cost of revenue is the segment's own support share.
+          supportCost += revenue * SEGMENT_SUPPORT_COST_SHARE[product.segment];
+          continue;
+        }
+        const cost = unitCostOf(draft, company, nodeId, costCache);
+        // The number the Products screen shows is the number the profit and
+        // loss books: stamped by the demand phase, read here, never recomputed
+        // into a second opinion.
+        const unitCost = product.unitCostUsd ?? cost.unitCostUsd;
+        nodeCogs += units * unitCost;
+        labourAllocated += units * conversionLineUsd(cost, 'labour');
+        capacityAllocated += units * conversionLineUsd(cost, 'capacity');
+        contractBilled += Math.max(0, product.contractBilledUsd ?? 0);
+        continue;
+      }
       const revenue = product.activeCustomers * product.pricePerSeat;
       productRevenue += revenue;
       // World 1: category is never resolved here (multiSector gates it), so
@@ -420,8 +606,17 @@ export function resolveFinancials(
     // quarter, recognised at the supplier's own realised margin — one
     // intercompany figure, whether it came from renting compute or from
     // building on somebody else's published API.
-    const interCompanyRevenue = (counterparty.get(company.id) ?? 0) + (supplyRevenue.get(company.id) ?? 0);
-    const interCompanyCogs = interCompanyRevenue * (1 - counterpartyMarginOf(company));
+    // The third leg, world 3 only: a royalty on somebody else's line. It
+    // arrives with no cost of goods behind it because there is none — the
+    // owner is being paid for a thing it already owns — and `interCompanyCogs`
+    // is zero in the node economy for the same reason.
+    const interCompanyRevenue = (counterparty.get(company.id) ?? 0) + (supplyRevenue.get(company.id) ?? 0) + (royalties.get(company.id) ?? 0);
+    // THE INTERCOMPANY FUDGE, deleted in world 3. `revenue × (1 -
+    // counterpartyMargin)` existed only because compute revenue arrived with no
+    // cost attached. In the node economy the seller's cost of goods is its own
+    // unit cost times its own units and the buyer's contains the purchase: both
+    // are real, in the same quarter, and no dollar is invented.
+    const interCompanyCogs = nodeEconomy ? 0 : interCompanyRevenue * (1 - counterpartyMarginOf(company));
 
     /* --- the seller side of the goods chain -------------------------------- */
     // Only the part of a sector's output sold to the other five sectors is
@@ -431,7 +626,11 @@ export function resolveFinancials(
     const sector = economy[sectorOf(company)];
     const ownSector = sectorOf(company);
     const tradeShare = multiSector ? sectorTradeShare(ownSector) : 0;
-    const chainPriceFactor = multiSector ? sectorPriceFactor(sector.priceIndex) : 1;
+    // World 3 prices goods in the node market and nowhere else, so the world-2
+    // sector goods index does not also lift revenue. The accord bonus below
+    // survives: a price accord is an agreement between companies, not a second
+    // opinion about what a sector's output is worth.
+    const chainPriceFactor = multiSector && !nodeEconomy ? sectorPriceFactor(sector.priceIndex) : 1;
     const accordBonusPct = multiSector ? accordBonusPctFor(company.id, accords) : 0;
     const rawSectorUplift = grossRevenue * tradeShare * (chainPriceFactor - 1);
     const rawTotalUplift = grossRevenue * tradeShare * (chainPriceFactor * (1 + accordBonusPct / 100) - 1);
@@ -443,36 +642,118 @@ export function resolveFinancials(
     const revenue = grossRevenue + tradeUplift + interCompanyRevenue;
 
     /* --- cost ------------------------------------------------------------- */
+    // Payroll and marketing were staged by the talent and product phases. They
+    // are read here, before cost, because world 3 allocates the labour a unit
+    // consumed *out of* payroll rather than beside it. The fallbacks below only
+    // bite when this phase is run in isolation.
+    const payroll = Math.max(company.financials.payroll, (totalHeadcount(company) * company.employees.avgComp) / 4);
+    const marketing = Math.max(company.financials.marketing, policyMarketingUsd(company));
+
     const compute = computeCost(draft, company);
     const servingCompute = compute.totalUsd * compute.servingShare;
     const trainingCompute = compute.totalUsd - servingCompute;
     const compliance = complianceCostUsd(draft, company.id);
+    // What it costs to be the custodian of the customer data this company holds.
+    // An OPERATING expense, not a cost of goods: it is the price of keeping an
+    // asset lawfully, not part of making a unit — and keeping it out of cost of
+    // goods is what preserves world 3's one identity, that cost of goods is the
+    // roll-up and nothing else.
+    const dataCustodyUsd = dataCustodyCostUsd(draft, company);
     const depreciation = Math.min(sheet.assets.ppe, compute.ownedDepreciationUsd);
 
-    // The sector's own cost weather: energy pass-through upward, AI productivity
-    // downward, plus the sustaining capital a capital-intensive sector owes just
-    // to stand still. Both are zero in world version 1.
+    /*
+     * THE ONE IDENTITY, and the reason the double-entry gate accepts it.
+     *
+     * Cost of goods IS the roll-up: `nodeCogs`, the sum over the quarter's lines
+     * of units times the same `unitCostUsd` the Products screen and the
+     * `unit_cost` lookup print. Not a cousin of it, not a capped version of it.
+     * Everything below decides where the company's OTHER charges go once the
+     * roll-up has already claimed its share of them, and nothing below may
+     * change the total.
+     *
+     * Two of the roll-up's conversion lines name a resource the company also
+     * carries a standing bill for, so each would otherwise be charged twice:
+     *
+     * - **Capacity.** The capacity line allocates the depreciation and rent on
+     *   plant, fleet, grid or accelerators to the units made on them; the
+     *   balance sheet writes the same depreciation off property, plant and
+     *   equipment.
+     * - **Labour.** The labour line allocates the wage bill to the units it
+     *   made; the talent phase already staged the whole of payroll.
+     *
+     * So each standing charge is booked only for the part production did NOT
+     * consume: what plant nothing was made on cost is the named operating
+     * expense "idle capacity", and what payroll production did not consume
+     * stays on the payroll line. Each is a `max(0, charge - allocated)`, never
+     * a `min`: an allocation LARGER than the standing charge is a line drawing
+     * capacity or labour beyond what the company owns and employs — rented
+     * plant, contract staff — and that excess is a real cash cost of making
+     * the unit. Capping it at the standing charge, as this once did, silently
+     * dropped every dollar of it and put the profit and loss into open
+     * disagreement with the unit cost the same quarter stamped on the line.
+     *
+     * The non-cash pieces still sum to `depreciation` EXACTLY — training's
+     * share, production's share and the idle share — which is the whole of
+     * what the gate checks: total cash charges plus depreciation must equal
+     * total booked charges.
+     */
+    const trainingShare = 1 - compute.servingShare;
+    const depreciationInRdWorld3 = depreciation * trainingShare;
+    const depreciationServing = depreciation - depreciationInRdWorld3;
+    // What renting capacity costs in cash this quarter, serving half only.
+    const computeCashServing = (compute.reservedUsd + compute.cloudUsd + compute.energyUsd) * compute.servingShare;
+    const capacityChargeUsd = depreciationServing + computeCashServing;
+    const capacityInCogs = nodeEconomy ? capacityAllocated : 0;
+    const idleCapacityUsd = nodeEconomy ? Math.max(0, capacityChargeUsd - capacityAllocated) : 0;
+    // World 2's sector cost weather — an energy pass-through and an AI
+    // productivity term over the sector supply graph — is applied to the *cash*
+    // part of cost only, for the same reason: scaling depreciation would invent
+    // property. Both are zero in world 1 and, below, in world 3.
     //
-    // The adjustment is applied to the *cash* part of cost only. Depreciation is
-    // a charge against an asset the balance sheet already carries; scaling it
-    // would invent property, so it is excluded and the cash-flow split below
-    // continues to subtract exactly the depreciation that was booked.
-    const depreciationInCogs = depreciation * compute.servingShare;
-    const cashCogsBeforeSector = Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance + supplyCost;
-    const sustainingCapital = sustainingCapitalUsd(sector, revenue);
-    const sectorCostAdjustment = (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapital;
+    // The depreciation inside cost of goods is bounded by the depreciation that
+    // actually ran this quarter: an allocation past it is rent, which is cash.
+    const depreciationInCogs = nodeEconomy ? Math.min(capacityAllocated, depreciationServing) : depreciation * compute.servingShare;
+    const idleDepreciation = nodeEconomy ? depreciationServing - depreciationInCogs : 0;
+    // Labour is allocated out of payroll, never beside it: the roll-up says how
+    // much of the quarter's wage bill a unit consumed, and what production did
+    // not consume stays on the payroll line.
+    const labourInCogs = nodeEconomy ? labourAllocated : 0;
+    const payrollBooked = nodeEconomy ? Math.max(0, payroll - labourAllocated) : payroll - labourInCogs;
+    // The identity, stated: in the node economy cost of goods is the roll-up.
+    const nodeCogsBooked = nodeCogs;
+
+    const cashCogsBeforeSector = nodeEconomy
+      ? Math.max(0, nodeCogsBooked - depreciationInCogs) + supportCost + compliance
+      : Math.max(0, servingCompute - depreciationInCogs) + supportCost + compliance + supplyCost;
+    // World 3 prices every input through the node market and charges capital per
+    // unit through the capacity line of the roll-up. World 2's sector cost
+    // weather — an input-price multiplier over the sector supply graph, and
+    // sustaining capital struck on revenue — would price the same inputs and
+    // the same capital a second time, which is precisely the unreconciled
+    // second economy the node table replaces. Both are zero in world 3; the
+    // toll below survives, because a group's freight toll is a real charge
+    // levied by another company rather than a second opinion about cost.
+    const sustainingCapital = nodeEconomy ? 0 : sustainingCapitalUsd(sector, revenue);
+    const sectorCostAdjustment = nodeEconomy ? 0 : (sector.inputCostMultiplier - 1) * cashCogsBeforeSector + sustainingCapital;
     // The Rockefeller squeeze: a group that dominates a region's freight charges
     // every rival in it a toll on the cash cost of goods, and its own companies
     // ride free. Cash-only, for the same reason the sector adjustment is:
     // scaling depreciation would invent property.
     const tollPct = logistics === null ? 0 : tollPaidPct(draft, company, logistics);
-    const tollAdjustment = (tollPct / 100) * cashCogsBeforeSector;
-    const cogs = servingCompute + supportCost + compliance + supplyCost + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
-
-    // Payroll and marketing were staged by the talent and product phases. The
-    // fallbacks below only bite when this phase is run in isolation.
-    const payroll = Math.max(company.financials.payroll, (totalHeadcount(company) * company.employees.avgComp) / 4);
-    const marketing = Math.max(company.financials.marketing, policyMarketingUsd(company));
+    // A toll is a charge on goods that MOVE. World 2's cash cost of goods was
+    // serving compute and support — roughly the freight-shaped part of a
+    // software business's cost — so charging the toll on all of it was fair
+    // there. World 3's cash cost of goods is the whole bill of materials, and
+    // charging a quarter of that as freight would be a tax rather than a toll:
+    // a consumer-electronics line would hand a rival's logistics group a fifth
+    // of its revenue every quarter. The base is the freight share of landed
+    // cost instead, and the group's dial still decides what fraction of that it
+    // takes.
+    const tollBase = nodeEconomy ? cashCogsBeforeSector * NODE_TOLL_FREIGHT_SHARE : cashCogsBeforeSector;
+    const tollAdjustment = (tollPct / 100) * tollBase;
+    const cogs = nodeEconomy
+      ? nodeCogsBooked + supportCost + compliance + sectorCostAdjustment + tollAdjustment
+      : servingCompute + supportCost + compliance + supplyCost + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
 
     const envelope = researchEnvelopeUsd(company, actions);
     const projectBudgets = projectBudgetUsd(draft, company.id);
@@ -489,7 +770,7 @@ export function resolveFinancials(
     const interestExpense = sheet.liabilities.debt * debtRate + overdraftCharge;
 
     const grossProfit = revenue - cogs;
-    const operatingExpenses = payroll + marketing + rdSpend;
+    const operatingExpenses = payrollBooked + marketing + rdSpend + idleCapacityUsd + dataCustodyUsd;
     const operatingIncome = grossProfit - operatingExpenses;
     const preTax = operatingIncome - interestExpense;
     const tax = preTax > 0 ? preTax * TAX_RATE : 0;
@@ -503,8 +784,15 @@ export function resolveFinancials(
 
     // Contracted revenue billed in advance is released from deferred revenue and
     // brings no cash with it; everything else is billed this quarter.
-    const deferredRelease = Math.min(openingDeferred, contractRevenue);
-    const billed = revenue - deferredRelease;
+    // World 3's `contract` sale kind bills its whole term the quarter it is
+    // signed and recognises a quarter at a time, through this same path — the
+    // one the government contracts already run on, never a second one. The
+    // advance is cash in and deferred revenue out; the release is revenue with
+    // no cash behind it.
+    const deferredAdd = nodeEconomy ? money(contractBilled) : 0;
+    const contractRecognised = nodeEconomy ? contractRevenue + contractRecognisedUsd(company) : contractRevenue;
+    const deferredRelease = Math.min(openingDeferred + deferredAdd, contractRecognised);
+    const billed = revenue - deferredRelease + deferredAdd;
     const closingReceivables = billed * RECEIVABLE_SHARE;
     const collections = openingReceivables + billed - closingReceivables;
 
@@ -512,9 +800,13 @@ export function resolveFinancials(
     // buckets the compute cost was split into. Both halves must be excluded from
     // the cash that actually leaves. `depreciationInCogs` was computed with the
     // sector adjustment above, which is deliberately cash-only for this reason.
-    const depreciationInRd = depreciation - depreciationInCogs;
+    // The three non-cash pieces sum to `depreciation` exactly, in both worlds:
+    // world 2 splits it between cost of goods and research, world 3 splits it
+    // between cost of goods, research and the idle line.
+    const depreciationInRd = nodeEconomy ? depreciationInRdWorld3 : depreciation - depreciationInCogs;
     const cogsCash = Math.max(0, cogs - depreciationInCogs);
     const rdCash = Math.max(0, rdSpend - depreciationInRd);
+    const idleCash = Math.max(0, idleCapacityUsd - idleDepreciation);
     const closingPayablesBase = cogsCash * PAYABLE_SHARE;
     const cogsCashPaid = openingPayables + cogsCash - closingPayablesBase;
 
@@ -529,8 +821,43 @@ export function resolveFinancials(
     // world-1 company forever, since invest_capacity is refused there.
     const capacityInvestments = company.capacity?.pendingInvestments ?? [];
     const capacityCapexUsd = money(capacityInvestments.reduce((total, investment) => total + investment.amountUsd, 0));
-    const capex = money(purchases.reduce((total, purchase) => total + purchase.totalUsd, 0) + capacityCapexUsd);
-    const cashOut = cogsCashPaid + payroll + marketing + rdCash + interestExpense + tax + debtRepayment + capex;
+    const discretionaryCapex = money(purchases.reduce((total, purchase) => total + purchase.totalUsd, 0) + capacityCapexUsd);
+    // Custody is entirely cash: there is no asset being written down, only a
+    // bill for holding one.
+    const cashOutBeforeMaintenance =
+      cogsCashPaid + payrollBooked + marketing + rdCash + idleCash + dataCustodyUsd + interestExpense + tax + debtRepayment + discretionaryCapex;
+
+    /*
+     * SUSTAINING CAPITAL, world 3's own.
+     *
+     * A plant wears out. Property, plant and equipment is written down five
+     * percent a quarter and the capacity buckets decay with it, and until this
+     * existed NOTHING in world 3 ever put a dollar back: `sustainingCapitalUsd`
+     * is a world-2 charge the node economy deliberately zeroed, on the grounds
+     * that the roll-up's capacity line already prices capital per unit — which
+     * it does, but pricing the use of an asset is not replacing it. Left alone,
+     * every capacity-bound line in the world lost more than half its output in
+     * sixteen quarters (0.95^16 = 0.44) while the talent market pushed its wage
+     * bill up, so a founder who did nothing watched a solvent company become an
+     * insolvent one for a reason nothing on any screen named. Four of fifteen
+     * opening backgrounds died of exactly this.
+     *
+     * So a company that still has a line to make reinvests what the quarter
+     * wrote off, and its capacity holds. It is capital, not cost: cash falls and
+     * property rises by the same figure, equity does not move, and the gate
+     * below sees the matched pair it sees for a purchased accelerator.
+     *
+     * Bounded by what is actually in the bank once every obligation is settled.
+     * A company that cannot pay for maintenance does not do it, and its capacity
+     * shrinks — which is a real consequence a player can see, act on and finance
+     * their way out of, rather than a silent tax on doing nothing.
+     */
+    const maintainable = nodeEconomy && activeProducts(company).some((product) => lineNodeIdOf(product) !== null);
+    const fundableMaintenanceUsd = Math.max(0, openingCash + collections - cashOutBeforeMaintenance) * SUSTAINING_CAPITAL_CASH_SHARE;
+    const maintenanceCapexUsd = maintainable ? money(Math.min(depreciation, fundableMaintenanceUsd)) : 0;
+    const maintenanceShare = depreciation > 0 ? maintenanceCapexUsd / depreciation : 0;
+    const capex = money(discretionaryCapex + maintenanceCapexUsd);
+    const cashOut = cashOutBeforeMaintenance + maintenanceCapexUsd;
     const unfloored = openingCash + collections - cashOut;
     // World 1 floors cash at zero and finances the gap through its suppliers.
     // World 2 does not: the balance goes where the arithmetic puts it, the
@@ -555,13 +882,18 @@ export function resolveFinancials(
       const decay = 1 - PPE_DEPRECIATION_PER_QUARTER;
       const investedByKind = { plant: 0, fleet: 0, grid: 0 } as Record<'plant' | 'fleet' | 'grid', number>;
       for (const investment of capacityInvestments) investedByKind[investment.kind] += investment.amountUsd;
-      company.capacity.plantUsd = money(Math.max(0, company.capacity.plantUsd * decay) + investedByKind.plant);
-      company.capacity.fleetUsd = money(Math.max(0, company.capacity.fleetUsd * decay) + investedByKind.fleet);
-      company.capacity.gridUsd = money(Math.max(0, company.capacity.gridUsd * decay) + investedByKind.grid);
+      // Sustaining capital lands on the bucket it maintained, at the share of
+      // the quarter's write-off the company could actually afford. A company
+      // that paid for all of it holds its capacity exactly; one that paid for
+      // none of it decays exactly as it always did.
+      const held = PPE_DEPRECIATION_PER_QUARTER * maintenanceShare;
+      company.capacity.plantUsd = money(Math.max(0, company.capacity.plantUsd * (decay + held)) + investedByKind.plant);
+      company.capacity.fleetUsd = money(Math.max(0, company.capacity.fleetUsd * (decay + held)) + investedByKind.fleet);
+      company.capacity.gridUsd = money(Math.max(0, company.capacity.gridUsd * (decay + held)) + investedByKind.grid);
       if (capacityInvestments.length > 0) company.capacity.pendingInvestments = [];
     }
     sheet.liabilities.payables = money(closingPayables);
-    sheet.liabilities.deferredRevenue = money(Math.max(0, openingDeferred - deferredRelease));
+    sheet.liabilities.deferredRevenue = money(Math.max(0, openingDeferred + deferredAdd - deferredRelease));
     sheet.liabilities.debt = money(Math.max(0, sheet.liabilities.debt - debtRepayment));
 
     const closingAssets =
@@ -600,7 +932,7 @@ export function resolveFinancials(
     company.financials = {
       revenueQuarterly: money(revenue),
       cogs: money(cogs),
-      payroll: money(payroll),
+      payroll: money(payrollBooked),
       marketing: money(marketing),
       rdSpend: money(rdSpend),
       capex,
@@ -610,6 +942,9 @@ export function resolveFinancials(
       quarterlyBurn,
       deferredRevenue: sheet.liabilities.deferredRevenue,
       backlogUsd: money(backlog),
+      // Stated only in world 3, so a world-1 or world-2 company never grows the
+      // key and both frozen worlds keep hashing to what they always hashed to.
+      ...(nodeEconomy ? { idleCapacityUsd: money(idleCapacityUsd), dataCustodyUsd: money(dataCustodyUsd) } : {}),
     };
 
     const segments: ProfitAndLoss['revenueBySegment'] = [];
@@ -663,9 +998,22 @@ export function resolveFinancials(
         servingComputeUsd: money(servingCompute),
         trainingComputeUsd: money(trainingCompute),
         depreciationUsd: money(depreciation),
-        payrollUsd: money(payroll),
+        payrollUsd: money(payrollBooked),
         marketingUsd: money(marketing),
         rdSpendUsd: money(rdSpend),
+        // World-3 keys only: the reconstruction in `resolver/invariants.ts`
+        // reads `idleCapacityUsd` when it is there and adds nothing when it is
+        // not, so a world-1 row is the row it has always been.
+        ...(nodeEconomy
+          ? {
+              idleCapacityUsd: money(idleCapacityUsd),
+              dataCustodyUsd: money(dataCustodyUsd),
+              nodeCogsUsd: money(nodeCogs),
+              labourInCogsUsd: money(labourInCogs),
+              capacityInCogsUsd: money(capacityInCogs),
+              capacityChargeUsd: money(capacityChargeUsd),
+            }
+          : {}),
         interestUsd: money(interestExpense),
         taxUsd: money(tax),
         // P0-2 attribution: the number the Financials screen prints traces to
@@ -680,6 +1028,40 @@ export function resolveFinancials(
       },
       'company',
     );
+    // Sustaining capital is a mutation of its own — cash out, property in — so
+    // it gets its own row rather than hiding inside the cost row above, which
+    // states charges against income and nothing else. `kind` marks it as the
+    // staging row it is for the financial reconstruction: it moves no equity.
+    if (maintenanceCapexUsd > 0) {
+      const maintenanceEventId = emitEvent(
+        draft,
+        ctx,
+        'capacity_invested',
+        company.id,
+        null,
+        {
+          companyId: company.id,
+          kind: 'maintenance',
+          amountUsd: maintenanceCapexUsd,
+          writtenOffUsd: money(depreciation),
+          heldSharePct: Math.round(maintenanceShare * 100),
+        },
+        'company',
+      );
+      // Only worth a line when the company is losing real capacity over it.
+      // Holding capacity flat is the ordinary case, a few points of slippage is
+      // noise, and a phone has better things to print.
+      if (maintenanceShare < MAINTENANCE_REPORT_SHARE) {
+        ctx.log({
+          phase: 'financial_resolution',
+          text: `${company.name} put ${usdLabel(maintenanceCapexUsd)} back into capacity against the ${usdLabel(depreciation)} it wrote off, so its plant, fleet and compute shrink by the difference.`,
+          deltaLabel: `${Math.round(maintenanceShare * 100)}% held`,
+          refEventIds: [maintenanceEventId],
+          tone: 'warning',
+          subjectId: company.id,
+        });
+      }
+    }
     /* --- attribution: the rows the interface renders ------------------------ */
     // Rule §6.2: if the engine multiplied it, the screen names it and signs it.
     // Every row below carries the committed ledger row it came from, and the
@@ -704,23 +1086,33 @@ export function resolveFinancials(
       if (accordUpliftUsd !== 0) {
         priceRows.push(stackRow('price_accord', `Price accord +${accordBonusPct}%`, 'network', accordUpliftUsd, grossRevenue, revenueEventId, 'price'));
       }
+      // What other companies paid this one is revenue like any other and has to
+      // appear, or the rows would not sum to the total they sit under.
+      if (nodeEconomy && Math.round(interCompanyRevenue) !== 0) {
+        priceRows.push(stackRow('intercompany', 'Sold to other companies', 'network', interCompanyRevenue, grossRevenue, revenueEventId, 'price'));
+      }
       priceStacks.push({
         companyId: company.id,
         quarter: ctx.quarter,
         kind: 'price',
         baseUsd: money(grossRevenue),
         totalUsd: money(revenue),
-        netPct: pctOfBase(tradeUplift, grossRevenue),
+        netPct: pctOfBase(revenue - grossRevenue, grossRevenue),
         rows: priceRows,
       });
 
       // The energy line already sits inside the cash cost of goods, so the base
       // is stated at a neutral energy index and the deviation is its own row.
-      const energyInCogs = compute.energyUsd * compute.servingShare;
+      // World 3's energy cost is the power line of each unit cost, struck on the
+      // grid node's own market price, and its input prices are the node
+      // market's. None of the three world-2 deviations below is in its cost of
+      // goods, so none of them is claimed as a row: the stack states what the
+      // engine actually multiplied, and nothing else.
+      const energyInCogs = nodeEconomy ? 0 : compute.energyUsd * compute.servingShare;
       const energyPriceEffect = energyInCogs * (1 - SECTOR_PRICE_BASELINE / Math.max(1, economy.energy.priceIndex));
       const costBase = cashCogsBeforeSector - energyPriceEffect;
-      const inputPriceUsd = (sector.inputPriceFactor - 1) * cashCogsBeforeSector;
-      const sectorConditionsUsd = (sector.inputCostMultiplier - sector.inputPriceFactor) * cashCogsBeforeSector;
+      const inputPriceUsd = nodeEconomy ? 0 : (sector.inputPriceFactor - 1) * cashCogsBeforeSector;
+      const sectorConditionsUsd = nodeEconomy ? 0 : (sector.inputCostMultiplier - sector.inputPriceFactor) * cashCogsBeforeSector;
       const energyRow = draft.economyReport?.sectorPrices.find((row) => row.sector === 'energy') ?? null;
       const tollRow = draft.economyReport?.regionTolls.find((row) => row.region === regionOf(company)) ?? null;
 
@@ -780,9 +1172,11 @@ export function resolveFinancials(
         productRevenueUsd: productRevenue,
         contractRevenueUsd: contractRevenue,
         cogsUsd: cogs,
-        payrollUsd: payroll,
+        payrollUsd: payrollBooked,
         marketingUsd: marketing,
         researchUsd: rdSpend,
+        idleCapacityUsd,
+        dataCustodyUsd,
         trainingComputeUsd: trainingCompute,
         depreciationUsd: depreciation,
         interestUsd: interestExpense,
@@ -874,6 +1268,35 @@ export function resolveFinancials(
       tone: operatingIncome >= 0 ? 'positive' : 'neutral',
       subjectId: company.id,
     });
+
+    // Capacity the company owns and production did not absorb. Said out loud,
+    // because it is the charge a founder can actually do something about:
+    // sell more, or stop paying for a bucket nothing is drawing on.
+    if (nodeEconomy && idleCapacityUsd >= 1 && idleCapacityUsd > capacityChargeUsd * IDLE_CAPACITY_REPORT_SHARE) {
+      const idleEventId = emitEvent(
+        draft,
+        ctx,
+        'cost_recognised',
+        company.id,
+        null,
+        {
+          kind: 'idle_capacity',
+          idleCapacityUsd: money(idleCapacityUsd),
+          capacityChargeUsd: money(capacityChargeUsd),
+          absorbedUsd: money(capacityInCogs),
+          utilisationPct: Math.round(ratio(capacityInCogs, Math.max(1, capacityChargeUsd)) * 100),
+        },
+        'company',
+      );
+      ctx.log({
+        phase: 'financial_resolution',
+        text: `${company.name} paid ${usdLabel(idleCapacityUsd)} for capacity nothing was made on: ${Math.round(ratio(capacityInCogs, Math.max(1, capacityChargeUsd)) * 100)}% of what it owns was used.`,
+        deltaLabel: usdLabel(-idleCapacityUsd),
+        refEventIds: [idleEventId],
+        tone: 'warning',
+        subjectId: company.id,
+      });
+    }
 
     /* --- distress and warnings --------------------------------------------- */
     if (overdrawn && negativeQuarters < SOLVENCY_NEGATIVE_QUARTERS) {

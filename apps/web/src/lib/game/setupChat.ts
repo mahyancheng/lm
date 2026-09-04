@@ -34,7 +34,15 @@
  * through `NewGameSetupSchema` and the engine builds the world from the result.
  */
 
-import type { BackgroundId, NewGameSetup, Region, Sector, SetupProposal, SetupSlot } from '@frontier/contracts';
+import type {
+  BackgroundId,
+  NewGameBackgroundHighlight,
+  NewGameSetup,
+  Region,
+  Sector,
+  SetupProposal,
+  SetupSlot,
+} from '@frontier/contracts';
 import {
   ALL_BACKGROUNDS,
   CURRENT_WORLD_VERSION,
@@ -45,7 +53,7 @@ import {
   SETUP_SLOTS,
   SetupProposalSchema,
   backgroundById,
-  backgroundsForSector,
+  defaultRegionFor,
   isRegion,
   isSector,
   missingSetupSlots,
@@ -53,6 +61,7 @@ import {
   regionsBySectorAffinity,
   sectorForBackground,
 } from '@frontier/contracts';
+import { backgroundCardsFor } from '@frontier/simulation';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                  */
@@ -580,6 +589,15 @@ export interface SetupQuickReply {
   readonly hint: string;
   /** What the player is taken to have said, so the transcript reads like a conversation. */
   readonly says: string;
+  /**
+   * The opening stats to draw under a background chip — cash, revenue, unit
+   * price and leverage — or absent for a chip that is not a background.
+   *
+   * These come from `backgroundCardsFor`, which reads them off the world the
+   * Found button is actually going to build. Nothing on this screen may state a
+   * number the scenario would contradict.
+   */
+  readonly highlights?: readonly NewGameBackgroundHighlight[];
 }
 
 /**
@@ -589,6 +607,11 @@ export interface SetupQuickReply {
  * rather than alphabetically, so the first thing a thumb reaches is the answer
  * the world would give. Names have no chips: nothing here may invent a name for
  * a company somebody is about to spend a campaign inside.
+ *
+ * Background chips carry the opening figures of the world this game will be
+ * built in, for the region the founder has chosen — or the sector's default
+ * while they have not, which is the region `newGameSetupFromProposal` would
+ * pick for them anyway, so the card and the company agree either way.
  */
 export function setupQuickReplies(slot: SetupSlot, proposal: SetupProposal): readonly SetupQuickReply[] {
   switch (slot) {
@@ -615,13 +638,14 @@ export function setupQuickReplies(slot: SetupSlot, proposal: SetupProposal): rea
     case 'backgroundId': {
       const sector = proposal.sector;
       if (sector === null) return [];
-      return backgroundsForSector(sector).map((background) => ({
+      return backgroundCardsFor(sector, proposal.region ?? defaultRegionFor(sector), CURRENT_WORLD_VERSION).map((background) => ({
         slot,
         value: background.id,
         icon: background.icon,
         label: background.label,
         hint: background.tagline,
         says: background.label,
+        highlights: background.highlights,
       }));
     }
     case 'companyName':

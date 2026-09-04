@@ -9,7 +9,11 @@
  *   it replays to the same state forever.
  * - **World 2** (`world2/`) is the multi-sector economy: six sectors, six
  *   regions, twenty-four rivals, forty-two Frontier Map nodes across six tracks,
- *   and share prices anchored to reported fundamentals.
+ *   and share prices anchored to reported fundamentals. It is frozen too — not
+ *   deleted and not migrated, so a game in progress can finish.
+ * - **World 3** (`world3/`) is the node economy: the same world re-founded on
+ *   the one node table, with node ownership per company and a producer for
+ *   every node at seed.
  *
  * `createDemoSession` and `demoSessionInput` come from `session.ts` and pick
  * between the two on `setup.worldVersion`, which defaults to 1. In demo mode the
@@ -17,7 +21,7 @@
  * what these modules make possible.
  */
 
-export { createDemoSession, demoSessionInput } from './session';
+export { backgroundCardsFor, createDemoSession, demoSessionInput } from './session';
 export {
   DEMO_COMPANIES,
   DEMO_CHARACTERS,
@@ -46,3 +50,27 @@ export {
   world2SessionInput,
 } from './world2';
 export type { V2CompanySeed } from './world2';
+
+/* --- world 3 -------------------------------------------------------------- */
+export {
+  WORLD_3_VERSION,
+  W3_BACKGROUND_OPENINGS,
+  W3_DEFAULT_SETUP,
+  W3_MAX_OWNED_NODES,
+  W3_NODES,
+  W3_NODES_BY_ID,
+  W3_NO_REVENUE_VALUE,
+  W3_SEED,
+  createWorld3Session,
+  w3CardMoney,
+  w3CardPrice,
+  w3LineNodeFor,
+  w3NodeOwnership,
+  w3OpeningFactsFor,
+  w3OwnershipSubjects,
+  world3Background,
+  world3BackgroundHighlights,
+  world3BackgroundsForSector,
+  world3SessionInput,
+} from './world3';
+export type { W3OpeningFacts } from './world3';

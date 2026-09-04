@@ -44,6 +44,11 @@ import {
 } from '@frontier/contracts';
 import { isMultiSectorWorld } from './sectors';
 import { priceSectors } from './prices';
+// World 3's node market. It belongs to the economy subsystem for the same
+// reason `priceSectors` does — it is world-level pricing, settled before anyone
+// trades against it — and lives in `graph/` because everything that reads a
+// node price reads it from there.
+import { priceNodes } from '../graph/market';
 import { driftWorld, selectDominantNarrative, type DriftChange } from './macro';
 import {
   budgetFor,
@@ -96,6 +101,7 @@ export {
   AI_PRODUCTIVITY_MAX_UPLIFT,
   ENERGY_COST_PASS_THROUGH,
   MULTI_SECTOR_WORLD_VERSION,
+  NODE_ECONOMY_VERSION,
   SECTOR_CYCLE_AMPLITUDE,
   SECTOR_DEMAND_BOUNDS,
   SECTOR_INPUT_COST_BOUNDS,
@@ -103,6 +109,7 @@ export {
   SUPPLY_GATE_FLOOR,
   SUSTAINING_CAPITAL_MAX_REVENUE_SHARE,
   isMultiSectorWorld,
+  isNodeEconomyWorld,
   neutralSectorEconomy,
   sectorCyclePhase,
   sectorDemandCycle,
@@ -131,6 +138,7 @@ export { EXPOSURE_DRIVEN_FAMILY_ID, familyHazardFor, maxAntitrustExposure } from
 export {
   AFFINITY_DEMAND_WEIGHT,
   REGION_FACTOR_BOUNDS,
+  SECTOR_TALENT_COST_FACTOR,
   regionalEnergyIndex,
   companyCapitalDepthFactor,
   companyEnergyCostFactor,
@@ -681,6 +689,7 @@ export function createEconomySubsystem(): EconomySubsystemImpl {
   return {
     updateMacro,
     priceSectors,
+    priceNodes,
     computeEventCandidates,
     applyModifiers,
     decayModifiers,

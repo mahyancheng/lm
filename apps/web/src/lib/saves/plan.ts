@@ -229,6 +229,12 @@ export interface MergedSlot {
   readonly savedAtIso: string | null;
   /** The host's revision, for a conditional write. Zero when it holds nothing. */
   readonly revision: number;
+  /**
+   * Why the copy that would be loaded cannot be, in words, or null when it can.
+   * Only a local copy ever carries one: the host never sends a file this build
+   * would refuse.
+   */
+  readonly reason: string | null;
 }
 
 /**
@@ -251,15 +257,24 @@ export function mergeSlot(facts: SlotFacts): MergedSlot {
     revision: server?.revision ?? 0,
   };
   if (plan.action === 'blocked') {
-    return { ...base, source: 'local', status: facts.local.status, ...names(facts.local) };
+    return { ...base, source: 'local', status: facts.local.status, reason: facts.local.reason, ...names(facts.local) };
   }
   if (plan.action === 'adopt' && server !== null) {
-    return { ...base, source: 'server', status: 'ok', ...names(server) };
+    return { ...base, source: 'server', status: 'ok', reason: null, ...names(server) };
   }
   if (plan.action === 'idle') {
-    return { ...base, source: 'none', status: 'absent', companyName: null, founderName: null, savedQuarter: null, savedAtIso: null };
+    return {
+      ...base,
+      source: 'none',
+      status: 'absent',
+      reason: null,
+      companyName: null,
+      founderName: null,
+      savedQuarter: null,
+      savedAtIso: null,
+    };
   }
-  return { ...base, source: 'local', status: facts.local.status, ...names(facts.local) };
+  return { ...base, source: 'local', status: facts.local.status, reason: facts.local.reason, ...names(facts.local) };
 }
 
 function names(from: SaveFileSummary | SaveSummaryEnvelope): {

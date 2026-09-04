@@ -170,6 +170,11 @@ function marketRequest(kind: LookupKind, message: string): LookupRequest | null 
     // (`answerFromFinding`, `actionsFromFindings`) still answer them.
     case 'suppliers':
     case 'customers':
+    // `unit_cost` and `entry_path` are the same shape of problem: both need a
+    // node id or a sector the founder named, which a keyword table cannot
+    // safely guess from free text, so neither is ever built here.
+    case 'unit_cost':
+    case 'entry_path':
     // `own_position` is always appended and is never the market half.
     case 'own_position':
       return null;
@@ -299,6 +304,24 @@ export function answerFromFinding(finding: LookupResult): string {
         : `${finding.rows.length} compan${finding.rows.length === 1 ? 'y builds' : 'ies build'} on it, worth ${formatMoney(
             finding.rows.reduce((sum, row) => sum + row.revenueUsd, 0),
           )} this quarter.`;
+
+    case 'unit_cost':
+      return finding.unitCostUsd <= 0
+        ? `${finding.label} costs nothing we can measure to make.`
+        : `One ${finding.unitLabel} of ${finding.label} costs ${formatMoney(finding.unitCostUsd)} to make against a market price of ${formatMoney(
+            finding.marketPriceUsd,
+          )}${finding.rows[0] === undefined ? '' : `, and the biggest line of that is ${finding.rows[0].label.toLowerCase()} at ${formatMoney(finding.rows[0].amountUsd)}`}.`;
+
+    case 'entry_path':
+      return finding.alreadyIn
+        ? 'We can already make something there.'
+        : finding.rows.length === 0
+          ? 'Nothing stands in the way of it.'
+          : `${finding.rows.length} node${finding.rows.length === 1 ? '' : 's'} to own first, starting with ${finding.rows[0]?.label ?? ''}${
+              finding.rows[0]?.researchable === true
+                ? ` — a programme against it runs ${formatMoney(finding.rows[0]?.researchLowUsd ?? 0)} to ${formatMoney(finding.rows[0]?.researchHighUsd ?? 0)}`
+                : ''
+            }.`;
 
     default: {
       const exhaustive: never = finding;

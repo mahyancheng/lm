@@ -23,10 +23,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { ActionIntent, ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
-import { categoryById, quarterLabel } from '@frontier/contracts';
+import { categoryById, economicNodeById, nodeMarketPriceUsd, quarterLabel } from '@frontier/contracts';
 import {
   RESEARCH_EFFORTS,
+  costBreakdown,
   effortPlan,
+  isNodeEconomyWorld,
+  nodeEntryRoutes,
+  unitCostOf,
   programmeForecast,
   projectRequirements,
   publicVerdict,
@@ -236,6 +240,31 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
     return [...ids].map((id) => titles.get(id) ?? id);
   }, [graph.edges, node, titles]);
 
+  /* --- world 3: the node behind this card ---------------------------------- */
+  //
+  // In the node economy the map IS the table, so a card on it is a thing that
+  // can be made, priced and sold. What that would cost this company is the
+  // engine's own roll-up — the same number cost of goods books once the line
+  // exists — rather than anything computed here.
+  const nodeEconomy = useMemo(() => {
+    if (node === null || !isNodeEconomyWorld(session)) return null;
+    const economic = economicNodeById(node.id);
+    if (economic === undefined) return null;
+    const cost = unitCostOf(session, company, economic.id);
+    const rows = costBreakdown(cost);
+    const routes = nodeEntryRoutes(session, company, economic.id);
+    return {
+      node: economic,
+      marketPriceUsd: nodeMarketPriceUsd(session, economic.id),
+      unitCostUsd: cost.unitCostUsd,
+      biggest: rows[0] ?? null,
+      canProduce: routes.canProduce,
+      producerCount: session.companies.filter(
+        (candidate) => candidate.isActive && candidate.products.some((product) => product.isActive && product.nodeId === economic.id),
+      ).length,
+    };
+  }, [node, session, company]);
+
   /* --- product lines this node's achievement gates ------------------------- */
   const unlockedLines = useMemo(() => {
     if (node === null) return [];
@@ -256,6 +285,53 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
           </div>
 
           <p className="text-[12.5px] leading-relaxed text-ink-dim">{node.summary}</p>
+
+          {/* --- 0. world 3: what owning this would mean --------------------- */}
+          {nodeEconomy === null ? null : (
+            <div>
+              <SectionHeading rule>What owning it would mean</SectionHeading>
+              <div className="mt-2">
+                <KeyValueGrid
+                  columns={2}
+                  items={[
+                    { label: 'One unit is', value: nodeEconomy.node.unitLabel },
+                    { label: 'Market price', value: formatMoney(nodeEconomy.marketPriceUsd, 'full'), hint: `per ${nodeEconomy.node.unitLabel}` },
+                    {
+                      label: 'It would cost you',
+                      value: formatMoney(nodeEconomy.unitCostUsd, 'full'),
+                      hint: 'to make one, at today\u2019s input prices',
+                    },
+                    {
+                      label: 'Who makes it',
+                      value:
+                        nodeEconomy.producerCount === 0
+                          ? 'Nobody'
+                          : `${nodeEconomy.producerCount} compan${nodeEconomy.producerCount === 1 ? 'y' : 'ies'}`,
+                    },
+                  ]}
+                />
+              </div>
+              {nodeEconomy.biggest === null ? null : (
+                <p className="mt-1.5 text-[11.5px] leading-snug text-ink-faint">
+                  The biggest line of that is {nodeEconomy.biggest.label} at {formatMoney(nodeEconomy.biggest.amountUsd, 'full')}.
+                </p>
+              )}
+              {nodeEconomy.canProduce ? (
+                <Link
+                  href="/products"
+                  onClick={() => setPendingLaunchCategory(nodeEconomy.node.id)}
+                  className="btn btn-primary tap-target mt-2 gap-1"
+                >
+                  Open a line on it
+                </Link>
+              ) : (
+                <p className="mt-1.5 text-[11.5px] leading-snug tone-warn">
+                  You do not own it yet. Research it here, licence it from an owner, or buy the finished thing from
+                  somebody who makes it.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* --- 1. what it unlocks ------------------------------------------ */}
           <div>

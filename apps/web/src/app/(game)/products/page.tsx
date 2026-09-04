@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Product } from '@frontier/contracts';
 import { quarterLabel } from '@frontier/contracts';
-import { isMultiSectorWorld, servingComputeUnits } from '@frontier/simulation';
+import { isMultiSectorWorld, isNodeEconomyWorld, servingComputeUnits } from '@frontier/simulation';
 import { formatCount, formatDelta, formatMoney, formatPct } from '@frontier/shared';
 import {
   DataTable,
@@ -43,9 +43,19 @@ import {
   productsByIndustryLine,
   projectCustomers,
 } from '@/components/screens/products/labels';
+import { NodeChainScreen } from '@/components/screens/products/NodeChainScreen';
 import { takePendingLaunchCategory, useActiveCompany, usePlayerView, useQueuedActions, useSession } from '@/lib/game';
 
 export default function ProductsPage(): React.JSX.Element {
+  const session = useSession();
+  // World 3 is a different economy, so it is a different screen rather than a
+  // set of branches inside this one: `NodeChainScreen` is the canvas, and this
+  // component stays exactly the screen worlds 1 and 2 have always had.
+  if (isNodeEconomyWorld(session)) return <NodeChainScreen />;
+  return <LegacyProductsPage />;
+}
+
+function LegacyProductsPage(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
   const company = useActiveCompany();

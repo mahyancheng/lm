@@ -146,6 +146,9 @@ export const BOTTLENECK_LABEL: Readonly<Record<ResearchBottleneck, string>> = {
   funding: 'money',
   compute: 'compute',
   talent: 'researchers',
+  // World 3's fourth: a programme against a node that asks for petabytes is
+  // short of the data its own customers would have produced.
+  data: 'customer data',
 };
 
 /**
@@ -163,6 +166,10 @@ export function shortfallLine(shortfall: ResearchShortfall | null): string | nul
   }
   if (shortfall.kind === 'funding') {
     return `Short of money: ${formatMoney(shortfall.have)} a quarter against ${formatMoney(shortfall.want)} the work needs.`;
+  }
+  if (shortfall.kind === 'data') {
+    // World 3: petabytes, in the unit the node asks for them in.
+    return `Short of data: ${formatCount(shortfall.have)} of ${formatCount(shortfall.want)} PB collected in this sector.`;
   }
   if (shortfall.capabilityGap) {
     return `The team is short on the skills this needs, not on bodies: ${formatCount(shortfall.have)} researchers are assigned, and the company is weak in the areas it calls for.`;

@@ -79,6 +79,7 @@ export const CHIEF_OF_STAFF_SYSTEM = [
   '',
   'Sourcing — when you cannot answer from the dossier alone:',
   `- The dossier is your own company. It does not contain the market: who sells compute and at what price, which companies could be bought and for how much, what could be borrowed, what is open at the agencies, what hiring costs. For those you may ask, once, by answering with mode \`research\` and a \`lookups\` array of at most ${MAX_LOOKUPS_PER_TURN} requests from this catalogue: ${LOOKUP_KINDS.join(', ')}.`,
+  `- Two of those need something the founder named: \`unit_cost\` takes a \`nodeId\` from the node table (the dossier's own lines carry theirs as \`categoryId\`), and \`entry_path\` takes either a \`sector\` or a \`nodeId\`. Ask \`unit_cost\` when the question is what something costs us to build or whether a price leaves a margin; ask \`entry_path\` when it is what we would have to research, licence or buy to make something we cannot make today.`,
   '- In `research` mode `reply` is one line saying what you are going off to check ("Checking the compute market and what it does to cash"), and `interpretedInstructions` MUST be empty. The lookups are run against canonical state and handed straight back to you.',
   '- **Ask for research only when the answer genuinely is not in the dossier.** "How much cash have we got" is in it; "can I buy a small data centre" is not.',
   '- When a turn arrives carrying findings, research mode is CLOSED and asking again is refused. Answer it: is there any, can we buy, from whom, at what price, how much capacity, where the cash balance lands afterwards, and what a raise or a debt issue would change. Then attach the actions ready to approve, each naming the seller from the row you took it from.',
@@ -173,23 +174,41 @@ export function renderDossier(dossier: ChiefOfStaffDossier): string {
           grp.cashUsd,
         )}, debt ${money(grp.debtUsd)}, headcount ${grp.headcount}, market value ${money(grp.marketValueUsd)}.`;
 
+  // A line is quoted in its own unit — "per wafer", "per MWh" — because that is
+  // what it sells, and its unit cost beside its price, because in the node
+  // economy the two are the whole conversation. Outside it both extra figures
+  // are zero and the sentence falls back to the world-2 shape.
   const products = [
     p.lines.length === 0
       ? 'No product lines.'
       : bullets(
           p.lines.map(
             (line) =>
-              `${line.name} (${line.productId}, ${line.segment}${line.isActive ? '' : ', sunset'}) — ${money(line.pricePerSeatUsd)} per seat, ${
-                line.activeCustomers
-              } customers, ${money(line.revenueQuarterlyUsd)} a quarter, margin ${wholePct(line.grossMarginPct)}, churn ${wholePct(line.churnQuarterly)}`,
+              `${line.name} (${line.productId}, ${line.segment}${line.isActive ? '' : ', sunset'}) — ${money(line.pricePerSeatUsd)} per ${
+                line.unitLabel
+              }${line.unitCostUsd > 0 ? ` against ${money(line.unitCostUsd)} to make` : ''}${
+                line.marketPriceUsd > 0 ? `, market ${money(line.marketPriceUsd)}` : ''
+              }, ${line.activeCustomers} customers, ${money(line.revenueQuarterlyUsd)} a quarter, margin ${wholePct(
+                line.grossMarginPct,
+              )}, churn ${wholePct(line.churnQuarterly)}${line.backlogUnits > 0 ? `, ${line.backlogUnits} on backlog` : ''}${
+                line.installedBase > 0 ? `, ${line.installedBase} in service` : ''
+              }${line.ownsNode ? '' : line.unitCostUsd > 0 ? ' — we do not own this node outright' : ''}`,
           ),
         ),
+    p.ownedNodeCount === 0
+      ? ''
+      : `We own or licence ${p.ownedNodeCount} node${p.ownedNodeCount === 1 ? '' : 's'} — everything we are entitled to produce. Anything else has to be researched, licensed, or bought as finished output.`,
+    p.dataPetabytes === 0 && p.ownedNodeCount === 0
+      ? ''
+      : `Customer data: ${p.dataPetabytes} petabytes held, collected at the ${p.dataPolicy} level.`,
     `Compute: ${p.computeOwned} owned and ${p.computeReserved} reserved accelerators, ${wholePct(p.computeUtilisationPct)} utilised, ${wholePct(
       p.trainingAllocationPct,
     )} on training, cloud ${money(p.cloudSpendQuarterlyUsd)} a quarter${
       p.reservationExpiryQuarter === null ? '' : `, reservation lapses in quarter ${p.reservationExpiryQuarter}`
     }.`,
-  ].join('\n\n');
+  ]
+    .filter((block) => block !== '')
+    .join('\n\n');
 
   const peopleBlock = [
     `Headcount ${people.total} — ${people.engineers} engineers, ${people.researchers} researchers, ${people.sales} sales, ${people.ops} ops, ${people.execs} executives. ${people.openRoles} open roles.`,
@@ -464,6 +483,38 @@ export function renderFinding(finding: LookupResult): string {
           bullets(
             finding.rows.map(
               (row) => `${row.buyerName} (${row.buyerCompanyId}) — ${row.buyerProductName}, ${row.unitsFilled} units, ${money(row.revenueUsd)} this quarter`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'unit_cost':
+      return section(
+        'Finding — what this costs us to build',
+        [
+          finding.summary,
+          bullets([
+            `${finding.label} (${finding.nodeId}) — ${money(finding.unitCostUsd)} a ${finding.unitLabel} to make, ${money(finding.marketPriceUsd)} on the market, a ${finding.grossMarginPct}% gross margin at that price`,
+            `${finding.madeInHouseSharePct}% of the input bill is made in house`,
+            ...(finding.blockedInputs.length === 0 ? [] : [`Blocked on ${finding.blockedInputs.join(', ')} — nobody in the world owns it, so the line ships nothing`]),
+          ]),
+          bullets(finding.rows.map((row) => `${row.label} — ${money(row.amountUsd)}, ${row.sharePct}% of the unit cost${row.sourceName === '' ? '' : `, from ${row.sourceName}`}`)),
+        ].join('\n\n'),
+      );
+
+    case 'entry_path':
+      return section(
+        'Finding — the way into this',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.label} (${row.nodeId}), tier ${row.tier} — ${
+                  row.researchable ? `research it for ${money(row.researchLowUsd)} to ${money(row.researchHighUsd)}` : 'not reachable by research'
+                }${row.licensorName === '' ? '' : `; ${row.licensorName} licenses it at ${row.licensorRoyaltyPct}% of revenue`}${
+                  row.sellerName === '' ? '' : `; ${row.sellerName} would sell the finished output at ${money(row.sellerAskUsd)}`
+                }`,
             ),
           ),
         ].join('\n\n'),

@@ -31,14 +31,27 @@ import type {
   SessionState,
   StaffRole,
 } from '@frontier/contracts';
-import { ANTITRUST_EXPOSURE_WEIGHTS, DIVIDEND_MAX_PAYOUT_PCT, TOLL_FLOOR_SHARE, defaultCategoryFor, resolveCategory } from '@frontier/contracts';
+import {
+  ANTITRUST_EXPOSURE_WEIGHTS,
+  DIVIDEND_MAX_PAYOUT_PCT,
+  ECONOMIC_NODES_BY_ID,
+  TOLL_FLOOR_SHARE,
+  canProduce,
+  defaultCategoryFor,
+  holdsNode,
+  resolveCategory,
+} from '@frontier/contracts';
 import { maxTollForCompany } from '../economy/prices';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { solvencyCommitmentNote } from '../companies/solvency';
 import { resolveCloudSeller, resolveComputeSeller } from '../companies/sellers';
 import { categoryOf } from '../companies/categories';
 import { dependencySatisfied } from '../research/nodes';
+import { unheldRequirements } from '../research/ownership';
+import { launchNodeIdFor } from '../companies/products';
+import { LICENCE_ROYALTY_BOUNDS, boundedRoyaltyPct, licenceUpfrontUsd, licenceFrom, ownsNodeOutright } from '../graph/licensing';
+import { cloudRentUsd, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
 import { expectedFill, isShortFill, realisesAvailability, reservableUnits, shortFillLine } from '../fills';
 import {
   COMP_BAND_MULTIPLIER,
@@ -52,7 +65,6 @@ import {
   MIN_RESERVABLE_UNITS,
   PRICE_MOVE_BAND,
   RESERVABLE_SHARE_OF_INSTALLED_BASE,
-  RESERVED_UNIT_COST_USD_PER_QUARTER,
 } from './balance';
 import {
   BatchBudget,
@@ -246,6 +258,28 @@ const startResearchProject: Rule<'start_research_project'> = (intent, verdict, c
     verdict.reject('requirement_not_met', `${ctx.company.name} has already demonstrated ${node.title}.`);
     return;
   }
+  // World 3: ownership is per company, so "already done" is a question about
+  // this company, and a programme is refused OUTRIGHT when the company does not
+  // hold what the node requires. Structural, so refused rather than clamped —
+  // no bigger cheque and no smaller team works around not owning the thing
+  // underneath it — and it is refused at the start, which is what closes world
+  // 2's money pit: there, a programme blocked on a dependency ran to progress
+  // 0.98 and charged its budget for ever with no way out.
+  if (isNodeEconomyWorld(ctx.draft)) {
+    if (holdsNode(ctx.company, intent.targetNodeId, ctx.draft.quarter)) {
+      verdict.reject('requirement_not_met', `${ctx.company.name} can already make ${node.title}.`);
+      return;
+    }
+    const missing = unheldRequirements(ctx.draft, ctx.company, intent.targetNodeId);
+    if (missing.length > 0) {
+      const names = missing.map((id) => ECONOMIC_NODES_BY_ID[id]?.label ?? id).join(', ');
+      verdict.reject(
+        'requirement_not_met',
+        `${ctx.company.name} cannot work on ${node.title} without ${names}. Research that first, licence it, or buy a company that has it.`,
+      );
+      return;
+    }
+  }
   const duplicate = ctx.draft.researchProjects.some(
     (p) => p.companyId === ctx.company.id && p.targetNodeId === intent.targetNodeId && (p.status === 'active' || p.status === 'paused'),
   );
@@ -383,6 +417,45 @@ const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict,
   });
 };
 
+/**
+ * Close a programme for good.
+ *
+ * Structural only: it must be this company's, and it must still be open.
+ * Nothing is clamped — abandoning is a decision, and a decision the engine
+ * either carries out or refuses.
+ */
+const abandonResearchProject: Rule<'abandon_research_project'> = (intent, verdict, ctx) => {
+  const project = ctx.draft.researchProjects.find((p) => p.id === intent.projectId);
+  if (project === undefined) {
+    verdict.reject('unknown_target', `No research programme "${intent.projectId}" exists.`);
+    return;
+  }
+  if (project.companyId !== ctx.company.id) {
+    verdict.reject('not_controller_of_company', `That programme belongs to another company, not ${ctx.company.name}.`);
+    return;
+  }
+  if (project.status !== 'active' && project.status !== 'paused') {
+    verdict.reject('duplicate_action', `That programme is already ${project.status}.`);
+  }
+};
+
+/**
+ * Change how hard this company collects from its own customers.
+ *
+ * Nothing to bound: the three positions are the schema, and every one of them
+ * is legal. Setting the level you are already on is refused as a duplicate
+ * rather than burning a decision on nothing.
+ */
+const setDataPolicy: Rule<'set_data_policy'> = (intent, verdict, ctx) => {
+  if (!isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'Customer data is only collected in the node economy.');
+    return;
+  }
+  if ((ctx.company.dataPolicy ?? 'standard') === intent.collectionLevel) {
+    verdict.reject('duplicate_action', `${ctx.company.name} already collects at the ${intent.collectionLevel} level.`);
+  }
+};
+
 const proposeInnovation: Rule<'propose_innovation'> = (intent, verdict, ctx) => {
   if (!ctx.draft.config.allowPlayerInnovation) {
     verdict.reject('requirement_not_met', 'Player innovation is disabled in this session.');
@@ -480,6 +553,55 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
   // gate: not something a bigger cheque or a smaller launch works around, so
   // it is refused rather than clamped, exactly as stage 1's table refuses only
   // the impossible. World 1 has no catalogue, so nothing here ever runs for it.
+  // World 3: a launch names a NODE, and the only question asked is whether this
+  // company may produce it — `canProduce`, which is about the company alone.
+  // The world-2 branch below is never reached, so `dependencySatisfied`'s global
+  // test, which locked nearly every line for everybody on turn one, is not on
+  // any world-3 path.
+  if (isNodeEconomyWorld(ctx.draft)) {
+    const requested = intent.categoryId;
+    if (requested !== null && ECONOMIC_NODES_BY_ID[requested] !== undefined && !canProduce(ctx.company, requested, ctx.draft.quarter)) {
+      const node = ECONOMIC_NODES_BY_ID[requested];
+      const missing = [requested, ...(node?.requires ?? [])].filter((id) => !holdsNode(ctx.company, id, ctx.draft.quarter));
+      const names = missing.map((id) => ECONOMIC_NODES_BY_ID[id]?.label ?? id).join(', ');
+      verdict.reject(
+        'requirement_not_met',
+        `${ctx.company.name} cannot make ${node?.label ?? requested}: it does not own ${names}. Research it, licence it, or buy a company that has it.`,
+      );
+      return;
+    }
+    const resolved = launchNodeIdFor(ctx.company, requested, intent.segment);
+    if (resolved === null) {
+      verdict.reject('requirement_not_met', `${ctx.company.name} owns nothing it could put on sale.`);
+      return;
+    }
+    if (requested !== resolved) {
+      verdict.clamp(
+        (draft) => {
+          draft.categoryId = resolved;
+        },
+        'unknown_target',
+        `Launching ${ECONOMIC_NODES_BY_ID[resolved]?.label ?? resolved}, the highest thing ${ctx.company.name} can make for this segment.`,
+      );
+    }
+    // Suppliers named at launch must name an input this node actually consumes;
+    // an entry that does not is dropped rather than failing the whole launch.
+    const node = ECONOMIC_NODES_BY_ID[resolved];
+    const kept = intent.supply.filter((entry) => node?.consumes.some((input) => input.nodeId === entry.inputCategoryId) === true);
+    if (kept.length !== intent.supply.length) {
+      verdict.clamp(
+        (draft) => {
+          draft.supply = kept;
+        },
+        'unknown_target',
+        `${intent.supply.length - kept.length} supplier choice${intent.supply.length - kept.length === 1 ? '' : 's'} named an input ${
+          node?.label ?? resolved
+        } does not use, and ${intent.supply.length - kept.length === 1 ? 'was' : 'were'} dropped.`,
+      );
+    }
+    return;
+  }
+
   if (isMultiSectorWorld(ctx.draft)) {
     const category = resolveCategory(intent.categoryId, ctx.company.sector, intent.segment);
     const missing = category.requiresNodeIds.filter((nodeId) => !dependencySatisfied(ctx.draft, nodeId, ctx.company.id));
@@ -842,7 +964,7 @@ const reserveCompute: Rule<'reserve_compute'> = (intent, verdict, ctx) => {
     }
   }
 
-  const unitCost = provider === null ? RESERVED_UNIT_COST_USD_PER_QUARTER * ctx.draft.world.compute.reservedPrice : provider.unitPriceUsd;
+  const unitCost = provider === null ? reservedRentUsd(ctx.draft) : provider.unitPriceUsd;
   const available = ctx.budget.availableCash(ctx.company);
   // The cash reserved tracks what the market is expected to actually fill, not
   // the whole ask: billing at resolution is struck on the units that clear, and
@@ -975,7 +1097,10 @@ const buyAccelerators: Rule<'buy_accelerators'> = (intent, verdict, ctx) => {
 };
 
 const allocateCompute: Rule<'allocate_compute'> = (_intent, verdict, ctx) => {
-  const held = heldCompute(ctx.company) + Math.round(ctx.company.compute.cloudSpendQuarterly / CLOUD_UNIT_COST_USD_PER_QUARTER);
+  // World 3 reads what an accelerator-quarter of cloud costs off the node
+  // table; worlds 1 and 2 divide by exactly the constant they always divided by.
+  const cloudUnitUsd = isNodeEconomyWorld(ctx.draft) ? cloudRentUsd(ctx.draft) : CLOUD_UNIT_COST_USD_PER_QUARTER;
+  const held = heldCompute(ctx.company) + Math.round(ctx.company.compute.cloudSpendQuarterly / cloudUnitUsd);
   if (held <= 0) verdict.reject('insufficient_compute', `${ctx.company.name} holds no capacity to allocate.`);
 };
 
@@ -1064,11 +1189,34 @@ const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
     verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
     return;
   }
-  const category = categoryOf(ctx.company, product);
-  const input = category.inputs.find((entry) => entry.categoryId === intent.inputCategoryId);
-  if (input === undefined) {
-    verdict.reject('unknown_target', `${category.label} is not built on ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
-    return;
+  // World 3: an input is a NODE the line's own node consumes, and a supplier is
+  // a company running a line on that node. World 2's catalogue answers neither
+  // question — its `categoryOf` resolves a product category, and every world-3
+  // input id is a node id — so both tests are made against the table here. The
+  // two id spaces are disjoint (every node id carries a table prefix), so the
+  // branch below cannot capture a world-2 action.
+  const nodeEconomy = isNodeEconomyWorld(ctx.draft);
+  const lineNodeId = nodeEconomy ? lineNodeIdOf(product) : null;
+  if (nodeEconomy) {
+    const lineNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId];
+    if (lineNode === undefined) {
+      verdict.reject('unknown_target', `${product.name} does not produce a node, so it has no inputs to wire.`);
+      return;
+    }
+    if (!lineNode.consumes.some((entry) => entry.nodeId === intent.inputCategoryId)) {
+      verdict.reject(
+        'unknown_target',
+        `${lineNode.label} does not consume ${ECONOMIC_NODES_BY_ID[intent.inputCategoryId]?.label ?? intent.inputCategoryId.replace(/_/g, ' ')}.`,
+      );
+      return;
+    }
+  } else {
+    const category = categoryOf(ctx.company, product);
+    const input = category.inputs.find((entry) => entry.categoryId === intent.inputCategoryId);
+    if (input === undefined) {
+      verdict.reject('unknown_target', `${category.label} is not built on ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+      return;
+    }
   }
   if (intent.supplierCompanyId === null) return; // the open market, or a deliberate refusal — always legal
   if (intent.supplierCompanyId === ctx.company.id && intent.supplierProductId === intent.productId) {
@@ -1085,10 +1233,23 @@ const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
     verdict.reject('unknown_target', `${supplierCompany.name} has no active product "${intent.supplierProductId}".`);
     return;
   }
-  const supplierCategory = categoryOf(supplierCompany, supplierProduct);
-  if (supplierCategory.id !== intent.inputCategoryId || !supplierCategory.canSupply) {
-    verdict.reject('unknown_target', `${supplierProduct.name} does not supply ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
-    return;
+  if (nodeEconomy) {
+    // A seller of a node is a company running a line on it. There is no
+    // `canSupply` flag in world 3: anything anybody makes, they can sell, which
+    // is what makes the one node table one market rather than two.
+    if (lineNodeIdOf(supplierProduct) !== intent.inputCategoryId) {
+      verdict.reject(
+        'unknown_target',
+        `${supplierProduct.name} does not make ${ECONOMIC_NODES_BY_ID[intent.inputCategoryId]?.label ?? intent.inputCategoryId.replace(/_/g, ' ')}.`,
+      );
+      return;
+    }
+  } else {
+    const supplierCategory = categoryOf(supplierCompany, supplierProduct);
+    if (supplierCategory.id !== intent.inputCategoryId || !supplierCategory.canSupply) {
+      verdict.reject('unknown_target', `${supplierProduct.name} does not supply ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+      return;
+    }
   }
   const terms = supplierProduct.supplyTerms ?? null;
   if (terms === null) {
@@ -1964,6 +2125,116 @@ const requestIntroduction: Rule<'request_introduction'> = (intent, verdict, ctx)
 };
 
 /* -------------------------------------------------------------------------- */
+/*  Licensing (world 3)                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Ask the owner of a node for the right to produce it.
+ *
+ * Structural refusals only, and every one of them is a fact the founder cannot
+ * spend their way past: a node that is not in the table, an owner that does not
+ * own it outright, a request to licence what you already own, and a licence
+ * that is still running. The royalty is CLAMPED into the band rather than
+ * refused, so an offer of one percent becomes an offer of two and says so; what
+ * the owner then makes of it is the owner's business, not the validator's.
+ *
+ * The signing fee is deliberately not a cash gate: from world 2 on, spending
+ * more than you hold is a solvency problem the clock answers, never a refusal.
+ */
+const licenseNode: Rule<'license_node'> = (intent, verdict, ctx) => {
+  if (!isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'Nodes are only owned, and therefore only licensed, in the node economy.');
+    return;
+  }
+  const node = ECONOMIC_NODES_BY_ID[intent.nodeId];
+  if (node === undefined) {
+    verdict.reject('unknown_target', `There is no node "${intent.nodeId}" in the economy.`);
+    return;
+  }
+  if (intent.ownerCompanyId === ctx.company.id) {
+    verdict.reject('illegal_value', `${ctx.company.name} cannot licence ${node.label} from itself.`);
+    return;
+  }
+  const owner = ctx.draft.companies.find((candidate) => candidate.id === intent.ownerCompanyId);
+  if (owner === undefined || !owner.isActive) {
+    verdict.reject('unknown_target', `"${intent.ownerCompanyId}" is not a company that could grant a licence.`);
+    return;
+  }
+  if (!ownsNodeOutright(owner, node.id)) {
+    verdict.reject(
+      'requirement_not_met',
+      `${owner.name} does not own ${node.label} outright, so it has nothing to grant: a licensee cannot licence on what it licensed.`,
+    );
+    return;
+  }
+  if (ownsNodeOutright(ctx.company, node.id)) {
+    verdict.reject('duplicate_action', `${ctx.company.name} already owns ${node.label}.`);
+    return;
+  }
+  const existing = licenceFrom(ctx.company, node.id, owner.id);
+  if (existing !== undefined && existing.expiryQuarter > ctx.draft.quarter) {
+    verdict.reject(
+      'duplicate_action',
+      `${ctx.company.name} already licenses ${node.label} from ${owner.name} until quarter ${existing.expiryQuarter}. Renew it when it runs out.`,
+    );
+    return;
+  }
+  const bounded = boundedRoyaltyPct(intent.royaltyPct);
+  if (bounded !== intent.royaltyPct) {
+    verdict.clamp(
+      (draft) => {
+        draft.royaltyPct = bounded;
+      },
+      'illegal_value',
+      `A royalty runs from ${LICENCE_ROYALTY_BOUNDS.min}% to ${LICENCE_ROYALTY_BOUNDS.max}%, so the offer to ${owner.name} is ${bounded}%. The signing fee is ${Math.round(
+        licenceUpfrontUsd(node) / 1_000_000,
+      )} million either way.`,
+    );
+  }
+};
+
+/**
+ * Advertise what you will licence one of your own nodes for.
+ *
+ * Owning it outright is the only requirement — publishing terms for something
+ * you licence yourself would be sublicensing, which no licence permits — and
+ * the royalty is clamped into the same band a request is.
+ */
+const publishLicenceTerms: Rule<'publish_licence_terms'> = (intent, verdict, ctx) => {
+  if (!isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'Nodes are only owned, and therefore only licensed, in the node economy.');
+    return;
+  }
+  const node = ECONOMIC_NODES_BY_ID[intent.nodeId];
+  if (node === undefined) {
+    verdict.reject('unknown_target', `There is no node "${intent.nodeId}" in the economy.`);
+    return;
+  }
+  if (!ownsNodeOutright(ctx.company, node.id)) {
+    verdict.reject(
+      'requirement_not_met',
+      `${ctx.company.name} does not own ${node.label} outright, so it has nothing to offer: a licensee cannot licence on what it licensed.`,
+    );
+    return;
+  }
+  const bounded = boundedRoyaltyPct(intent.royaltyPct);
+  const published = (ctx.company.licenceOffers ?? []).find((offer) => offer.nodeId === node.id);
+  if (published !== undefined && published.royaltyPct === bounded && published.openToAll === intent.openToAll) {
+    verdict.reject('duplicate_action', `${ctx.company.name} already offers ${node.label} on exactly those terms.`);
+    return;
+  }
+  if (bounded !== intent.royaltyPct) {
+    verdict.clamp(
+      (draft) => {
+        draft.royaltyPct = bounded;
+      },
+      'illegal_value',
+      `A royalty runs from ${LICENCE_ROYALTY_BOUNDS.min}% to ${LICENCE_ROYALTY_BOUNDS.max}%, so ${node.label} is published at ${bounded}%.`,
+    );
+  }
+};
+
+/* -------------------------------------------------------------------------- */
 /*  The table                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -1976,6 +2247,8 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   set_research_budget: setResearchBudget,
   start_research_project: startResearchProject,
   adjust_research_project: adjustResearchProject,
+  abandon_research_project: abandonResearchProject,
+  set_data_policy: setDataPolicy,
   propose_innovation: proposeInnovation,
   publish_research: publishResearch,
   set_product_price: setProductPrice,
@@ -2019,6 +2292,8 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   choose_supplier: chooseSupplier,
   transfer_between_group: transferBetweenGroup,
   merge_subsidiary: mergeSubsidiary,
+  license_node: licenseNode,
+  publish_licence_terms: publishLicenceTerms,
 };
 
 /**

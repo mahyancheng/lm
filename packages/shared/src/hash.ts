@@ -175,13 +175,162 @@ function compareKeys(a: string, b: string): number {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * `hashCanonical` is `fnv1a64 ∘ stableStringify` with the string never built.
+ *
+ * It walks the same tree in the same order and mixes the same characters into
+ * the same fold, so it returns the same sixteen hex digits for every value —
+ * that equivalence is a test, not a claim, and the two frozen world hashes are
+ * part of it. What it does not do is materialise the two megabytes of canonical
+ * JSON that a twenty-quarter session serialises to, eighteen times a quarter,
+ * once per ledger phase. That allocation, and the per-byte closure call inside
+ * the fold, were ninety-three percent of a quarter's resolution time by quarter
+ * twenty: 1,490ms of 1,594ms, against about a hundred milliseconds of actual
+ * economy. Nothing about the ledger's per-phase chain changes; only the cost of
+ * computing a link in it.
+ *
+ * The fold is FNV-1a over UTF-8, held in four sixteen-bit lanes so the 64-bit
+ * multiply is exact without `BigInt`, exactly as `fnv1a64` holds it.
+ */
+class CanonicalHasher {
+  private v0 = 0x2325;
+  private v1 = 0x8422;
+  private v2 = 0x9ce4;
+  private v3 = 0xcbf2;
+
+  /** One byte through the FNV-1a round: `v ^= byte; v *= 0x100000001b3`, in four sixteen-bit lanes. */
+  private byte(b: number): void {
+    const x0 = this.v0 ^ b;
+    const t0 = x0 * 0x1b3;
+    const t1 = this.v1 * 0x1b3;
+    const t2 = this.v2 * 0x1b3 + (x0 << 8);
+    const t3 = this.v3 * 0x1b3 + (this.v1 << 8);
+    this.v0 = t0 & 0xffff;
+    this.v1 = (t1 + (t0 >>> 16)) & 0xffff;
+    this.v2 = (t2 + (t1 >>> 16)) & 0xffff;
+    this.v3 = (t3 + (t2 >>> 16)) & 0xffff;
+  }
+
+  /**
+   * One chunk of the canonical text, UTF-8 encoded byte by byte.
+   *
+   * A chunk is always a whole token — a quoted string, a number literal, a
+   * punctuation mark — so a surrogate pair can never straddle two chunks and
+   * this is character for character what `fnv1a64` does over the joined string.
+   */
+  write(text: string): void {
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.codePointAt(i) ?? 0;
+      if (code < 0x80) {
+        this.byte(code);
+      } else if (code < 0x800) {
+        this.byte(0xc0 | (code >> 6));
+        this.byte(0x80 | (code & 0x3f));
+      } else if (code < 0x10000) {
+        this.byte(0xe0 | (code >> 12));
+        this.byte(0x80 | ((code >> 6) & 0x3f));
+        this.byte(0x80 | (code & 0x3f));
+      } else {
+        i += 1; // surrogate pair consumed
+        this.byte(0xf0 | (code >> 18));
+        this.byte(0x80 | ((code >> 12) & 0x3f));
+        this.byte(0x80 | ((code >> 6) & 0x3f));
+        this.byte(0x80 | (code & 0x3f));
+      }
+    }
+  }
+
+  digest(): string {
+    const hex = (lane: number): string => (lane & 0xffff).toString(16).padStart(4, '0');
+    return `${hex(this.v3)}${hex(this.v2)}${hex(this.v1)}${hex(this.v0)}`;
+  }
+}
+
+/**
+ * The canonical hash of any engine value, without building the canonical string.
+ *
+ * Exactly `fnv1a64(stableStringify(value, options))` for every value; see
+ * `CanonicalHasher`. `stableStringify` stays exported and stays the definition
+ * of what canonical means — this is the same walk with a different sink.
+ */
+export function hashCanonical(value: unknown, options: StableStringifyOptions = {}): string {
+  const sink = new CanonicalHasher();
+  const seen = new Set<object>();
+  const { moneyPrecision } = options;
+
+  const walk = (node: unknown): void => {
+    if (node === null) {
+      sink.write('null');
+      return;
+    }
+    switch (typeof node) {
+      case 'number':
+        sink.write(canonicalNumber(node, moneyPrecision));
+        return;
+      case 'string':
+        sink.write(JSON.stringify(node));
+        return;
+      case 'boolean':
+        sink.write(node ? 'true' : 'false');
+        return;
+      case 'bigint':
+        sink.write(`"${node.toString()}n"`);
+        return;
+      case 'undefined':
+      case 'function':
+      case 'symbol':
+        sink.write('null');
+        return;
+      default:
+        break;
+    }
+
+    const obj = node as object;
+    if (seen.has(obj)) {
+      sink.write('"[cyclic]"');
+      return;
+    }
+    seen.add(obj);
+    try {
+      if (Array.isArray(obj)) {
+        sink.write('[');
+        for (let i = 0; i < obj.length; i += 1) {
+          if (i > 0) sink.write(',');
+          walk(obj[i]);
+        }
+        sink.write(']');
+        return;
+      }
+      const record = obj as Record<string, unknown>;
+      const keys = Object.keys(record).sort(compareKeys);
+      sink.write('{');
+      let first = true;
+      for (const key of keys) {
+        const child = record[key];
+        if (child === undefined || typeof child === 'function' || typeof child === 'symbol') continue;
+        if (!first) sink.write(',');
+        first = false;
+        sink.write(JSON.stringify(key));
+        sink.write(':');
+        walk(child);
+      }
+      sink.write('}');
+    } finally {
+      seen.delete(obj);
+    }
+  };
+
+  walk(value);
+  return sink.digest();
+}
+
+/**
  * `fnv1a64 ∘ stableStringify`. The canonical hash of any engine value.
  *
  * Accepts `unknown` so it satisfies `StateHasher` from `@frontier/contracts`
  * while remaining usable for hashing an action batch or a GM proposal.
  */
 export function hashState(value: unknown): string {
-  return fnv1a64(stableStringify(value));
+  return hashCanonical(value);
 }
 
 /**
@@ -189,5 +338,5 @@ export function hashState(value: unknown): string {
  * places first, so a cent of floating-point noise cannot break replay equality.
  */
 export function createStateHasher(moneyPrecision: number): (value: unknown) => string {
-  return (value: unknown) => fnv1a64(stableStringify(value, { moneyPrecision }));
+  return (value: unknown) => hashCanonical(value, { moneyPrecision });
 }

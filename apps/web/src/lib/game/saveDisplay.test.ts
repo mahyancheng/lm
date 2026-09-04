@@ -43,6 +43,7 @@ function summary(partial: Partial<SlotSummary>): SlotSummary {
     worldVersion: 1,
     savedAtIso: '2027-03-02T09:30:00.000Z',
     endedQuarter: null,
+    reason: null,
     ...partial,
   };
 }

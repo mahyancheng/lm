@@ -301,14 +301,27 @@ export function SetupChat({ busy, llmAvailable, onFound, advanced }: SetupChatPr
             <li key={chip.value}>
               <button
                 type="button"
-                className="icon-knockout-panel press-pop flex min-h-11 w-full items-center gap-2.5 rounded-card border border-hair bg-raised p-2.5 text-left hover:border-brand"
+                className="icon-knockout-panel press-pop flex min-h-11 w-full items-start gap-2.5 rounded-card border border-hair bg-raised p-2.5 text-left hover:border-brand"
                 onClick={() => tap(chip)}
                 disabled={busy || sending}
               >
-                <Icon name={isIconName(chip.icon) ? chip.icon : 'building'} size={18} accent="brand" className="shrink-0" />
+                <Icon name={isIconName(chip.icon) ? chip.icon : 'building'} size={18} accent="brand" className="mt-0.5 shrink-0" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] font-bold text-ink">{chip.label}</span>
                   <span className="block truncate text-[10.5px] text-ink-faint">{chip.hint}</span>
+                  {/* What this opening actually holds, read off the world the
+                      Found button is going to build — never a hand-written
+                      figure. Two columns so four stats clear 390px. */}
+                  {chip.highlights === undefined || chip.highlights.length === 0 ? null : (
+                    <span className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5">
+                      {chip.highlights.map((highlight) => (
+                        <span key={highlight.label} className="flex min-w-0 items-baseline gap-1">
+                          <span className="label-caps-faint shrink-0 text-[9px]">{highlight.label}</span>
+                          <span className="figure min-w-0 truncate text-[10.5px] font-semibold text-ink-dim">{highlight.value}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </span>
               </button>
             </li>

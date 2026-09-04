@@ -172,6 +172,26 @@ export const ProductSchema = z
     categoryId: z.string().min(1).nullable().optional().describe(
       'Id into PRODUCT_CATEGORIES (productCategories.ts): the industry line this product is, e.g. "ai_frontier_models" or "manufacturing_batteries". Absent on a world-version-1 product or a save from before this field existed; call categoryOf/defaultCategoryFor rather than reading it directly. Never absent on a product launched in world version 2.',
     ),
+    /*
+     * World version 3: the node of the one economic table this line produces
+     * and sells. Optional for exactly the reason `categoryId` is — a defaulted
+     * field would materialise on every world-1 and world-2 product the moment
+     * the schema parsed one, and both frozen worlds would stop hashing to what
+     * they have always hashed to.
+     *
+     * A line with a node is the world-3 unit of production: its unit cost is
+     * that node's inputs rolled up through the stored node prices, and its
+     * price is judged against that node's own market price rather than against
+     * the mean price of every product in its buyer segment across all six
+     * sectors. A product without one is a world-2 product and is priced the
+     * world-2 way.
+     */
+    nodeId: z
+      .string()
+      .min(1)
+      .nullable()
+      .optional()
+      .describe('Id into ECONOMIC_NODES (nodeGraph.ts): the node this line produces and sells. Absent on every world-1 and world-2 product; always set on a world-3 line.'),
     pricePerSeat: usd('List price per seat per quarter. For developer_api products, price per million billed units.'),
     activeCustomers: intCount('Paying seats or accounts at the end of the quarter.'),
     churnQuarterly: unitInterval('Fraction of customers lost this quarter. 0.05 is healthy enterprise, 0.20 is a leaking consumer product.'),
@@ -213,6 +233,49 @@ export const ProductSchema = z
       .describe(
         'Published terms for this line as somebody else\'s input, set with set_supply_terms. Null (or absent) means not published: this line cannot be anyone\'s supplier yet, whatever its category\'s canSupply says. Only meaningful when the category canSupply is true. Absent on a world-version-1 product.',
       ),
+
+    /*
+     * World version 3 — the node line. Every field below is optional for the
+     * one reason every world-2 field above is: a defaulted key would
+     * materialise on every world-1 and world-2 product the moment the schema
+     * parsed one, and both frozen worlds would stop hashing to what they have
+     * always hashed to. Absent is read as the neutral value everywhere.
+     *
+     * `unitsSoldQuarterly` is the quarter's *billed* units in every sale kind,
+     * stamped by the demand phase, and is what the profit and loss, the filed
+     * statement and every screen multiply by the price. Nothing recomputes it:
+     * `activeCustomers x pricePerSeat` appeared in six places in world 2 and
+     * disagreed with the income statement in at least two of them.
+     */
+    unitsSoldQuarterly: intCount(
+      'Units billed this quarter, stamped by the demand phase: seats for a recurring line, shipments for a unit line, the serviced book for a contract line. Revenue is this times pricePerSeat, everywhere. Absent on a world-1 or world-2 product.',
+    ).optional(),
+    installedBase: intCount(
+      'Durable units of a unit-sale line still in service. Grows by what shipped and decays by one lifetime\'s worth a quarter; the decay is next quarter\'s replacement demand. Absent outside world 3 and on lines that are not durable goods.',
+    ).optional(),
+    backlogUnits: intCount(
+      'Orders this line could not fill, carried into next quarter\'s pool at BACKLOG_CARRY. Visible on purpose: unfilled orders are what make building capacity obviously worth doing. Absent outside world 3.',
+    ).optional(),
+    contractRemainingQuarters: z
+      .number()
+      .min(0)
+      .max(80)
+      .optional()
+      .describe(
+        'Quarters left on the book of a contract line, weighted by units. Falls by one a quarter; at zero the book has run off. Absent outside world 3 and on lines that are not sold as contracts.',
+      ),
+    contractBilledUsd: usd(
+      'Cash billed in advance this quarter for contracts signed this quarter: units x price x contractQuarters. Stamped by the demand phase, turned into deferred revenue by the financial phase, and recognised a quarter at a time. Absent outside world 3.',
+    ).optional(),
+    unitCostUsd: usd(
+      'What one unit of this line cost to make this quarter, rolled up through the node prices. The number the profit and loss books as cost of goods sold, not a cousin of it: grossMarginPct is 1 - unitCostUsd / pricePerSeat exactly. Absent outside world 3.',
+    ).optional(),
+    craftQuality: unitInterval(
+      'How well this line is built, before the quality tier scales it. World 3\'s reading of qualityScore, which stays for world 1 and world 2. Absent outside world 3.',
+    ).optional(),
+    qualityTier: unitInterval(
+      'One lever, both consequences: capacityDrawPerUnit and delivered quality both scale by (0.5 + qualityTier), so a higher tier buys quality and costs real unit cost. World 3\'s reading of computeIntensity, which stays for world 1 and world 2. Absent outside world 3.',
+    ).optional(),
   })
   .describe('One commercial product line. Unit economics are resolved per product each quarter, then rolled up into the company P&L.');
 export type Product = z.infer<typeof ProductSchema>;
@@ -364,6 +427,21 @@ export const FinancialsSchema = z
     quarterlyBurn: signedUsd('Net cash movement this quarter. Negative means the company consumed cash; positive means it generated cash.'),
     deferredRevenue: usd('Contracted revenue billed but not yet recognised, principally from government contracts.'),
     backlogUsd: usd('Contracted future revenue not yet billed. Government awards create backlog before they create revenue.'),
+    /*
+     * World version 3 only, and optional for the reason every world-3 field is:
+     * a defaulted key would materialise on every world-1 and world-2 company
+     * and move both frozen worlds' hashes.
+     *
+     * The capacity a company owns and did not use. The rationing rule bounds
+     * what production can absorb at what the buckets actually cost, so the
+     * remainder is a real charge with nothing to attach to: build a fab and
+     * sell nothing and this is what it costs you. An operating expense, never a
+     * cost of goods, so gross margin stays a per-unit truth.
+     */
+    idleCapacityUsd: usd('Capacity charge no production absorbed this quarter, booked as an operating expense. Absent outside world version 3.').optional(),
+    dataCustodyUsd: usd(
+      'What it cost this quarter to hold the customer data this company has collected: encryption, access logging, retention machinery and audit, scaled by how stringent privacy regulation is. An operating expense, never a cost of goods — holding an asset lawfully is not part of making a unit. Absent outside world version 3.',
+    ).optional(),
   })
   .describe('The quarterly profit and loss and cash position. Every figure is in dollars for the quarter just resolved, not annualised.');
 export type Financials = z.infer<typeof FinancialsSchema>;
@@ -412,13 +490,31 @@ export function balanceSheetReconciles(sheet: BalanceSheet, toleranceUsd: number
 /* -------------------------------------------------------------------------- */
 
 /**
- * How many closed quarters a company keeps on state. Ten years.
+ * The most closed quarters a company's series may CARRY. Ten years.
+ *
+ * The schema bound, and it does not move: a save written before the engine
+ * shortened its window still holds up to forty statements and still has to
+ * parse, because a game in progress has to be able to finish.
+ */
+export const FINANCIAL_HISTORY_QUARTERS = 40;
+
+/**
+ * How many closed quarters the engine KEEPS. Three years.
  *
  * BOUND: the array is trimmed from the front, oldest first, every time the
  * financial phase appends. The complete series lives in the snapshots and the
  * ledger; this is the phone-sized window a screen reads.
+ *
+ * Three years rather than ten because the whole session is hashed once per
+ * ledger phase, eighteen times a quarter, and a company's filed statements are
+ * about eighty-five percent of what a session weighs: at ten years a
+ * twenty-seven-company world hashed 1.5MB eighteen times and a quarter took
+ * 1.2 seconds on desktop hardware, against a Pi budget of well under a second.
+ * Three years still carries every year-on-year comparison the screens and the
+ * Chief of Staff draw, and the older statements are not lost — they are in the
+ * ledger, where the full record has always lived.
  */
-export const FINANCIAL_HISTORY_QUARTERS = 40;
+export const FINANCIAL_HISTORY_KEPT_QUARTERS = 12;
 
 export const FinancialRevenueBySourceSchema = z
   .object({
@@ -747,6 +843,81 @@ export const AcquisitionRecordSchema = z
 export type AcquisitionRecord = z.infer<typeof AcquisitionRecordSchema>;
 
 
+/**
+ * The right to produce a node somebody else owns.
+ *
+ * A licence is the alternative to researching a node yourself and the reason
+ * ownership does not become a wall: an AI laboratory that has no business
+ * learning to run a fab can still buy the right to make its own accelerators,
+ * and pay for it every quarter. Defined here rather than in `nodes.ts` because
+ * it hangs off a company, and defining it there would make `nodes.ts` and
+ * `company.ts` import one another.
+ */
+export const NodeLicenceSchema = z
+  .object({
+    nodeId: z.string().min(1).describe('The node this licence covers, an id into ECONOMIC_NODES.'),
+    ownerCompanyId: z.string().min(1).describe('The company that owns the node and grants the licence.'),
+    royaltyPct: z.number().int().min(0).max(40).describe('Whole percent of this line\'s revenue paid to the owner every quarter, 0-40.'),
+    expiryQuarter: QuarterIndexSchema.describe('Quarter the licence lapses. Producing after it lapses is not possible; renewing it is a negotiation.'),
+  })
+  .describe('A right to produce one node owned by another company, at a royalty, until an expiry. World version 3.');
+export type NodeLicence = z.infer<typeof NodeLicenceSchema>;
+
+/**
+ * Terms an owner advertises for a node it owns.
+ *
+ * A licence is a negotiation, and a negotiation needs an opening price that is
+ * not a guess. An owner that has published terms is stating what it will say
+ * yes to: a request at or above `royaltyPct` from anybody it is `openToAll`
+ * for is accepted deterministically, which is what turns the whole mechanism
+ * from a lottery into a price a founder can read before spending a quarter on
+ * it. Publishing binds nobody to renew, and it never sublicenses.
+ */
+export const NodeLicenceOfferSchema = z
+  .object({
+    nodeId: z.string().min(1).describe('The node being offered, an id into ECONOMIC_NODES. The company must own it outright — a licensee cannot sublicense.'),
+    royaltyPct: z.number().int().min(0).max(40).describe('The whole percent of revenue the owner will licence at. A request at or above this is accepted.'),
+    openToAll: z.boolean().describe('True when anybody may take these terms. False advertises the price while leaving the owner free to refuse a direct rival.'),
+  })
+  .describe('Published licence terms for one node this company owns. World version 3.');
+export type NodeLicenceOffer = z.infer<typeof NodeLicenceOfferSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*  Customer data                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How hard a company collects from its own customers. One dial, three
+ * positions, and every one of them costs something: aggressive collection buys
+ * yield and pays for it in churn, reputation and regulatory exposure; minimal
+ * collection buys goodwill and gives up the data that would have improved the
+ * product.
+ */
+export const DATA_COLLECTION_LEVELS = ['minimal', 'standard', 'aggressive'] as const;
+
+export const DataCollectionLevelSchema = z
+  .enum(DATA_COLLECTION_LEVELS)
+  .describe(
+    'How hard this company collects customer data. "minimal": less yield, calmer customers, better standing. "standard": the default. "aggressive": far more yield, more churn on consumer lines, worse standing and a higher chance of enforcement.',
+  );
+export type DataCollectionLevel = z.infer<typeof DataCollectionLevelSchema>;
+
+/**
+ * One sector's pool of customer data, in petabytes.
+ *
+ * Pooled BY SECTOR because data is not fungible across industries: an AI
+ * laboratory's chat logs improve its models and do nothing at all for its
+ * batteries. An array rather than a record so the shape stays inside the
+ * LLM-facing schema rules, and capped at six because there are six sectors.
+ */
+export const DataAssetSchema = z
+  .object({
+    sector: SectorSchema,
+    petabytes: z.number().min(0).describe('Petabytes of usable customer data held in this sector, after decay.'),
+  })
+  .describe('One sector\'s stock of customer data. World version 3.');
+export type DataAsset = z.infer<typeof DataAssetSchema>;
+
 export const CompanySchema = z
   .object({
     // --- identity ---
@@ -839,6 +1010,50 @@ export const CompanySchema = z
       ),
     capacity: CapacityHoldingsSchema.optional().describe(
       'Non-compute capacity built with invest_capacity: plant, fleet and grid. Absent until the company first invests, and absent for every world-version-1 company, for the same hash-freezing reason every field in this block is optional rather than defaulted.',
+    ),
+
+    /*
+     * World version 3: which nodes of the one economic table this company can
+     * produce, and what it has licensed from somebody else. Both optional for
+     * exactly the reason every priced-economy field above is — a defaulted
+     * array would materialise on every world-1 and world-2 company the moment
+     * the schema parsed one, and both frozen worlds would stop hashing to the
+     * values they have always hashed to.
+     *
+     * Ownership is per company on purpose. World 2 asked whether a technology
+     * was achieved *by anybody*, which locked nearly every line for everybody
+     * on turn one, incumbents included.
+     */
+    ownedNodes: z
+      // The table is 87 rows. The cap is above it because ownership UNIONS on
+      // an acquisition: two companies owning thirty nodes each become one
+      // owning fifty, and a cap below what a legal acquisition produces would
+      // make the resulting session unsavable.
+      .array(z.string().min(1))
+      .max(96)
+      .optional()
+      .describe(
+        'Ids into ECONOMIC_NODES (nodeGraph.ts) this company may produce. A company has a line on a node when it produces and sells it; owning the node is what makes that legal. Absent on a world-1 or world-2 company.',
+      ),
+    licences: z
+      .array(NodeLicenceSchema)
+      .max(12)
+      .optional()
+      .describe('Nodes this company may produce under somebody else\'s ownership, at a royalty and until an expiry. Absent on a world-1 or world-2 company.'),
+    licenceOffers: z
+      .array(NodeLicenceOfferSchema)
+      .max(12)
+      .optional()
+      .describe('Terms this company advertises for nodes it owns. Absent on a world-1 or world-2 company, and absent for an owner that has never published.'),
+    dataAssets: z
+      .array(DataAssetSchema)
+      .max(6)
+      .optional()
+      .describe(
+        'Customer data this company holds, pooled by sector, in petabytes. Accrues from what its lines serve, decays every quarter, lifts the quality of what it sells in that sector and feeds any line whose node consumes a dataset. Absent on a world-1 or world-2 company.',
+      ),
+    dataPolicy: DataCollectionLevelSchema.optional().describe(
+      'How hard this company collects from its own customers. Absent means "standard", which is what every company starts on and what a world-1 or world-2 company always is.',
     ),
 
     // --- strategy (drives NPC behaviour and describes player companies) ---

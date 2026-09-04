@@ -30,22 +30,76 @@ export interface MarketingPlan {
 }
 
 /**
+ * How much of last quarter's GROSS PROFIT a company nobody is directing will put
+ * behind marketing and research together.
+ *
+ * The archetype shares are struck on revenue, which is the right shape for a
+ * software business at an eighty percent margin and a nonsense for a contract
+ * manufacturer at twenty-five: a twenty-two percent research share of revenue is
+ * most of the gross profit of the thing it sells, and the two shares together
+ * can exceed the margin outright, so no run rate at any scale would ever cover
+ * the wage bill. Struck on gross profit instead, the same policy means the same
+ * thing in every industry: a company spends a little over half of what it makes
+ * on the goods, and the rest pays the people.
+ *
+ * World 3 only, and gated on the company's own lines rather than on the world
+ * version, because only a node line has a cost of goods that is the roll-up of
+ * what it is made of. A world-1 or world-2 company carries no `nodeId` on any
+ * product, so neither frozen world can reach this and neither hash can move.
+ */
+export const NODE_DISCRETIONARY_GROSS_PROFIT_SHARE = 0.55;
+
+/** Whether this company sells node lines, and so has a real cost of goods to strike a policy on. */
+function sellsNodeLines(company: Company): boolean {
+  return company.products.some((product) => product.isActive && (product.nodeId ?? null) !== null);
+}
+
+/**
+ * The most a node-economy company will put behind marketing and research
+ * together this quarter, or null when the gross-profit bound does not apply.
+ *
+ * Read off last quarter's own figures — the revenue and the cost of goods the
+ * financial phase booked — so it is exactly as knowable to the company as the
+ * revenue share it replaces.
+ */
+export function discretionaryCeilingUsd(company: Company): number | null {
+  if (!sellsNodeLines(company)) return null;
+  const grossProfit = company.financials.revenueQuarterly - company.financials.cogs;
+  return Math.max(0, grossProfit) * NODE_DISCRETIONARY_GROSS_PROFIT_SHARE;
+}
+
+/**
+ * This policy's share of the ceiling: the two budgets split it in the ratio the
+ * archetype already declares, so neither depends on which is computed first and
+ * the pair can never sum past the ceiling.
+ */
+function boundedPolicyUsd(company: Company, ownShare: number, otherShare: number): number {
+  const derived = company.financials.revenueQuarterly * ownShare;
+  const ceiling = discretionaryCeilingUsd(company);
+  if (ceiling === null) return money(derived);
+  const total = ownShare + otherShare;
+  const slice = total <= 0 ? 0 : ceiling * (ownShare / total);
+  return money(Math.min(derived, slice));
+}
+
+/**
  * Derive the archetype-policy marketing spend: a share of last quarter's
- * revenue, bent by posture. Used when no action stated a budget, and as the
+ * revenue, bent by posture, and in the node economy never more than the gross
+ * profit behind it can carry. Used when no action stated a budget, and as the
  * floor the financial phase falls back to if the product phase did not run.
  */
 export function policyMarketingUsd(company: Company): number {
   const policy = effectivePolicy(company.archetype, company.posture);
-  return money(company.financials.revenueQuarterly * policy.marketingRevenueShare);
+  return boundedPolicyUsd(company, policy.marketingRevenueShare, policy.rdRevenueShare);
 }
 
 /**
  * Derive the archetype-policy research envelope: a share of last quarter's
- * revenue, bent by posture.
+ * revenue, bent by posture, under the same gross-profit bound as marketing.
  */
 export function policyResearchEnvelopeUsd(company: Company): number {
   const policy = effectivePolicy(company.archetype, company.posture);
-  return money(company.financials.revenueQuarterly * policy.rdRevenueShare);
+  return boundedPolicyUsd(company, policy.rdRevenueShare, policy.marketingRevenueShare);
 }
 
 /**

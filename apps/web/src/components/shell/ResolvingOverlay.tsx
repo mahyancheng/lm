@@ -32,7 +32,7 @@ interface Stage {
   readonly id: VignetteId;
   readonly title: string;
   readonly caption: string;
-  /** The phases this vignette stands for. The five together are all eighteen. */
+  /** The phases this vignette stands for. The five together are every phase. */
   readonly phases: readonly ResolutionPhase[];
 }
 
@@ -58,8 +58,8 @@ const STAGES: readonly Stage[] = [
   {
     id: 'office',
     title: 'Your company works',
-    caption: 'Hiring, research, demand — and the books that follow from them.',
-    phases: ['talent_resolution', 'research_resolution', 'product_demand_resolution', 'financial_resolution'],
+    caption: 'Hiring, research, prices, demand — and the books that follow from them.',
+    phases: ['talent_resolution', 'research_resolution', 'node_market_resolution', 'product_demand_resolution', 'financial_resolution'],
   },
   {
     id: 'ticker',
@@ -233,7 +233,7 @@ export function ResolvingOverlay(): React.JSX.Element | null {
         {/* --- the phases, streaming --------------------------------------- */}
         {resolving ? (
           /* Deliberately not keyed on the stage: re-mounting inside a live
-             region would re-announce all eighteen names on every step. The
+             region would re-announce every phase name on every step. The
              stream plays once, on arrival, and the marks update in place. */
           <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-0.5" aria-label="Resolution phases">
             {RESOLUTION_PHASES.map((phase, index) => {

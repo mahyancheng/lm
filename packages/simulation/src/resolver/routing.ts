@@ -18,7 +18,9 @@
 
 import type {
   BoardProposal,
+  Company,
   DealProposal,
+  NodeLicence,
   ResearchProject,
   ResolverContext,
   SessionState,
@@ -26,11 +28,22 @@ import type {
   StoredGovernmentBid,
   SubmittedAction,
 } from '@frontier/contracts';
-import { DEFAULT_QUORUM_RULE, makeId } from '@frontier/contracts';
+import { DEFAULT_QUORUM_RULE, economicNodeById, makeId } from '@frontier/contracts';
 import { labelFor, pendingOfType } from './actions';
 import { plannedProgrammeQuarters } from '../research/forecast';
+import { abandonProject } from '../research/ownership';
 import { emitPartialFill } from '../companies/partialFill';
-import { isMultiSectorWorld } from '../economy/sectors';
+import {
+  LICENCE_TERM_QUARTERS,
+  boundedRoyaltyPct,
+  dropLapsedLicences,
+  grantLicence,
+  licenceUpfrontUsd,
+  nodeLicenceOf,
+  npcLicenceVerdict,
+  ownsNodeOutright,
+} from '../graph/licensing';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { computeCommitted, researchComputeHeadroom, researchersCommitted } from '../validator/context';
 
 /* -------------------------------------------------------------------------- */
@@ -234,6 +247,62 @@ export function ensureResearchProjects(draft: SessionState, ctx: ResolverContext
  * Secrecy is not touched here: it is set when the programme opens and changing
  * it would move a private fact into public view without a publication.
  */
+/**
+ * Apply every `abandon_research_project` to the programme it names.
+ *
+ * Runs before `advanceProjects`, so a programme closed this quarter costs
+ * nothing this quarter: that is the whole point of the instruction. The
+ * consequences — releasing the researchers and the compute, stopping the
+ * budget, and the investor reputation it costs — live in `research/ownership.ts`
+ * beside the pause it is the answer to.
+ */
+export function applyResearchAbandonments(draft: SessionState, ctx: ResolverContext): number {
+  let closed = 0;
+  for (const { action, intent } of pendingOfType(draft, 'abandon_research_project')) {
+    if (action.actorCompanyId === null) continue;
+    if (abandonProject(draft, ctx, action.actorCompanyId, intent.projectId)) closed += 1;
+  }
+  return closed;
+}
+
+/**
+ * Apply every `set_data_policy` to the company that submitted it.
+ *
+ * Nothing else happens here: the yield, the churn, the reputation and the
+ * regulatory exposure are all read off the stored level by the passes that own
+ * those numbers, so the policy is a single field and never a second copy of the
+ * arithmetic.
+ */
+export function applyDataPolicies(draft: SessionState, ctx: ResolverContext): number {
+  let changed = 0;
+  for (const { action, intent } of pendingOfType(draft, 'set_data_policy')) {
+    const company = draft.companies.find((candidate) => candidate.id === action.actorCompanyId);
+    if (company === undefined) continue;
+    const before = company.dataPolicy ?? 'standard';
+    if (before === intent.collectionLevel) continue;
+    company.dataPolicy = intent.collectionLevel;
+    changed += 1;
+    const eventId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'data_resolved',
+      actorId: company.id,
+      targetId: company.id,
+      payload: { collectionLevel: intent.collectionLevel, previousLevel: before, policyChanged: true },
+      visibility: 'company',
+    });
+    ctx.log({
+      phase: 'research_resolution',
+      text: `${company.name} moved to ${intent.collectionLevel} data collection from ${before}.`,
+      deltaLabel: intent.collectionLevel,
+      refEventIds: [eventId],
+      tone: intent.collectionLevel === 'aggressive' ? 'warning' : 'positive',
+      subjectId: company.id,
+    });
+  }
+  return changed;
+}
+
 export function applyResearchAdjustments(draft: SessionState, ctx: ResolverContext): ResearchProject[] {
   const changed: ResearchProject[] = [];
 
@@ -538,6 +607,299 @@ export function routeDeals(draft: SessionState, ctx: ResolverContext): void {
       visibility: deal.confidentiality === 'public' ? 'public' : 'company',
     });
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Node licences (world 3)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Everything a quarter does about licensing, in the order it has to happen:
+ * lapse what has run out, publish what an owner is advertising, put every
+ * request to its owner, and execute what has been agreed.
+ *
+ * Lapsing first is what lets a renewal agreed this quarter land on top of the
+ * licence it renews rather than fighting it; executing last is what lets a
+ * request an NPC owner accepted in the same breath take effect in the same
+ * quarter, so a founder is never told to come back in three months to find out
+ * whether they may buy something.
+ *
+ * A no-op below world version 3, which has no node ownership to licence.
+ */
+export function routeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  lapseNodeLicences(draft, ctx);
+  publishLicenceTerms(draft, ctx);
+  proposeNodeLicences(draft, ctx);
+  executeNodeLicences(draft, ctx);
+}
+
+/** The plain name of a node, for a report line. Falls back to the id. */
+function nodeLabel(nodeId: string): string {
+  return economicNodeById(nodeId)?.label ?? nodeId;
+}
+
+/**
+ * Drop every licence whose term has ended and say so.
+ *
+ * The owner declining a renewal is not an event the owner has to take: it is
+ * what happens by default, and that is what makes a licence a weapon. A line
+ * built on a lapsed licence stops being producible the same quarter, which the
+ * production phase reports on its own.
+ */
+function lapseNodeLicences(draft: SessionState, ctx: ResolverContext): void {
+  for (const company of draft.companies) {
+    if (!company.isActive) continue;
+    for (const licence of dropLapsedLicences(company, draft.quarter)) {
+      const owner = draft.companies.find((candidate) => candidate.id === licence.ownerCompanyId);
+      const eventId = ctx.emit({
+        sessionId: draft.sessionId,
+        quarter: draft.quarter,
+        type: 'node_licence_lapsed',
+        actorId: licence.ownerCompanyId,
+        targetId: company.id,
+        payload: { nodeId: licence.nodeId, royaltyPct: licence.royaltyPct, expiryQuarter: licence.expiryQuarter },
+        visibility: 'company',
+      });
+      ctx.log({
+        phase: 'capital_resolution',
+        text: `${company.name}'s licence on ${nodeLabel(licence.nodeId)} from ${
+          owner?.name ?? licence.ownerCompanyId
+        } has run out. Anything built on it stops until it is renewed, researched or bought.`,
+        deltaLabel: 'lapsed',
+        refEventIds: [eventId],
+        tone: 'warning',
+        subjectId: company.id,
+      });
+    }
+  }
+}
+
+/** Record what an owner is advertising. Its own state, so no consent is involved. */
+function publishLicenceTerms(draft: SessionState, ctx: ResolverContext): void {
+  for (const { action, intent } of pendingOfType(draft, 'publish_licence_terms')) {
+    const company = draft.companies.find((candidate) => candidate.id === action.actorCompanyId);
+    if (company === undefined || !ownsNodeOutright(company, intent.nodeId)) continue;
+    const royaltyPct = boundedRoyaltyPct(intent.royaltyPct);
+    const offers = company.licenceOffers ?? [];
+    const existing = offers.findIndex((offer) => offer.nodeId === intent.nodeId);
+    const offer = { nodeId: intent.nodeId, royaltyPct, openToAll: intent.openToAll };
+    if (existing >= 0) company.licenceOffers = offers.map((entry, index) => (index === existing ? offer : entry));
+    else if (offers.length < 12) company.licenceOffers = [...offers, offer];
+    else continue;
+
+    const eventId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'node_licensed',
+      actorId: company.id,
+      targetId: intent.nodeId,
+      payload: { published: true, nodeId: intent.nodeId, royaltyPct, openToAll: intent.openToAll },
+      visibility: 'public',
+    });
+    ctx.log({
+      phase: 'capital_resolution',
+      text: `${company.name} will licence ${nodeLabel(intent.nodeId)} at ${royaltyPct}% ${
+        intent.openToAll ? 'to anybody who asks' : 'to anybody it does not compete with'
+      }.`,
+      deltaLabel: `${royaltyPct}%`,
+      refEventIds: [eventId],
+      tone: 'neutral',
+      subjectId: company.id,
+    });
+  }
+}
+
+/**
+ * Put every `license_node` request to the company that owns the node, as an
+ * ordinary deal, and let an NPC owner answer it in the same quarter.
+ *
+ * A player-run owner answers with `accept_deal` or `reject_deal` like any other
+ * proposal — the offer is on their deal room table, and it expires next quarter
+ * if they ignore it.
+ */
+function proposeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
+  for (const { action, intent } of pendingOfType(draft, 'license_node')) {
+    const licensee = draft.companies.find((candidate) => candidate.id === action.actorCompanyId);
+    const owner = draft.companies.find((candidate) => candidate.id === intent.ownerCompanyId);
+    const node = economicNodeById(intent.nodeId);
+    if (licensee === undefined || owner === undefined || node === undefined) continue;
+    if (!licensee.isActive || !owner.isActive || licensee.id === owner.id) continue;
+    // Only an outright owner may grant: a licensee sublicensing is the one
+    // thing a licence does not permit, and the validator says so too.
+    if (!ownsNodeOutright(owner, node.id)) continue;
+
+    const id = makeId('deal', draft.sessionId, draft.quarter, action.actorCompanyId, 'licence', String(action.sequence));
+    if (draft.deals.some((deal) => deal.id === id)) continue;
+
+    const royaltyPct = boundedRoyaltyPct(intent.royaltyPct);
+    const upfrontUsd = licenceUpfrontUsd(node);
+    // The fee is a FIELD of the licence obligation and is paid once, by the
+    // executor below. A second `cash_payment` obligation naming the same
+    // dollars would be a second claim on them the first time anything else
+    // learns to execute one.
+    const proposal: DealProposal = {
+      id,
+      counterpartyId: owner.id,
+      counterpartyKind: 'company',
+      gives: [],
+      gets: [
+        {
+          kind: 'node_licence',
+          nodeId: node.id,
+          ownerCompanyId: owner.id,
+          licenseeCompanyId: licensee.id,
+          royaltyPct,
+          quarters: LICENCE_TERM_QUARTERS,
+          upfrontUsd,
+        },
+      ],
+      confidentiality: 'private',
+      expiresQuarter: draft.quarter + 1,
+      binding: true,
+      intentStatements: [],
+      summary: `${licensee.name} asks to licence ${node.label} from ${owner.name}: ${compactUsd(
+        upfrontUsd,
+      )} on signature and ${royaltyPct}% of the revenue of every line that needs it, for ${LICENCE_TERM_QUARTERS} quarters.`,
+      proposerId: licensee.id,
+      proposerKind: 'company',
+      status: 'proposed',
+      createdQuarter: draft.quarter,
+      respondedQuarter: null,
+      conversationId: null,
+      breachedByPartyId: null,
+    };
+    draft.deals.push(proposal);
+
+    const proposedId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'deal_proposed',
+      actorId: licensee.id,
+      targetId: owner.id,
+      payload: { dealId: proposal.id, binding: true, gives: [], gets: ['node_licence'], expiresQuarter: proposal.expiresQuarter },
+      visibility: 'company',
+    });
+    ctx.log({
+      phase: 'capital_resolution',
+      text: proposal.summary,
+      deltaLabel: `${royaltyPct}%`,
+      refEventIds: [proposedId],
+      tone: 'neutral',
+      subjectId: licensee.id,
+    });
+
+    // A player-run owner decides for themselves, next quarter, on the deal
+    // screen. An NPC owner decides here, by a rule a founder can read.
+    if (owner.controllerPlayerId !== null) continue;
+    const verdict = npcLicenceVerdict(owner, licensee, node, royaltyPct);
+    proposal.status = verdict.accepted ? 'accepted' : 'rejected';
+    proposal.respondedQuarter = draft.quarter;
+    const answerId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: verdict.accepted ? 'deal_accepted' : 'deal_rejected',
+      actorId: owner.id,
+      targetId: proposal.id,
+      payload: { proposerId: licensee.id, binding: true, reason: clip(verdict.reason, 240) },
+      visibility: 'company',
+    });
+    ctx.log({
+      phase: 'capital_resolution',
+      text: verdict.reason,
+      deltaLabel: verdict.accepted ? 'accepted' : 'refused',
+      refEventIds: [answerId],
+      tone: verdict.accepted ? 'positive' : 'warning',
+      subjectId: licensee.id,
+    });
+  }
+}
+
+/**
+ * Execute every accepted node licence: the fee moves, the right is written onto
+ * the licensee, and the deal is marked executed so no quarter does it twice.
+ *
+ * The fee moves cash and equity together on both sides, exactly as a transfer
+ * inside a group does, because these are two separate companies and nothing on
+ * the licensee's own sheet offsets the money leaving it.
+ */
+function executeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
+  for (const deal of draft.deals) {
+    if (deal.status !== 'accepted' || !deal.binding) continue;
+    const terms = nodeLicenceOf(deal);
+    if (terms === null) continue;
+
+    const owner = draft.companies.find((candidate) => candidate.id === terms.ownerCompanyId);
+    const licensee = draft.companies.find((candidate) => candidate.id === terms.licenseeCompanyId);
+    const node = economicNodeById(terms.nodeId);
+    // Executed-with-nothing-done rather than left accepted for ever: the
+    // counterparty is gone or the node is not in this session's table, and
+    // re-checking it every quarter would be a slow way to keep saying no.
+    if (owner === undefined || licensee === undefined || node === undefined || !ownsNodeOutright(owner, node.id)) {
+      deal.status = 'executed';
+      continue;
+    }
+
+    const licence: NodeLicence = {
+      nodeId: node.id,
+      ownerCompanyId: owner.id,
+      royaltyPct: terms.royaltyPct,
+      expiryQuarter: draft.quarter + terms.quarters,
+    };
+    if (!grantLicence(licensee, licence)) {
+      deal.status = 'executed';
+      ctx.log({
+        phase: 'capital_resolution',
+        text: `${licensee.name} already licenses as much as it can carry, so ${node.label} was not added.`,
+        deltaLabel: 'not granted',
+        refEventIds: [],
+        tone: 'warning',
+        subjectId: licensee.id,
+      });
+      continue;
+    }
+    deal.status = 'executed';
+    payLicenceFee(licensee, owner, terms.upfrontUsd);
+
+    const eventId = ctx.emit({
+      sessionId: draft.sessionId,
+      quarter: draft.quarter,
+      type: 'node_licensed',
+      actorId: owner.id,
+      targetId: licensee.id,
+      payload: {
+        published: false,
+        dealId: deal.id,
+        nodeId: node.id,
+        royaltyPct: terms.royaltyPct,
+        upfrontUsd: terms.upfrontUsd,
+        expiryQuarter: licence.expiryQuarter,
+      },
+      visibility: 'company',
+    });
+    ctx.log({
+      phase: 'capital_resolution',
+      text: `${licensee.name} may now make ${node.label} under ${owner.name}'s licence: ${compactUsd(terms.upfrontUsd)} paid, ${
+        terms.royaltyPct
+      }% of every line that needs it for the next ${terms.quarters} quarters, and no right to licence it on.`,
+      deltaLabel: `-${compactUsd(terms.upfrontUsd)}`,
+      refEventIds: [eventId],
+      tone: 'positive',
+      subjectId: licensee.id,
+    });
+  }
+}
+
+/** Move the signing fee. Cash and equity together, on both sheets. */
+function payLicenceFee(licensee: Company, owner: Company, upfrontUsd: number): void {
+  const amount = Math.max(0, Math.round(upfrontUsd));
+  if (amount <= 0) return;
+  licensee.financials.cash -= amount;
+  licensee.balanceSheet.assets.cash -= amount;
+  licensee.balanceSheet.equity -= amount;
+  owner.financials.cash += amount;
+  owner.balanceSheet.assets.cash += amount;
+  owner.balanceSheet.equity += amount;
 }
 
 /* -------------------------------------------------------------------------- */

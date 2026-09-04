@@ -9,7 +9,7 @@
  *
  * Two layers of test, matching the two ways this module is reached:
  *
- * 1. **Pure mechanics** — `resolveSupplyLine`, `effectiveQuality`,
+ * 1. **Pure mechanics** — `resolveSupplyLine`, `categoryEffectiveQuality`,
  *    `resolveSupplyLedger`, `dependenceOn`, `suppliersFor`, `customersFor` and
  *    `chooseSupplierDefault` called directly against a hand-shaped
  *    `SessionState`, with no resolution pass. These are the functions a screen
@@ -23,18 +23,20 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ActionIntent, Company, Product, SessionState, SubmittedAction } from '@frontier/contracts';
-import { PRODUCT_CATEGORIES_BY_ID, categoryById } from '@frontier/contracts';
+import { PRODUCT_CATEGORIES_BY_ID, categoryById, nodeMarketPriceUsd } from '@frontier/contracts';
 import { hashState } from '@frontier/shared';
 import { createDefaultEngine } from '../src/engine';
 import { createActionValidator } from '../src/validator';
 import { createDemoSession, DEMO_COMPANIES, DEMO_PLAYER_ID } from '../src/scenario';
 import { createWorld2Session, W2_COMPANIES } from '../src/scenario/world2';
+import { createWorld3Session } from '../src/scenario/world3';
+import { OPEN_MARKET_PREMIUM, unitCostOf } from '../src/graph';
 import { categoryOf } from '../src/companies/categories';
 import {
   chooseSupplierDefault,
   customersFor,
   dependenceOn,
-  effectiveQuality,
+  categoryEffectiveQuality,
   openMarketSupplyCostUsd,
   requiredInputUnsupplied,
   resolveSupplyLedger,
@@ -204,15 +206,15 @@ describe('resolveSupplyLine', () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/*  effectiveQuality — the blend, and the switching cost                       */
+/*  categoryEffectiveQuality — the blend, and the switching cost                       */
 /* -------------------------------------------------------------------------- */
 
-describe('effectiveQuality', () => {
+describe('categoryEffectiveQuality', () => {
   it('is exactly the product\'s own quality in world 1', () => {
     const state = createDemoSession();
     const company = companyOf(state, DEMO_COMPANIES.player);
     const product = productOf(company);
-    expect(effectiveQuality(state, company, product)).toBe(product.qualityScore);
+    expect(categoryEffectiveQuality(state, company, product)).toBe(product.qualityScore);
   });
 
   it('is exactly the product\'s own quality when its category declares no inputs', () => {
@@ -220,7 +222,7 @@ describe('effectiveQuality', () => {
     const company = companyOf(state, W2_COMPANIES.tessellate);
     const product = productOf(company);
     expect(categoryOf(company, product).inputs).toHaveLength(0);
-    expect(effectiveQuality(state, company, product)).toBe(product.qualityScore);
+    expect(categoryEffectiveQuality(state, company, product)).toBe(product.qualityScore);
   });
 
   it('blends toward a live supplier by the input\'s declared share, and away from one with no live supplier', () => {
@@ -234,7 +236,7 @@ describe('effectiveQuality', () => {
     const battQuality = productOf(companyOf(state, SUPPLIER_OPTIONAL)).qualityScore;
 
     const expected = product.qualityScore + sensorsShare * (sensorQuality - product.qualityScore) + battShare * (battQuality - product.qualityScore);
-    expect(effectiveQuality(state, buyer, product)).toBeCloseTo(Math.min(1, Math.max(0, expected)), 6);
+    expect(categoryEffectiveQuality(state, buyer, product)).toBeCloseTo(Math.min(1, Math.max(0, expected)), 6);
   });
 
   it('dampens a switched line\'s pull to SWITCH_QUALITY_FACTOR for the quarter it lands in, and not after', () => {
@@ -248,8 +250,8 @@ describe('effectiveQuality', () => {
     const battQuality = productOf(companyOf(state, SUPPLIER_OPTIONAL)).qualityScore;
     const own = product.qualityScore;
 
-    const steady = effectiveQuality(state, buyer, product);
-    const switched = effectiveQuality(state, buyer, product, new Set([`${product.id}|${sensorsInput.categoryId}`]));
+    const steady = categoryEffectiveQuality(state, buyer, product);
+    const switched = categoryEffectiveQuality(state, buyer, product, new Set([`${product.id}|${sensorsInput.categoryId}`]));
 
     // Only the sensors line switched, so only its pull is dampened; the
     // battery line's contribution is exactly the same in both readings.
@@ -296,12 +298,68 @@ describe('resolveSupplyLedger and cost/revenue reconciliation', () => {
   });
 
   it('an input nobody named a supplier for costs nothing extra — the category baseline already prices it', () => {
+    // WORLD 2's rule, and it stays: world 2 is frozen and its hash is pinned.
+    // It is also the bug — naming a supplier was a pure penalty, because the
+    // named leg cost up to 65% of *revenue* and the open market cost zero. The
+    // assertion below inverts it for world 3, where the open market is priced
+    // and a contract is the cheaper of the two.
     const state = world2();
     const buyer = companyOf(state, BUYER);
     const product = productOf(buyer);
     product.supply = []; // strip every named choice
     expect(openMarketSupplyCostUsd(state, buyer, product)).toBe(0);
     expect(supplyInputCostUsd(state, buyer, product)).toBe(0);
+  });
+
+  it('world 3 inverts it: the open market is priced, and a named supplier undercuts it', () => {
+    const state = createWorld3Session();
+    for (const company of state.companies) company.products = [];
+    const buyer = state.companies[0] as Company;
+    const supplier = state.companies[1] as Company;
+    buyer.region = 'north_america';
+    supplier.region = 'north_america';
+
+    const WAFER = 'mat_wafer_300mm';
+    const CHEMICALS = 'res_fab_chemicals';
+    const wafer = (nodeId: string, priceUsd: number): Product => ({
+      id: `prd_${nodeId}`,
+      name: nodeId,
+      segment: 'enterprise',
+      nodeId,
+      pricePerSeat: priceUsd,
+      activeCustomers: 0,
+      churnQuarterly: 0.05,
+      growthQuarterly: 0,
+      grossMarginPct: 0.4,
+      computeIntensity: 0.5,
+      qualityScore: 0.6,
+      launchedQuarter: 0,
+      isActive: true,
+    });
+
+    buyer.products = [wafer(WAFER, 14_000)];
+    const open = unitCostOf(state, buyer, WAFER);
+    const chemicals = open.lines.find((line) => line.key === CHEMICALS);
+    // The open market is not free any more: it is the node's settled price plus
+    // the premium a spot buyer pays for not having a contract.
+    expect(chemicals?.sourceKind).toBe('market');
+    expect(chemicals?.unitPriceUsd).toBeCloseTo(nodeMarketPriceUsd(state, CHEMICALS) * OPEN_MARKET_PREMIUM, 6);
+    expect(chemicals?.amountUsd).toBeGreaterThan(0);
+
+    // A named supplier asking under the market is cheaper than the open market,
+    // which is what makes choosing one the obvious move rather than a penalty.
+    supplier.products = [
+      { ...wafer(CHEMICALS, 600), supplyTerms: { openToAll: true, pricePerUnitUsd: 540, exclusiveCustomerIds: [], blockedCustomerIds: [] } },
+    ];
+    buyer.products = [
+      {
+        ...wafer(WAFER, 14_000),
+        supply: [{ inputCategoryId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null }],
+      },
+    ];
+    const contracted = unitCostOf(state, buyer, WAFER);
+    expect(contracted.lines.find((line) => line.key === CHEMICALS)?.sourceKind).toBe('buy');
+    expect(contracted.unitCostUsd).toBeLessThan(open.unitCostUsd);
   });
 
   it('resolves twice from the same state to the same ledger — no RNG, no clock', () => {

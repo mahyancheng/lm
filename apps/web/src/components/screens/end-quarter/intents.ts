@@ -64,6 +64,27 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
     case 'set_research_budget':
       return { label: 'Set the research budget', terms: [term('Budget', formatMoney(intent.budgetUsd))] };
 
+    case 'abandon_research_project':
+      return { label: 'Close a research programme', terms: [term('Programme', intent.projectId)] };
+
+    case 'set_data_policy':
+      return {
+        label: `Collect customer data at the ${intent.collectionLevel} level`,
+        terms: [term('Collection', intent.collectionLevel)],
+      };
+
+    case 'license_node':
+      return {
+        label: `Ask to licence ${intent.nodeId}`,
+        terms: [term('Owner', intent.ownerCompanyId), term('Royalty', `${intent.royaltyPct}%`)],
+      };
+
+    case 'publish_licence_terms':
+      return {
+        label: `Offer ${intent.nodeId} to licence`,
+        terms: [term('Royalty', `${intent.royaltyPct}%`), term('Open to', intent.openToAll ? 'anybody' : 'non-rivals')],
+      };
+
     case 'start_research_project':
       return {
         label: `Start a programme against ${intent.targetNodeId}`,
@@ -473,6 +494,16 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   set_research_budget: 'research_resolution',
   start_research_project: 'research_resolution',
   adjust_research_project: 'research_resolution',
+  // Both land in the research phase: closing a programme and changing the
+  // collection level are applied before the quarter advances, so a decision
+  // taken this quarter is the one this quarter runs on.
+  abandon_research_project: 'research_resolution',
+  set_data_policy: 'research_resolution',
+  // Licensing is a bargain between two companies, so it lands where every other
+  // deal does — and early enough that a licence granted this quarter is in
+  // force for this quarter's production.
+  license_node: 'capital_resolution',
+  publish_licence_terms: 'capital_resolution',
   propose_innovation: 'research_resolution',
   publish_research: 'research_resolution',
   reserve_compute: 'research_resolution',

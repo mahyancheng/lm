@@ -25,6 +25,7 @@ import { ActiveModifierSchema } from './modifiers';
 import { EventHazardMapSchema, WorldEventSchema } from './events';
 import { CompanySchema, CompanyQuarterMetricsSchema } from './company';
 import { EconomyReportSchema, SECTOR_PRICE_BOUNDS, SECTOR_SHORTAGE_MAX, TOLL_MAX_PCT } from './economy';
+import { NODE_PRICE_BOUNDS } from './nodes';
 import { CapTableSchema, FundingRoundSchema, SecuritySchema } from './ownership';
 import { MarketBeliefSchema, MarketInstrumentSchema, PublicDisclosureSchema, QuoteSchema, ValuationAnchorSchema } from './markets';
 import { BoardProposalSchema, BoardSchema, StoredCommitmentSchema } from './governance';
@@ -49,25 +50,61 @@ import { LeaderboardSchema, QuarterSnapshotSchema, SessionObjectiveSchema } from
  * made against it replays to the same state forever.
  *
  * **2** is the multi-sector economy — six sectors, six regions, hundreds of
- * companies, fundamentals-anchored prices.
+ * companies, fundamentals-anchored prices. It is not deleted and not migrated:
+ * a game already in progress has to be able to finish, so world 2 keeps working
+ * exactly as it always did and its opening state is pinned by a test.
+ *
+ * **3** is the node economy — one table of nodes, one market price per node,
+ * unit cost rolled up through those prices, and ownership per company.
  *
  * The version is recorded rather than inferred, and it defaults to **1** so a
  * save written before this field existed parses as what it actually is. New
  * games are created at `CURRENT_WORLD_VERSION`.
  */
-export const WORLD_VERSIONS = [1, 2] as const;
+export const WORLD_VERSIONS = [1, 2, 3] as const;
 
 export const WorldVersionSchema = z
-  .union([z.literal(1), z.literal(2)])
+  .union([z.literal(1), z.literal(2), z.literal(3)])
   .default(1)
-  .describe('Which world scenario this session was built from. 1 is the frozen single-sector AI world; 2 is the multi-sector economy. Absent means 1: the field postdates world 1 saves.');
+  .describe('Which world scenario this session was built from. 1 is the frozen single-sector AI world; 2 is the multi-sector economy; 3 is the node economy. Absent means 1: the field postdates world 1 saves.');
 export type WorldVersion = (typeof WORLD_VERSIONS)[number];
 
 /** What a save without a recorded version is. Never change this. */
 export const LEGACY_WORLD_VERSION: WorldVersion = 1;
 
 /** What a new game is created at. */
-export const CURRENT_WORLD_VERSION: WorldVersion = 2;
+export const CURRENT_WORLD_VERSION: WorldVersion = 3;
+
+/**
+ * The first world version whose economy is the one node table. Every world-3
+ * branch in the engine gates on this and never on the multi-sector gate:
+ * `isMultiSectorWorld` means "version 2 or later" and repurposing it would
+ * silently drag world 2 into world-3 behaviour.
+ */
+export const NODE_ECONOMY_WORLD_VERSION: WorldVersion = 3;
+
+/**
+ * The oldest world version this build can open.
+ *
+ * Three, from the node economy on. World 3 rebuilt the economy from the ground
+ * up — one node table, one price per node, ownership per company — and a world-2
+ * save is a recording of decisions taken against rules that no longer exist:
+ * replaying it would not reproduce that game, it would produce a different one
+ * wearing its name. So it is REFUSED, in the plain words below, and never
+ * migrated and never overwritten. The world-2 engine itself is not deleted —
+ * every branch of it still runs and is still pinned by hash — but this build
+ * starts new games in world 3 only.
+ */
+export const MINIMUM_SUPPORTED_WORLD_VERSION: WorldVersion = 3;
+
+/** What a player is told when they open a save from a world this build retired. */
+export const RETIRED_WORLD_SAVE_MESSAGE =
+  'This save was made in world 2. World 3 rebuilt the economy from the ground up and cannot replay it. Start a new game.';
+
+/** Whether a stored world version is one this build will open. */
+export function worldVersionIsSupported(version: WorldVersion): boolean {
+  return version >= MINIMUM_SUPPORTED_WORLD_VERSION;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Configuration                                                              */
@@ -183,14 +220,32 @@ export interface NewGameBackground {
   readonly label: string;
   readonly tagline: string;
   readonly blurb: string;
-  /** Three or four opening stats to show on the card. */
+  /**
+   * Three or four opening stats to show on the card.
+   *
+   * The ones written into the tables below are **world 1 and world 2's**. They
+   * are hand-written, and hand-written numbers go stale: world 3 reprices every
+   * line off the node roll-up, so a card claiming "Cash: $22M, Pre-revenue"
+   * describes a company that world no longer builds. From world 3 on, the
+   * picker asks the SCENARIO what a background opens with —
+   * `backgroundCardsFor` in `@frontier/simulation`, checked against
+   * `createWorld3Session` by `world3BackgroundCards.test.ts`. Contracts is the
+   * base layer and cannot compute them here.
+   *
+   * So: do not add a figure to a card below expecting a new world to honour it.
+   * Worlds 1 and 2 are frozen and these strings are frozen with them.
+   */
   readonly highlights: readonly NewGameBackgroundHighlight[];
 }
 
 /**
- * The copy and headline stats for the five backgrounds, in pick order. The
- * numbers here mirror the scenario's starting shape; the scenario is the source
- * of truth for what actually reaches the engine.
+ * The copy and headline stats for the five backgrounds, in pick order.
+ *
+ * The numbers mirror the world-1 and world-2 scenarios' starting shape, and
+ * they are frozen along with those worlds: a player finishing a world-2 game
+ * has to keep seeing the cards it was described to them with. A world-3 picker
+ * draws the same copy carrying figures read off `createWorld3Session` — see
+ * `highlights` above. The scenario is the source of truth either way.
  */
 export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
   {
@@ -274,7 +329,9 @@ export const NEW_GAME_BACKGROUNDS: readonly NewGameBackground[] = [
  * The world-version-2 backgrounds, two for each of the five non-AI sectors, in
  * `SECTORS` order. Same contract as the AI five: the copy lives here, the
  * numeric opening shape lives in the scenario, and the scenario is the source of
- * truth for what actually reaches the engine.
+ * truth for what actually reaches the engine — which from world 3 on means the
+ * picker takes its figures from `backgroundCardsFor` rather than from the
+ * `highlights` written below.
  */
 export const SECTOR_BACKGROUNDS: readonly NewGameBackground[] = [
   {
@@ -614,6 +671,12 @@ export const SessionStateSchema = z
       .record(z.string(), z.number().int().min(0).max(SECTOR_SHORTAGE_MAX))
       .optional()
       .describe('The stateful half of the price rule: a 0-60 counter per sector that deepens by ten when the price clamp saturates and heals by five when it does not.'),
+    nodePrices: z
+      .record(z.string(), z.number().int().min(NODE_PRICE_BOUNDS.min).max(NODE_PRICE_BOUNDS.max))
+      .optional()
+      .describe(
+        'World version 3: the price index of every economic node, whole numbers around a baseline of 100, multiplied into that node\'s own basePriceUsd. One price per node per quarter, computed from last quarter\'s supply and demand and stored here rather than recomputed inside any loop. Absent in world versions 1 and 2, where the neutral reading is the baseline.',
+      ),
     regionTolls: z
       .record(z.string(), z.number().int().min(0).max(TOLL_MAX_PCT))
       .optional()

@@ -146,14 +146,14 @@ function rawAt(key: string): string | null | undefined {
 /** Inspect whatever sits under one storage key. Shared by the autosave and the slots. */
 function inspectKey(key: string): SaveInspection {
   const store = storage();
-  if (store === null) return { status: 'absent', version: null, file: null };
+  if (store === null) return { status: 'absent', version: null, file: null, reason: null };
   let raw: string | null;
   try {
     raw = store.getItem(key);
   } catch {
-    return { status: 'unreadable', version: null, file: null };
+    return { status: 'unreadable', version: null, file: null, reason: null };
   }
-  if (raw === null) return { status: 'absent', version: null, file: null };
+  if (raw === null) return { status: 'absent', version: null, file: null, reason: null };
   return inspectSaveText(raw, PARSE_OPTIONS);
 }
 
@@ -282,7 +282,7 @@ function slotKey(slot: number): string | null {
 /** Inspect one slot, with the same unsupported-version preservation as the autosave. */
 export function readSlotFile(slot: number): SaveInspection {
   const key = slotKey(slot);
-  if (key === null) return { status: 'absent', version: null, file: null };
+  if (key === null) return { status: 'absent', version: null, file: null, reason: null };
   return inspectKey(key);
 }
 

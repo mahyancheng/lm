@@ -44,14 +44,25 @@ import type {
   StatementRow,
   SupplierOfferRow,
   SupplyCustomerRow,
+  EntryStepRow,
+  Sector,
+  UnitCostRow,
 } from '@frontier/contracts';
-import { COMP_BANDS, MAX_LOOKUPS_PER_TURN, MAX_LOOKUP_ROWS, STAFF_ROLES } from '@frontier/contracts';
 import {
-  ACCELERATOR_UNIT_PRICE_USD,
-  CLOUD_UNIT_COST_USD_PER_QUARTER,
+  COMP_BANDS,
+  ECONOMIC_NODES,
+  ECONOMIC_NODES_BY_ID,
+  MAX_LOOKUPS_PER_TURN,
+  MAX_LOOKUP_ROWS,
+  SECTORS,
+  STAFF_ROLES,
+  canProduce,
+  economicNodeById,
+  nodeMarketPriceUsd,
+} from '@frontier/contracts';
+import {
   ENERGY_USD_PER_ACCELERATOR_QUARTER,
   PPE_DEPRECIATION_PER_QUARTER,
-  RESERVED_UNIT_COST_USD_PER_QUARTER,
   SOLVENCY_NEGATIVE_QUARTERS,
 } from './companies/balance';
 import { negativeCashQuarters, solvencyLine } from './companies/solvency';
@@ -64,8 +75,12 @@ import { regionOf } from './economy/regions';
 import { quarterlyHireCostUsd, reservableUnits } from './validator/rules';
 import { companyEnergyCostFactor } from './economy/regions';
 import { launchableLines } from './companies/categories';
+import { launchableNodes } from './graph/lines';
 import { customersFor, suppliersFor } from './companies/supply';
-import { isMultiSectorWorld } from './economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from './economy/sectors';
+import { acceleratorListUsd, cloudRentUsd, reservedRentUsd } from './graph/lines';
+import { unitCostOf } from './graph/cost';
+import { costBreakdown, nodeEntryRoutes } from './graph/options';
 
 /* -------------------------------------------------------------------------- */
 /*  Small shared helpers                                                       */
@@ -173,7 +188,7 @@ function computeMarket(draft: SessionState, company: Company, askedUnits: number
   const cloud = sellersFor(draft, 'cloud', company.id);
 
   const cheapestAccelerator = accelerators[0] ?? null;
-  const buyPrice = cheapestAccelerator === null ? ACCELERATOR_UNIT_PRICE_USD : cheapestAccelerator.unitPriceUsd;
+  const buyPrice = cheapestAccelerator === null ? acceleratorListUsd(draft) : cheapestAccelerator.unitPriceUsd;
   // A size the founder did not name still needs a quote, and the honest default
   // is "as much again as you already hold", floored so a company with nothing
   // still gets a comparison it can read.
@@ -183,8 +198,8 @@ function computeMarket(draft: SessionState, company: Company, askedUnits: number
   const energyPerUnit = ENERGY_USD_PER_ACCELERATOR_QUARTER * draft.world.energy.electricityPrice * companyEnergyCostFactor(draft, company);
   const ownedQuarterly = units * (buyPrice * PPE_DEPRECIATION_PER_QUARTER + energyPerUnit);
   const reservedQuarterly =
-    units * ((reservations[0]?.unitPriceUsd ?? RESERVED_UNIT_COST_USD_PER_QUARTER * draft.world.compute.reservedPrice) + energyPerUnit);
-  const cloudQuarterly = units * ((cloud[0]?.unitPriceUsd ?? CLOUD_UNIT_COST_USD_PER_QUARTER * draft.world.compute.spotPrice) + energyPerUnit);
+    units * ((reservations[0]?.unitPriceUsd ?? reservedRentUsd(draft)) + energyPerUnit);
+  const cloudQuarterly = units * ((cloud[0]?.unitPriceUsd ?? cloudRentUsd(draft)) + energyPerUnit);
 
   const purchaseCostUsd = positive(units * buyPrice);
   const after = cashAfter(company, purchaseCostUsd);
@@ -448,6 +463,45 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
   if (!isMultiSectorWorld(draft)) {
     return { kind: 'launchable_lines', summary: clip('This world has no industry catalogue; only the four legacy segments exist.'), rows: [] };
   }
+  // World 3: the one graph. The rows are NODES this company may produce, and
+  // `locked` is `canProduce` — a question about this company alone. The world-2
+  // catalogue branch below is unreachable here, which is what keeps the deleted
+  // global achievement test off every world-3 path.
+  if (isNodeEconomyWorld(draft)) {
+    const nodes = launchableNodes(draft, company).slice(0, MAX_LOOKUP_ROWS);
+    const nodeRows: LaunchableLineRow[] = nodes.map(({ node, locked, missingNodeIds, alreadySold }) => ({
+      categoryId: node.id,
+      label: clip(node.label),
+      sectorId: clip(node.sector),
+      unitLabel: clip(node.unitLabel),
+      referencePriceUsd: positive(nodeMarketPriceUsd(draft, node.id)),
+      locked,
+      missingNodeTitles: missingNodeIds.slice(0, 4).map((nodeId) => clip(ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId)),
+      intent:
+        locked || alreadySold
+          ? null
+          : {
+              type: 'launch_product',
+              name: `${node.label} line`,
+              segment: node.buyerSegment ?? 'enterprise',
+              categoryId: node.id,
+              pricePerSeatUsd: positive(nodeMarketPriceUsd(draft, node.id)),
+              computeIntensity: 0.5,
+              launchMarketingUsd: 0,
+              targetQuality: 0.5,
+              supply: [],
+            },
+    }));
+    const openNodes = nodeRows.filter((row) => !row.locked).length;
+    return {
+      kind: 'launchable_lines',
+      summary: clip(
+        `${openNodes} of ${nodeRows.length} nodes in ${company.sector ?? 'this sector'} are ${company.name}'s to make now; the rest need research, a licence or an acquisition.`,
+      ),
+      rows: nodeRows,
+    };
+  }
+
   const lines = launchableLines(draft, company).slice(0, MAX_LOOKUP_ROWS);
   const rows: LaunchableLineRow[] = lines.map(({ category, locked, missingNodeIds }) => ({
     categoryId: category.id,
@@ -540,6 +594,164 @@ function customersLookup(draft: SessionState, company: Company, productId: strin
 }
 
 /* -------------------------------------------------------------------------- */
+/*  unit_cost                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * "What does this cost me to build?"
+ *
+ * The roll-up, itemised, biggest first — `unitCostOf` and `costBreakdown`, the
+ * same two calls the launch screen makes and the same number the profit and
+ * loss will book. The margin quoted is against the node's own market price,
+ * never a segment average.
+ */
+function unitCostLookup(draft: SessionState, company: Company, nodeId: string): LookupResult {
+  const node = economicNodeById(nodeId);
+  if (!isNodeEconomyWorld(draft) || node === undefined) {
+    return {
+      kind: 'unit_cost',
+      summary: clip(
+        node === undefined
+          ? `There is no node called ${nodeId}.`
+          : 'This world has no node economy; costs are held per product, not per node.',
+      ),
+      nodeId: clip(nodeId),
+      label: clip(node?.label ?? nodeId),
+      unitLabel: clip(node?.unitLabel ?? 'unit'),
+      unitCostUsd: 0,
+      marketPriceUsd: 0,
+      grossMarginPct: 0,
+      madeInHouseSharePct: 0,
+      blockedInputs: [],
+      rows: [],
+    };
+  }
+
+  const result = unitCostOf(draft, company, node.id);
+  const breakdown = costBreakdown(result).slice(0, MAX_LOOKUP_ROWS);
+  const marketPriceUsd = nodeMarketPriceUsd(draft, node.id);
+  const rows: UnitCostRow[] = breakdown.map((row) => ({
+    key: clip(row.key),
+    label: clip(row.label),
+    amountUsd: positive(row.amountUsd),
+    sharePct: positive(row.sharePct),
+    sourceKind: row.sourceKind,
+    sourceName: clip(row.sourceCompanyId === null ? '' : (draft.companies.find((entry) => entry.id === row.sourceCompanyId)?.name ?? '')),
+  }));
+  const biggest = breakdown[0] ?? null;
+
+  return {
+    kind: 'unit_cost',
+    summary: clip(
+      `One ${node.unitLabel} of ${node.label} costs ${whole(result.unitCostUsd)} dollars to make${
+        biggest === null ? '' : `, of which ${whole(biggest.amountUsd)} is ${biggest.label.toLowerCase()}`
+      }; the market pays ${whole(marketPriceUsd)}.`,
+    ),
+    nodeId: clip(node.id),
+    label: clip(node.label),
+    unitLabel: clip(node.unitLabel),
+    unitCostUsd: positive(result.unitCostUsd),
+    marketPriceUsd: positive(marketPriceUsd),
+    grossMarginPct: marketPriceUsd <= 0 ? 0 : whole(((marketPriceUsd - result.unitCostUsd) / marketPriceUsd) * 100),
+    madeInHouseSharePct: positive(result.madeInHouseSharePct),
+    blockedInputs: result.blockedInputNodeIds.slice(0, 8).map((id) => clip(ECONOMIC_NODES_BY_ID[id]?.label ?? id)),
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  entry_path                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * "What do I need to research to enter robotics?"
+ *
+ * The cheapest way in, not every way in: for a sector, the node in it this
+ * company is closest to owning, and everything that stands in front of that
+ * one. Each row carries all three routes — a programme's estimated cost, the
+ * cheapest published licence, and anybody who would simply sell the output —
+ * and a `start_research` intent where one is legal right now.
+ *
+ * A whole sector's table would be ninety rows of noise. What a founder asked
+ * for is a way in.
+ */
+function entryPathLookup(draft: SessionState, company: Company, sector: string, nodeId: string): LookupResult {
+  const empty = (summary: string): LookupResult => ({
+    kind: 'entry_path',
+    summary: clip(summary),
+    sector: clip(sector),
+    nodeId: clip(nodeId),
+    alreadyIn: false,
+    rows: [],
+  });
+  if (!isNodeEconomyWorld(draft)) return empty('This world has no node economy; entering an industry is a product launch, not an ownership question.');
+
+  // One named node wins over a sector; otherwise the target is the node in that
+  // sector with the fewest missing pieces, ties broken by the highest tier —
+  // the most finished thing that is closest to being reachable.
+  const named = nodeId === '' ? undefined : economicNodeById(nodeId);
+  const wanted = (SECTORS as readonly string[]).includes(sector) ? (sector as Sector) : null;
+  if (named === undefined && wanted === null) return empty('Name a sector or a node to find a way into.');
+
+  const inSector = named !== undefined ? [named] : ECONOMIC_NODES.filter((node) => node.sector === wanted);
+  const already = inSector.some((node) => canProduce(company, node.id, draft.quarter));
+  const target = [...inSector]
+    .map((node) => ({ node, routes: nodeEntryRoutes(draft, company, node.id) }))
+    .sort((a, b) => {
+      if (a.routes.missing.length !== b.routes.missing.length) return a.routes.missing.length - b.routes.missing.length;
+      if (b.node.tier !== a.node.tier) return b.node.tier - a.node.tier;
+      return a.node.id.localeCompare(b.node.id);
+    })[0];
+
+  if (target === undefined) return empty(`Nothing in ${sector === '' ? nodeId : sector} is in the table.`);
+
+  const rows: EntryStepRow[] = target.routes.missing.slice(0, MAX_LOOKUP_ROWS).map((step) => {
+    const licensor = step.licensors[0] ?? null;
+    const seller = target.routes.buyInstead[0] ?? null;
+    // A programme is only offerable when nothing else is in front of it: the
+    // world-3 research gate refuses a target whose own requirements are unheld.
+    const reachable = step.researchable && nodeEntryRoutes(draft, company, step.nodeId).missing.length === 1;
+    return {
+      nodeId: clip(step.nodeId),
+      label: clip(step.label),
+      tier: positive(ECONOMIC_NODES_BY_ID[step.nodeId]?.tier ?? 0),
+      researchable: step.researchable,
+      researchLowUsd: positive(step.researchCostRangeUsd[0]),
+      researchHighUsd: positive(step.researchCostRangeUsd[1]),
+      licensorName: clip(licensor?.name ?? ''),
+      licensorRoyaltyPct: positive(licensor?.royaltyPct ?? 0),
+      sellerName: clip(step.nodeId === target.node.id ? (seller?.name ?? '') : ''),
+      sellerAskUsd: positive(step.nodeId === target.node.id ? (seller?.askUsd ?? 0) : 0),
+      intent: reachable
+        ? {
+            type: 'start_research_project',
+            targetNodeId: step.nodeId,
+            budgetUsd: positive((step.researchCostRangeUsd[0] + step.researchCostRangeUsd[1]) / 2),
+            researchersAssigned: Math.max(1, Math.min(company.employees.researchers, 6)),
+            computeUnits: 0,
+            secret: false,
+          }
+        : null,
+    };
+  });
+
+  return {
+    kind: 'entry_path',
+    summary: clip(
+      already
+        ? `${company.name} can already make something in ${sector === '' ? target.node.label : sector}.`
+        : rows.length === 0
+          ? `${company.name} can already own everything ${target.node.label} needs.`
+          : `The shortest way into ${sector === '' ? target.node.label : sector} is ${target.node.label}: ${rows.length} node${rows.length === 1 ? '' : 's'} to own first, starting with ${rows[0]?.label ?? ''}.`,
+    ),
+    sector: clip(sector),
+    nodeId: clip(target.node.id),
+    alreadyIn: already,
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  The entry point                                                            */
 /* -------------------------------------------------------------------------- */
 
@@ -599,6 +811,12 @@ export function runLookups(draft: SessionState, companyId: string, requests: rea
         break;
       case 'customers':
         out.push(customersLookup(draft, company, request.productId));
+        break;
+      case 'unit_cost':
+        out.push(unitCostLookup(draft, company, request.nodeId));
+        break;
+      case 'entry_path':
+        out.push(entryPathLookup(draft, company, request.sector, request.nodeId));
         break;
       default: {
         const exhaustive: never = request;

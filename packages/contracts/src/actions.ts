@@ -28,7 +28,16 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, intCount, unitInterval, usd } from './ids';
-import { CapacityKindSchema, CompBandSchema, CompanyPostureSchema, ExecutiveRoleSchema, ProductSegmentSchema, StaffRoleSchema, SupplyTermsSchema } from './company';
+import {
+  CapacityKindSchema,
+  CompBandSchema,
+  CompanyPostureSchema,
+  DataCollectionLevelSchema,
+  ExecutiveRoleSchema,
+  ProductSegmentSchema,
+  StaffRoleSchema,
+  SupplyTermsSchema,
+} from './company';
 import { RegionSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
 import { BoardProposalKindSchema, CommitmentConditionSchema } from './governance';
@@ -149,6 +158,24 @@ export const ActionIntentSchema = z
         rationale: z.string().max(400).describe('Why publish now. Shown in the resolution report.'),
       })
       .describe('Make a private research result public. Buys reputation and hands rivals the method.'),
+
+    // Appended, world version 3. A programme blocked on something it can no
+    // longer hold is paused rather than pinned at ninety-eight percent for
+    // ever; this is the way out of it, and it costs standing so that quitting
+    // is a decision rather than a free undo.
+    z
+      .object({
+        type: z.literal('abandon_research_project'),
+        projectId: z.string().min(1).describe('The programme to close. Must belong to the acting company and still be active or paused.'),
+      })
+      .describe('Close a research programme for good. The researchers and the compute go back to the company the same quarter, the money stops, and investors mark you down for it.'),
+
+    z
+      .object({
+        type: z.literal('set_data_policy'),
+        collectionLevel: DataCollectionLevelSchema,
+      })
+      .describe('Set how hard this company collects data from its own customers. More collection means better products and worse standing; less means the reverse.'),
 
     /* ---------------------------- product ----------------------------- */
     z
@@ -573,6 +600,37 @@ export const ActionIntentSchema = z
       .describe(
         'Fully absorb a subsidiary: its cash, staff, products and balance sheet merge into yours and it is extinguished, exactly like an old-style acquisition. Irreversible — the subsidiary stops filing its own accounts and stops being a company you can direct separately.',
       ),
+
+    /* --------------------- licensing (world 3) ------------------------ */
+    // Appended. Ownership of a node is per company, so an AI laboratory that
+    // will never learn to run a fab needs a way in that is not "research it or
+    // do without": it licences the node from whoever owns it, or it buys the
+    // company. Both of these ride the existing deal machinery — a request is a
+    // proposal the owner answers — so no new notion of consent enters the game.
+    z
+      .object({
+        type: z.literal('license_node'),
+        nodeId: z.string().min(1).describe('The node to licence, an id into ECONOMIC_NODES.'),
+        ownerCompanyId: z.string().min(1).describe('The company that owns it. It must own the node outright; a licensee cannot sublicense what it licensed.'),
+        royaltyPct: z
+          .number()
+          .int()
+          .min(0)
+          .max(40)
+          .describe('Whole percent of your revenue on every line requiring this node, offered to the owner each quarter. Owners refuse thin offers; the engine holds the figure inside the licensing band.'),
+      })
+      .describe(
+        'Ask the owner of a node for the right to produce it. A signing fee is paid on acceptance and a royalty every quarter after, the term runs twelve quarters, and the owner is free to refuse the renewal. Cheaper than researching it and worse than owning it — which is the point.',
+      ),
+
+    z
+      .object({
+        type: z.literal('publish_licence_terms'),
+        nodeId: z.string().min(1).describe('A node this company owns outright.'),
+        royaltyPct: z.number().int().min(0).max(40).describe('The royalty the owner will licence at. A request at or above it is accepted.'),
+        openToAll: z.boolean().describe('True to take all comers at these terms. False advertises the price and leaves the owner free to refuse a direct rival.'),
+      })
+      .describe('Advertise what you will licence one of your nodes for. Publishing binds you to nothing but the price, and never to a renewal.'),
   ])
   .describe('One intended action. Submitting it is not doing it: the engine validates, clamps and then resolves.');
 export type ActionIntent = z.infer<typeof ActionIntentSchema>;
@@ -628,6 +686,11 @@ export const ACTION_TYPES = [
   // Group control (world 2). Appended, never inserted.
   'transfer_between_group',
   'merge_subsidiary',
+  // World 3. Appended, never inserted.
+  'abandon_research_project',
+  'set_data_policy',
+  'license_node',
+  'publish_licence_terms',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -671,6 +734,13 @@ export const CONFIRMATION_REQUIRED_ACTIONS: readonly ActionType[] = [
   // Full absorption is irreversible and ends the subsidiary as a company a
   // founder can direct separately, exactly like an acquisition.
   'merge_subsidiary',
+  // A licence is a signing fee in the hundreds of millions and a royalty on
+  // every unit for three years: a large spending commitment by the same test
+  // that makes an acquisition one. Publishing terms is the leverage decision
+  // set_supply_terms already is — what you will licence your own technology
+  // for, to whom, and at what price.
+  'license_node',
+  'publish_licence_terms',
 ];
 
 /** True when an action may never be auto-executed on the player's behalf. */

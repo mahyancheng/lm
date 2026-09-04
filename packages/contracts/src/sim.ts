@@ -143,6 +143,19 @@ export const SIM_EVENT_TYPES = [
   'control_changed',
   'group_transfer_executed',
   'subsidiary_merged',
+  // World 3's node market. Appended, never inserted. One row per node whose
+  // price index moved, carrying the units of supply and demand behind it.
+  'node_price_set',
+  // World 3's research on the one graph, and the customer data that feeds it.
+  // Appended, never inserted.
+  'research_paused',
+  'research_abandoned',
+  'node_owned',
+  'data_resolved',
+  // World 3's licensing: the right to produce somebody else's node, granted
+  // and then lapsed. Appended, never inserted.
+  'node_licensed',
+  'node_licence_lapsed',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');
@@ -228,6 +241,12 @@ export const RESOLUTION_PHASES = [
   'government_resolution',
   'talent_resolution',
   'research_resolution',
+  // World 3's node market. It sits here, and is its own phase, because it is
+  // world-level: it prices every node in the table from last quarter's supply
+  // and demand before any company resolves a single line against those prices.
+  // Burying it inside the product phase is precisely how world 2 ended up
+  // running three price systems that never reconciled.
+  'node_market_resolution',
   'product_demand_resolution',
   'financial_resolution',
   'disclosure_resolution',
@@ -242,7 +261,7 @@ export const RESOLUTION_PHASES = [
 export const ResolutionPhaseSchema = z
   .enum(RESOLUTION_PHASES)
   .describe(
-    'One phase of quarter resolution. The order is fixed: world events and modifiers move the world before anyone acts; boards decide before capital moves; capital moves before government awards; research and product resolve before financials; financials before disclosure; disclosure before the market prices; the market before social propagation; and the ledger commits before the snapshot is taken.',
+    'One phase of quarter resolution. The order is fixed: world events and modifiers move the world before anyone acts; boards decide before capital moves; capital moves before government awards; research resolves before the node market prices, and the node market before any line is sold against it; product resolves before financials; financials before disclosure; disclosure before the market prices; the market before social propagation; and the ledger commits before the snapshot is taken.',
   );
 export type ResolutionPhase = z.infer<typeof ResolutionPhaseSchema>;
 

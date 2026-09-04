@@ -15,7 +15,7 @@
  *    on the open market (no real counterparty — the category's own margin
  *    baseline already prices it, so this costs nothing extra), or has left a
  *    `required` input genuinely unfilled — which means the product cannot
- *    ship. `effectiveQuality` blends the answer into the product's own
+ *    ship. `categoryEffectiveQuality` blends the answer into the product's own
  *    quality by the input's `share`.
  * 2. **What does it cost, and who gets paid?** `supplyInputCostUsd` (the
  *    buyer's bill) and `supplyChargesByCompany` (the seller's revenue) are two
@@ -48,7 +48,10 @@
 import type { Company, Product, ProductCategory, ProductCategoryInput, ResolverContext, SessionState } from '@frontier/contracts';
 import { customersPerUnit, servingComputeUnits } from './products';
 import { categoryOf, capacityUsd } from './categories';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
+import { lineNodeIdOf } from '../graph/lines';
+import { unitCostOf } from '../graph/cost';
+import { nodeSellersFor } from '../graph/options';
 import { activeCompanies, activeProducts, clamp, companyActions, emitEvent, intentsOfType, money, ratio, unit, usdLabel } from './util';
 
 /* -------------------------------------------------------------------------- */
@@ -136,7 +139,14 @@ export function requiredInputUnsupplied(draft: SessionState, company: Company, p
  * owner's second north star asks for ("switching costs one quarter of
  * degraded quality, stated").
  */
-export function effectiveQuality(
+/**
+ * Worlds 1 and 2 only, and named for what it actually reads: it blends supplier
+ * quality over a **product category's** declared inputs, weighted by the
+ * `share`-of-revenue world 3 deletes. World 3's one quality function is
+ * `graph/production.ts`'s `effectiveQuality`, which weights by bill-of-materials
+ * value share and adds the company's own data edge.
+ */
+export function categoryEffectiveQuality(
   draft: SessionState,
   company: Company,
   product: Product,
@@ -301,6 +311,12 @@ export function resolveSupplyLedger(draft: SessionState): SupplyLedgerEntry[] {
 /**
  * The open-market share of one buyer product's input cost: always zero.
  *
+ * WORLD 2 ONLY, and world 3 does not call it at all: the node roll-up prices an
+ * unnamed input at `market x OPEN_MARKET_PREMIUM` (graph/cost.ts), which is the
+ * number that turns naming a supplier from a pure penalty into the obvious
+ * move. What follows is why the world-2 answer is zero, kept because world 2
+ * still runs on it.
+ *
  * `category.grossMarginBaselinePct` already prices in whatever a healthy line
  * needs to build itself, inputs included — every product in the catalogue was
  * tuned against that baseline before this module existed. So "the open
@@ -352,6 +368,29 @@ export function supplyChargesByCompany(draft: SessionState): Map<string, number>
 }
 
 /**
+ * The world-3 reading of dependence: the share of revenue whose unit cost is
+ * bought from one named supplier, weighted by how much of each unit it is.
+ */
+function nodeDependenceOn(draft: SessionState, company: Company, supplierCompanyId: string): number {
+  let totalRevenue = 0;
+  let dependentRevenue = 0;
+  for (const product of activeProducts(company)) {
+    const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
+    const revenue = units * product.pricePerSeat;
+    totalRevenue += revenue;
+    if (revenue <= 0) continue;
+    const nodeId = lineNodeIdOf(product);
+    if (nodeId === null) continue;
+    const cost = unitCostOf(draft, company, nodeId);
+    if (!(cost.unitCostUsd > 0)) continue;
+    let fromSupplier = 0;
+    for (const line of cost.lines) if (line.sourceCompanyId === supplierCompanyId && line.sourceKind === 'buy') fromSupplier += line.amountUsd;
+    dependentRevenue += revenue * clamp(fromSupplier / cost.unitCostUsd, 0, 1);
+  }
+  return totalRevenue <= 0 ? 0 : unit(ratio(dependentRevenue, totalRevenue));
+}
+
+/**
  * Share of `company`'s revenue riding on `supplierCompanyId` this quarter —
  * derived, never stored, so the dossier and the feed always read the current
  * position rather than a figure that can go stale.
@@ -392,6 +431,18 @@ export interface SupplyOffer {
 /** Every company whose open supply terms would currently accept `buyerCompanyId` for `inputCategoryId`. */
 export function suppliersFor(draft: SessionState, buyerCompanyId: string, inputCategoryId: string): SupplyOffer[] {
   if (!isMultiSectorWorld(draft)) return [];
+  // World 3: the id is a NODE id and a line is matched on the node it produces,
+  // not on a world-2 category. The two id spaces are disjoint — every node id
+  // carries a table prefix — so this branch cannot capture a category lookup.
+  if (isNodeEconomyWorld(draft)) {
+    return nodeSellersFor(draft, buyerCompanyId, inputCategoryId).map((seller) => ({
+      company: seller.company,
+      product: seller.company.products.find((candidate) => candidate.id === seller.productId)!,
+      pricePerUnitUsd: seller.askUsd,
+      qualityScore: seller.qualityScore,
+      isDirectRival: seller.isDirectRival,
+    }));
+  }
   const buyer = draft.companies.find((candidate) => candidate.id === buyerCompanyId) ?? null;
   const buyerSuppliesSameCategory = new Set(
     (buyer?.products ?? [])
@@ -478,7 +529,7 @@ function setSupplyLine(
  *
  * Returns the `${productId}|${inputCategoryId}` keys of every line that
  * pointed at a different supplier before this quarter began, for
- * `effectiveQuality`'s switching-cost discount.
+ * `categoryEffectiveQuality`'s switching-cost discount.
  */
 export function resolveSupplyOrders(draft: SessionState, ctx: ResolverContext): ReadonlySet<string> {
   const switched = new Set<string>();

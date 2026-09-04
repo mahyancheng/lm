@@ -37,6 +37,7 @@
 import type {
   ResolutionLine,
   ResolutionLineDraft,
+  NodeCostCache,
   ResolutionPhase,
   ResolutionPhaseReport,
   ResolverContext,
@@ -47,6 +48,7 @@ import type {
 } from '@frontier/contracts';
 import { RESOLUTION_PHASES, makeId } from '@frontier/contracts';
 import { fnv1a64, stableStringify } from '@frontier/shared';
+import { createNodeCostCache } from '../graph/lines';
 
 /** Report lines are capped by the schema; a long line is clipped, never dropped. */
 const MAX_LINE_TEXT = 300;
@@ -111,6 +113,15 @@ export class ResolutionRecorder {
   /** Lines a subsystem logged with no event to reference. Reported at commit. */
   private unreferencedLines = 0;
 
+  /**
+   * The unit-cost memo table for this one resolution, handed to every phase.
+   *
+   * Built here rather than by a phase because its lifetime is the resolution's
+   * lifetime exactly: it must outlive one phase and must not outlive one
+   * quarter. World 1 and world 2 never look at it.
+   */
+  readonly costCache: NodeCostCache;
+
   readonly startSequence: number;
   /**
    * The quarter being resolved, fixed at construction.
@@ -130,6 +141,7 @@ export class ResolutionRecorder {
     this.lastRowHash = preResolutionHash;
     this.startSequence = draft.ledgerSequence;
     this.resolutionQuarter = draft.quarter;
+    this.costCache = createNodeCostCache(draft);
   }
 
   /**
@@ -167,11 +179,19 @@ export class ResolutionRecorder {
     this.lastHash = after;
   }
 
-  /** The context handed to a subsystem for one phase. */
+  /**
+   * The context handed to a subsystem for one phase.
+   *
+   * Every phase of one resolution is handed the *same* cost cache, which is
+   * what makes it a per-resolution memo table rather than a per-phase one: the
+   * roll-up a phase does is still valid for the next phase of the same quarter,
+   * and a module-level cache would leak between saves and break replay.
+   */
   contextFor(phase: ResolutionPhase, rng: SeededRng): ResolverContext {
     return {
       quarter: this.resolutionQuarter,
       rng,
+      costCache: this.costCache,
       emit: (draft: SimEventDraft) => this.emit(draft, phase),
       log: (line: ResolutionLineDraft) => this.log(line, phase),
     };

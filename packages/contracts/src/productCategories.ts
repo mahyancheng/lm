@@ -1,6 +1,12 @@
 /**
  * @frontier/contracts — productCategories.ts
  *
+ * @deprecated WORLD 2 ONLY. World version 3 replaces this catalogue with the
+ * one node table in `nodes.ts` and `nodeGraph.ts`. This module is not deleted
+ * because world-2 saves reference its ids and a game in progress has to be able
+ * to finish; it is frozen, and no world-3 code may import it. A contract test
+ * enforces that.
+ *
  * The product category catalogue: the owner's second north star made explicit.
  *
  * World version 1 sells "seats" in four segments and nothing else. World

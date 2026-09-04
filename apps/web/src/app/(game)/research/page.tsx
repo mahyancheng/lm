@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
 import { SECTORS, quarterLabel } from '@frontier/contracts';
-import { heldComputeUnits, researchEnvelopeUsd, runningForecast, unmetDependencies } from '@frontier/simulation';
+import { heldComputeUnits, isNodeEconomyWorld, researchEnvelopeUsd, runningForecast, unmetDependencies } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
 import {
   CashAfter,
@@ -42,6 +42,7 @@ import {
   type Column,
 } from '@/components/ui';
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
+import { NodeMapPanel } from '@/components/screens/research/NodeMapPanel';
 import { InnovationPanel } from '@/components/screens/research/InnovationPanel';
 import { NodeDrawer } from '@/components/screens/research/NodeDrawer';
 import { EDGE_STYLE } from '@/components/screens/research/graphLayout';
@@ -109,6 +110,10 @@ export default function ResearchPage(): React.JSX.Element {
   }, []);
 
   const graph = view.techGraph;
+  // World 3's map is the node table projected, drawn on the shared canvas. The
+  // programme tables below are unchanged: a research project targets a node id
+  // in both economies, and everything about running one is the same.
+  const nodeEconomy = isNodeEconomyWorld(session);
   const queued = useMemo(() => queuedEntries.map((entry) => entry.action), [queuedEntries]);
 
   const ownProjects = view.ownResearchProjects;
@@ -430,6 +435,9 @@ export default function ResearchPage(): React.JSX.Element {
         />
       </div>
 
+      {nodeEconomy ? (
+        <NodeMapPanel session={session} companyId={company.id} selectedNodeId={selectedId} onSelect={setSelectedId} />
+      ) : (
       <Panel
         iconName="network"
         iconTone="brand"
@@ -540,6 +548,7 @@ export default function ResearchPage(): React.JSX.Element {
           </p>
         </div>
       </Panel>
+      )}
 
       {!inventing ? null : (
         <InnovationPanel session={session} company={company} graph={graph} researchEnvelopeUsd={envelope} computeUnits={Math.round(held)} />

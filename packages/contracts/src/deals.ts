@@ -54,6 +54,10 @@ export const DEAL_OBLIGATION_KINDS = [
   // available here. Offered in quarter t, answerable only in t+1.
   'term_sheet',
   'buyout_offer',
+  // World 3. The right to produce a node somebody else owns, carried on the
+  // ordinary deal path because a licence is a bargain between two companies and
+  // the deal path already proposes, accepts, rejects, expires and audits.
+  'node_licence',
 ] as const;
 
 /**
@@ -165,6 +169,19 @@ export const DealObligationSchema = z
       })
       .describe(
         'An approach to buy control of a company. It uses the takeover machinery that already exists — a controlling holder is already decisive on the board tally, and a block is already reachable at a premium — so this adds an offer, not a new verb.',
+      ),
+    z
+      .object({
+        kind: z.literal('node_licence'),
+        nodeId: z.string().min(1).describe('The node being licensed, an id into ECONOMIC_NODES.'),
+        ownerCompanyId: z.string().min(1).describe('The company that owns the node and grants the right. It must own the node outright: a licensee cannot sublicense.'),
+        licenseeCompanyId: z.string().min(1).describe('The company that gains the right to produce the node.'),
+        royaltyPct: z.number().int().min(0).max(40).describe('Whole percent of the licensee\'s revenue on every line requiring this node, paid to the owner every quarter.'),
+        quarters: z.number().int().min(1).max(20).describe('Licence term in quarters, from acceptance. Renewal is a fresh negotiation the owner may decline.'),
+        upfrontUsd: usd('The signing fee, paid in cash on execution. A share of what researching the node would have cost.'),
+      })
+      .describe(
+        'Licence a node from the company that owns it. The licensee may produce it while the term runs and pays a royalty every quarter it does; it may not sublicense, it does not become the node\'s pioneer, and when the term ends the owner is free to refuse a renewal.',
       ),
   ])
   .describe('One obligation. The set of obligations on each side is what makes a deal mechanically enforceable rather than a conversation.');

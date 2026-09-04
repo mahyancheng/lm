@@ -25,10 +25,23 @@ import {
   UNLOCK_CONFIDENCE_GAIN,
 } from './balance';
 import { bumpGraphVersion, emitEvent, findCompany, findNode, isCapabilityArea, projectVisibility, unit } from './util';
+import { isNodeEconomyWorld } from '../economy/sectors';
+import { achieveOwnedNodes } from './ownership';
 
 /**
  * True when `nodeId` counts as achieved from `companyId`'s point of view: either
  * the world knows it is done, or this company privately finished it itself.
+ *
+ * **Worlds 1 and 2 only.** This is the global test world 3 exists to replace:
+ * it asks whether a node was achieved by *anybody*, and exactly one of
+ * forty-two seed nodes was, so on turn one nearly every technology and a dozen
+ * product lines were locked for everybody — incumbents already selling them
+ * included. World 3 asks `canProduce(company, nodeId)` instead, which is a
+ * question about one company. Both frozen worlds still run on this, so it is
+ * deprecated rather than deleted; `nodeResearch.test.ts` proves no world-3 path
+ * reaches it.
+ *
+ * @deprecated World 1 and 2 only. World-3 code must use `canProduce`.
  */
 export function dependencySatisfied(draft: SessionState, nodeId: string, companyId: string): boolean {
   const node = findNode(draft, nodeId);
@@ -45,7 +58,7 @@ export function unmetDependencies(draft: SessionState, node: TechNode, companyId
 }
 
 /** Raise the company's capability in every area the node required. */
-function applyCapabilityGain(draft: SessionState, project: ResearchProject, node: TechNode): Record<string, number> {
+export function applyCapabilityGain(draft: SessionState, project: ResearchProject, node: TechNode): Record<string, number> {
   const company = findCompany(draft, project.companyId);
   const gains: Record<string, number> = {};
   if (company === undefined) return gains;
@@ -60,7 +73,7 @@ function applyCapabilityGain(draft: SessionState, project: ResearchProject, node
 }
 
 /** Every node this achievement makes more credible, with the strength of the link. */
-function unlockTargets(draft: SessionState, node: TechNode): { node: TechNode; strength: number }[] {
+export function unlockTargets(draft: SessionState, node: TechNode): { node: TechNode; strength: number }[] {
   const out: { node: TechNode; strength: number }[] = [];
   const seen = new Set<string>();
   for (const id of node.possibleUnlocks) {
@@ -85,7 +98,7 @@ function unlockTargets(draft: SessionState, node: TechNode): { node: TechNode; s
  * families that already exist in the session's hazard map are touched: the
  * engine never invents a family that the scenario did not author.
  */
-function raiseAchievementHazard(draft: SessionState, node: TechNode, eventId: string): string | null {
+export function raiseAchievementHazard(draft: SessionState, node: TechNode, eventId: string): string | null {
   const candidates = ['fam_model_breakthrough', 'fam_frontier_breakthrough', 'fam_capability_jump'];
   for (const familyId of candidates) {
     const hazard = draft.eventHazards[familyId];
@@ -103,8 +116,20 @@ function raiseAchievementHazard(draft: SessionState, node: TechNode, eventId: st
   return null;
 }
 
-/** Mark nodes achieved where a programme has completed, and propagate the consequences. */
+/**
+ * Mark nodes achieved where a programme has completed, and propagate the
+ * consequences.
+ *
+ * World 3 answers a different question — who may now PRODUCE this, which is a
+ * fact about one company — and answers it in `research/ownership.ts`. The body
+ * below is worlds 1 and 2 only, and stays exactly as they have always resolved
+ * it; both are frozen and pinned by hash.
+ */
 export function achieveNodes(draft: SessionState, ctx: ResolverContext): void {
+  if (isNodeEconomyWorld(draft)) {
+    achieveOwnedNodes(draft, ctx);
+    return;
+  }
   let graphChanged = false;
 
   for (const project of draft.researchProjects) {

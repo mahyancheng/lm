@@ -17,7 +17,13 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SessionState } from '@frontier/contracts';
-import { FINANCIAL_HISTORY_QUARTERS, FINANCIAL_STATEMENT_TOLERANCE_USD, SessionStateSchema, financialQuarterReconciles } from '@frontier/contracts';
+import {
+  FINANCIAL_HISTORY_KEPT_QUARTERS,
+  FINANCIAL_HISTORY_QUARTERS,
+  FINANCIAL_STATEMENT_TOLERANCE_USD,
+  SessionStateSchema,
+  financialQuarterReconciles,
+} from '@frontier/contracts';
 import { hashState, stableStringify } from '@frontier/shared';
 import { createDefaultEngine } from '../src/engine';
 import { demoSessionInput } from '../src/scenario';
@@ -74,8 +80,34 @@ function run(state: SessionState, quarters: number): SessionState {
 /* -------------------------------------------------------------------------- */
 
 describe('filed financial statements', () => {
+  it('still parse at the older, longer series a save written before the shorter window may hold', () => {
+    const state = run(createWorld2Session(), 6);
+    const company = state.companies.find((candidate) => (candidate.financialHistory ?? []).length > 0);
+    expect(company).toBeDefined();
+    const filed = company?.financialHistory?.[0];
+    expect(filed).toBeDefined();
+    if (company === undefined || filed === undefined) return;
+
+    // A save made before the engine shortened its window carries up to the
+    // schema's own bound. It has to keep parsing: world 2 is not migrated, and
+    // a game in progress has to be able to finish.
+    const long = Array.from({ length: FINANCIAL_HISTORY_QUARTERS }, (_unused, index) => ({ ...filed, quarter: index }));
+    expect(FINANCIAL_HISTORY_QUARTERS).toBeGreaterThan(FINANCIAL_HISTORY_KEPT_QUARTERS);
+    const parsed = SessionStateSchema.parse({
+      ...state,
+      companies: state.companies.map((candidate) => (candidate.id === company.id ? { ...candidate, financialHistory: long } : candidate)),
+    });
+    expect(parsed.companies.find((candidate) => candidate.id === company.id)?.financialHistory).toHaveLength(FINANCIAL_HISTORY_QUARTERS);
+
+    // And the next quarter it resolves trims it back to what the engine keeps.
+    const after = createDefaultEngine().resolver.resolveQuarter(parsed, [], null, []).nextState;
+    expect((after.companies.find((candidate) => candidate.id === company.id)?.financialHistory ?? []).length).toBeLessThanOrEqual(
+      FINANCIAL_HISTORY_KEPT_QUARTERS,
+    );
+  });
+
   it(
-    'files a reconciling statement for every company, every quarter, and bounds the series at forty',
+    'files a reconciling statement for every company, every quarter, and bounds the series at the kept window',
     () => {
       const quarters = 45;
       const state = run(createWorld2Session(), quarters);
@@ -87,11 +119,18 @@ describe('filed financial statements', () => {
         expect(history, `${company.id} filed no statements`).toBeDefined();
         if (history === undefined) continue;
 
-        // BOUND: forty-five quarters, forty statements, oldest dropped — and a
-        // company founded mid-session (market entry replaces a wind-up) files
-        // from the quarter after its founding, so it has a shorter series
-        // rather than a series with holes in it.
-        const first = Math.max(company.foundedQuarter + 1, quarters - FINANCIAL_HISTORY_QUARTERS);
+        // BOUND: forty-five quarters, `FINANCIAL_HISTORY_KEPT_QUARTERS`
+        // statements, oldest dropped — and a company founded mid-session
+        // (market entry replaces a wind-up) files from the quarter after its
+        // founding, so it has a shorter series rather than a series with holes
+        // in it.
+        //
+        // The kept window is shorter than the schema's own bound on purpose:
+        // the whole session is hashed once per ledger phase and the filed
+        // statements were most of what a session weighed, so the engine keeps
+        // three years while the schema still accepts the ten a save written
+        // before this may hold. That second half is asserted below.
+        const first = Math.max(company.foundedQuarter + 1, quarters - FINANCIAL_HISTORY_KEPT_QUARTERS);
         expect(history.length).toBe(quarters - first);
         expect(history[0]?.quarter).toBe(first);
         expect(history[history.length - 1]?.quarter).toBe(quarters - 1);

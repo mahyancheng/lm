@@ -87,6 +87,11 @@ function makeStubs(options: StubOptions = {}): Stubs {
       // Deliberately silent: recording here would consume a draw and change the
       // call sequence these tests exist to pin.
     },
+    priceNodes() {
+      // Silent for the same reason `priceSectors` is. World 3's node market is
+      // exercised in nodeMarket.test.ts against the real subsystem; here it
+      // exists only so the stub satisfies the interface.
+    },
     updateMacro(draft, ctx) {
       record('economy.updateMacro', ctx);
       if (options.narrate !== false) {
@@ -399,8 +404,8 @@ const submittedFor = (intent: SubmittedAction['intent'], companyId: string, char
 /* -------------------------------------------------------------------------- */
 
 describe('the pipeline', () => {
-  it('runs the eighteen phases in the order the contract declares', () => {
-    expect(RESOLUTION_PHASES).toHaveLength(18);
+  it('runs the nineteen phases in the order the contract declares', () => {
+    expect(RESOLUTION_PHASES).toHaveLength(19);
     const stubs = makeStubs();
     resolve(createDemoSession(), stubs, proposalBatch(0.35, 'world.compute.acceleratorSupply'));
     expect(stubs.calls.map((call) => call.method)).toEqual(EXPECTED_CALL_ORDER);
@@ -442,7 +447,7 @@ describe('the pipeline', () => {
 
   it('reports timings that are zero, because the engine may not read a clock', () => {
     const outcome = resolve(createDemoSession(), makeStubs(), null);
-    expect(outcome.phaseTimings).toHaveLength(18);
+    expect(outcome.phaseTimings).toHaveLength(19);
     expect(outcome.phaseTimings.every((timing) => timing.durationMs === 0)).toBe(true);
     expect(outcome.phaseTimings.reduce((sum, timing) => sum + timing.eventsEmitted, 0)).toBeGreaterThan(0);
   });

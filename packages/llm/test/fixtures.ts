@@ -510,6 +510,15 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           qualityScore: 0.72,
           revenueQuarterlyUsd: 558_000_000,
           isActive: true,
+          // The world-3 half of the shape. A world-2 fixture reads it as zero
+          // and false, which is exactly what the dossier builder produces for a
+          // company that is not in the node economy.
+          unitCostUsd: 0,
+          marketPriceUsd: 0,
+          unitsSoldQuarterly: 620_000,
+          backlogUnits: 0,
+          installedBase: 0,
+          ownsNode: false,
         },
         {
           productId: 'prd_consumer_copilot',
@@ -524,6 +533,12 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           qualityScore: 0.55,
           revenueQuarterlyUsd: 124_000_000,
           isActive: true,
+          unitCostUsd: 0,
+          marketPriceUsd: 0,
+          unitsSoldQuarterly: 3_100_000,
+          backlogUnits: 0,
+          installedBase: 0,
+          ownsNode: false,
         },
       ],
       computeOwned: 40_000,
@@ -532,6 +547,9 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
       trainingAllocationPct: 0.6,
       reservationExpiryQuarter: 9,
       cloudSpendQuarterlyUsd: 120_000_000,
+      ownedNodeCount: 0,
+      dataPetabytes: 0,
+      dataPolicy: 'standard',
     },
     people: {
       engineers: 620,

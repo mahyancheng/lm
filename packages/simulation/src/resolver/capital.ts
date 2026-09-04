@@ -54,12 +54,12 @@ import {
 import { moveDryPowder } from '../capital/context';
 import { pickLeadInvestor } from '../capital/leads';
 import { companyCapitalDepthFactor } from '../economy/regions';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { maxTollForCompany } from '../economy/prices';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { emitPartialFill } from '../companies/partialFill';
 import { pendingOfType } from './actions';
-import { routeDeals } from './routing';
+import { routeDeals, routeNodeLicences } from './routing';
 
 /* -------------------------------------------------------------------------- */
 /*  Balancing constants                                                        */
@@ -345,6 +345,10 @@ export function resolveCapital(draft: SessionState, ctx: ResolverContext): void 
   resolveGroupTransfers(draft, ctx);
   resolveMergeSubsidiary(draft, ctx);
   routeDeals(draft, ctx);
+  // Immediately after the deal router, so a licence a player-run owner accepted
+  // with `accept_deal` this quarter is executed this quarter, on the same pass
+  // that answers an NPC owner's requests.
+  routeNodeLicences(draft, ctx);
 }
 
 /* ------------------------------- policies --------------------------------- */
@@ -1241,6 +1245,21 @@ function absorbTarget(
   acquirer.compute.reservedAccelerators += target.compute.reservedAccelerators;
   acquirer.compute.cloudSpendQuarterly += target.compute.cloudSpendQuarterly;
   for (const product of target.products) acquirer.products.push({ ...product });
+
+  // World 3: what the target can MAKE is usually the thing being bought. This
+  // is the owner's other route into an industry — "I can purchase or invest but
+  // I don't start with it" — and it is one line because ownership is a list.
+  //
+  // LICENCES DO NOT MOVE. A licence names its licensee, so buying a company
+  // that licenses an accelerator buys the revenue and not the right behind it;
+  // the licence lapses with the company. Said out loud in the report line
+  // below, because it is exactly the mistake an acquirer would otherwise make.
+  const licencesLost = isNodeEconomyWorld(draft) ? (target.licences ?? []).filter((licence) => licence.expiryQuarter > draft.quarter).length : 0;
+  if (isNodeEconomyWorld(draft)) {
+    const owned = [...(acquirer.ownedNodes ?? [])];
+    for (const nodeId of target.ownedNodes ?? []) if (!owned.includes(nodeId)) owned.push(nodeId);
+    acquirer.ownedNodes = owned;
+  }
   for (const [area, strength] of Object.entries(target.techCapabilities)) {
     const current = acquirer.techCapabilities[area] ?? 0;
     acquirer.techCapabilities[area] = clamp01(Math.max(current, strength * ACQUISITION_CAPABILITY_RETENTION));
@@ -1309,14 +1328,20 @@ function absorbTarget(
     },
     visibility: 'public',
   });
+  // What the acquirer got, and — the part that catches people out — what it
+  // did not: a licence names its licensee and dies with the company.
+  const licenceNote =
+    licencesLost > 0
+      ? ` ${licencesLost} licence${licencesLost === 1 ? '' : 's'} ${licencesLost === 1 ? 'was' : 'were'} not transferred: a licence names its licensee, so that technology stays with its owner.`
+      : '';
   ctx.log({
     phase: 'capital_resolution',
     text:
-      bargainGain > 0
+      (bargainGain > 0
         ? `${acquirer.name} acquired ${target.name} for ${compactUsd(offerValueUsd)}, ${compactUsd(
             bargainGain,
           )} below the net assets it took on — a bargain purchase, recognised as a gain.`
-        : `${acquirer.name} acquired ${target.name} for ${compactUsd(offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`,
+        : `${acquirer.name} acquired ${target.name} for ${compactUsd(offerValueUsd)}, recognising ${compactUsd(goodwill)} of goodwill.`) + licenceNote,
     deltaLabel: `+${headcount(target)} staff`,
     refEventIds: [eventId],
     tone: 'positive',

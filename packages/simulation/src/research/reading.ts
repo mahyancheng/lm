@@ -11,14 +11,22 @@
  * shared arithmetic lives here and depends on nothing but numbers.
  */
 
-/** Which of the three inputs is holding a programme back, or null when none is. */
-export type ResearchBottleneck = 'funding' | 'compute' | 'talent';
+/** Which of the four inputs is holding a programme back, or null when none is. */
+export type ResearchBottleneck = 'funding' | 'compute' | 'talent' | 'data';
 
-/** The three adequacy factors, as the screen shows them. */
+/**
+ * The adequacy factors, as the screen shows them.
+ *
+ * `data` is world 3's fourth: a programme against a node that asks for
+ * petabytes is hostage to the data its company has collected. It is exactly 1
+ * in worlds 1 and 2, where no node asks for any, so it can never be the
+ * bottleneck there.
+ */
 export interface ForecastFactors {
   readonly funding: number;
   readonly compute: number;
   readonly talent: number;
+  readonly data: number;
 }
 
 /**
@@ -37,16 +45,17 @@ export const SETBACK_RISK_BANDS = { low: 0.15, medium: 0.3 } as const;
 export const MAX_FORECAST_QUARTERS = 200;
 
 /**
- * The lowest of the three factors, when one of them is short.
+ * The lowest of the factors, when one of them is short.
  *
- * Ties go to funding, then compute, then talent — a fixed order, so the same
- * state always names the same bottleneck.
+ * Ties go to funding, then compute, then talent, then data — a fixed order, so
+ * the same state always names the same bottleneck.
  */
 export function bottleneckOf(factors: ForecastFactors): ResearchBottleneck | null {
   const entries: readonly (readonly [ResearchBottleneck, number])[] = [
     ['funding', factors.funding],
     ['compute', factors.compute],
     ['talent', factors.talent],
+    ['data', factors.data],
   ];
   let worst: ResearchBottleneck | null = null;
   let lowest = BOTTLENECK_TOLERANCE;
@@ -86,4 +95,5 @@ export const BOTTLENECK_NOUN: Readonly<Record<ResearchBottleneck, string>> = {
   funding: 'money',
   compute: 'compute',
   talent: 'researchers',
+  data: 'data',
 };

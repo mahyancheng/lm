@@ -42,8 +42,11 @@ import {
   predatorPressure,
   resolveCategory,
   undercutFraction,
+  canProduce,
+  economicNodeById,
+  nodeMarketPriceUsd,
 } from '@frontier/contracts';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import {
   BASELINE_COMPUTE_INTENSITY,
   CAPACITY_BASE_LOSS_CEILING,
@@ -73,9 +76,11 @@ import {
 } from './balance';
 import { resolveComputeOrders } from './compute';
 import { resolveCapacityOrders } from './capacity';
-import { effectiveQuality, requiredInputUnsupplied, resolveSupplyOrders } from './supply';
+import { categoryEffectiveQuality, requiredInputUnsupplied, resolveSupplyOrders } from './supply';
 import { categoryOf, capacityUsd } from './categories';
 import { marketingPlan } from './policy';
+import { resolveNodeProduction, type StagedLineInputs } from '../graph/production';
+import { lineNodeIdOf } from '../graph/lines';
 import { sectorEconomy, sectorOf } from '../economy/sectors';
 import { companyRegionFitFactor } from '../economy/regions';
 import {
@@ -257,6 +262,22 @@ export function priceSaturationDecay(priceUsd: number, referencePriceUsd: number
 }
 
 /**
+ * The demand multiplier a quality edge earns, bounded.
+ *
+ * Extracted rather than inlined so the world-3 node pass runs the *same*
+ * arithmetic on a node's own frontier instead of a second copy of it. World 1
+ * and world 2 call it at exactly the inputs they always did.
+ */
+export function qualityFactorOf(qualityEdge: number): number {
+  return clamp(1 + QUALITY_DEMAND_SENSITIVITY * qualityEdge, QUALITY_FACTOR_BOUNDS.min, QUALITY_FACTOR_BOUNDS.max);
+}
+
+/** The demand multiplier a reputation score earns, on the same contract. */
+export function reputationFactorOf(reputation: number): number {
+  return 0.5 + 0.7 * (reputation / 100);
+}
+
+/**
  * Churn for a product this quarter, inside the segment's design band — except
  * after a price rise, which is the one thing that moves customers faster than
  * the band allows.
@@ -392,7 +413,7 @@ function productDemandDraft(
   // Exactly `product.qualityScore` in world 1 and for any product with no
   // resolved inputs, so nothing here moves a number the demand model did not
   // already produce before supply chains existed.
-  const quality = isMultiSectorWorld(draft) ? effectiveQuality(draft, company, product, switchedSupplierLines) : product.qualityScore;
+  const quality = isMultiSectorWorld(draft) ? categoryEffectiveQuality(draft, company, product, switchedSupplierLines) : product.qualityScore;
   // A required input nobody has filled means the product cannot ship at all
   // this quarter: booked as zero units, with its own report line, rather than
   // refused — "realise, not refuse" extends to a founder who launched ahead
@@ -401,9 +422,9 @@ function productDemandDraft(
 
   const qualityEdge = quality - frontier;
   const priceEdge = relativePrice(inputs.priceUsd, reference);
-  const qualityFactor = clamp(1 + QUALITY_DEMAND_SENSITIVITY * qualityEdge, QUALITY_FACTOR_BOUNDS.min, QUALITY_FACTOR_BOUNDS.max);
+  const qualityFactor = qualityFactorOf(qualityEdge);
   const price = priceFactor(segment, inputs.priceUsd, reference, elasticity);
-  const reputationFactor = 0.5 + 0.7 * (reputation / 100);
+  const reputationFactor = reputationFactorOf(reputation);
   const demand = segmentDemand(draft, company.sectorId, segment);
   const lift = marketingLift(inputs.marketingUsd, product.activeCustomers * inputs.priceUsd);
 
@@ -508,11 +529,51 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
   const staged = new Map<string, StagedProduct>();
   for (const company of companies) staged.set(company.id, applyProductActions(draft, ctx, company, switchedSupplierLines));
   const pressure = resolvePredation(draft, ctx);
+
+  // World 3: node lines are produced and sold by the node pass, which allocates
+  // each node's order pool across everybody competing for it and therefore
+  // cannot be run one company at a time. The world-2 demand model is not run
+  // beside it — running both would be world 2's original defect, two demand
+  // systems that never reconcile — so a world-3 product with no node simply
+  // bills what it billed, and the scenario gives every line a node.
+  if (isNodeEconomyWorld(draft)) {
+    resolveNodeProduction(draft, ctx, stagedLineInputs(companies, staged));
+    for (const company of companies) {
+      for (const product of activeProducts(company)) {
+        if (lineNodeIdOf(product) !== null) continue;
+        product.unitsSoldQuarterly = count(product.activeCustomers);
+      }
+    }
+    return;
+  }
+
   for (const company of companies) {
     const own = staged.get(company.id);
     if (own === undefined) continue;
     resolveCompanyDemand(draft, ctx, rng, economy, company, own, pressure);
   }
+}
+
+/**
+ * Flatten the per-company staging into the two per-product maps the node pass
+ * reads, using the same marketing split the world-2 pass uses: a segment's plan
+ * divided evenly across the products in it.
+ */
+function stagedLineInputs(companies: readonly Company[], staged: ReadonlyMap<string, StagedProduct>): StagedLineInputs {
+  const marketingByProduct = new Map<string, number>();
+  const shockByProduct = new Map<string, number>();
+  for (const company of companies) {
+    const own = staged.get(company.id);
+    if (own === undefined) continue;
+    const products = activeProducts(company);
+    const perSegment: Record<string, number> = {};
+    for (const product of products) perSegment[product.segment] = (perSegment[product.segment] ?? 0) + 1;
+    for (const product of products) {
+      marketingByProduct.set(product.id, (own.plan.bySegment[product.segment] ?? 0) / Math.max(1, perSegment[product.segment] ?? 1));
+      shockByProduct.set(product.id, own.shockByProduct.get(product.id) ?? 0);
+    }
+  }
+  return { marketingByProduct, shockByProduct };
 }
 
 /** Reprice, launch, sunset and set the marketing plan for one company. */
@@ -567,14 +628,20 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       // (its own choice, or the sector/segment default), so this is never null
       // here.
       const multiSector = isMultiSectorWorld(draft);
-      const category = multiSector ? resolveCategory(intent.categoryId, company.sector, intent.segment) : null;
+      // World 3 keys a line on a node, never on a category: `categoryId` on the
+      // intent is read as a node id, which is unambiguous because the two id
+      // spaces are disjoint (every node carries a res_/mat_/cmp_/sys_/svc_/
+      // app_/dat_ prefix).
+      const nodeId = isNodeEconomyWorld(draft) ? launchNodeIdFor(company, intent.categoryId ?? null, intent.segment) : null;
+      const node = nodeId === null ? undefined : economicNodeById(nodeId);
+      const category = multiSector && nodeId === null ? resolveCategory(intent.categoryId, company.sector, intent.segment) : null;
       const product: Product = {
         id,
         name: intent.name,
         segment: intent.segment,
         pricePerSeat: money(intent.pricePerSeatUsd),
         activeCustomers: 0,
-        churnQuarterly: category?.churnBand.max ?? SEGMENT_CHURN_BAND[intent.segment].max,
+        churnQuarterly: node?.churnBand.max ?? category?.churnBand.max ?? SEGMENT_CHURN_BAND[intent.segment].max,
         growthQuarterly: 0,
         grossMarginPct: 0.5,
         computeIntensity: unit(intent.computeIntensity),
@@ -582,6 +649,30 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
         launchedQuarter: ctx.quarter,
         isActive: true,
       };
+      if (node !== undefined) {
+        product.nodeId = node.id;
+        // The world-3 readings of the two world-2 levers. `qualityTier` is one
+        // lever with both consequences: it scales the capacity a unit draws and
+        // the quality delivered by the same factor, so a higher tier costs real
+        // unit cost rather than a phantom margin.
+        product.craftQuality = delivered;
+        product.qualityTier = unit(intent.computeIntensity);
+        product.unitsSoldQuarterly = 0;
+        product.installedBase = 0;
+        product.backlogUnits = 0;
+        product.unitCostUsd = 0;
+        product.contractBilledUsd = 0;
+        if (node.saleKind === 'contract') product.contractRemainingQuarters = 0;
+        product.supply = intent.supply
+          .filter((entry) => node.consumes.some((input) => input.nodeId === entry.inputCategoryId))
+          .map((entry) => ({
+            inputCategoryId: entry.inputCategoryId,
+            supplierCompanyId: entry.supplierCompanyId,
+            supplierProductId: entry.supplierProductId,
+            cutOffNoticeQuarter: null,
+          }));
+        product.supplyTerms = null;
+      }
       if (category !== null) {
         product.categoryId = category.id;
         // Only entries that name one of this category's own inputs survive —
@@ -610,6 +701,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
           name: product.name,
           segment: product.segment,
           categoryId: category?.id ?? null,
+          nodeId: node?.id ?? null,
           pricePerSeatUsd: product.pricePerSeat,
           targetQuality: intent.targetQuality,
           deliveredQuality: delivered,
@@ -619,7 +711,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       );
       ctx.log({
         phase: 'product_demand_resolution',
-        text: `${company.name} launched ${product.name}${category === null ? '' : ` (${category.label})`} into ${product.segment.replace(/_/g, ' ')} at quality ${(delivered * 100).toFixed(0)}.`,
+        text: `${company.name} launched ${product.name}${node !== undefined ? ` (${node.label})` : category === null ? '' : ` (${category.label})`} into ${product.segment.replace(/_/g, ' ')} at quality ${(delivered * 100).toFixed(0)}.`,
         deltaLabel: `q ${(delivered * 100).toFixed(0)}`,
         refEventIds: [eventId],
         tone: delivered >= intent.targetQuality * 0.9 ? 'positive' : 'warning',
@@ -663,6 +755,43 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
     company.financials.marketing = money(plan.recurringUsd + plan.oneOffUsd);
     return { plan, shockByProduct, switchedSupplierLines };
   }
+}
+
+/**
+ * The node a world-3 launch produces.
+ *
+ * The founder's own choice when they can actually make it, and otherwise the
+ * best node they own that sells into the segment they asked for — never a
+ * refusal, because "realise, not refuse" applies here too: a launch aimed at a
+ * node the company cannot produce lands on the nearest one it can, and the
+ * report says which. Null only when the company owns nothing at all, which the
+ * scenario rules out.
+ */
+export function launchNodeIdFor(company: Company, requestedId: string | null, segment: ProductSegment): string | null {
+  if (requestedId !== null && economicNodeById(requestedId) !== undefined && canProduce(company, requestedId)) return requestedId;
+  const owned = (company.ownedNodes ?? []).filter((id) => canProduce(company, id));
+  let best: string | null = null;
+  let bestTier = -1;
+  for (const id of owned) {
+    const node = economicNodeById(id);
+    if (node === undefined) continue;
+    if (node.buyerSegment !== segment) continue;
+    if (node.tier > bestTier) {
+      best = id;
+      bestTier = node.tier;
+    }
+  }
+  if (best !== null) return best;
+  // Nothing sells into that segment: the highest-tier thing they can make.
+  for (const id of owned) {
+    const node = economicNodeById(id);
+    if (node === undefined) continue;
+    if (node.tier > bestTier) {
+      best = id;
+      bestTier = node.tier;
+    }
+  }
+  return best;
 }
 
 /** How far one capacity kind's rationing goes for a company this quarter. */
@@ -935,6 +1064,15 @@ function grossMarginAt(draft: SessionState, product: Product, customers: number,
  * selling under cost reads as negative.
  */
 export function unclampedGrossMargin(draft: SessionState, product: Product): number {
+  // World 3 has one margin model and this is it: the unit cost the roll-up
+  // produced and the profit and loss booked, against the price actually
+  // charged. The compute-only formula below it survives only for worlds 1 and
+  // 2, which are frozen and must keep hashing to what they always hashed to.
+  if (isNodeEconomyWorld(draft) && lineNodeIdOf(product) !== null) {
+    const unitCost = product.unitCostUsd ?? 0;
+    if (!(product.pricePerSeat > 0)) return 0;
+    return 1 - unitCost / product.pricePerSeat;
+  }
   return grossMarginAt(draft, product, product.activeCustomers, product.pricePerSeat);
 }
 
@@ -978,10 +1116,18 @@ function resolvePredation(draft: SessionState, ctx: ResolverContext): PressureMa
     return computed;
   };
 
+  const nodeEconomy = isNodeEconomyWorld(draft);
   for (const company of activeCompanies(draft)) {
     for (const product of activeProducts(company)) {
       const segment = product.segment;
-      const reference = segmentOf(segment);
+      // A price is judged against its own node's market price in world 3, and
+      // against the segment mean only where there is no node. The segment mean
+      // is the customer-weighted average of every product in that buyer segment
+      // across all six sectors — about $21,000 for enterprise — so judging a
+      // wafer fab's undercut against it was never a statement about the wafer
+      // market.
+      const nodeId = nodeEconomy ? lineNodeIdOf(product) : null;
+      const reference = nodeId === null ? segmentOf(segment) : nodeMarketPriceUsd(draft, nodeId);
       const undercut = undercutFraction(product.pricePerSeat, reference);
       const margin = unclampedGrossMargin(draft, product);
       candidates.push({ company, product, segment, reference, undercut, margin, predatory: isPredatoryPrice(margin, undercut) });

@@ -125,6 +125,56 @@ describe('demo store surfaces', () => {
     // state is untouched by the candidate draw
     expect(s.quarter).toBe(0);
   });
+
+  it('puts the chief executive, their feelings and their memories into the strategist input', () => {
+    const s = createSession();
+    const id = strategistCompanies(s)[0]!;
+    const input = buildNpcStrategistInput(s, id)!;
+
+    expect(input.persona).not.toBeNull();
+    expect(input.persona?.traits.aggressiveness).toBeGreaterThanOrEqual(0);
+    expect(input.companyName.length).toBeGreaterThan(0);
+    // Absent `strategistMemory` — no quarter has resolved — reads as an empty
+    // memory carrying the standing strategy the engine would have derived.
+    expect(s.companies.find((entry) => entry.id === id)?.strategistMemory).toBeUndefined();
+    expect(input.memory.grudges).toEqual([]);
+    expect(input.memory.standingStrategy.length).toBeGreaterThan(0);
+    for (const view of input.relationships) expect(view.counterpartyId).not.toBe(id);
+    for (const view of input.memories) expect(view.strength).toBeGreaterThan(0);
+  });
+
+  it('sends a delta once there is a prior quarter to compress against, and never another company\'s memory', () => {
+    const engine = getEngine();
+    const opening = createSession();
+    const resolved = engine.resolver.resolveQuarter(opening, [], null, []).nextState;
+    const [mine, theirs] = strategistCompanies(resolved);
+
+    // A private record belonging to the OTHER company. It must not appear in
+    // this company's dossier in any form.
+    const PRIVATE = 'Their board agreed in private to undercut us next quarter.';
+    const planted = {
+      ...resolved,
+      companies: resolved.companies.map((company) =>
+        company.id === theirs
+          ? { ...company, strategistMemory: { standingStrategy: PRIVATE, standingStrategyQuarter: 1, grudges: [], attempts: [] } }
+          : company,
+      ),
+    };
+
+    const full = buildNpcStrategistInput(planted, mine!, { previousWorld: null })!;
+    const delta = buildNpcStrategistInput(planted, mine!, { previousWorld: opening.world })!;
+
+    expect(full.changedSinceLastQuarter.isFullBriefing).toBe(true);
+    expect(full.worldBriefing.length).toBeGreaterThan(0);
+    expect(delta.changedSinceLastQuarter.isFullBriefing).toBe(false);
+    expect(delta.worldBriefing).toBe('');
+    expect(delta.rivalBriefing).toBe('');
+    expect(JSON.stringify(delta).length).toBeLessThan(JSON.stringify(full).length);
+
+    for (const input of [full, delta]) {
+      expect(JSON.stringify(input)).not.toContain(PRIVATE);
+    }
+  });
 });
 
 /**

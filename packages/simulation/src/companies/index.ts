@@ -137,12 +137,56 @@ export {
   seedCapitalUsd,
 } from './entrants';
 export type { AdministrationRow, MarketEntry } from './entrants';
-export { NPC_MIN_GROSS_MARGIN, NPC_PRICE_MOVE_FLOOR, NPC_PRICE_TRACKING, applyNpcDefaults, bidTarget } from './npc';
+export {
+  GRUDGE_ACTION_THRESHOLD,
+  GRUDGE_POACH_AGGRESSION,
+  GRUDGE_POACH_THRESHOLD,
+  GRUDGE_POST_PUBLICITY,
+  GRUDGE_POST_THRESHOLD,
+  GRUDGE_UNDERCUT_MAX,
+  NODE_PRICE_LEAN_BOUND,
+  NPC_MIN_GROSS_MARGIN,
+  NPC_PRICE_MOVE_FLOOR,
+  NPC_PRICE_TRACKING,
+  PUBLISH_PUBLICITY_LEAN,
+  actionableGrudges,
+  applyNpcDefaults,
+  bidTarget,
+} from './npc';
+export {
+  GRUDGE_BASE_INTENSITY,
+  GRUDGE_DECAY_PER_QUARTER,
+  MAX_ATTEMPTS_PER_QUARTER,
+  standingStrategyFor,
+  updateStrategistMemory,
+} from './strategistMemory';
+export type { GrudgeCause, StrategistMemoryUpdate } from './strategistMemory';
 export { recomputeMetrics, recomputeAntitrustExposure, recomputeControlStatus } from './metrics';
-export { NODE_DISCRETIONARY_GROSS_PROFIT_SHARE, discretionaryCeilingUsd, marketingPlan, policyMarketingUsd, policyResearchEnvelopeUsd, researchEnvelopeUsd } from './policy';
+export {
+  NODE_DISCRETIONARY_GROSS_PROFIT_SHARE,
+  discretionaryCeilingUsd,
+  executiveDialsFor,
+  executiveTraitsOf,
+  marketingPlan,
+  policyMarketingUsd,
+  policyResearchEnvelopeUsd,
+  researchEnvelopeUsd,
+} from './policy';
 export type { MarketingPlan } from './policy';
-export { ARCHETYPE_POLICIES, POSTURE_ADJUSTMENTS, effectivePolicy } from './archetypes';
-export type { ArchetypePolicy, PostureAdjustment, EffectivePolicy } from './archetypes';
+export {
+  ARCHETYPE_POLICIES,
+  COMP_BAND_LADDER,
+  EXECUTIVE_COEFFICIENTS,
+  EXECUTIVE_FACTOR_BOUNDS,
+  NEUTRAL_EXECUTIVE_DIALS,
+  POSTURE_ADJUSTMENTS,
+  effectivePolicy,
+  executiveDials,
+  personalisedPolicy,
+  shiftCompBand,
+  traitLean,
+} from './archetypes';
+export type { ArchetypePolicy, ExecutiveDials, PostureAdjustment, EffectivePolicy } from './archetypes';
 export { controlledCompaniesOf, resolveControlChanges } from './control';
 export * from './balance';
 

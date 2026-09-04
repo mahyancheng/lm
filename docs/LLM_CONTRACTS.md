@@ -224,10 +224,16 @@ in `CONFIRMATION_REQUIRED_ACTIONS`, checked by the engine: `raise_round`,
 
 ### 3.3 NPC strategist
 
-- **Input:** `NpcStrategistInputSchema` — its own position in full; world
-  conditions as that company would understand them; **public information only**
-  about rivals; visible procurement; incoming deals; last quarter's posture and
-  strategy (so behaviour has continuity); hard constraints.
+- **Input:** `NpcStrategistInputSchema` — the chief executive running the
+  company (`persona`: name, title, role, the five `stableTraits`, beliefs); how
+  that executive regards the player and the rivals that matter
+  (`relationships`); what they remember about others (`memories`, strongest
+  first); the company's own bounded engine-written `memory` (standing strategy,
+  grudges, attempts — see `StrategistMemorySchema`); its own position in full;
+  world conditions as that company would understand them; **public information
+  only** about rivals; visible procurement; incoming deals; last quarter's
+  posture and strategy (so behaviour has continuity); hard constraints; and
+  `changedSinceLastQuarter`, the delta described below.
 - **Output:** `NpcActionBundleSchema` — `companyId`, `strategySummary`, a
   `CompanyPosture`, at most 8 `ActionIntent`s and a `rationale`.
 
@@ -241,7 +247,21 @@ in `CONFIRMATION_REQUIRED_ACTIONS`, checked by the engine: `raise_round`,
 ```
 
 The engine resolves whether those attempts succeed. Rival private state is never
-in the input; an NPC that "knows" a secret is a bug in the input builder.
+in the input; an NPC that "knows" a secret is a bug in the input builder. The
+strategist memory is a company's **own** private record and never appears in
+anybody else's dossier.
+
+**Full dossier or delta.** Sessions are fresh per call, so the model remembers
+nothing between quarters and nothing here relies on it doing so. What varies is
+how much is *sent*: `isFullBriefingQuarter` (in `@frontier/llm`) sends the whole
+world and rival dossier on the first call of a run, on the first after a load,
+and every `STRATEGIST_FULL_BRIEFING_INTERVAL` (8) quarters; on every other
+quarter that block is replaced by `changedSinceLastQuarter` — the company's own
+recorded attempts and their outcomes, world readings that moved materially,
+rivals' public disclosures, newly opened procurement and newly arrived offers.
+The persona, the memory, the position line, the constraints and the open deals
+travel on every call. Measured on a world-3 session at quarter 6, the composed
+prompt falls from 5,812-6,083 characters to 3,809-4,243 — roughly a third.
 
 ### 3.4 Character dialogue
 
@@ -513,3 +533,83 @@ transcript is disposable; the database is the long-term memory.
 Quarterly memory consolidation applies `Memory.decayRate` so old grudges fade
 unless reinforced — characters remember how you treated them, at the
 resolution the engine chooses, not at raw-transcript resolution.
+
+## 12. What a rival strategist sees, and why its memory is engine-owned
+
+Twenty-four rivals that behave identically are one rival. Two things fix that,
+and only one of them involves a model.
+
+### 12.1 What travels with an `npc_strategist` call
+
+`NpcStrategistInputSchema` (`packages/contracts/src/llm.ts`) carries, beyond the
+position and the constraints:
+
+| Key | What it is | Where it comes from |
+|---|---|---|
+| `persona` | The chief executive: name, title, role, the five `stableTraits`, current beliefs. Null when the chair is empty. | `Character` in canonical state. Never invented. |
+| `relationships` | How **this** chief executive regards the counterparties that matter — trust, respect, hostility, mapped onto the counterparty's company. | `draft.relationships`, own feelings only. |
+| `memories` | What this chief executive actually remembers about others, strongest first. | `draft.memories`, after decay. |
+| `memory` | The company's own bounded, engine-written record: standing strategy, grudges, recent attempts. | `updateStrategistMemory` (below). |
+| `changedSinceLastQuarter` | A delta instead of a full dossier, plus `isFullBriefing`. | Committed state; no RNG, no clock. |
+
+Everything above is *this company's own* view. A rival's private state is never
+included, and `composeNpcStrategist` throws `LlmContextLeakError` on a persona
+whose character is not this company's.
+
+### 12.2 Why the sessions stay fresh
+
+The obvious economy is to give each rival one long-lived Claude Code session
+and reuse the transcript. Two thirds of the reasoning behind that idea is right,
+and the last third would break the game.
+
+- **It would save tokens.** True. The prompt would carry the delta rather than
+  the dossier. That saving is real, and it is bought here instead by
+  `StrategistDeltaSchema` — the same compression, without a transcript.
+- **It would not save wall-clock.** The cost on the deployment target is the
+  subprocess spawn (about 200MB, 30–90s), and `LLM_MAX_CONCURRENCY=1` means the
+  Pi runs one call at a time whatever the session count. Reuse changes the
+  prompt size, not the number of spawns.
+- **It would silently eat the personality.** A transcript that grows over forty
+  quarters is compacted by the SDK, on its own schedule, by a summariser nobody
+  in this repository controls. The compaction is not deterministic and not
+  replayable, so the thing being preserved — who this rival is and what it has
+  not forgiven — would be the first thing summarised away, quietly, mid-campaign.
+  Determinism is the house rule the rest of the engine is built on
+  (`S_{t+1} = F(S_t, actions, modifiers, seed)`); a non-deterministic summariser
+  inside the loop is exactly what it forbids.
+
+So strategic calls stay fresh sessions built by a `ContextComposer` (§11), and
+continuity comes from state instead.
+
+### 12.3 Memory is written by the engine, not by the model
+
+`packages/simulation/src/companies/strategistMemory.ts` writes one bounded
+record per company in phase 16 of every quarter: a **standing strategy** derived
+from the archetype policy and the posture, at most six **grudges**, and at most
+eight **attempts** (what the company asked for against what the world gave it).
+
+It is bounded (so forty quarters cannot grow it and no compaction step is ever
+needed), it is a pure function of the committed quarters (so a replayed save
+reconstructs it byte for byte), it costs nothing, and it behaves the same when
+the model is unavailable. Every grudge traces to something that actually
+happened — a `Memory` the relationships subsystem stored, or a ledger row from
+this quarter — and never to model output.
+
+### 12.4 The fallback carries the same personality
+
+Only a handful of rivals get a live call in a quarter (`MAX_LIVE_STRATEGISTS`,
+and the per-quarter model-time budget usually cuts it further), so **most rival
+behaviour, most of the time, is the deterministic fallback.** Personality that
+lived only in the prompt would therefore be personality almost nobody sees.
+
+`companies/archetypes.ts` turns the same five `stableTraits` into
+`ExecutiveDials`, bounded to the range the archetype and posture tables already
+run through, and `companies/npc.ts` and `companies/policy.ts` apply them: an
+aggressive executive prices nearer the floor, hires ahead of demand and bids on
+more public work; a financially conservative one holds its cash, pays less and
+refuses to bid a programme thin; a status-sensitive one publishes what it has
+proved and answers slights in public; a technically oriented one funds the lab
+before the campaign. The company's own grudges bite here too — it undercuts the
+company that wronged it, bids against it, refuses to licence to it, and, on a
+fresh and severe injury, raids its people. A company somebody is playing gets
+the neutral dials: the player is the executive.

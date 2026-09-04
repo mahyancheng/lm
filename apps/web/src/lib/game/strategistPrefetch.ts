@@ -28,7 +28,7 @@
 
 import { hashState } from '@frontier/shared';
 import type { NpcActionBundle, SessionState } from '@frontier/contracts';
-import { buildNpcStrategistInput } from './briefings';
+import { buildNpcStrategistInput, type StrategistBriefingOptions } from './briefings';
 import { requestNpcBundle } from '@/lib/llm/client';
 
 interface PrefetchEntry {
@@ -39,6 +39,12 @@ interface PrefetchEntry {
 /** Replaced wholesale on every `startStrategistPrefetch` call — never grows past one quarter. */
 let cache = new Map<string, PrefetchEntry>();
 
+/*
+ * The key is the state, the quarter and the company — not the briefing shape.
+ * `previousWorld` decides only how much of that same state is sent (full
+ * dossier or delta), so an entry started under either shape is a plan for
+ * exactly this state and is safe to reuse.
+ */
 function keyOf(stateHash: string, quarter: number, companyId: string): string {
   return `${stateHash}:${quarter}:${companyId}`;
 }
@@ -55,7 +61,7 @@ function keyOf(stateHash: string, quarter: number, companyId: string): string {
  * session, a rival that fell out of this quarter's priority order) is
  * aborted, and the cache is replaced with exactly the new set.
  */
-export function startStrategistPrefetch(session: SessionState, companyIds: readonly string[]): void {
+export function startStrategistPrefetch(session: SessionState, companyIds: readonly string[], options: StrategistBriefingOptions = { previousWorld: null }): void {
   const stateHash = hashState(session);
   const next = new Map<string, PrefetchEntry>();
 
@@ -66,7 +72,7 @@ export function startStrategistPrefetch(session: SessionState, companyIds: reado
       next.set(key, existing);
       continue;
     }
-    const input = buildNpcStrategistInput(session, companyId);
+    const input = buildNpcStrategistInput(session, companyId, options);
     if (input === null) continue;
     const controller = new AbortController();
     const promise = requestNpcBundle(input, undefined, controller.signal).catch(() => null);

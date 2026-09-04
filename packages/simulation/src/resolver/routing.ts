@@ -792,7 +792,10 @@ function proposeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
     // A player-run owner decides for themselves, next quarter, on the deal
     // screen. An NPC owner decides here, by a rule a founder can read.
     if (owner.controllerPlayerId !== null) continue;
-    const verdict = npcLicenceVerdict(owner, licensee, node, royaltyPct);
+    // What the owner remembers about the company asking. `strategistMemory` is
+    // engine-written and bounded; a company with no memory yet contributes zero.
+    const grudge = (owner.strategistMemory?.grudges ?? []).find((held) => held.companyId === licensee.id);
+    const verdict = npcLicenceVerdict(owner, licensee, node, royaltyPct, grudge?.intensity ?? 0);
     proposal.status = verdict.accepted ? 'accepted' : 'rejected';
     proposal.respondedQuarter = draft.quarter;
     const answerId = ctx.emit({

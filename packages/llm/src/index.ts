@@ -131,7 +131,15 @@ export {
 } from './chiefOfStaffOffline';
 export { forgetBefore, readMemory, rememberExchange, standingPreferenceOf, type ExchangeToRemember } from './chiefOfStaffMemory';
 export type { NpcPastDecision, NpcStrategistEvidence, RivalSignal } from './compose/npcStrategist';
-export { EMPTY_NPC_EVIDENCE, NPC_DECISION_HISTORY_QUARTERS, NPC_STRATEGIST_SYSTEM, composeNpcStrategist } from './compose/npcStrategist';
+export {
+  EMPTY_NPC_EVIDENCE,
+  NPC_DECISION_HISTORY_QUARTERS,
+  NPC_STRATEGIST_SYSTEM,
+  STRATEGIST_FULL_BRIEFING_INTERVAL,
+  composeNpcStrategist,
+  isFullBriefingQuarter,
+  quartersSinceFullBriefing,
+} from './compose/npcStrategist';
 export { DIALOGUE_HISTORY_TURNS, DIALOGUE_MEMORY_LIMIT, composeCharacterDialogue, composeCharacterPersona } from './compose/characterDialogue';
 export { INNOVATION_INTERPRETER_SYSTEM, composeInnovationInterpreter } from './compose/innovationInterpreter';
 export { SOCIAL_AUTHOR_SYSTEM, composeSocialAuthor } from './compose/socialAuthor';

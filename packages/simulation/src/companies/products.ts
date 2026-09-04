@@ -78,7 +78,7 @@ import { resolveComputeOrders } from './compute';
 import { resolveCapacityOrders } from './capacity';
 import { categoryEffectiveQuality, requiredInputUnsupplied, resolveSupplyOrders } from './supply';
 import { categoryOf, capacityUsd } from './categories';
-import { marketingPlan } from './policy';
+import { executiveDialsFor, marketingPlan } from './policy';
 import { resolveNodeProduction, type StagedLineInputs } from '../graph/production';
 import { lineNodeIdOf } from '../graph/lines';
 import { sectorEconomy, sectorOf } from '../economy/sectors';
@@ -751,7 +751,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
     }
 
     /* --- marketing plan --------------------------------------------------- */
-    const plan = marketingPlan(company, actions);
+    const plan = marketingPlan(company, actions, executiveDialsFor(draft, company));
     company.financials.marketing = money(plan.recurringUsd + plan.oneOffUsd);
     return { plan, shockByProduct, switchedSupplierLines };
   }

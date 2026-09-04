@@ -27,17 +27,17 @@
  */
 
 import { z } from 'zod';
-import { QuarterIndexSchema, intCount, signedUsd, unitInterval, usd } from './ids';
+import { QuarterIndexSchema, bipolarUnit, intCount, score100, signedUsd, unitInterval, usd } from './ids';
 import { WorldVariableReadingSchema } from './world';
 import { ImpactBudgetSchema } from './modifiers';
 import { GmEventProposalSchema, GmProposalBatchSchema } from './events';
 import { WorldEventCandidateSchema } from './engine';
 import { ActionIntentSchema, ActionTypeSchema } from './actions';
 import { ConditionalCommitmentSchema } from './governance';
-import { CharacterSchema, MemoryDraftSchema, MemorySchema, RelationshipSchema } from './people';
+import { CharacterBeliefSchema, CharacterRoleSchema, CharacterSchema, MemoryDraftSchema, MemoryKindSchema, MemorySchema, RelationshipSchema, StableTraitsSchema } from './people';
 import { InnovationProposalSchema } from './tech';
 import { NetworkArchetypeSchema, PostIntentSchema, SocialPostDraftSchema } from './social';
-import { CompBandSchema, CompanyPostureSchema, FinancialQuarterSchema, ProductSegmentSchema, StaffRoleSchema } from './company';
+import { CompBandSchema, CompanyPostureSchema, FinancialQuarterSchema, ProductSegmentSchema, StaffRoleSchema, StrategistMemorySchema } from './company';
 
 /* -------------------------------------------------------------------------- */
 /*  Roles                                                                      */
@@ -1048,11 +1048,157 @@ export type ChiefOfStaffInterpretation = z.infer<typeof ChiefOfStaffInterpretati
 /*  NPC strategist                                                             */
 /* -------------------------------------------------------------------------- */
 
+/*
+ * Bounds on everything the strategist prompt carries about a person.
+ *
+ * They exist so the prompt is the same size in quarter 40 as in quarter 1. A
+ * chief executive holds at most this many remembered slights and this many
+ * live relationships in front of them when they plan; the projection builder
+ * keeps the strongest and drops the rest.
+ */
+
+/** Beliefs shown per persona. The topic list itself is twelve long. */
+export const MAX_STRATEGIST_BELIEFS = 12;
+
+/** Counterparties a strategist is shown feelings about. */
+export const MAX_STRATEGIST_RELATIONSHIPS = 8;
+
+/** Memories a strategist is shown, strongest first. */
+export const MAX_STRATEGIST_MEMORIES = 10;
+
+/** Lines in the since-last-quarter delta. */
+export const MAX_STRATEGIST_CHANGES = 24;
+
+/** Characters in one delta line. */
+export const MAX_STRATEGIST_CHANGE_CHARS = 240;
+
+/**
+ * Who is running the company.
+ *
+ * A rival that behaves like every other rival is a rival with no chief
+ * executive in its prompt. The character already exists in canonical state with
+ * traits, beliefs, a role and a title; this is that character projected for the
+ * strategist, and it is the reason two companies in identical positions choose
+ * differently.
+ */
+export const NpcPersonaSchema = z
+  .object({
+    characterId: z.string().min(1).describe('The chief executive\'s character id.'),
+    name: z.string().min(1).max(80).describe('Their name, as the world knows it. The prompt is written in their voice.'),
+    title: z.string().max(80).describe('Their stated title, or empty when they have none.'),
+    role: CharacterRoleSchema,
+    traits: StableTraitsSchema.describe('The five stable traits, 0-100. These decide what kind of move this executive reaches for first.'),
+    beliefs: z.array(CharacterBeliefSchema).max(MAX_STRATEGIST_BELIEFS).describe('What they currently think is true about the world.'),
+  })
+  .describe('The chief executive behind the company, projected from canonical character state. Never invented, never model-authored.');
+export type NpcPersona = z.infer<typeof NpcPersonaSchema>;
+
+/** How this company's chief executive regards one counterparty. Own feelings only. */
+export const NpcRelationshipViewSchema = z
+  .object({
+    counterpartyId: z.string().min(1).describe('The company the feeling is about — the player\'s company included.'),
+    counterpartyName: z.string().min(1).max(120),
+    isPlayerCompany: z.boolean().describe('True when this counterparty is a company a session participant controls.'),
+    trust: score100('Belief that they keep their word.'),
+    respect: score100('Regard for their competence.'),
+    hostility: score100('Active antagonism.'),
+  })
+  .describe('One directional relationship, held BY this company\'s chief executive. How anybody else feels is not knowable and is never included.');
+export type NpcRelationshipView = z.infer<typeof NpcRelationshipViewSchema>;
+
+/** One thing this company's chief executive remembers, projected for the prompt. */
+export const NpcMemoryViewSchema = z
+  .object({
+    quarter: QuarterIndexSchema,
+    kind: MemoryKindSchema,
+    aboutId: z.string().min(1).describe('Who or what it is about: a character id or a company id.'),
+    aboutName: z.string().min(1).max(120).describe('That party\'s name, so the prompt reads as a person recalling a person.'),
+    summary: z.string().min(1).max(300).describe('The memory in the rememberer\'s own framing.'),
+    sentiment: bipolarUnit('How they feel about it, -1 bitter to +1 grateful.'),
+    strength: unitInterval('Salience after decay. Strongest first.'),
+  })
+  .describe('A memory held by this company\'s own chief executive. This is what makes a rival bring up a poaching raid three years later.');
+export type NpcMemoryView = z.infer<typeof NpcMemoryViewSchema>;
+
+export const STRATEGIST_CHANGE_KINDS = ['own_move', 'world', 'rival', 'opportunity', 'deal'] as const;
+export const StrategistChangeKindSchema = z
+  .enum(STRATEGIST_CHANGE_KINDS)
+  .describe('What sort of change this is: something this company did, a world variable that moved, a rival\'s public action, a new procurement, or a new deal.');
+export type StrategistChangeKind = z.infer<typeof StrategistChangeKindSchema>;
+
+export const StrategistChangeSchema = z
+  .object({
+    kind: StrategistChangeKindSchema,
+    detail: z.string().min(1).max(MAX_STRATEGIST_CHANGE_CHARS).describe('One line, already written from this company\'s point of view.'),
+  })
+  .describe('One thing that changed since this company last planned.');
+export type StrategistChange = z.infer<typeof StrategistChangeSchema>;
+
+/**
+ * The delta a strategist gets instead of a full dossier.
+ *
+ * Sessions are fresh on every call, so this is a compression of what we SEND,
+ * never a reliance on the model remembering: the company's standing memory and
+ * its position line always travel with it. The full world and rival dossier is
+ * re-sent on the first call of a run, after a load, and on the periodic
+ * refresh — which is what `isFullBriefing` records.
+ */
+export const StrategistDeltaSchema = z
+  .object({
+    isFullBriefing: z.boolean().describe('True when this call carries the whole dossier: the first call of a run, the first after a load, and the periodic refresh.'),
+    quartersSinceFullBriefing: z.number().int().min(0).max(4000).describe('Quarters since the last full dossier. Zero on a full one.'),
+    changes: z
+      .array(StrategistChangeSchema)
+      .max(MAX_STRATEGIST_CHANGES)
+      .describe('What moved since last quarter, oldest concern first. Empty on a quiet quarter, which is a legitimate answer.'),
+  })
+  .describe('What changed since this company last planned. Bounded, so a forty-quarter campaign never grows the prompt.');
+export type StrategistDelta = z.infer<typeof StrategistDeltaSchema>;
+
+/**
+ * How often a strategist call carries the whole dossier rather than a delta.
+ *
+ * This lives here, beside the schema it governs, rather than in the composer:
+ * the browser decides which shape to build and the composer renders it, and a
+ * constant only one of them can see is a constant they can disagree about.
+ * Keeping it in contracts is also what stops `apps/web` importing
+ * `@frontier/llm`, whose default transport spawns a Claude Code subprocess and
+ * therefore cannot be bundled for a browser at all.
+ */
+export const STRATEGIST_FULL_BRIEFING_INTERVAL = 8;
+
+/**
+ * Quarters since the last full dossier, under the anchor rule below.
+ *
+ * Pure and stateless: the anchor is the quarter index itself, so two callers
+ * never disagree about which quarter was a refresh and a reloaded save reaches
+ * the same answer as the run that wrote it.
+ */
+export function quartersSinceFullBriefing(quarter: number, interval: number = STRATEGIST_FULL_BRIEFING_INTERVAL): number {
+  if (interval <= 0) return 0;
+  const whole = Math.max(0, Math.trunc(quarter));
+  return whole % interval;
+}
+
+/**
+ * Whether this call carries the whole dossier.
+ *
+ * True on the periodic refresh, and true whenever the caller has no prior
+ * context to compress against — the first call of a run and the first after a
+ * load, where "what changed since last quarter" would be a sentence nobody can
+ * write honestly.
+ */
+export function isFullBriefingQuarter(quarter: number, hasPriorContext: boolean, interval: number = STRATEGIST_FULL_BRIEFING_INTERVAL): boolean {
+  if (!hasPriorContext) return true;
+  return quartersSinceFullBriefing(quarter, interval) === 0;
+}
+
 export const NpcStrategistInputSchema = z
   .object({
     sessionId: z.string().min(1),
     quarter: QuarterIndexSchema,
     companyId: z.string().min(1),
+    companyName: z.string().min(1).max(120).describe('The company\'s name, so the prompt addresses a person running a named business rather than an id.'),
     companyBriefing: z.string().describe('This company\'s own position, in full.'),
     worldBriefing: z.string().describe('World conditions as this company would understand them.'),
     rivalBriefing: z.string().describe('What this company knows about rivals — public information only, plus anything it has legitimately learned.'),
@@ -1061,6 +1207,19 @@ export const NpcStrategistInputSchema = z
     priorPosture: CompanyPostureSchema.describe('The stance this company took last quarter. Wild swings without cause read as incoherent.'),
     priorStrategySummary: z.string().describe('What this company said it was doing last quarter, so its behaviour has continuity.'),
     constraints: z.array(z.string()).describe('Hard limits: available cash, available compute, board approvals required, contractual commitments already made.'),
+    persona: NpcPersonaSchema.nullable().describe('The chief executive running this company, or null when it has none — a company in administration, or one whose founder has left.'),
+    relationships: z
+      .array(NpcRelationshipViewSchema)
+      .max(MAX_STRATEGIST_RELATIONSHIPS)
+      .describe('How this chief executive regards the player and the rivals that matter, strongest feeling first. Their own feelings only.'),
+    memories: z
+      .array(NpcMemoryViewSchema)
+      .max(MAX_STRATEGIST_MEMORIES)
+      .describe('What this chief executive actually remembers about others, strongest first.'),
+    memory: StrategistMemorySchema.describe(
+      'The company\'s own bounded, engine-written memory: standing strategy, grudges and recent attempts. An empty memory is the neutral reading, never a missing key.',
+    ),
+    changedSinceLastQuarter: StrategistDeltaSchema.describe('What moved since this company last planned, and whether this call carries the full dossier.'),
   })
   .describe('What an NPC strategist sees: only the information its company could reasonably have. Rival private state is never included.');
 export type NpcStrategistInput = z.infer<typeof NpcStrategistInputSchema>;

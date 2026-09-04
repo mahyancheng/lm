@@ -22,6 +22,7 @@ import { effectivePolicy } from './archetypes';
 import { emitPartialFill } from './partialFill';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { canReach } from '../validator/context';
+import { ceoOf, rememberEvent } from '../relationships/relations';
 import { companyTalentCostFactor } from '../economy/regions';
 import {
   ATTRITION_BOUNDS,
@@ -393,6 +394,27 @@ export function resolveHiring(draft: SessionState, ctx: ResolverContext): void {
           setRoleHeadcount(previousEmployer, 'execs', Math.max(0, roleHeadcount(previousEmployer, 'execs') - 1));
           previousEmployer.employees.morale = score(previousEmployer.employees.morale - POACH_MORALE_SHOCK);
           if (previousEmployer.ceoCharacterId === target.id) previousEmployer.ceoCharacterId = null;
+
+          // The employer remembers the raid that WORKED. `reactToPoach` in
+          // relationships/reactions.ts records the approach an employer still
+          // has their person after, but it reads `target.companyId` in phase 15
+          // — by which point a successful raid has already moved them here — so
+          // it sees the raider as the employer and stores nothing. Its own
+          // comment says "their employer remembers it either way"; this is the
+          // other way, written where the previous employer is still known.
+          const employerCeo = ceoOf(draft, previousEmployer.id);
+          if (employerCeo !== null && employerCeo !== action.actorCharacterId && employerCeo !== target.id) {
+            const inPublic = intent.approach === 'public';
+            rememberEvent(draft, ctx, {
+              ownerCharacterId: employerCeo,
+              aboutId: company.id,
+              kind: 'poach',
+              summary: `${company.name} took ${target.name} from us on a ${Math.round(intent.compPremiumPct * 100)}% package${inPublic ? ', and did it in public' : ''}.`,
+              // Worse than an approach that failed, which reactToPoach scores
+              // from 0.45: losing the person is the injury, not being asked.
+              sentiment: -(0.6 + (inPublic ? 0.3 : 0)),
+            });
+          }
         }
 
         const departureId = emitEvent(

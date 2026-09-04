@@ -14,11 +14,41 @@
  * carries something for it this quarter: a player submission, an NPC strategist
  * bundle folded in by the action-collection phase, or a board or deal execution.
  *
+ * ## The executive, and the grudge
+ *
+ * Only a handful of rivals get a live model call in a quarter, so this file —
+ * not the prompt — is where most rival behaviour comes from most of the time.
+ * Two things therefore reach it:
+ *
+ * - **The chief executive's five stable traits**, through `executiveDialsFor`.
+ *   They bend the archetype tables inside the bounds those tables already run
+ *   through: an aggressive executive prices nearer the floor, hires ahead of
+ *   demand and bids on more public work; a financially conservative one holds
+ *   its cash, pays less and refuses to bid a programme thin; a status-sensitive
+ *   one answers slights in public and publishes what it has proved; a
+ *   technically oriented one funds the lab before the campaign.
+ * - **The company's own engine-written grudges**, through `strategistMemory`.
+ *   A rival carrying a real, recent injury undercuts the company that caused it,
+ *   bids against it, and — if the person in the chair is the sort — raids its
+ *   people and answers in public.
+ *
+ * Both are pure functions of committed state. Neither is model output, neither
+ * adds an RNG draw, and both replay identically from a save.
+ *
  * Determinism: the only RNG draw here is a small jitter on hiring size, taken
  * once per company in stable array order.
  */
 
-import type { ActionIntent, Company, ProcurementOpportunity, ResolverContext, SessionState, StaffRole, SubmittedAction } from '@frontier/contracts';
+import type {
+  ActionIntent,
+  Company,
+  ProcurementOpportunity,
+  ResolverContext,
+  SessionState,
+  StaffRole,
+  StrategistGrudge,
+  SubmittedAction,
+} from '@frontier/contracts';
 import { makeId, nodeMarketPriceUsd } from '@frontier/contracts';
 // The two procurement gates a default bid has to clear are restated by the
 // government subsystem as data, so they are imported rather than duplicated
@@ -35,12 +65,17 @@ import {
   NPC_MIN_HIRE_COUNT,
   NPC_MIN_PRICE_MOVE,
   NPC_SURVIVAL_RUNWAY_QUARTERS,
+  NEUTRAL_EXECUTIVE_DIALS,
   effectivePolicy,
+  personalisedPolicy,
   type EffectivePolicy,
+  type ExecutiveDials,
 } from './archetypes';
+import { executiveDialsFor } from './policy';
 import { PPE_DEPRECIATION_PER_QUARTER, RUNWAY_CAP_QUARTERS } from './balance';
 import { categoryOf } from './categories';
 import { chooseSupplierDefault, defaultSupplyTerms, resolveSupplyLine } from './supply';
+import { isNodePublic } from '../research/projection';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { CAPACITY_UNIT_USD, createNodeCostCache, drawPerUnitOf, lineNodeIdOf, lineNodeOf } from '../graph/lines';
 import { unitCostOf } from '../graph/cost';
@@ -59,6 +94,223 @@ function runwayQuarters(company: Company): number {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Grudges                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Below this a grudge is a note in the file rather than a change of plan.
+ *
+ * Thirty is what a single ordinary slight is worth on the day it happens
+ * (`GRUDGE_BASE_INTENSITY`: a poaching approach, a board vote, an activist
+ * letter). So the rule reads: one fresh slight is enough to change how this
+ * company deals with you, and a slight already half forgotten is not.
+ */
+export const GRUDGE_ACTION_THRESHOLD = 30;
+
+/**
+ * Extra quarterly price cut aimed at a rival we hold a grudge against, at full
+ * intensity. Three points a quarter is the width of a posture change, so being
+ * hated is worth about as much price pressure as a rival switching to a land
+ * grab — real, and not a death sentence.
+ */
+export const GRUDGE_UNDERCUT_MAX = 0.03;
+
+/**
+ * Grudge intensity at which an executive goes after the other side's people.
+ *
+ * Fifty-five: above what any single slight is worth, so a raid needs an injury
+ * that was either severe (a betrayal at 45 with hostility behind it) or
+ * repeated. Companies do not raid each other over one lost tender.
+ */
+export const GRUDGE_POACH_THRESHOLD = 55;
+
+/** Aggression lean below which an executive does not raid, whatever the grudge. */
+export const GRUDGE_POACH_AGGRESSION = 0.2;
+
+/** What a raid offers over the market rate for the post. Generous, and not absurd. */
+export const GRUDGE_POACH_PREMIUM_PCT = 0.35;
+
+/**
+ * Grudge intensity at which a status-sensitive executive answers in public.
+ * Lower than a raid because a post costs nothing but standing, which is exactly
+ * the currency a status-sensitive person is willing to spend.
+ */
+export const GRUDGE_POST_THRESHOLD = 45;
+
+/** Publicity lean below which an executive lets a slight pass without comment. */
+export const GRUDGE_POST_PUBLICITY = 0.2;
+
+/** Publicity lean at or above which an executive publishes a result it has proved. */
+export const PUBLISH_PUBLICITY_LEAN = 0.2;
+
+/**
+ * The grudges this company will actually act on, strongest first.
+ *
+ * A company with no memory yet — a world-1 or world-2 save, or a state in which
+ * no quarter has resolved — carries none, which is the neutral reading and not a
+ * missing key.
+ */
+export function actionableGrudges(company: Company): readonly StrategistGrudge[] {
+  const held = company.strategistMemory?.grudges ?? [];
+  return held
+    .filter((grudge) => grudge.intensity >= GRUDGE_ACTION_THRESHOLD)
+    .slice()
+    .sort((a, b) => b.intensity - a.intensity || (a.companyId < b.companyId ? -1 : 1));
+}
+
+/**
+ * A grudge is FRESH in the quarter after the one that last reinforced it.
+ *
+ * `strategistMemory` is written in phase 16 of quarter Q; this runs in phase 4
+ * of quarter Q+1. So `grudge.quarter === ctx.quarter - 1` is "they did it to us
+ * last quarter" — which is the only window in which the one-off retaliations
+ * below fire. Without it a standing grudge would launch a raid every quarter for
+ * as long as it lasted, and the answer to an injury would be a siege.
+ */
+function isFresh(grudge: StrategistGrudge, quarter: number): boolean {
+  return grudge.quarter === quarter - 1;
+}
+
+/**
+ * How hard this company wants to undercut somebody in one segment.
+ *
+ * Only a grudge against a company that actually sells into the segment counts:
+ * cutting the price of a product a rival does not compete on is not revenge, it
+ * is a gift to our own customers.
+ */
+function undercutIntensity(draft: SessionState, grudges: readonly StrategistGrudge[], segment: string): number {
+  let worst = 0;
+  for (const grudge of grudges) {
+    const rival = draft.companies.find((candidate) => candidate.id === grudge.companyId);
+    if (rival === undefined || !rival.isActive) continue;
+    if (!rival.products.some((product) => product.isActive && product.segment === segment)) continue;
+    if (grudge.intensity > worst) worst = grudge.intensity;
+  }
+  return worst;
+}
+
+/**
+ * The raid a fresh, severe grudge provokes, or null.
+ *
+ * Deterministic in every part: the grudge list is already sorted strongest
+ * first, and the person approached is the most connected active employee of the
+ * offending company, ties broken by character id. One raid per company per
+ * quarter, and only in the quarter after the injury.
+ */
+function raidIntent(draft: SessionState, ctx: ResolverContext, company: Company, grudges: readonly StrategistGrudge[], dials: ExecutiveDials): ActionIntent | null {
+  if (dials.aggressionLean < GRUDGE_POACH_AGGRESSION) return null;
+  for (const grudge of grudges) {
+    if (grudge.intensity < GRUDGE_POACH_THRESHOLD || !isFresh(grudge, ctx.quarter)) continue;
+    const rival = draft.companies.find((candidate) => candidate.id === grudge.companyId);
+    if (rival === undefined || !rival.isActive || rival.id === company.id) continue;
+    // Never the other side's sitting chief executive. Two reasons, and both are
+    // constraints rather than taste: a founder in the chair is not for sale at a
+    // recruiter's premium, and nothing in the engine refills a rival's empty
+    // chair — only a board can appoint, and a background rival has no board — so
+    // a successful decapitation would delete that company's personality from the
+    // world permanently, which is the opposite of what this file is for.
+    const people = draft.characters
+      .filter((character) => character.isActive && character.companyId === rival.id && !character.isPlayer && character.id !== rival.ceoCharacterId)
+      .slice()
+      .sort((a, b) => b.connectionLevel - a.connectionLevel || (a.id < b.id ? -1 : 1));
+    const target = people[0];
+    if (target === undefined) continue;
+    return {
+      type: 'poach_executive',
+      targetCharacterId: target.id,
+      compPremiumPct: GRUDGE_POACH_PREMIUM_PCT,
+      // Public, because the point of this approach is that the other side hears
+      // about it. A private one would be a hiring decision, not an answer.
+      approach: 'public',
+    };
+  }
+  return null;
+}
+
+/** Characters cannot be quoted; the post is assembled from the grudge the engine wrote. */
+const MAX_POST_CHARS = 560;
+
+/**
+ * Networks a public answer is preferred on, widest audience first. `fast_feed`
+ * carries journalists, investors, founders and consumers, which is where a
+ * company answering an injury wants to be heard.
+ */
+const POST_NETWORK_PREFERENCE = ['fast_feed', 'professional', 'community', 'video', 'technical_forum', 'finance'] as const;
+
+/** The network this executive can actually post on, or null when they have no account anywhere. */
+function postNetworkFor(draft: SessionState, company: Company, authorCharacterId: string): (typeof POST_NETWORK_PREFERENCE)[number] | null {
+  const held = new Set(
+    draft.socialAccounts
+      .filter((account) => account.isActive && (account.ownerCharacterId === authorCharacterId || account.ownerCompanyId === company.id))
+      .map((account) => account.network),
+  );
+  for (const network of POST_NETWORK_PREFERENCE) if (held.has(network)) return network;
+  return null;
+}
+
+/**
+ * The public answer a fresh grudge provokes in a status-sensitive executive, or
+ * null. The text is the engine's own record of what happened — nothing here is
+ * model output, and nothing is invented.
+ */
+function postIntent(draft: SessionState, ctx: ResolverContext, company: Company, grudges: readonly StrategistGrudge[], dials: ExecutiveDials): ActionIntent | null {
+  if (dials.publicityLean < GRUDGE_POST_PUBLICITY) return null;
+  const author = company.ceoCharacterId;
+  if (author === null) return null;
+  // Checked here rather than left to the validator, for the same reason
+  // `bidTarget` restates the procurement gates: an executive with no account on
+  // any network does not try to post and get a refusal in the report for
+  // something they never meant to do.
+  const network = postNetworkFor(draft, company, author);
+  if (network === null) return null;
+  for (const grudge of grudges) {
+    if (grudge.intensity < GRUDGE_POST_THRESHOLD || !isFresh(grudge, ctx.quarter)) continue;
+    const rival = draft.companies.find((candidate) => candidate.id === grudge.companyId);
+    if (rival === undefined || !rival.isActive) continue;
+    return {
+      type: 'social_post',
+      draft: {
+        authorCharacterId: author,
+        network,
+        text: `${company.name} is not going to pretend this did not happen. ${grudge.reason}`.slice(0, MAX_POST_CHARS),
+        intent: 'attack',
+        targetCompanyId: rival.id,
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * The result a status-sensitive executive publishes, or null.
+ *
+ * Bounded by the world rather than by a counter: only a node this company has
+ * actually finished and that is still private can be published, and publishing
+ * makes it public, so the same result is never published twice. A technical
+ * executive writes the paper; a status-sensitive one who is not technical
+ * demonstrates the product instead, which buys public and investor standing and
+ * keeps the method.
+ */
+function publicationIntent(draft: SessionState, company: Company, dials: ExecutiveDials): ActionIntent | null {
+  if (dials.publicityLean < PUBLISH_PUBLICITY_LEAN) return null;
+  const finished = draft.researchProjects
+    .filter((project) => project.companyId === company.id && project.status === 'succeeded')
+    .map((project) => project.targetNodeId)
+    .sort();
+  for (const nodeId of finished) {
+    const node = draft.techGraph.nodes.find((candidate) => candidate.id === nodeId);
+    if (node === undefined || isNodePublic(node)) continue;
+    return {
+      type: 'publish_research',
+      nodeId,
+      mode: dials.technicalLean >= 0 ? 'paper' : 'product_demonstration',
+      rationale: `${company.name} wants the credit for ${node.title} while it is still ours to claim.`,
+    };
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Public work                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -71,7 +323,12 @@ function runwayQuarters(company: Company): number {
  * gates restated are exactly the ones `disqualificationReasons` applies: the
  * bid is either legal and scoreable or it is not made.
  */
-export function bidTarget(draft: SessionState, ctx: ResolverContext, company: Company): ProcurementOpportunity | null {
+export function bidTarget(
+  draft: SessionState,
+  ctx: ResolverContext,
+  company: Company,
+  contestedIds: ReadonlySet<string> = EMPTY_ID_SET,
+): ProcurementOpportunity | null {
   const technicalStaff = roleHeadcount(company, 'engineers') + roleHeadcount(company, 'researchers');
   const eligible = draft.procurementOpportunities.filter((opportunity) => {
     if (opportunity.status !== 'open' || ctx.quarter > opportunity.closeQuarter) return false;
@@ -84,13 +341,32 @@ export function bidTarget(draft: SessionState, ctx: ResolverContext, company: Co
     return true;
   });
   if (eligible.length === 0) return null;
-  // Biggest first, then by id: the same competition on every replay.
-  eligible.sort((a, b) => (b.maxValue !== a.maxValue ? b.maxValue - a.maxValue : a.id < b.id ? -1 : 1));
+  // A company we hold a grudge against, already bidding, moves its competition
+  // to the front: bidding against them is the point, and the value of the
+  // programme is the tie-break rather than the ranking. Then biggest first, then
+  // by id: the same competition on every replay.
+  const contested = (opportunity: ProcurementOpportunity): number =>
+    contestedIds.size > 0 &&
+    draft.governmentBids.some(
+      (bid) => bid.opportunityId === opportunity.id && bid.status !== 'withdrawn' && contestedIds.has(bid.bidderCompanyId),
+    )
+      ? 1
+      : 0;
+  eligible.sort((a, b) => contested(b) - contested(a) || (b.maxValue !== a.maxValue ? b.maxValue - a.maxValue : a.id < b.id ? -1 : 1));
   return eligible[0] ?? null;
 }
 
+/** Shared empty set, so the default argument allocates nothing per company per quarter. */
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
+
 /** The bid an archetype default submits on an opportunity it is eligible for. */
-function bidIntent(draft: SessionState, company: Company, opportunity: ProcurementOpportunity, policy: EffectivePolicy): ActionIntent {
+function bidIntent(
+  draft: SessionState,
+  company: Company,
+  opportunity: ProcurementOpportunity,
+  policy: EffectivePolicy,
+  dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS,
+): ActionIntent {
   const capability = capabilityIndex(company);
   const cleared = CLEARANCE_STAFF_REQUIREMENT[opportunity.requirements.clearanceLevel];
   const engineers = Math.max(1, Math.round(roleHeadcount(company, 'engineers') * NPC_BID_STAFF_SHARE));
@@ -103,7 +379,9 @@ function bidIntent(draft: SessionState, company: Company, opportunity: Procureme
     opportunityId: opportunity.id,
     bid: {
       opportunityId: opportunity.id,
-      price: money(opportunity.maxValue * NPC_BID_PRICE_SHARE),
+      // What this executive is willing to leave on the table. Bounded well inside
+      // the ceiling either way, so an aggressive bid is still a priced bid.
+      price: money(opportunity.maxValue * clamp(NPC_BID_PRICE_SHARE + dials.bidPriceShareDelta, 0.6, 0.98)),
       technicalScoreInputs: {
         modelCapability: unit(capability),
         architectureQuality: unit(capability),
@@ -153,7 +431,7 @@ export const NPC_CAPACITY_CASH_SHARE = 0.1;
  * orders would need, which is how a backlog turns into plant. Bounded by cash,
  * so a company in trouble builds nothing.
  */
-export function capacityInvestmentsFor(draft: SessionState, company: Company): ActionIntent[] {
+export function capacityInvestmentsFor(draft: SessionState, company: Company, dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS): ActionIntent[] {
   const wanted = new Map<'plant' | 'fleet' | 'grid', number>();
   for (const product of activeProducts(company)) {
     const node = lineNodeOf(product);
@@ -167,7 +445,10 @@ export function capacityInvestmentsFor(draft: SessionState, company: Company): A
     const growUsd = backlog * draw * CAPACITY_UNIT_USD * NPC_CAPACITY_CATCH_UP;
     wanted.set(kind, (wanted.get(kind) ?? 0) + replaceUsd + growUsd);
   }
-  const budget = Math.max(0, company.balanceSheet.assets.cash) * NPC_CAPACITY_CASH_SHARE;
+  // The one capital decision a company nobody is directing makes, and therefore
+  // the only place "holds more cash" can mean anything: a conservative executive
+  // commits less of the balance to plant, a risk-tolerant one more.
+  const budget = Math.max(0, company.balanceSheet.assets.cash) * NPC_CAPACITY_CASH_SHARE * dials.capacityCashFactor;
   const total = [...wanted.values()].reduce((sum, value) => sum + value, 0);
   if (total <= 0 || budget <= 0) return [];
   const scale = Math.min(1, budget / total);
@@ -195,7 +476,11 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
       company.posture = 'survival';
     }
 
-    const policy = effectivePolicy(company.archetype, company.posture);
+    // Who is running this company, and what they are carrying. Both are
+    // committed state: no RNG is drawn for either, and a replay reproduces them.
+    const dials = executiveDialsFor(draft, company);
+    const policy = personalisedPolicy(effectivePolicy(company.archetype, company.posture), dials);
+    const grudges = actionableGrudges(company);
     const intents: ActionIntent[] = [];
 
     /* --- budgets ---------------------------------------------------------- */
@@ -229,12 +514,23 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
     }
 
     /* --- pricing nudge ---------------------------------------------------- */
-    if (Math.abs(policy.pricingNudge) >= NPC_MIN_PRICE_MOVE) {
-      for (const product of products) {
-        const next = money(product.pricePerSeat * (1 + policy.pricingNudge));
-        if (next === product.pricePerSeat) continue;
-        intents.push({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: next });
-      }
+    // Priced per product rather than per company, because the grudge cut is
+    // aimed at whoever we are actually fighting: a line a hated rival does not
+    // sell into is priced exactly as the policy says. With no grudge in the
+    // segment the nudge is the policy's own and the gate is unchanged.
+    //
+    // A node line is skipped here and priced once, by `applyNodeDefaults`, which
+    // knows the line's cost floor and the price its node actually settled at.
+    // Two price decisions on one line would mean the first one silently won —
+    // whichever ran first — and world 3 would drift off its only anchor.
+    for (const product of products) {
+      if (lineNodeIdOf(product) !== null) continue;
+      const undercut = (GRUDGE_UNDERCUT_MAX * undercutIntensity(draft, grudges, product.segment)) / 100;
+      const nudge = policy.pricingNudge - undercut;
+      if (Math.abs(nudge) < NPC_MIN_PRICE_MOVE) continue;
+      const next = money(product.pricePerSeat * (1 + nudge));
+      if (next === product.pricePerSeat) continue;
+      intents.push({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: next });
     }
 
     /* --- supply chain: publish an open API, build on the best supplier ---- */
@@ -270,8 +566,8 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
     // Without this, an offline session opens competitions nobody ever bids on
     // and cancels every one of them for want of a qualified bid.
     if (policy.governmentAppetite >= NPC_BID_APPETITE_FLOOR) {
-      const opportunity = bidTarget(draft, ctx, company);
-      if (opportunity !== null) intents.push(bidIntent(draft, company, opportunity, policy));
+      const opportunity = bidTarget(draft, ctx, company, new Set(grudges.map((grudge) => grudge.companyId)));
+      if (opportunity !== null) intents.push(bidIntent(draft, company, opportunity, policy, dials));
     }
 
     /* --- hiring or cutting ------------------------------------------------ */
@@ -293,6 +589,17 @@ export function applyNpcDefaults(draft: SessionState, ctx: ResolverContext): voi
         intents.push({ type: 'layoff', role, count: cut, severanceQuartersOfPay: company.posture === 'survival' ? 0.25 : 1 });
       }
     }
+
+    /* --- answering an injury, and taking the credit ------------------------ */
+    // Appended after the playbook so that a company with nothing to answer
+    // queues exactly the actions it queued before any of this existed — same
+    // order, same synthesised action ids.
+    const raid = raidIntent(draft, ctx, company, grudges, dials);
+    if (raid !== null) intents.push(raid);
+    const post = postIntent(draft, ctx, company, grudges, dials);
+    if (post !== null) intents.push(post);
+    const publication = publicationIntent(draft, company, dials);
+    if (publication !== null) intents.push(publication);
 
     if (intents.length === 0) continue;
 
@@ -380,6 +687,19 @@ export const NPC_PRICE_TRACKING = 1 / 3;
 export const NPC_PRICE_MOVE_FLOOR = 0.02;
 
 /**
+ * How far an executive may sit off the price its node settled at.
+ *
+ * Four percent. A node line has exactly one anchor — the market its own inputs
+ * are rolled up at — so an executive's lean is a POSITION against that market
+ * (a discounter sits under it, a premium seller over it), never a replacement
+ * for it. Bounded tightly on purpose: at four percent the line still converges
+ * on the market within a year, which is the world-3 repair this file exists to
+ * keep, and a company that wants to be cheaper than that has to actually be
+ * cheaper — the cost floor below is not negotiable.
+ */
+export const NODE_PRICE_LEAN_BOUND = 0.04;
+
+/**
  * Queue the two decisions no company delegates: replacing the capacity that
  * wore out, and refusing to sell under cost.
  *
@@ -405,7 +725,10 @@ export function applyNodeDefaults(draft: SessionState, ctx: ResolverContext, sta
           (productId === undefined || (action.intent as { productId?: string }).productId === productId),
       );
 
-    const intents: ActionIntent[] = told('invest_capacity') ? [] : [...capacityInvestmentsFor(draft, company)];
+    const dials = executiveDialsFor(draft, company);
+    const grudges = actionableGrudges(company);
+    const policy = personalisedPolicy(effectivePolicy(company.archetype, company.posture), dials);
+    const intents: ActionIntent[] = told('invest_capacity') ? [] : [...capacityInvestmentsFor(draft, company, dials)];
 
     // The cost is read at the prices the company can actually see — last
     // quarter's, because the node market prices this quarter after the actions
@@ -421,7 +744,12 @@ export function applyNodeDefaults(draft: SessionState, ctx: ResolverContext, sta
       // has — every input this line buys is rolled up at it — so a line that
       // ignores it is selling at a price from a world that no longer exists.
       const marketUsd = nodeMarketPriceUsd(draft, nodeId);
-      const targetUsd = Math.max(floorUsd, marketUsd);
+      // Where this executive wants to sit relative to that market, and how much
+      // of that lean is aimed at somebody in particular. Both bounded, and both
+      // beneath the cost floor in priority: nobody sells at a loss out of spite.
+      const undercut = (GRUDGE_UNDERCUT_MAX * undercutIntensity(draft, grudges, product.segment)) / 100;
+      const lean = clamp(policy.pricingNudge - undercut, -NODE_PRICE_LEAN_BOUND, NODE_PRICE_LEAN_BOUND);
+      const targetUsd = Math.max(floorUsd, marketUsd * (1 + lean));
       const before = product.pricePerSeat;
       if (!(targetUsd > 0) || !(before > 0)) continue;
       const nextUsd = Math.max(floorUsd, Math.round((before + (targetUsd - before) * NPC_PRICE_TRACKING) * 100) / 100);

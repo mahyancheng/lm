@@ -158,6 +158,15 @@ export function isDirectRivalOnNode(owner: Company, licensee: Company, node: Eco
   return sectorsSoldInto(owner).has(node.sector) && sectorsSoldInto(licensee).has(node.sector);
 }
 
+/**
+ * Grudge intensity at or above which an NPC owner refuses a licence outright.
+ *
+ * Forty-five is a betrayal on the day it happened, or an ordinary slight that
+ * has been repeated. Below it the royalty rules still decide, so a company you
+ * merely annoyed will still take your money.
+ */
+export const NPC_LICENCE_GRUDGE_REFUSAL = 45;
+
 /** An NPC owner's verdict on one request, with the sentence it is explained by. */
 export interface LicenceVerdict {
   readonly accepted: boolean;
@@ -177,7 +186,23 @@ export interface LicenceVerdict {
  * No random number, no relationship roll: an owner's answer has to be a thing a
  * founder can reason about before spending a quarter on it.
  */
-export function npcLicenceVerdict(owner: Company, licensee: Company, node: EconomicNode, royaltyPct: number): LicenceVerdict {
+export function npcLicenceVerdict(
+  owner: Company,
+  licensee: Company,
+  node: EconomicNode,
+  royaltyPct: number,
+  grudgeIntensity: number = 0,
+): LicenceVerdict {
+  // A company that wronged us last year does not get our technology this year,
+  // at any royalty. This is the fallback's version of "refuses its deals": the
+  // grudge is the engine's own bounded record, and the refusal is stated in the
+  // report so a founder can see exactly why the door closed.
+  if (grudgeIntensity >= NPC_LICENCE_GRUDGE_REFUSAL) {
+    return {
+      accepted: false,
+      reason: `${owner.name} will not licence ${node.label} to ${licensee.name} after what passed between them.`,
+    };
+  }
   const rival = isDirectRivalOnNode(owner, licensee, node);
   const offer = licenceOfferOf(owner, node.id);
   if (offer !== null && royaltyPct >= offer.royaltyPct) {

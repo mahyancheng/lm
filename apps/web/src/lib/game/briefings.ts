@@ -14,17 +14,33 @@ import type {
   Company,
   ChiefOfStaffInput,
   LookupResult,
+  NpcMemoryView,
+  NpcPersona,
+  NpcRelationshipView,
   NpcStrategistInput,
   SessionState,
   SimEvent,
   SocialAuthorInput,
   SocialPost,
+  StrategistChange,
+  StrategistMemory,
   WorldDirectorInput,
   WorldState,
 } from '@frontier/contracts';
-import { WORLD_TARGET_PATHS, quarterLabel } from '@frontier/contracts';
+import {
+  MAX_STRATEGIST_BELIEFS,
+  MAX_STRATEGIST_CHANGES,
+  MAX_STRATEGIST_CHANGE_CHARS,
+  MAX_STRATEGIST_MEMORIES,
+  MAX_STRATEGIST_RELATIONSHIPS,
+  MEMORY_RECALL_THRESHOLD,
+  WORLD_TARGET_PATHS,
+  quarterLabel,
+  isFullBriefingQuarter,
+  quartersSinceFullBriefing,
+} from '@frontier/contracts';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
-import { impactBudgetFor, strategistCompanyIds } from '@frontier/simulation';
+import { ceoOf, impactBudgetFor, standingStrategyFor, strategistCompanyIds } from '@frontier/simulation';
 import { PLAYER_ID, drawWorldCandidates, playerCompanyOf } from './engine';
 import { buildChiefOfStaffDossier } from './dossier';
 import { metricsFor } from './playerView';
@@ -186,24 +202,219 @@ export function buildWorldDirectorInput(session: SessionState, previousWorld: Wo
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/*  The strategist projection: the person, their memory, and what changed      */
+/* -------------------------------------------------------------------------- */
+
+/** Options for one strategist call. */
+export interface StrategistBriefingOptions {
+  /**
+   * The world as it stood when this company last planned, or null.
+   *
+   * Null means there is no prior quarter to compress against — a new run, or
+   * the first quarter after a load — which is exactly when the full dossier
+   * must be sent instead of a delta.
+   */
+  readonly previousWorld: WorldState | null;
+}
+
+const NO_PRIOR_CONTEXT: StrategistBriefingOptions = { previousWorld: null };
+
+/** The two-line position summary a delta call carries in place of the full dossier. */
+function companyPositionLine(session: SessionState, company: Company): string {
+  const metrics = metricsFor(session, company.id);
+  const staff = company.employees;
+  const headcount = staff.engineers + staff.researchers + staff.sales + staff.ops + staff.execs;
+  return [
+    `${company.name} (${company.ticker ?? 'private'}) — posture ${company.posture.replace(/_/g, ' ')}, ${company.sectorId.replace(/_/g, ' ')}.`,
+    `Revenue ${formatMoney(company.financials.revenueQuarterly)}, cash ${formatMoney(company.financials.cash)}, debt ${formatMoney(company.financials.debt)}, burn ${formatMoney(company.financials.quarterlyBurn)}` +
+      `${metrics === null ? '' : `, runway ${formatQuarterCount(metrics.runwayQuarters)}, operating margin ${formatPct(metrics.operatingMarginPct)}`}.`,
+    `Headcount ${headcount}; ${company.compute.ownedAccelerators + company.compute.reservedAccelerators} accelerator-equivalents at ${formatPct(company.compute.computeUtilisation)} utilisation.`,
+  ].join('\n');
+}
+
+/** The chief executive, projected. Null when the company has nobody running it. */
+function personaFor(session: SessionState, company: Company): NpcPersona | null {
+  const ceoId = ceoOf(session, company.id);
+  if (ceoId === null) return null;
+  const ceo = session.characters.find((character) => character.id === ceoId) ?? null;
+  if (ceo === null) return null;
+  return {
+    characterId: ceo.id,
+    name: ceo.name,
+    title: ceo.title,
+    role: ceo.role,
+    traits: ceo.stableTraits,
+    beliefs: ceo.beliefs.slice(0, MAX_STRATEGIST_BELIEFS),
+  };
+}
+
+/**
+ * How this chief executive regards the companies that matter, strongest
+ * feeling first.
+ *
+ * Their own feelings only: a relationship is directional, and how anybody else
+ * feels about them is not knowable. Feelings are held between people, so each
+ * one is attributed to the counterparty's company — one row per company, the
+ * strongest kept.
+ */
+function relationshipViews(session: SessionState, company: Company, ceoId: string | null): NpcRelationshipView[] {
+  if (ceoId === null) return [];
+  const companyOfCharacter = new Map(session.characters.map((character) => [character.id, character.companyId]));
+  const byCompany = new Map<string, NpcRelationshipView>();
+
+  for (const relationship of session.relationships) {
+    if (relationship.fromId !== ceoId) continue;
+    const counterpartyCompanyId = companyOfCharacter.get(relationship.toId) ?? null;
+    if (counterpartyCompanyId === null || counterpartyCompanyId === company.id) continue;
+    const counterparty = session.companies.find((entry) => entry.id === counterpartyCompanyId) ?? null;
+    if (counterparty === null) continue;
+    const view: NpcRelationshipView = {
+      counterpartyId: counterparty.id,
+      counterpartyName: counterparty.name,
+      isPlayerCompany: counterparty.controllerPlayerId !== null,
+      trust: Math.round(relationship.trust),
+      respect: Math.round(relationship.respect),
+      hostility: Math.round(relationship.hostility),
+    };
+    const held = byCompany.get(counterparty.id);
+    if (held === undefined || weightOf(view) > weightOf(held)) byCompany.set(counterparty.id, view);
+  }
+
+  return [...byCompany.values()]
+    .sort((a, b) => weightOf(b) - weightOf(a) || a.counterpartyId.localeCompare(b.counterpartyId))
+    .slice(0, MAX_STRATEGIST_RELATIONSHIPS);
+}
+
+/** How much a relationship deserves prompt space: a strong feeling of any kind. */
+function weightOf(view: NpcRelationshipView): number {
+  return Math.max(view.hostility, view.respect, Math.abs(view.trust - 50) * 2);
+}
+
+/** What this chief executive remembers, strongest first. Their own memories only. */
+function memoryViews(session: SessionState, ceoId: string | null): NpcMemoryView[] {
+  if (ceoId === null) return [];
+  const nameOf = (id: string): string =>
+    session.companies.find((entry) => entry.id === id)?.name ?? session.characters.find((entry) => entry.id === id)?.name ?? id;
+
+  return session.memories
+    .filter((memory) => memory.ownerCharacterId === ceoId && memory.strength >= MEMORY_RECALL_THRESHOLD)
+    .slice()
+    .sort((a, b) => b.strength - a.strength || b.quarter - a.quarter || a.id.localeCompare(b.id))
+    .slice(0, MAX_STRATEGIST_MEMORIES)
+    .map((memory) => ({
+      quarter: memory.quarter,
+      kind: memory.kind,
+      aboutId: memory.aboutId,
+      aboutName: nameOf(memory.aboutId),
+      summary: memory.summary,
+      sentiment: memory.sentiment,
+      strength: memory.strength,
+    }));
+}
+
+/**
+ * The engine's own memory for this company, or the neutral reading.
+ *
+ * `strategistMemory` is absent until a quarter has resolved against the
+ * company, and on every world-1 and world-2 save — where absent is
+ * deliberately not the same as empty, because a default would move both frozen
+ * hashes. Here it becomes an empty memory carrying the standing strategy the
+ * engine would have derived anyway.
+ */
+function strategistMemoryOf(session: SessionState, company: Company): StrategistMemory {
+  if (company.strategistMemory !== undefined) return company.strategistMemory;
+  return { standingStrategy: standingStrategyFor(company), standingStrategyQuarter: session.quarter, grudges: [], attempts: [] };
+}
+
+/**
+ * What changed since this company last planned.
+ *
+ * The token saving: on a delta quarter this replaces the world digest and the
+ * rival table, which are the two largest blocks in the dossier. Everything
+ * here is committed state — the company's own recorded attempts, world
+ * readings, public disclosures, newly opened procurement and newly arrived
+ * offers — so two runs of the same quarter produce the same lines.
+ */
+function changesSinceLastQuarter(session: SessionState, company: Company, memory: StrategistMemory, previousWorld: WorldState | null): StrategistChange[] {
+  const lastQuarter = session.quarter - 1;
+  const changes: StrategistChange[] = [];
+
+  for (const attempt of memory.attempts) {
+    if (attempt.quarter !== lastQuarter) continue;
+    changes.push({ kind: 'own_move', detail: `${attempt.what}: ${attempt.outcome}` });
+  }
+
+  if (previousWorld !== null) {
+    const moved = Object.keys(WORLD_TARGET_PATHS)
+      .flatMap((path) => {
+        const value = readWorldPath(session.world, path);
+        const previous = readWorldPath(previousWorld, path);
+        if (value === null || previous === null) return [];
+        const delta = value - previous;
+        if (Math.abs(delta) < Math.max(0.02, Math.abs(previous) * 0.02)) return [];
+        return [{ path, value, delta }];
+      })
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.path.localeCompare(b.path))
+      .slice(0, 6);
+    for (const reading of moved) {
+      changes.push({ kind: 'world', detail: `${labelForPath(reading.path)} ${reading.value.toFixed(2)} (${reading.delta > 0 ? '+' : ''}${reading.delta.toFixed(2)}).` });
+    }
+  }
+
+  for (const disclosure of session.disclosures.filter((entry) => entry.quarter === lastQuarter && entry.companyId !== null && entry.companyId !== company.id).slice(-6)) {
+    const rival = session.companies.find((entry) => entry.id === disclosure.companyId) ?? null;
+    // The headline usually names the company already; prefixing it twice reads badly.
+    const named = rival !== null && disclosure.headline.startsWith(rival.name);
+    changes.push({ kind: 'rival', detail: named || rival === null ? disclosure.headline : `${rival.name}: ${disclosure.headline}` });
+  }
+
+  for (const opportunity of session.procurementOpportunities) {
+    if (opportunity.status !== 'open' || opportunity.openQuarter < lastQuarter) continue;
+    if (opportunity.visibility !== 'public' && !opportunity.invitedCompanyIds.includes(company.id)) continue;
+    changes.push({ kind: 'opportunity', detail: `Newly open: ${opportunity.programme}, ceiling ${formatMoney(opportunity.maxValue)}, closes ${quarterLabel(session.startYear, opportunity.closeQuarter)}.` });
+  }
+
+  for (const deal of session.deals) {
+    if (deal.counterpartyId !== company.id || deal.status !== 'proposed' || deal.createdQuarter < lastQuarter) continue;
+    changes.push({ kind: 'deal', detail: `New offer from ${deal.proposerId}: ${deal.summary}` });
+  }
+
+  return changes.slice(0, MAX_STRATEGIST_CHANGES).map((change) => ({ kind: change.kind, detail: change.detail.slice(0, MAX_STRATEGIST_CHANGE_CHARS) }));
+}
+
 /**
  * Build one NPC strategist's input.
  *
  * Scoped hard: this company's own position in full, the world as it would
  * understand it, and rivals reduced to public information. Nothing private
- * about another company crosses this boundary.
+ * about another company crosses this boundary — including the strategist
+ * memory, which is a company's OWN record and never appears in anybody else's
+ * dossier.
+ *
+ * Full dossier or delta is decided by `isFullBriefingQuarter`: the whole thing
+ * on the first call of a run, on the first after a load, and every eighth
+ * quarter; what changed since last quarter on every other. Sessions are fresh
+ * per call either way, so the person, the memory, the position and the
+ * constraints travel every time.
  */
-export function buildNpcStrategistInput(session: SessionState, companyId: string): NpcStrategistInput | null {
+export function buildNpcStrategistInput(session: SessionState, companyId: string, options: StrategistBriefingOptions = NO_PRIOR_CONTEXT): NpcStrategistInput | null {
   const company = session.companies.find((entry) => entry.id === companyId) ?? null;
   if (company === null) return null;
 
+  const full = isFullBriefingQuarter(session.quarter, options.previousWorld !== null);
+  const memory = strategistMemoryOf(session, company);
+  const persona = personaFor(session, company);
+
   const rivals = session.companies.filter((entry) => entry.id !== companyId && entry.isActive);
-  const rivalBriefing = rivals
-    .map((rival) => {
-      if (!rival.isPublic) return `${rival.name} — private, ${rival.sectorId.replace(/_/g, ' ')}. Financials undisclosed.`;
-      return `${rival.name} (${rival.ticker ?? '—'}) — ${rival.sectorId.replace(/_/g, ' ')}, revenue ${formatMoney(rival.financials.revenueQuarterly)} last reported, cash ${formatMoney(rival.financials.cash)}, enterprise reputation ${rival.reputation.enterprise}.`;
-    })
-    .join('\n');
+  const rivalBriefing = full
+    ? rivals
+        .map((rival) => {
+          if (!rival.isPublic) return `${rival.name} — private, ${rival.sectorId.replace(/_/g, ' ')}. Financials undisclosed.`;
+          return `${rival.name} (${rival.ticker ?? '—'}) — ${rival.sectorId.replace(/_/g, ' ')}, revenue ${formatMoney(rival.financials.revenueQuarterly)} last reported, cash ${formatMoney(rival.financials.cash)}, enterprise reputation ${rival.reputation.enterprise}.`;
+        })
+        .join('\n')
+    : '';
 
   const cash = company.financials.cash;
   const constraints = [
@@ -218,8 +429,11 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
     sessionId: session.sessionId,
     quarter: session.quarter,
     companyId,
-    companyBriefing: companyBriefing(session, company),
-    worldBriefing: worldBriefing(session),
+    companyName: company.name,
+    // The delta path sends the position line instead of the full dossier. Both
+    // are built from the same committed state; only the width differs.
+    companyBriefing: full ? companyBriefing(session, company) : companyPositionLine(session, company),
+    worldBriefing: full ? worldBriefing(session) : '',
     rivalBriefing,
     openOpportunities: session.procurementOpportunities
       .filter((opportunity) => opportunity.status === 'open' && (opportunity.visibility === 'public' || opportunity.invitedCompanyIds.includes(companyId)))
@@ -235,6 +449,15 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
     priorPosture: company.posture,
     priorStrategySummary: `Last quarter ${company.name} held a ${company.posture.replace(/_/g, ' ')} posture with risk tolerance ${company.riskTolerance.toFixed(2)}.`,
     constraints,
+    persona,
+    relationships: relationshipViews(session, company, persona?.characterId ?? null),
+    memories: memoryViews(session, persona?.characterId ?? null),
+    memory,
+    changedSinceLastQuarter: {
+      isFullBriefing: full,
+      quartersSinceFullBriefing: full ? 0 : quartersSinceFullBriefing(session.quarter),
+      changes: full ? [] : changesSinceLastQuarter(session, company, memory, options.previousWorld),
+    },
   };
 }
 

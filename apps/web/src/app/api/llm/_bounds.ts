@@ -121,6 +121,9 @@ export const BoundedNpcStrategistInputSchema = NpcStrategistInputSchema.superRef
   stringEntries(ctx, ['constraints'], value.constraints, L.listEntries, L.listText);
   entries(ctx, ['openOpportunities'], value.openOpportunities, L.listEntries, (item, at) => chars(ctx, [...at, 'programme'], item.programme, L.listText));
   entries(ctx, ['incomingDeals'], value.incomingDeals, L.listEntries, (item, at) => chars(ctx, [...at, 'summary'], item.summary, L.listText));
+  // The persona, the strategist memory and the delta need nothing here: every
+  // string and every array inside them is capped by the contract itself, and a
+  // second, looser limit on the same field would be dead code.
 });
 
 export const BoundedCharacterContextSchema = CharacterUtteranceContextSchema.superRefine((value, ctx) => {

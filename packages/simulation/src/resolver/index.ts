@@ -80,6 +80,7 @@ import { resolveDisclosures } from './disclosure';
 import { rebuildLeaderboards } from './leaderboards';
 import { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 import { resolveControlChanges } from '../companies/control';
+import { updateStrategistMemory } from '../companies/strategistMemory';
 
 export { ResolutionRecorder, chainRowHash, rowFingerprint } from './ledger';
 export { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
@@ -358,6 +359,12 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             subsystems.companies.recomputeMetrics(draft, ctx);
             subsystems.capitalDesks?.recomputeCapitalEntities(draft, ctx);
             rebuildLeaderboards(draft, ctx);
+            // Last in the last phase that touches companies: every economic
+            // phase has run, phase fifteen has already turned this quarter's
+            // events into memories and feelings, and the ledger is complete but
+            // for the commit and the snapshot. A company's memory is therefore
+            // written from what happened, never from what was planned.
+            updateStrategistMemory(draft, ctx, recorder.events);
             break;
 
           case 'ledger_commit':

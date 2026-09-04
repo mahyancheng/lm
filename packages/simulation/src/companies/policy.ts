@@ -11,11 +11,47 @@
  * or **derived** from the archetype policy in `archetypes.ts` applied to last
  * quarter's revenue. Both paths are deterministic and both are visible in the
  * ledger.
+ *
+ * The derivation is where a MAJOR rival's personality lands. `applyNpcDefaults`
+ * skips major-tier companies — a major is meant to have a strategist — so a
+ * major whose model call did not happen this quarter (the top-K cap, the
+ * per-quarter time budget, an outage) states no budget at all, and this is the
+ * only thing deciding what it spends. Reading the chief executive's dials here
+ * is what stops that company from spending exactly what every other company of
+ * its archetype spends.
  */
 
-import type { Company, SubmittedAction } from '@frontier/contracts';
-import { effectivePolicy } from './archetypes';
+import type { Company, SessionState, StableTraits, SubmittedAction } from '@frontier/contracts';
+import { NEUTRAL_EXECUTIVE_DIALS, effectivePolicy, executiveDials, personalisedPolicy, type ExecutiveDials } from './archetypes';
 import { intentsOfType, money } from './util';
+import { ceoOf } from '../relationships/relations';
+
+/* -------------------------------------------------------------------------- */
+/*  Who is running the company                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** The stable traits of whoever is in the chair, or null when the chair is empty. */
+export function executiveTraitsOf(draft: SessionState, company: Company): StableTraits | null {
+  const characterId = ceoOf(draft, company.id);
+  if (characterId === null) return null;
+  const character = draft.characters.find((candidate) => candidate.id === characterId);
+  if (character === undefined || !character.isActive) return null;
+  return character.stableTraits;
+}
+
+/**
+ * The dials this company's chief executive turns on the archetype tables.
+ *
+ * A company somebody is playing gets the neutral set deliberately: the player is
+ * the executive, their instructions are the personality, and a derived fallback
+ * budget that quietly moved with traits they picked at character creation would
+ * be a number on their own screen that they did not choose and cannot see the
+ * reason for. Every company nobody is playing gets its executive.
+ */
+export function executiveDialsFor(draft: SessionState, company: Company): ExecutiveDials {
+  if (company.controllerPlayerId !== null) return NEUTRAL_EXECUTIVE_DIALS;
+  return executiveDials(executiveTraitsOf(draft, company));
+}
 
 /** What a company will spend on demand generation this quarter, and where it came from. */
 export interface MarketingPlan {
@@ -88,8 +124,8 @@ function boundedPolicyUsd(company: Company, ownShare: number, otherShare: number
  * profit behind it can carry. Used when no action stated a budget, and as the
  * floor the financial phase falls back to if the product phase did not run.
  */
-export function policyMarketingUsd(company: Company): number {
-  const policy = effectivePolicy(company.archetype, company.posture);
+export function policyMarketingUsd(company: Company, dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS): number {
+  const policy = personalisedPolicy(effectivePolicy(company.archetype, company.posture), dials);
   return boundedPolicyUsd(company, policy.marketingRevenueShare, policy.rdRevenueShare);
 }
 
@@ -97,8 +133,8 @@ export function policyMarketingUsd(company: Company): number {
  * Derive the archetype-policy research envelope: a share of last quarter's
  * revenue, bent by posture, under the same gross-profit bound as marketing.
  */
-export function policyResearchEnvelopeUsd(company: Company): number {
-  const policy = effectivePolicy(company.archetype, company.posture);
+export function policyResearchEnvelopeUsd(company: Company, dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS): number {
+  const policy = personalisedPolicy(effectivePolicy(company.archetype, company.posture), dials);
   return boundedPolicyUsd(company, policy.rdRevenueShare, policy.marketingRevenueShare);
 }
 
@@ -108,7 +144,7 @@ export function policyResearchEnvelopeUsd(company: Company): number {
  * this runs, which is the point: budgets are set against the revenue the company
  * actually knows about.
  */
-export function marketingPlan(company: Company, actions: readonly SubmittedAction[]): MarketingPlan {
+export function marketingPlan(company: Company, actions: readonly SubmittedAction[], dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS): MarketingPlan {
   const bySegment: Record<string, number> = {};
   let recurring = 0;
   let stated = false;
@@ -139,7 +175,7 @@ export function marketingPlan(company: Company, actions: readonly SubmittedActio
   }
 
   if (!stated) {
-    const derived = policyMarketingUsd(company);
+    const derived = policyMarketingUsd(company, dials);
     recurring = derived;
     const products = company.products.filter((p) => p.isActive);
     if (products.length === 0) {
@@ -163,9 +199,9 @@ export function marketingPlan(company: Company, actions: readonly SubmittedActio
  * This quarter's research envelope: the stated `set_research_budget` figure when
  * the company gave one, the archetype-policy share of revenue otherwise.
  */
-export function researchEnvelopeUsd(company: Company, actions: readonly SubmittedAction[]): number {
+export function researchEnvelopeUsd(company: Company, actions: readonly SubmittedAction[], dials: ExecutiveDials = NEUTRAL_EXECUTIVE_DIALS): number {
   const stated = intentsOfType(actions, 'set_research_budget');
   const last = stated[stated.length - 1];
   if (last !== undefined) return money(last.intent.budgetUsd);
-  return policyResearchEnvelopeUsd(company);
+  return policyResearchEnvelopeUsd(company, dials);
 }

@@ -27,6 +27,10 @@ import {
   CURRENT_WORLD_VERSION,
   CapTableSchema,
   CompanySchema,
+  MAX_STANDING_STRATEGY_CHARS,
+  MAX_STRATEGIST_ATTEMPTS,
+  MAX_STRATEGIST_GRUDGES,
+  StrategistMemorySchema,
   ConditionalCommitmentSchema,
   DEFAULT_COMPANY_FUNDAMENTALS,
   DEFAULT_EVALUATION_WEIGHTS,
@@ -42,6 +46,10 @@ import {
   NEW_GAME_BACKGROUND_IDS,
   NewGameSetupSchema,
   NpcActionBundleSchema,
+  NpcStrategistInputSchema,
+  MAX_STRATEGIST_CHANGES,
+  MAX_STRATEGIST_MEMORIES,
+  MAX_STRATEGIST_RELATIONSHIPS,
   OWNERSHIP_THRESHOLDS,
   PATTERN_TARGET_PATHS,
   PublicRecordItemSchema,
@@ -952,6 +960,9 @@ const LLM_FACING_SCHEMAS: ReadonlyArray<readonly [string, z.ZodTypeAny]> = [
   ['DealObligationSchema', DealObligationSchema],
   ['DealExtractionSchema', DealExtractionSchema],
   ['NarratorOutputSchema', NarratorOutputSchema],
+  // An input rather than an output, and listed for the same reason: every key of
+  // it is written into a prompt, so an absent key would be an absent sentence.
+  ['NpcStrategistInputSchema', NpcStrategistInputSchema],
 ];
 
 describe('LLM-facing schemas stay compatible with structured outputs', () => {
@@ -1163,6 +1174,135 @@ describe('sectors and regions', () => {
     expect(defaultRegionFor('ai')).toBe('north_america');
     expect(regionsBySectorAffinity('robotics')[0]).toBe('east_asia');
     expect(regionsBySectorAffinity('ai')).toEqual(regionsBySectorAffinity('ai'));
+  });
+});
+
+describe('the strategist memory', () => {
+  const memory = {
+    standingStrategy: 'A frontier lab putting the frontier ahead of the quarter.',
+    standingStrategyQuarter: 3,
+    grudges: [{ companyId: 'cmp_nexus', reason: 'They closed a supply line to us.', quarter: 3, intensity: 34 }],
+    attempts: [{ quarter: 3, what: 'hire', outcome: 'Reduced: 6 of 40 roles arrived.' }],
+  };
+
+  it('is absent on a company that has never had a quarter resolved against it', () => {
+    // Load-bearing: a defaulted key would materialise on every world-1 and
+    // world-2 company and both frozen worlds would stop hashing as they do.
+    expect(CompanySchema.parse(company).strategistMemory).toBeUndefined();
+    expect(Object.keys(CompanySchema.parse(company))).not.toContain('strategistMemory');
+  });
+
+  it('parses a written memory and keeps every field', () => {
+    const parsed = CompanySchema.parse({ ...company, strategistMemory: memory });
+    expect(parsed.strategistMemory?.grudges[0]?.intensity).toBe(34);
+    expect(parsed.strategistMemory?.attempts[0]?.quarter).toBe(3);
+    expect(parsed.strategistMemory?.standingStrategyQuarter).toBe(3);
+  });
+
+  it('refuses a memory that has outgrown its bounds', () => {
+    const grudge = memory.grudges[0]!;
+    const attempt = memory.attempts[0]!;
+    const tooMany = {
+      ...company,
+      strategistMemory: { ...memory, grudges: Array.from({ length: MAX_STRATEGIST_GRUDGES + 1 }, () => grudge) },
+    };
+    expect(CompanySchema.safeParse(tooMany).success).toBe(false);
+
+    const tooManyAttempts = {
+      ...company,
+      strategistMemory: { ...memory, attempts: Array.from({ length: MAX_STRATEGIST_ATTEMPTS + 1 }, () => attempt) },
+    };
+    expect(CompanySchema.safeParse(tooManyAttempts).success).toBe(false);
+
+    const tooLong = { ...company, strategistMemory: { ...memory, standingStrategy: 'x'.repeat(MAX_STANDING_STRATEGY_CHARS + 1) } };
+    expect(CompanySchema.safeParse(tooLong).success).toBe(false);
+
+    const outOfRange = { ...company, strategistMemory: { ...memory, grudges: [{ ...grudge, intensity: 101 }] } };
+    expect(CompanySchema.safeParse(outOfRange).success).toBe(false);
+
+    const fractional = { ...company, strategistMemory: { ...memory, grudges: [{ ...grudge, intensity: 34.5 }] } };
+    expect(CompanySchema.safeParse(fractional).success).toBe(false);
+  });
+
+  it('emits every key, so it can be handed to a model as it stands', () => {
+    // The LLM-facing rules: no optional, no default, no record inside it.
+    const names = collectTypeNames(StrategistMemorySchema);
+    expect(names.has('ZodOptional')).toBe(false);
+    expect(names.has('ZodDefault')).toBe(false);
+    expect(names.has('ZodRecord')).toBe(false);
+  });
+});
+
+describe('the strategist input carries the person running the company', () => {
+  const base = {
+    sessionId: 'ses_1',
+    quarter: 9,
+    companyId: 'cmp_aletheia',
+    companyName: 'Aletheia Labs',
+    companyBriefing: 'Aletheia Labs — cash $1.2bn.',
+    worldBriefing: 'Compute tight.',
+    rivalBriefing: 'Nexus is public.',
+    openOpportunities: [],
+    incomingDeals: [],
+    priorPosture: 'balanced' as const,
+    priorStrategySummary: 'Hold the enterprise accounts.',
+    constraints: ['Available cash $1.2bn.'],
+    persona: {
+      characterId: 'chr_rhea',
+      name: 'Rhea Valdes',
+      title: 'CEO — Aletheia Labs',
+      role: 'founder_ceo' as const,
+      traits: { riskTolerance: 83, technicalOrientation: 74, financialConservatism: 21, aggressiveness: 77, statusSensitivity: 66 },
+      beliefs: [{ topic: 'frontier_progress' as const, level: 'high' as const }],
+    },
+    relationships: [{ counterpartyId: 'cmp_player', counterpartyName: 'Player Ventures', isPlayerCompany: true, trust: 12, respect: 60, hostility: 71 }],
+    memories: [
+      {
+        quarter: 7,
+        kind: 'poach' as const,
+        aboutId: 'cmp_player',
+        aboutName: 'Player Ventures',
+        summary: 'They took my head of research during the shortage.',
+        sentiment: -0.8,
+        strength: 0.72,
+      },
+    ],
+    memory: { standingStrategy: 'A frontier lab spending ahead of revenue.', standingStrategyQuarter: 7, grudges: [], attempts: [] },
+    changedSinceLastQuarter: { isFullBriefing: false, quartersSinceFullBriefing: 1, changes: [{ kind: 'own_move' as const, detail: 'hire: reduced from 400 to 24.' }] },
+  };
+
+  it('parses a persona, relationships, memories, the engine memory and the delta', () => {
+    const parsed = NpcStrategistInputSchema.parse(base);
+    expect(parsed.persona?.traits.aggressiveness).toBe(77);
+    expect(parsed.relationships[0]?.hostility).toBe(71);
+    expect(parsed.memories[0]?.kind).toBe('poach');
+    expect(parsed.memory.standingStrategyQuarter).toBe(7);
+    expect(parsed.changedSinceLastQuarter.isFullBriefing).toBe(false);
+  });
+
+  it('requires every new key, so a structured input can never omit one', () => {
+    // Required-and-nullable, not optional: `persona: null` is a company with no
+    // chief executive; a missing key is a builder that forgot.
+    expect(NpcStrategistInputSchema.safeParse({ ...base, persona: null }).success).toBe(true);
+    for (const key of ['persona', 'relationships', 'memories', 'memory', 'changedSinceLastQuarter'] as const) {
+      const without: Record<string, unknown> = { ...base };
+      delete without[key];
+      expect(NpcStrategistInputSchema.safeParse(without).success).toBe(false);
+    }
+  });
+
+  it('refuses more of any of them than the prompt is allowed to carry', () => {
+    const relationship = base.relationships[0]!;
+    const memory = base.memories[0]!;
+    const change = base.changedSinceLastQuarter.changes[0]!;
+    expect(NpcStrategistInputSchema.safeParse({ ...base, relationships: Array.from({ length: MAX_STRATEGIST_RELATIONSHIPS + 1 }, () => relationship) }).success).toBe(false);
+    expect(NpcStrategistInputSchema.safeParse({ ...base, memories: Array.from({ length: MAX_STRATEGIST_MEMORIES + 1 }, () => memory) }).success).toBe(false);
+    expect(
+      NpcStrategistInputSchema.safeParse({
+        ...base,
+        changedSinceLastQuarter: { ...base.changedSinceLastQuarter, changes: Array.from({ length: MAX_STRATEGIST_CHANGES + 1 }, () => change) },
+      }).success,
+    ).toBe(false);
   });
 });
 

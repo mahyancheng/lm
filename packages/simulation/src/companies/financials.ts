@@ -109,7 +109,7 @@ import { appendFinancialQuarter } from './history';
 import { cloudRentUsd, createNodeCostCache, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
 import { totalDataPetabytes } from '../graph/data';
 import { unitCostOf } from '../graph/cost';
-import { policyMarketingUsd, researchEnvelopeUsd } from './policy';
+import { executiveDialsFor, policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
 import { companyEnergyCostFactor } from '../economy/regions';
 import {
@@ -647,7 +647,7 @@ export function resolveFinancials(
     // consumed *out of* payroll rather than beside it. The fallbacks below only
     // bite when this phase is run in isolation.
     const payroll = Math.max(company.financials.payroll, (totalHeadcount(company) * company.employees.avgComp) / 4);
-    const marketing = Math.max(company.financials.marketing, policyMarketingUsd(company));
+    const marketing = Math.max(company.financials.marketing, policyMarketingUsd(company, executiveDialsFor(draft, company)));
 
     const compute = computeCost(draft, company);
     const servingCompute = compute.totalUsd * compute.servingShare;
@@ -755,7 +755,7 @@ export function resolveFinancials(
       ? nodeCogsBooked + supportCost + compliance + sectorCostAdjustment + tollAdjustment
       : servingCompute + supportCost + compliance + supplyCost + sectorCostAdjustment + tollAdjustment + interCompanyCogs;
 
-    const envelope = researchEnvelopeUsd(company, actions);
+    const envelope = researchEnvelopeUsd(company, actions, executiveDialsFor(draft, company));
     const projectBudgets = projectBudgetUsd(draft, company.id);
     const rdSpend = Math.max(projectBudgets, envelope) + trainingCompute;
 

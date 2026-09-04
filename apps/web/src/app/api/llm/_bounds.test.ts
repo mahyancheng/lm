@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import { DEFAULT_IMPACT_BUDGET } from '@frontier/contracts';
+import { DEFAULT_IMPACT_BUDGET, MAX_STRATEGIST_CHANGE_CHARS } from '@frontier/contracts';
 import {
   BoundedChiefOfStaffInputSchema,
   BoundedNpcStrategistInputSchema,
@@ -238,6 +238,19 @@ describe('other role bounds', () => {
     priorPosture: 'balanced',
     priorStrategySummary: 'Hold pricing.',
     constraints: ['Available cash $2.1bn'],
+    companyName: 'Nexus Intelligence',
+    persona: {
+      characterId: 'chr_maya',
+      name: 'Maya Chen',
+      title: 'CEO — Nexus Intelligence',
+      role: 'founder_ceo',
+      traits: { riskTolerance: 78, technicalOrientation: 82, financialConservatism: 24, aggressiveness: 71, statusSensitivity: 66 },
+      beliefs: [],
+    },
+    relationships: [],
+    memories: [],
+    memory: { standingStrategy: 'A frontier lab spending ahead of revenue.', standingStrategyQuarter: 1, grudges: [], attempts: [] },
+    changedSinceLastQuarter: { isFullBriefing: true, quartersSinceFullBriefing: 0, changes: [] },
     ...overrides,
   });
 
@@ -245,6 +258,15 @@ describe('other role bounds', () => {
     const oversize = 'x'.repeat(LLM_INPUT_LIMITS.briefing + 1);
     expect(pathsOf(BoundedNpcStrategistInputSchema.safeParse(npcInput({ rivalBriefing: oversize })))).toContain('rivalBriefing');
     expect(BoundedNpcStrategistInputSchema.safeParse(npcInput()).success).toBe(true);
+  });
+
+  it('refuses a delta line longer than the contract allows', () => {
+    // Bounded by the contract itself (MAX_STRATEGIST_CHANGE_CHARS), which is
+    // why `_bounds.ts` adds no second limit on it.
+    const flooded = npcInput({
+      changedSinceLastQuarter: { isFullBriefing: false, quartersSinceFullBriefing: 1, changes: [{ kind: 'world', detail: 'x'.repeat(MAX_STRATEGIST_CHANGE_CHARS + 1) }] },
+    });
+    expect(pathsOf(BoundedNpcStrategistInputSchema.safeParse(flooded))).toContain('changedSinceLastQuarter.changes.0.detail');
   });
 
   it('bounds the World Director\'s candidate list and target paths', () => {

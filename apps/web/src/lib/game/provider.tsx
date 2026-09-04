@@ -808,8 +808,8 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     const player = playerCompanyOf(state.session);
     const strategistCap = Math.max(0, Math.min(LLM_STRATEGISTS_PER_QUARTER, MAX_LIVE_STRATEGISTS));
     const ids = strategistPriority(state.session, player.id, strategistCap);
-    startStrategistPrefetch(state.session, ids);
-  }, [state.session, state.hydrated, state.loading, state.settings.useLiveModel]);
+    startStrategistPrefetch(state.session, ids, { previousWorld: state.previousWorld });
+  }, [state.session, state.previousWorld, state.hydrated, state.loading, state.settings.useLiveModel]);
 
   // Final unmount only — see the long comment above. The effect above prunes
   // stale entries itself on every subsequent run; this is only for the run
@@ -1125,7 +1125,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
             const bundle = hasStrategistPrefetch(session, id)
               ? await withDeadline(takeStrategistPrefetch(session, id), remaining)
               : await (async () => {
-                  const input = buildNpcStrategistInput(session, id);
+                  const input = buildNpcStrategistInput(session, id, { previousWorld: current.previousWorld });
                   return input === null ? null : await withDeadline(requestNpcBundle(input), remaining);
                 })();
 

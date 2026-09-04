@@ -918,6 +918,91 @@ export const DataAssetSchema = z
   .describe('One sector\'s stock of customer data. World version 3.');
 export type DataAsset = z.infer<typeof DataAssetSchema>;
 
+/* -------------------------------------------------------------------------- */
+/*  Strategist memory                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a company remembers about how it has been treated and how its own
+ * instructions have gone — the thing that makes one rival read differently from
+ * another twenty quarters in.
+ *
+ * Three properties are load-bearing and are why this lives on state rather than
+ * in a model transcript:
+ *
+ * - **The engine writes it.** Every entry below is derived by
+ *   `updateStrategistMemory` in `@frontier/simulation` from committed ledger
+ *   rows, the memories the relationships subsystem already stored and the
+ *   company's own posture. No model output reaches it, so it costs no tokens,
+ *   survives an LLM outage and cannot hallucinate a slight that never happened.
+ * - **It is bounded.** Six grudges, eight attempts, 240 characters of standing
+ *   strategy. A forty-quarter campaign cannot grow it, so it cannot be quietly
+ *   compacted, truncated or summarised away by anything.
+ * - **It replays.** A pure function of the recorded quarters, so a save
+ *   replayed from its recorded decisions reconstructs the same memory byte for
+ *   byte, and the same seed produces the same rival personality twice.
+ */
+
+/** Most grudges one company carries. Trimmed oldest-first. */
+export const MAX_STRATEGIST_GRUDGES = 6;
+
+/** Most attempts one company remembers. Trimmed oldest-first. */
+export const MAX_STRATEGIST_ATTEMPTS = 8;
+
+/** Longest a standing strategy may be, in characters. */
+export const MAX_STANDING_STRATEGY_CHARS = 240;
+
+/** Longest a grudge's reason may be. The writer clips to it; the schema enforces it. */
+export const MAX_GRUDGE_REASON_CHARS = 160;
+
+/** Longest an attempt's two halves may be. */
+export const MAX_ATTEMPT_WHAT_CHARS = 120;
+export const MAX_ATTEMPT_OUTCOME_CHARS = 200;
+
+export const StrategistGrudgeSchema = z
+  .object({
+    companyId: z
+      .string()
+      .min(1)
+      .describe('Who it is against: a company id, or the id of the fund behind an activist campaign. Never this company itself.'),
+    reason: z.string().min(1).max(MAX_GRUDGE_REASON_CHARS).describe('What they did, in one sentence, taken from the ledger row or stored memory that caused it.'),
+    quarter: QuarterIndexSchema.describe('The quarter the most recent instance of this happened in.'),
+    intensity: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .describe('How much it still rankles, 0-100. Raised when the same counterparty does it again, and decayed a few points every quarter, so a slight fades unless it is repeated.'),
+  })
+  .describe('One standing complaint a company holds against a counterparty, written from what actually happened.');
+export type StrategistGrudge = z.infer<typeof StrategistGrudgeSchema>;
+
+export const StrategistAttemptSchema = z
+  .object({
+    quarter: QuarterIndexSchema.describe('The quarter the attempt was made in.'),
+    what: z.string().min(1).max(MAX_ATTEMPT_WHAT_CHARS).describe('What the company tried, e.g. "Hiring 40 engineers".'),
+    outcome: z
+      .string()
+      .min(1)
+      .max(MAX_ATTEMPT_OUTCOME_CHARS)
+      .describe('What the world did with it: the shortfall, the refusal or the reduction, in the words the founder read.'),
+  })
+  .describe('One thing this company tried and how that went. Written from the validator\'s verdict and the resolver\'s fills, never from intent.');
+export type StrategistAttempt = z.infer<typeof StrategistAttemptSchema>;
+
+export const StrategistMemorySchema = z
+  .object({
+    standingStrategy: z
+      .string()
+      .max(MAX_STANDING_STRATEGY_CHARS)
+      .describe('What this company is trying to do, in its own words. Derived from its archetype policy and its posture, and rewritten only when the posture actually changes, so it stays stable and legible.'),
+    standingStrategyQuarter: QuarterIndexSchema.describe('The quarter the standing strategy last changed. Unmoved by a quarter that changed nothing.'),
+    grudges: z.array(StrategistGrudgeSchema).max(MAX_STRATEGIST_GRUDGES).describe('Standing complaints, oldest first. Bounded and trimmed oldest-first.'),
+    attempts: z.array(StrategistAttemptSchema).max(MAX_STRATEGIST_ATTEMPTS).describe('Recent attempts and their outcomes, oldest first. Bounded and trimmed oldest-first.'),
+  })
+  .describe('A company\'s bounded, engine-written memory: what it is trying to do, who has wronged it, and what it has tried.');
+export type StrategistMemory = z.infer<typeof StrategistMemorySchema>;
+
 export const CompanySchema = z
   .object({
     // --- identity ---
@@ -1054,6 +1139,20 @@ export const CompanySchema = z
       ),
     dataPolicy: DataCollectionLevelSchema.optional().describe(
       'How hard this company collects from its own customers. Absent means "standard", which is what every company starts on and what a world-1 or world-2 company always is.',
+    ),
+
+    /*
+     * The bounded memory `updateStrategistMemory` writes after every quarter's
+     * events are committed: what this company is trying to do, who has wronged
+     * it and what it has tried. Optional for exactly the reason every
+     * priced-economy field above is — a defaulted object would materialise on
+     * every world-1 and world-2 company the moment the schema parsed one, and
+     * both frozen worlds would stop hashing to what they have always hashed to.
+     * Absent means "nothing has happened to this company yet", which every
+     * reader treats as an empty memory.
+     */
+    strategistMemory: StrategistMemorySchema.optional().describe(
+      'This company\'s bounded, engine-written memory. Absent until the first quarter resolves against it, and absent on a world-1 or world-2 opening state.',
     ),
 
     // --- strategy (drives NPC behaviour and describes player companies) ---

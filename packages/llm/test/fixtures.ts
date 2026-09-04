@@ -220,6 +220,29 @@ export function npcStrategistInput(overrides: Partial<NpcStrategistInput> = {}):
     priorPosture: 'aggressive_growth',
     priorStrategySummary: 'Lock supply before the shortage prices in, and hold enterprise pricing.',
     constraints: ['Available cash $2.1bn', 'Board approval required above $500m', 'Existing reservation commitments through 2028'],
+    persona: {
+      characterId: MAYA_ID,
+      name: 'Maya Chen',
+      title: 'CEO — Nexus Intelligence',
+      role: 'founder_ceo',
+      traits: { riskTolerance: 78, technicalOrientation: 82, financialConservatism: 24, aggressiveness: 71, statusSensitivity: 66 },
+      beliefs: [
+        { topic: 'compute_scarcity', level: 'high' },
+        { topic: 'frontier_progress', level: 'high' },
+      ],
+    },
+    relationships: [{ counterpartyId: ORBIT_ID, counterpartyName: 'Orbit Dynamics', isPlayerCompany: false, trust: 28, respect: 61, hostility: 54 }],
+    memories: [],
+    memory: {
+      standingStrategy: 'A frontier lab spending ahead of revenue to take the share now.',
+      standingStrategyQuarter: 1,
+      grudges: [{ companyId: ORBIT_ID, reason: 'They approached two of my inference engineers during the shortage.', quarter: 1, intensity: 34 }],
+      attempts: [{ quarter: 1, what: 'hire', outcome: 'Reduced: requisitions reduced from 400 to 24.' }],
+    },
+    // Full by default, so the existing assertions about the world, rival and
+    // decision-history sections keep testing what they were written to test.
+    changedSinceLastQuarter: { isFullBriefing: true, quartersSinceFullBriefing: 0, changes: [] },
+    companyName: 'Nexus Intelligence',
     ...overrides,
   };
 }

@@ -183,7 +183,14 @@ export function ingestPostActions(draft: SessionState, ctx: ResolverContext): So
     const account = ensureAccount(draft, author.id, post.network);
     if (account === null) continue;
 
-    const id = makeId('pst', draft.sessionId, ctx.quarter, action.actionId);
+    // The SAME id `ensureSocialPosts` (resolver/routing.ts) mints for this
+    // action, and that is the whole of the deduplication between them. Both run
+    // every quarter — routing publishes first and skips an author who has no
+    // account, this pass opens one for them — and while the two minted
+    // different ids neither could see the other's row, so every submitted post
+    // was published twice and its reach, sentiment and controversy counted
+    // twice with it.
+    const id = makeId('pst', draft.sessionId, ctx.quarter, action.actorCompanyId, String(action.sequence));
     if (draft.socialPosts.some((p) => p.id === id)) continue;
 
     const stored: SocialPost = {

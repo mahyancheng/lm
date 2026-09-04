@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { LlmContextLeakError } from '../src/compose/redaction';
 import { composeWorldDirector } from '../src/compose/worldDirector';
-import { composeNpcStrategist } from '../src/compose/npcStrategist';
+import { STRATEGIST_FULL_BRIEFING_INTERVAL, composeNpcStrategist, isFullBriefingQuarter, quartersSinceFullBriefing } from '../src/compose/npcStrategist';
 import { composeChiefOfStaff, enforceConfirmationPolicy } from '../src/compose/chiefOfStaff';
 import { composeCharacterDialogue, composeCharacterPersona } from '../src/compose/characterDialogue';
 import { composeInnovationInterpreter } from '../src/compose/innovationInterpreter';
@@ -149,6 +149,159 @@ describe('npc strategist composer', () => {
       ownCharacterIds: [],
     });
     expect(prompt).toContain('concealed');
+  });
+});
+
+describe('npc strategist persona and delta', () => {
+  const CAUTIOUS = {
+    characterId: MAYA_ID,
+    name: 'Ines Okafor',
+    title: 'CEO — Nexus Intelligence',
+    role: 'founder_ceo' as const,
+    traits: { riskTolerance: 18, technicalOrientation: 22, financialConservatism: 88, aggressiveness: 14, statusSensitivity: 12 },
+    beliefs: [{ topic: 'market_bubble' as const, level: 'high' as const }],
+  };
+
+  it('opens with the person, states what their traits mean, and carries the grudges', () => {
+    const { system, prompt } = composeNpcStrategist(npcStrategistInput());
+    expect(prompt.indexOf('You are Maya Chen')).toBeLessThan(prompt.indexOf('Your position'));
+    expect(prompt).toContain('82 on technical depth');
+    expect(prompt).toContain('compute scarcity high');
+    // The traits have to bite: a directive, not a number to admire.
+    expect(prompt).toContain('You attack.');
+    expect(prompt).toContain('You spend ahead of revenue');
+    expect(prompt).toContain('Who you have not forgotten');
+    expect(prompt).toContain('approached two of my inference engineers');
+    expect(prompt).toContain('still at 34 out of 100');
+    expect(prompt).toContain('A frontier lab spending ahead of revenue');
+    expect(prompt).toContain('Unchanged since Q1');
+    expect(prompt).toContain('requisitions reduced from 400 to 24');
+    expect(system).toContain('Two companies in the same position should not produce the same bundle');
+  });
+
+  it('gives two rivals with different traits and different memories materially different prompts', () => {
+    const aggressive = composeNpcStrategist(npcStrategistInput()).prompt;
+    const cautious = composeNpcStrategist(
+      npcStrategistInput({
+        persona: CAUTIOUS,
+        memory: { standingStrategy: 'An enterprise software company protecting the margin.', standingStrategyQuarter: 4, grudges: [], attempts: [] },
+        relationships: [{ counterpartyId: ORBIT_ID, counterpartyName: 'Orbit Dynamics', isPlayerCompany: false, trust: 71, respect: 66, hostility: 4 }],
+      }),
+    ).prompt;
+
+    expect(cautious).not.toEqual(aggressive);
+    expect(cautious).toContain('You do not pick fights');
+    expect(cautious).toContain('You watch the cash');
+    expect(cautious).not.toContain('You attack.');
+    expect(cautious).not.toContain('approached two of my inference engineers');
+    expect(aggressive).not.toContain('You watch the cash');
+  });
+
+  it('is deterministic', () => {
+    expect(composeNpcStrategist(npcStrategistInput())).toEqual(composeNpcStrategist(npcStrategistInput()));
+  });
+
+  it('sends a delta instead of the full dossier, and the delta is smaller', () => {
+    const full = composeNpcStrategist(npcStrategistInput(), {
+      researchProjects: [researchProject()],
+      memories: [],
+      relationships: [],
+      rivalSignals: [{ companyId: ORBIT_ID, basis: 'a published case study', observation: 'They are winning on deployment time.' }],
+      recentPublicEvents: [{ eventId: 'wev_energy_q0', quarter: 0, type: 'energy_price_shock', title: 'Grid pricing reform lands early', severity: 0.4, stillActive: true }],
+      pastDecisions: [{ quarter: 1, posture: 'balanced', strategySummary: 'q1', outcomeSummary: 'ok' }],
+      ownCharacterIds: [MAYA_ID],
+    }).prompt;
+
+    const delta = composeNpcStrategist(
+      npcStrategistInput({
+        quarter: 9,
+        changedSinceLastQuarter: {
+          isFullBriefing: false,
+          quartersSinceFullBriefing: 1,
+          changes: [
+            { kind: 'own_move', detail: 'hire: requisitions reduced from 400 to 24.' },
+            { kind: 'world', detail: 'Compute spot price 1.31 (+0.09).' },
+          ],
+        },
+      }),
+      {
+        researchProjects: [researchProject()],
+        memories: [],
+        relationships: [],
+        rivalSignals: [{ companyId: ORBIT_ID, basis: 'a published case study', observation: 'They are winning on deployment time.' }],
+        recentPublicEvents: [{ eventId: 'wev_energy_q0', quarter: 0, type: 'energy_price_shock', title: 'Grid pricing reform lands early', severity: 0.4, stillActive: true }],
+        pastDecisions: [{ quarter: 1, posture: 'balanced', strategySummary: 'q1', outcomeSummary: 'ok' }],
+        ownCharacterIds: [MAYA_ID],
+      },
+    ).prompt;
+
+    expect(delta.length).toBeLessThan(full.length);
+    expect(delta).toContain('What changed since quarter 8');
+    expect(delta).toContain('Compute spot price 1.31');
+    // What a fresh session cannot do without still travels on a delta call.
+    expect(delta).toContain('You are Maya Chen');
+    expect(delta).toContain('Your position');
+    expect(delta).toContain('Hard constraints');
+    // What the refresh is for does not.
+    expect(delta).not.toContain('The world, as you understand it');
+    expect(delta).not.toContain('Rivals — public information only');
+    expect(full).toContain('The world, as you understand it');
+  });
+
+  it('fires the periodic refresh, on the first call of a run and every eighth quarter after', () => {
+    expect(STRATEGIST_FULL_BRIEFING_INTERVAL).toBe(8);
+    // No prior context — a fresh run or a just-loaded save — is always full.
+    expect(isFullBriefingQuarter(5, false)).toBe(true);
+    expect(isFullBriefingQuarter(5, true)).toBe(false);
+    expect(isFullBriefingQuarter(8, true)).toBe(true);
+    expect(isFullBriefingQuarter(16, true)).toBe(true);
+    expect(quartersSinceFullBriefing(11)).toBe(3);
+    expect(quartersSinceFullBriefing(16)).toBe(0);
+    const quarters = Array.from({ length: 40 }, (_, index) => index + 1);
+    expect(quarters.filter((quarter) => isFullBriefingQuarter(quarter, true))).toEqual([8, 16, 24, 32, 40]);
+  });
+
+  it('never writes another company\'s private state into a rival\'s prompt', () => {
+    // The boundary in one assertion: strings that only exist inside another
+    // company's own state must not appear, whichever field they are smuggled in.
+    const PRIVATE = 'Orbit internalConfidence is 0.48 on the agent programme';
+    expect(() => composeNpcStrategist(npcStrategistInput({ rivalBriefing: PRIVATE }))).toThrow(LlmContextLeakError);
+    expect(() => composeNpcStrategist(npcStrategistInput({ worldBriefing: PRIVATE }))).toThrow(LlmContextLeakError);
+    expect(() =>
+      composeNpcStrategist(
+        npcStrategistInput({
+          changedSinceLastQuarter: { isFullBriefing: false, quartersSinceFullBriefing: 1, changes: [{ kind: 'rival', detail: 'Orbit has an isSecret programme on sparse inference.' }] },
+        }),
+      ),
+    ).toThrow(LlmContextLeakError);
+    expect(() =>
+      composeNpcStrategist(
+        npcStrategistInput({
+          memories: [
+            { quarter: 3, kind: 'meeting', aboutId: ORBIT_ID, aboutName: 'Orbit Dynamics', summary: 'Their isSecret programme is behind schedule.', sentiment: 0, strength: 0.5 },
+          ],
+        }),
+      ),
+    ).toThrow(LlmContextLeakError);
+
+    // And a persona that does not work here is refused rather than written.
+    expect(() =>
+      composeNpcStrategist(npcStrategistInput({ persona: { ...CAUTIOUS, characterId: DANIEL_ID } }), {
+        researchProjects: [],
+        memories: [],
+        relationships: [],
+        rivalSignals: [],
+        recentPublicEvents: [],
+        pastDecisions: [],
+        ownCharacterIds: [MAYA_ID],
+      }),
+    ).toThrow(/does not work for/);
+
+    // A clean prompt carries nothing of the sort.
+    const clean = composeNpcStrategist(npcStrategistInput()).prompt;
+    for (const marker of ['internalConfidence', 'isSecret', 'isTruthful', 'confidenceByCompany']) {
+      expect(clean).not.toContain(marker);
+    }
   });
 });
 

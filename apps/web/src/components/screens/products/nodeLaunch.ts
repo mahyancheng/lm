@@ -189,7 +189,9 @@ export function entryRoutes(routes: NodeEntryRoutes, formatUsd: (value: number) 
 export function capacitySentence(preview: LaunchCapacityPreview | null, node: EconomicNode, formatUnits: (value: number) => string): string {
   if (preview === null) return '';
   const bucket = CAPACITY_BUCKET_NAME[preview.capacityKind] ?? preview.capacityKind;
-  const units = `${formatUnits(preview.unitsPerQuarter)} ${node.unitLabel} a quarter`;
+  // The node's unit label is singular and not every one takes an s ("kWh", "1M tokens"),
+  // so the sentence counts units; the line's subtitle already names the unit.
+  const units = `${formatUnits(preview.unitsPerQuarter)} units a quarter`;
   if (preview.sharers === 0) return `Made on your ${bucket}: room for about ${units} at this tier. Add capacity to make more.`;
   const others = preview.sharers === 1 ? 'the line already on it keeps' : `the ${preview.sharers} lines already on it keep`;
   const head = `Opens with ${Math.round(preview.share * 100)}% of your ${bucket} — about ${units} at this tier — and ${others} the rest.`;

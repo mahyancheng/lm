@@ -125,7 +125,7 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
       {open ? null : (
         <button
           type="button"
-          className="press-pop fixed left-3 z-30 flex items-center gap-2 rounded-pill border border-hair bg-panel px-3 py-2 shadow-float lg:left-4 lg:bottom-4"
+          className="press-pop fixed left-3 z-30 flex items-center gap-2 rounded-pill border border-hair bg-panel min-h-11 px-3 py-2 shadow-float lg:left-4 lg:bottom-4"
           style={{ bottom: 'calc(var(--bottombar-height) + env(safe-area-inset-bottom, 0px) + 0.75rem)' }}
           onClick={() => setOpen(true)}
           aria-label={`Ask the Chief of Staff about ${screenLabel}`}

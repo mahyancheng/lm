@@ -282,8 +282,11 @@ describe('the offline responder', () => {
     const one = answerFromDossier('composition', composed, 'what is Nexus Copilot built on?');
     expect(one).toContain('Nexus Copilot: Your consumer subscription');
     expect(one).not.toContain('Nexus Enterprise Agent');
-    expect(one).toContain('fill_slot');
-    expect(one).toContain('set_target_market');
+    // The answer is read by the founder, not the model: it points at the drawer
+    // and never prints an action's machine name.
+    expect(one).toContain('drawer on Products');
+    expect(one).not.toContain('fill_slot');
+    expect(one).not.toContain('set_target_market');
     // Named by the node it sells, when the founder says the node rather than the line.
     expect(namedLine(composed.products.lines, 'which model is the ai software suite on')?.productId).toBe('prd_enterprise_agent');
 

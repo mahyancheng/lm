@@ -504,7 +504,7 @@ export function answerFromDossier(kind: CosQuestionKind, dossier: ChiefOfStaffDo
           : 'Our lines are not composed by slot in this world: each is a catalogued product with its own inputs, not a chain of chosen nodes.';
       }
       const named = namedLine(composed, message);
-      if (named !== null) return `${named.name}: ${compositionSentence(named)} Change the model, harness or supplier with fill_slot; change who it is aimed at with set_target_market.`;
+      if (named !== null) return `${named.name}: ${compositionSentence(named)} You can change the model, the harness or a supplier, and who it is aimed at, from the line’s drawer on Products.`;
       const listed = composed.slice(0, 3).map((line) => `${line.name} — ${compositionSentence(line)}`);
       return `${listed.join(' ')}${composed.length > 3 ? ` And ${composed.length - 3} more.` : ''}`;
     }

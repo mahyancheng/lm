@@ -52,7 +52,11 @@ export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.El
     <div className="border-y border-dashed border-hair-strong bg-raised">
       {/* Thumb-sized cards that snap: a phone flicks along the tape one
           instrument at a time, and the strip scrolls inside its own box. */}
-      <div className="scroll-x flex snap-x snap-mandatory items-stretch gap-2 px-3 py-2.5 sm:snap-none">
+      {/* `[contain:paint]`: the cards pop in staggered, and without paint containment the
+          strip's in-flight content widened the whole document at 390px (scrollWidth 1764)
+          so the page scrolled sideways. Containment keeps the overflow inside the strip,
+          which is the only place it may scroll. */}
+      <div className="scroll-x flex snap-x snap-mandatory items-stretch gap-2 px-3 py-2.5 [contain:paint] sm:snap-none">
         {rows.map((row, index) => {
           const up = row.quarterReturn >= 0;
           const notable = Math.abs(row.quarterReturn) >= NOTABLE_MOVE;

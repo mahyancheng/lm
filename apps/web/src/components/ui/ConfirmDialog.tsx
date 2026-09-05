@@ -83,12 +83,12 @@ export function ConfirmDialog({
       initialFocus={requireTyped === null ? undefined : typedRef}
       footer={
         <>
-          <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+          <button type="button" className="btn tap-target" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </button>
           <button
             type="button"
-            className={cx('btn', tone === 'loss' ? 'btn-danger' : 'btn-primary')}
+            className={cx('btn tap-target', tone === 'loss' ? 'btn-danger' : 'btn-primary')}
             onClick={onConfirm}
             disabled={busy || gated}
           >

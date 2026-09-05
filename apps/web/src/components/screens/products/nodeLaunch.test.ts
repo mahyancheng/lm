@@ -343,7 +343,8 @@ describe('capacitySentence', () => {
     expect(preview?.sharers).toBe(1);
     const sentence = capacitySentence(preview, node, formatUnits);
     expect(sentence).toContain(`${Math.round((preview?.share ?? 0) * 100)}% of your compute`);
-    expect(sentence).toContain(`${formatUnits(preview?.unitsPerQuarter ?? 0)} ${node.unitLabel} a quarter`);
+    // Counted in units: the node's label is singular and not every unit takes an s.
+    expect(sentence).toContain(`${formatUnits(preview?.unitsPerQuarter ?? 0)} units a quarter`);
     expect(sentence).toContain('the line already on it keeps the rest');
     expect(sentence).toContain('grows into more as it sells');
   });
@@ -355,7 +356,7 @@ describe('capacitySentence', () => {
     expect(starved).toContain('nothing ships until you add capacity');
     const alone = capacitySentence({ capacityKind: 'plant', sharers: 0, share: 1, unitsPerQuarter: 40 }, node, formatUnits);
     expect(alone).toContain('Made on your plant');
-    expect(alone).toContain('40 licence a quarter');
+    expect(alone).toContain('40 units a quarter');
     expect(capacitySentence(null, node, formatUnits)).toBe('');
   });
 });

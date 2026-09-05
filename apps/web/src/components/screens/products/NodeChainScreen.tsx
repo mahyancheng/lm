@@ -5,33 +5,29 @@
  *
  * The screen opens on the canvas fitted to the founder's own lines and what
  * feeds them, because that is the thing they came to look at. Each of their
- * lines is a card with an input port along the bottom for every input the node
- * declares; the wired supplier hangs under each port on a dashed wire, an
- * unwired port carries a `+`, and the output port on the right runs to the
- * market or to their own downstream line.
+ * lines is a card with a slot port along the bottom for every slot the node
+ * declares; the node in each slot hangs under its port on a dashed wire with
+ * the supplier's name beneath, an empty slot carries a `+`, the card says who
+ * the line is aimed at, and the output port on the right runs to the market,
+ * to their own downstream line, or to the device the line ships on.
  *
  * Under the canvas is the same set of lines as a table, because a canvas is
  * good at structure and bad at columns of figures, and a founder wants both.
- * Tapping either opens the same drawer.
+ * Tapping either opens the same drawer; tapping a hanging node opens the
+ * drawer on that slot's candidates.
  *
  * Every number on this screen came from the engine: `unitCostOf` for cost,
- * `nodeMarketPriceUsd` for the market, `inputOptions` for the wires. Nothing
+ * `nodeMarketPriceUsd` for the market, `slotOptions` for the fills. Nothing
  * here computes an economic figure of its own.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import type { Product } from '@frontier/contracts';
 import { economicNodeById, nodeMarketPriceUsd, quarterLabel } from '@frontier/contracts';
-import {
-  chainNodeIds,
-  inputOptions,
-  lineNodeIdOf,
-  nodeMapFor,
-  unitCostOf,
-} from '@frontier/simulation';
+import { chainNodeIds, defaultIndustryFor, describeLine, lineNodeIdOf, lineNodeOf, nodeMapFor, slotOptions, unitCostOf } from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { DataTable, EmptyState, Icon, PageHeader, Panel, StatCard, Tag, type Column } from '@/components/ui';
-import { Canvas, buildCanvas } from '@/components/screens/graph';
+import { Canvas, buildCanvas, type CanvasLine } from '@/components/screens/graph';
 import { takePendingLaunchCategory, useActiveCompany, usePlayerView, useSession } from '@/lib/game';
 import { NodeLaunchModal } from './NodeLaunchModal';
 import { NodeLineDrawer } from './NodeLineDrawer';
@@ -42,6 +38,7 @@ export function NodeChainScreen(): React.JSX.Element {
   const company = useActiveCompany();
 
   const [openProductId, setOpenProductId] = useState<string | null>(null);
+  const [openSlotId, setOpenSlotId] = useState<string | null>(null);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [launchNodeId, setLaunchNodeId] = useState<string | null>(null);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
@@ -62,34 +59,27 @@ export function NodeChainScreen(): React.JSX.Element {
   const map = useMemo(() => nodeMapFor(session, company.id), [session, company.id]);
   const chain = useMemo(() => chainNodeIds(map), [map]);
 
-  // Who is wired to what, and what cannot be filled at any price. Both come
-  // from `inputOptions` on the company's own lines — the only lines whose
-  // economics this seat is entitled to.
-  const { wiring, blocked } = useMemo(() => {
-    const wired = new Map<string, { companyId: string; name: string; madeInHouse: boolean }>();
-    const dead = new Set<string>();
+  // How each of the company's own lines is composed and where it is aimed.
+  // Both come from the engine on the company's own lines — the only lines
+  // whose composition this seat is entitled to act on.
+  const lines = useMemo(() => {
+    const out = new Map<string, CanvasLine>();
     for (const product of active) {
-      const nodeId = lineNodeIdOf(product);
-      if (nodeId === null) continue;
-      for (const option of inputOptions(session, company, nodeId, product.id)) {
-        const key = `${product.id}|${option.inputNodeId}`;
-        if (option.blocked) dead.add(key);
-        const chosen = option.chosen;
-        if (chosen === null || chosen.kind === 'market' || chosen.supplierCompanyId === null) continue;
-        wired.set(key, {
-          companyId: chosen.supplierCompanyId,
-          name: chosen.kind === 'make' ? company.name : (map.companyNames[chosen.supplierCompanyId] ?? chosen.label),
-          madeInHouse: chosen.kind === 'make',
-        });
-      }
+      const node = lineNodeOf(product);
+      if (node === undefined) continue;
+      out.set(product.id, {
+        target: {
+          customer: product.segment,
+          industry: product.segment === 'consumer' ? 'consumer' : (product.targetIndustry ?? defaultIndustryFor(node)),
+        },
+        fills: slotOptions(session, company, node.id, product.id).flatMap((slot) => (slot.fill === null ? [] : [slot.fill])),
+        description: describeLine(session, company, product, company.id),
+      });
     }
-    return { wiring: wired, blocked: dead };
-  }, [session, company, active, map]);
+    return out;
+  }, [session, company, active]);
 
-  const model = useMemo(
-    () => buildCanvas(map, { view: 'chain', nodeIds: chain.length > 0 ? chain : undefined, wiring, blocked }),
-    [map, chain, wiring, blocked],
-  );
+  const model = useMemo(() => buildCanvas(map, { view: 'chain', nodeIds: chain.length > 0 ? chain : undefined, lines }), [map, chain, lines]);
 
   const focus = focusNodeId === null ? (chain.length > 0 ? chain : null) : [focusNodeId];
 
@@ -106,14 +96,21 @@ export function NodeChainScreen(): React.JSX.Element {
   const companyNames = useMemo(() => new Map(Object.entries(map.companyNames)), [map.companyNames]);
   const openProduct = openProductId === null ? null : (company.products.find((product) => product.id === openProductId) ?? null);
 
-  function openCanvasNode(nodeId: string): void {
+  function openCanvasNode(nodeId: string, slotId: string | null = null): void {
     setFocusNodeId(nodeId);
     const mine = active.find((product) => lineNodeIdOf(product) === nodeId);
-    if (mine !== undefined) setOpenProductId(mine.id);
-    else {
+    if (mine !== undefined) {
+      setOpenSlotId(slotId);
+      setOpenProductId(mine.id);
+    } else {
       setLaunchNodeId(nodeId);
       setLaunchOpen(true);
     }
+  }
+
+  function openLine(productId: string): void {
+    setOpenSlotId(null);
+    setOpenProductId(productId);
   }
 
   const columns: readonly Column<Product>[] = [
@@ -180,7 +177,7 @@ export function NodeChainScreen(): React.JSX.Element {
       <PageHeader
         title="My chain"
         eyebrow={`${quarterLabel(session.startYear, session.quarter)} · ${company.name}`}
-        subtitle="What you make, what it is made from, and who makes that. Tap a card to open its line; tap a hanging supplier to change it."
+        subtitle="What you make, what it is made from, who makes that, and who it is aimed at. Tap a card to open its line; tap a hanging node to change what is in that slot."
         actions={
           <button
             type="button"
@@ -213,7 +210,7 @@ export function NodeChainScreen(): React.JSX.Element {
       <Panel
         title="The chain"
         iconName="network"
-        subtitle="Your lines, their inputs, and who supplies them"
+        subtitle="Your lines, what fills each slot, who supplies it, and what they ship on"
         actions={
           focusNodeId === null ? null : (
             <button type="button" className="btn min-h-11" onClick={() => setFocusNodeId(null)}>
@@ -242,8 +239,8 @@ export function NodeChainScreen(): React.JSX.Element {
             model={model}
             focusNodeIds={focus}
             selectedNodeId={focusNodeId}
-            onSelectNode={openCanvasNode}
-            onSelectInput={(nodeId) => openCanvasNode(nodeId)}
+            onSelectNode={(nodeId) => openCanvasNode(nodeId)}
+            onSelectInput={(nodeId, slotId) => openCanvasNode(nodeId, slotId)}
             height={420}
           />
         )}
@@ -254,7 +251,7 @@ export function NodeChainScreen(): React.JSX.Element {
           columns={columns}
           rows={active}
           rowKey={(row) => row.id}
-          onRowClick={(row) => setOpenProductId(row.id)}
+          onRowClick={(row) => openLine(row.id)}
           initialSort={{ key: 'units', direction: 'desc' }}
           cardMode="auto"
           cardTitleKey="name"
@@ -278,7 +275,7 @@ export function NodeChainScreen(): React.JSX.Element {
 
       {sunset.length === 0 ? null : (
         <Panel title="Closed lines" iconName="ledger" subtitle="Kept for financial comparatives" flush>
-          <DataTable columns={columns} rows={sunset} rowKey={(row) => row.id} onRowClick={(row) => setOpenProductId(row.id)} cardMode="auto" cardTitleKey="name" dense />
+          <DataTable columns={columns} rows={sunset} rowKey={(row) => row.id} onRowClick={(row) => openLine(row.id)} cardMode="auto" cardTitleKey="name" dense />
         </Panel>
       )}
 
@@ -291,10 +288,14 @@ export function NodeChainScreen(): React.JSX.Element {
       <NodeLineDrawer
         session={session}
         product={openProduct}
-        onClose={() => setOpenProductId(null)}
+        onClose={() => {
+          setOpenProductId(null);
+          setOpenSlotId(null);
+        }}
         report={view.economyReport}
         companyId={company.id}
         companyNames={companyNames}
+        initialSlotId={openSlotId}
       />
       <NodeLaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} initialNodeId={launchNodeId} />
     </>

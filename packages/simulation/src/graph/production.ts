@@ -31,6 +31,16 @@
  * rest becomes **visible backlog** — which is what makes building capacity
  * obviously worth doing.
  *
+ * ## The cell a line sells into
+ *
+ * A pool is not a node's: it is one **cell** of the node's market — the
+ * industry the line is aimed at (`Product.targetIndustry`, or the market's
+ * heaviest industry) and the customer type it sells to (`Product.segment`).
+ * Two lines on the same node aimed at different cells never compete for the
+ * same order, and a line aimed at a cell its node's market gives no weight
+ * draws from an empty pool and is told so in a plain advisory row rather than
+ * being refused. A recurring line reads its own cell's appetite the same way.
+ *
  * ## What is booked, and where
  *
  * Nothing here moves cash or touches a balance sheet. The pass *stamps* the
@@ -47,7 +57,7 @@
  * allocation it feeds. Everything else is a pure function of the draft.
  */
 
-import type { Company, EconomicNode, NodeCostCache, Product, ProductSegment, ResolverContext, SessionState, UnitCostResult } from '@frontier/contracts';
+import type { Company, EconomicNode, NodeCostCache, Product, ProductSegment, ResolverContext, Sector, SessionState, UnitCostResult } from '@frontier/contracts';
 import { economicNodeById } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
@@ -72,8 +82,9 @@ import {
 import { activeCompanies, activeProducts, clamp, count, emitEvent, money, pctLabel, ratio, segmentReputation, unit } from '../companies/util';
 import { unitCostOf } from './cost';
 import { dataPolicyOf, dataQualityUplift, resolveNodeData, sellableDataUnits, DATA_POLICY_CHURN } from './data';
-import { createNodeCostCache, drawPerUnitOf, lineNodeIdOf, lineNodeOf, qualityTierFactor } from './lines';
-import { endDemandUnits, nodeBalances, producibleUnits, type NodeBalance } from './market';
+import { createNodeCostCache, drawPerUnitOf, lineNodeOf, productOf, qualityTierFactor } from './lines';
+import { cellDemandLevel, industrySizeFactors, marketCellWeight, nodeBalances, producibleUnits, type NodeBalance } from './market';
+import { SWITCH_QUALITY_FACTOR, cellKey, cellOf, resolveFills, type ResolvedFill } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                  */
@@ -189,11 +200,20 @@ interface LineDraft {
   readonly company: Company;
   readonly product: Product;
   readonly node: EconomicNode;
+  /** The customer type the line sells to: the product's own. */
   readonly segment: ProductSegment;
+  /** The industry the line is aimed at. Always `consumer` for a consumer customer. */
+  readonly industry: Sector;
+  /** The weight the node's market gives that cell, 0..1. Zero means nobody there buys this. */
+  readonly cellWeight: number;
+  /** The world's appetite in that cell as a multiplier around 1; zero for an empty cell. */
+  readonly demandLevel: number;
+  /** Every slot of the node, resolved to the route this line runs it on. */
+  readonly fills: readonly ResolvedFill[];
   readonly priceUsd: number;
   readonly marketPriceUsd: number;
   readonly cost: UnitCostResult;
-  /** True when a non-substitutable input has no source at all: the line ships nothing. */
+  /** True when a blocking input has no source at all: the line ships nothing. */
   readonly blocked: boolean;
   /** How much of this line's inputs the world can actually supply, 0..1. */
   readonly inputFill: number;
@@ -238,28 +258,48 @@ export function deliveredQuality(product: Product): number {
  * 2. **The data edge.** `DATA_QUALITY_MAX x pb/(pb + DATA_HALF_PB)` on the
  *    company's pool in this node's sector: what it has learned from its own
  *    customers, bounded and saturating.
- * 3. **What its suppliers ship.** Weighted by **bill-of-materials value share**
- *    — each input's share of the input cost of one unit — not by world 2's
- *    deleted `share`-of-revenue. A company whose die is nine tenths of its
- *    package's cost inherits nine tenths of that supplier's quality, which is
- *    what buying the cheap part actually means.
+ * 3. **What its inputs deliver.** Every `buy` and every `make` route, weighted
+ *    by **bill-of-materials value share** — each input's share of the input
+ *    cost of one unit — not by world 2's deleted `share`-of-revenue. A company
+ *    whose die is nine tenths of its package's cost inherits nine tenths of
+ *    that supplier's quality, which is what buying the cheap part actually
+ *    means; and a better model behind its own API raises the API, because the
+ *    upstream line's stamped quality is what flows through a `make` route. The
+ *    open market and an empty slot contribute nothing. A fill changed this
+ *    quarter delivers at `SWITCH_QUALITY_FACTOR`: the switching cost, with no
+ *    cross-phase set to remember it by — replay reads it off the fill.
+ *
+ * The quality read off an input line is its `qualityScore` — what that line
+ * was worth at the close of last quarter, its own suppliers included — so
+ * quality propagates down a chain one tier per quarter and never reads a
+ * number this quarter has only half written.
  */
-export function effectiveQuality(state: SessionState, company: Company, product: Product, node: EconomicNode, cost: UnitCostResult): number {
+export function effectiveQuality(
+  state: SessionState,
+  company: Company,
+  product: Product,
+  node: EconomicNode,
+  cost: UnitCostResult,
+  cache?: NodeCostCache,
+  fills: readonly ResolvedFill[] = resolveFills(state, company, product, node, cache),
+): number {
   const base = unit(deliveredQuality(product) + dataQualityUplift(company, node.sector));
 
-  const inputs = cost.lines.filter((line) => line.sourceKind === 'buy' && line.sourceCompanyId !== null);
   let inputValue = 0;
   for (const line of cost.lines) if (line.sourceKind !== 'conversion') inputValue += Math.max(0, line.amountUsd);
-  if (inputs.length === 0 || inputValue <= 0) return base;
+  if (inputValue <= 0) return base;
 
   let blended = base;
-  for (const line of inputs) {
-    const supplier = state.companies.find((candidate) => candidate.id === line.sourceCompanyId);
-    if (supplier === undefined) continue;
-    const supplierLine = supplier.products.find((candidate) => candidate.isActive && lineNodeIdOf(candidate) === line.key);
-    if (supplierLine === undefined) continue;
+  for (const line of cost.lines) {
+    if (line.slotId === undefined || (line.sourceKind !== 'buy' && line.sourceKind !== 'make')) continue;
+    const fill = fills.find((candidate) => candidate.slotId === line.slotId);
+    if (fill === undefined || fill.supplierCompanyId === null || fill.supplierProductId === null) continue;
+    if (fill.route !== 'buy' && fill.route !== 'make') continue;
+    const inputLine = productOf(state, fill.supplierCompanyId, fill.supplierProductId);
+    if (inputLine === undefined || !inputLine.isActive) continue;
+    const delivered = unit(inputLine.qualityScore) * (fill.changedThisQuarter ? SWITCH_QUALITY_FACTOR : 1);
     const weight = Math.max(0, line.amountUsd) / inputValue;
-    blended += weight * (deliveredQuality(supplierLine) - base);
+    blended += weight * (delivered - base);
   }
   return unit(blended);
 }
@@ -267,17 +307,20 @@ export function effectiveQuality(state: SessionState, company: Company, product:
 /**
  * How much of this line's inputs the world can supply, 0..1.
  *
- * The tightest non-substitutable input decides: a line whose die supply covers
- * two-thirds of what it wants ships two-thirds of what capacity would allow. A
- * substitutable input never binds, because that is what substitutable means,
- * and neither does an input no company in this world produces — that one is
- * imported and its balance reads as fully supplied.
+ * The tightest blocking slot decides, read on the node actually in it: a line
+ * whose die supply covers two-thirds of what it wants ships two-thirds of what
+ * capacity would allow. A non-blocking slot never binds, because the open
+ * market always has some of it, and neither does an input no company in this
+ * world produces — that one is imported and its balance reads as fully
+ * supplied.
  */
-export function inputFillRatio(node: EconomicNode, balances: Readonly<Record<string, NodeBalance>>): number {
+export function inputFillRatio(node: EconomicNode, fills: readonly ResolvedFill[], balances: Readonly<Record<string, NodeBalance>>): number {
   let fill = 1;
-  for (const input of node.consumes) {
-    if (input.substitutable) continue;
-    const balance = balances[input.nodeId];
+  for (const slot of node.slots) {
+    if (!slot.blocking) continue;
+    const resolved = fills.find((candidate) => candidate.slotId === slot.id);
+    if (resolved === undefined || resolved.nodeId === null) continue;
+    const balance = balances[resolved.nodeId];
     if (balance === undefined) continue;
     if (balance.fillRatio < fill) fill = balance.fillRatio;
   }
@@ -298,14 +341,17 @@ export function inputFillRatio(node: EconomicNode, balances: Readonly<Record<str
  * third writes the result back.
  */
 export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext, staged: StagedLineInputs): void {
-  // Balances are read before a single line is written, so derived demand is
-  // genuinely last quarter's output and this quarter's allocation cannot feed
-  // back into the pool it is being allocated from.
-  const balances = nodeBalances(draft);
   // A fresh cache: this phase has already launched and sunset lines, so the
   // snapshot the recorder built at the top of the resolution is stale by
   // exactly those lines.
   const cache: NodeCostCache = createNodeCostCache(draft);
+  // Balances are read before a single line is written, so derived demand is
+  // genuinely last quarter's output and this quarter's allocation cannot feed
+  // back into the pool it is being allocated from.
+  const balances = nodeBalances(draft, cache);
+  // How large each industry is against its size at seed: one walk, shared by
+  // every recurring line's demand level.
+  const sizeFactors = industrySizeFactors(draft);
   // The cache's own index and one company lookup, built once: `producibleUnits`
   // would otherwise scan the company list for every line in the world.
   const linesByCompany = cache.linesByCompany;
@@ -319,6 +365,7 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
     product: Product;
     node: EconomicNode;
     cost: UnitCostResult;
+    fills: readonly ResolvedFill[];
     quality: number;
     noise: number;
   }[] = [];
@@ -337,20 +384,26 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
       // line's suppliers ship by bill-of-materials value share, and the value
       // shares come out of the roll-up.
       const cost = unitCostOf(draft, company, node.id, cache);
-      const quality = effectiveQuality(draft, company, product, node, cost);
+      const fills = resolveFills(draft, company, product, node, cache);
+      const quality = effectiveQuality(draft, company, product, node, cost, cache, fills);
       const best = frontierByNode.get(node.id) ?? 0;
       if (quality > best) frontierByNode.set(node.id, quality);
-      staging.push({ company, product, node, cost, quality, noise });
+      staging.push({ company, product, node, cost, fills, quality, noise });
     }
   }
 
   for (const entry of staging) {
-    const { company, product, node, cost, quality, noise } = entry;
-    const segment = node.buyerSegment ?? product.segment;
+    const { company, product, node, cost, fills, quality, noise } = entry;
+    // The cell this line sells into: its own customer type, and the industry it
+    // is aimed at. Who buys a line is the line's business, not the node's.
+    const cell = cellOf(product, node);
+    const segment = cell.customer;
+    const industry = cell.industry;
+    const cellWeight = marketCellWeight(node, industry, segment);
     const priceUsd = Math.max(0, product.pricePerSeat);
     const marketPriceUsd = balances[node.id]?.priceUsd ?? 0;
     const blocked = cost.blockedInputNodeIds.length > 0;
-    const inputFill = blocked ? 0 : inputFillRatio(node, balances);
+    const inputFill = blocked ? 0 : inputFillRatio(node, fills, balances);
 
     const lineRef = (linesByCompany.get(company.id) ?? []).find((candidate) => candidate.productId === product.id);
     const capacityUnits = lineRef === undefined ? 0 : producibleUnits(draft, lineRef, linesByCompany, companiesById);
@@ -378,6 +431,10 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
       product,
       node,
       segment,
+      industry,
+      cellWeight,
+      demandLevel: cellDemandLevel(draft, node, industry, segment, sizeFactors),
+      fills,
       priceUsd,
       marketPriceUsd,
       cost,
@@ -386,7 +443,8 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
       quality,
       qualityEdge,
       producible,
-      demandUnits: Math.max(0, balances[node.id]?.demandUnits ?? 0),
+      // What this line's own cell still wants of this node this quarter.
+      demandUnits: Math.max(0, balances[node.id]?.cells[cellKey(industry, segment)] ?? 0),
       attractiveness,
       marketingUsd,
       shock,
@@ -394,28 +452,32 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
     });
   }
 
-  /* --- pass two: allocate each node's order pool -------------------------- */
-  // Only `unit` and `contract` lines share a pool; a recurring line keeps its
+  /* --- pass two: allocate each cell's order pool -------------------------- */
+  // Only `unit` and `contract` lines share a pool, and only lines aimed at the
+  // same cell of the same node share the same one; a recurring line keeps its
   // own base and is resolved line by line in pass three.
-  const poolByNode = new Map<string, number>();
-  const attractionByNode = new Map<string, number>();
-  const countByNode = new Map<string, number>();
-  const backlogByNode = new Map<string, number>();
+  const poolByCell = new Map<string, number>();
+  const attractionByCell = new Map<string, number>();
+  const countByCell = new Map<string, number>();
+  const backlogByCell = new Map<string, number>();
   for (const entry of drafts) {
     if (entry.node.saleKind === 'recurring') continue;
-    attractionByNode.set(entry.node.id, (attractionByNode.get(entry.node.id) ?? 0) + entry.attractiveness);
-    countByNode.set(entry.node.id, (countByNode.get(entry.node.id) ?? 0) + 1);
-    backlogByNode.set(entry.node.id, (backlogByNode.get(entry.node.id) ?? 0) + Math.max(0, entry.product.backlogUnits ?? 0));
+    const key = poolKeyOf(entry);
+    attractionByCell.set(key, (attractionByCell.get(key) ?? 0) + entry.attractiveness);
+    countByCell.set(key, (countByCell.get(key) ?? 0) + 1);
+    backlogByCell.set(key, (backlogByCell.get(key) ?? 0) + Math.max(0, entry.product.backlogUnits ?? 0));
   }
-  for (const [nodeId, backlog] of backlogByNode) {
-    const balance = balances[nodeId];
-    poolByNode.set(nodeId, Math.max(0, (balance?.demandUnits ?? 0) + backlog * BACKLOG_CARRY));
+  for (const entry of drafts) {
+    if (entry.node.saleKind === 'recurring') continue;
+    const key = poolKeyOf(entry);
+    if (poolByCell.has(key)) continue;
+    poolByCell.set(key, Math.max(0, entry.demandUnits + (backlogByCell.get(key) ?? 0) * BACKLOG_CARRY));
   }
 
   /* --- pass three: settle, stamp and say so ------------------------------- */
   for (const entry of drafts) {
     if (entry.node.saleKind === 'recurring') settleRecurring(draft, ctx, entry);
-    else settleOrders(draft, ctx, entry, poolByNode, attractionByNode, countByNode);
+    else settleOrders(draft, ctx, entry, poolByCell, attractionByCell, countByCell);
   }
 
   /* --- pass four: utilisation follows what was actually made -------------- */
@@ -439,7 +501,49 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
   // Data accrues from what was actually served, so it runs after the lines are
   // stamped and inside the same phase. It draws no random number, so it cannot
   // move any other phase's call sequence.
-  resolveNodeData(draft, ctx);
+  resolveNodeData(draft, ctx, cache);
+}
+
+/** The pool a unit or contract line draws from: its node, its industry and its customer type. */
+function poolKeyOf(entry: LineDraft): string {
+  return `${entry.node.id}|${cellKey(entry.industry, entry.segment)}`;
+}
+
+/**
+ * Say so when a line is aimed at a cell its node's market gives no weight.
+ *
+ * Rule §6: an economic fact the founder can act on is a row, not an absence.
+ * The pool is simply empty — nothing is refused, and derived demand from
+ * buyers in that industry still lands there — but a line selling to nobody is
+ * owed a sentence naming the target it should move to.
+ */
+function adviseEmptyCell(draft: SessionState, ctx: ResolverContext, entry: LineDraft): void {
+  const { company, product, node } = entry;
+  const eventId = emitEvent(
+    draft,
+    ctx,
+    'information_revealed',
+    company.id,
+    product.id,
+    {
+      kind: 'market_cell_empty',
+      productId: product.id,
+      nodeId: node.id,
+      industry: entry.industry,
+      customer: entry.segment,
+      demandUnits: Math.round(entry.demandUnits),
+    },
+    'company',
+  );
+  const who = entry.segment === 'consumer' ? 'the public' : `${entry.industry.replace(/_/g, ' ')} ${entry.segment.replace(/_/g, ' ')} buyers`;
+  ctx.log({
+    phase: 'product_demand_resolution',
+    text: `${product.name} is aimed at ${who}, who do not buy ${node.label}. Change its target market to sell it.`,
+    deltaLabel: 'no market',
+    refEventIds: [eventId],
+    tone: 'warning',
+    subjectId: company.id,
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -464,7 +568,7 @@ function settleRecurring(draft: SessionState, ctx: ResolverContext, entry: LineD
   const retained = entry.blocked ? 0 : before * (1 - churn);
   const seed = SEGMENT_SEED_POOL[segment];
   const addRate = SEGMENT_BASE_ADD_RATE[segment];
-  const grossAdds = entry.blocked ? 0 : Math.max(0, (before + seed) * addRate * entry.attractiveness * 2 * demandLevel(draft, node));
+  const grossAdds = entry.blocked ? 0 : Math.max(0, (before + seed) * addRate * entry.attractiveness * 2 * entry.demandLevel);
   const desired = retained + grossAdds;
 
   // Capacity rations exactly as it always did, and now in units of the node:
@@ -488,21 +592,6 @@ function settleRecurring(draft: SessionState, ctx: ResolverContext, entry: LineD
   });
 }
 
-/**
- * The world's appetite for this node's segment and sector this quarter, as a
- * multiplier around 1. The same signal `endDemandUnits` applies to the pool,
- * applied here to the one kind that does not draw on a pool.
- */
-function demandLevel(draft: SessionState, node: EconomicNode): number {
-  const base = node.endDemandBaseUnits;
-  if (base <= 0) return 1;
-  // `endDemandUnits` already carries appetite and the sector cycle; dividing by
-  // the node's own baseline turns it back into the multiplier around 1 that the
-  // gross-adds model expects, so the two readings cannot drift.
-  const balance = endDemandUnits(draft, node);
-  return clamp(balance / base, 0.35, 2);
-}
-
 /* -------------------------------------------------------------------------- */
 /*  Unit and contract: share of an order pool                                  */
 /* -------------------------------------------------------------------------- */
@@ -523,15 +612,16 @@ function settleOrders(
   draft: SessionState,
   ctx: ResolverContext,
   entry: LineDraft,
-  poolByNode: ReadonlyMap<string, number>,
-  attractionByNode: ReadonlyMap<string, number>,
-  countByNode: ReadonlyMap<string, number>,
+  poolByCell: ReadonlyMap<string, number>,
+  attractionByCell: ReadonlyMap<string, number>,
+  countByCell: ReadonlyMap<string, number>,
 ): void {
   const { product, node } = entry;
   const before = product.activeCustomers;
-  const pool = poolByNode.get(node.id) ?? 0;
-  const attraction = attractionByNode.get(node.id) ?? 0;
-  const producers = Math.max(1, countByNode.get(node.id) ?? 1);
+  const key = poolKeyOf(entry);
+  const pool = poolByCell.get(key) ?? 0;
+  const attraction = attractionByCell.get(key) ?? 0;
+  const producers = Math.max(1, countByCell.get(key) ?? 1);
   // A pool nobody attracts is split evenly rather than dropped: every line on
   // it is equally unappealing, which is not the same as nobody wanting any.
   const share = attraction > 0 ? entry.attractiveness / attraction : entry.blocked ? 0 : 1 / producers;
@@ -680,6 +770,7 @@ function stampLine(draft: SessionState, ctx: ResolverContext, entry: LineDraft, 
       nodeId: node.id,
       saleKind: node.saleKind,
       segment: entry.segment,
+      industry: entry.industry,
       customersBefore: settled.before,
       customersAfter: settled.units,
       unitsSold: settled.units,
@@ -701,6 +792,8 @@ function stampLine(draft: SessionState, ctx: ResolverContext, entry: LineDraft, 
     },
     'company',
   );
+
+  if (entry.cellWeight <= 0) adviseEmptyCell(draft, ctx, entry);
 
   /* --- a line that fell off a cliff says why -------------------------------- */
   //

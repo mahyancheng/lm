@@ -349,6 +349,10 @@ export function labelFor(intent: ActionIntent): string {
       return `Publishing ${intent.productId} as a supply line`;
     case 'choose_supplier':
       return `Choosing a supplier for ${intent.productId}`;
+    case 'fill_slot':
+      return `Filling the ${intent.slotId.replace(/_/g, ' ')} slot of ${intent.productId}`;
+    case 'set_target_market':
+      return `Aiming ${intent.productId} at ${intent.targetIndustry} ${intent.segment.replace(/_/g, ' ')} customers`;
     case 'start_research_project':
       return `A programme against ${intent.targetNodeId}`;
     case 'submit_board_proposal':

@@ -16,18 +16,21 @@
  *     small subtitle under that;
  *   • an input port as a small tab on the left edge;
  *   • an output port as a small circle on the right edge;
- *   • sub-ports along the bottom edge, one per declared input, each with a text
- *     label and a red asterisk when the input is required;
- *   • a small round supplier node hanging under each sub-port on a dashed wire,
- *     or a `+` when nothing is wired to it yet;
+ *   • slot ports along the bottom edge, one per slot the node declares, each
+ *     with a text label and a red asterisk when the slot is required;
+ *   • a small round node hanging under each slot port on a dashed wire — the
+ *     node in the slot, with its supplier's name beneath — or a `+` when the
+ *     slot is empty;
  *   • solid wires for the main left-to-right flow, dotted grid behind.
  *
  * Two constraints from the house rules are structural here rather than
- * decorative. Every interactive target is at least `TAP` across — a sub-port
+ * decorative. Every interactive target is at least `TAP` across — a slot-port
  * dot is 9px and its hit area is 44px, which is why hit boxes are their own
  * functions. And the canvas has to be legible at 390 x 844: the card is sized
- * so a phone shows a card, its name and its sub-ports without zooming, and the
- * focus control exists so that it can.
+ * so a phone shows a card, its name and its slot ports without zooming, and the
+ * focus control exists so that it can. A card with more than three slots wraps
+ * its hanging nodes into rows of three (`SUPPLIER_ROW_SIZE`), because six
+ * across at a 78px pitch is wider than a phone.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -44,16 +47,23 @@ export const NAME_GAP = 7;
 export const NAME_H = 15;
 export const SUBTITLE_H = 13;
 
-/** Everything above the sub-port labels: card, gap, name, subtitle. */
+/** The target line a viewer's own line carries under its subtitle: "→ Logistics · enterprise". */
+export const TARGET_H = 12;
+
+/** Everything above the slot-port labels: card, gap, name, subtitle. The target line fits inside `SUPPLIER_DROP`. */
 export const HEAD_H = CARD_H + NAME_GAP + NAME_H + SUBTITLE_H;
 
-/** The supplier row: how far below the card a hanging supplier node sits, and how big it is. */
+/** The hanging row: how far below the card a hanging node sits, and how big it is. */
 export const SUPPLIER_DROP = 58;
 export const SUPPLIER_R = 13;
-/** Horizontal pitch between two hanging suppliers. Wider than the card, so the wires fan clear of the name. */
+/** Horizontal pitch between two hanging nodes. Wider than the card, so the wires fan clear of the name; wider than `TAP`, so two targets never overlap. */
 export const SUPPLIER_PITCH = 78;
-/** The label under a hanging supplier. */
+/** The label under a hanging node. */
 export const SUPPLIER_LABEL_H = 24;
+/** Hanging nodes per row before the next row starts. Three at the pitch above is 156px: a phone-width card block. */
+export const SUPPLIER_ROW_SIZE = 3;
+/** Vertical pitch between two rows of hanging nodes. Above `TAP`, so a target in one row never overlaps one in the next. */
+export const SUPPLIER_ROW_GAP = 48;
 
 /** The smallest a target may be and still be hit reliably with a thumb. */
 export const TAP = 44;
@@ -67,9 +77,22 @@ export const SUB_PORT_R = 4.5;
 /** Column and row spacing for the laid-out graph. Generous: a card carries a name and a subtitle under it. */
 export const CANVAS_COLUMN_GAP = 96;
 
-/** The full height one node occupies, sub-ports and their suppliers included. */
-export function nodeBlockHeight(subPortCount: number): number {
-  return subPortCount === 0 ? HEAD_H : HEAD_H + SUPPLIER_DROP + SUPPLIER_R + SUPPLIER_LABEL_H;
+/** How many rows `count` hanging nodes wrap into. Zero for none. */
+export function supplierRowsOf(count: number): number {
+  return count <= 0 ? 0 : Math.ceil(count / SUPPLIER_ROW_SIZE);
+}
+
+/**
+ * The full height one node occupies: the card and its name block, the target
+ * line when it carries one, and every row of hanging nodes with the label under
+ * the last of them. What the layout spaces rows by, so a card's hanging nodes
+ * never run into the card below it.
+ */
+export function nodeBlockHeight(hangingCount: number, hasTarget = false): number {
+  const head = HEAD_H + (hasTarget ? TARGET_H : 0);
+  const rows = supplierRowsOf(hangingCount);
+  if (rows === 0) return head;
+  return Math.max(head, CARD_H + SUPPLIER_DROP + (rows - 1) * SUPPLIER_ROW_GAP + SUPPLIER_R + SUPPLIER_LABEL_H);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -131,20 +154,28 @@ export function subPortsOf(box: CardBox, count: number): readonly Point[] {
 }
 
 /**
- * Where the supplier hanging off sub-port `index` sits.
+ * Where the node hanging off slot port `index` sits.
  *
  * Spread on a pitch wider than the card, centred under it, so the dashed wires
- * fan outwards around the name block instead of straight through it.
+ * fan outwards around the name block instead of straight through it. Past
+ * `SUPPLIER_ROW_SIZE` the nodes wrap into a second row `SUPPLIER_ROW_GAP`
+ * lower, each row centred on the card in its own right, so a six-slot robot
+ * reads as two rows of three rather than a 400px shelf.
  */
 export function supplierSlotsOf(box: CardBox, count: number): readonly Point[] {
   if (count <= 0) return [];
   const centreX = box.x + box.width / 2;
-  const y = box.y + box.height + SUPPLIER_DROP;
-  const span = SUPPLIER_PITCH * (count - 1);
-  return Array.from({ length: count }, (_, index) => ({
-    x: centreX - span / 2 + SUPPLIER_PITCH * index,
-    y,
-  }));
+  const baseY = box.y + box.height + SUPPLIER_DROP;
+  return Array.from({ length: count }, (_, index) => {
+    const row = Math.floor(index / SUPPLIER_ROW_SIZE);
+    const inRow = index % SUPPLIER_ROW_SIZE;
+    const rowCount = Math.min(SUPPLIER_ROW_SIZE, count - row * SUPPLIER_ROW_SIZE);
+    const span = SUPPLIER_PITCH * (rowCount - 1);
+    return {
+      x: centreX - span / 2 + SUPPLIER_PITCH * inRow,
+      y: baseY + row * SUPPLIER_ROW_GAP,
+    };
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -167,13 +198,27 @@ export function flowWire(from: Point, to: Point): string {
 }
 
 /**
- * The supplier wire: down out of a sub-port and across to the hanging node,
+ * The supplier wire: down out of a slot port and across to the hanging node,
  * with vertical tangents so it leaves the card downwards and arrives from
- * above. Drawn dashed by the renderer — a supplier is a choice, not structure.
+ * above. Drawn dashed by the renderer — a fill is a choice, not structure.
  */
 export function supplierWire(from: Point, to: Point): string {
   const dy = Math.max(18, (to.y - from.y) * 0.55);
   return `M ${r(from.x)} ${r(from.y)} C ${r(from.x)} ${r(from.y + dy)}, ${r(to.x)} ${r(to.y - dy)}, ${r(to.x)} ${r(to.y)}`;
+}
+
+/**
+ * The same path, every y moved by `dy`.
+ *
+ * The layout spaces rows by a node's whole block — card, name and hanging
+ * rows — and puts a wire's ends at the block's vertical centre; the card sits
+ * at the top of its block, so its ports are higher by half the difference.
+ * Every point on the path shifts by the same amount, dummy-slot bends
+ * included, because every block on the grid is the same height.
+ */
+export function shiftPathY(path: string, dy: number): string {
+  if (dy === 0) return path;
+  return path.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (_match, x: string, y: string) => `${x} ${r(Number(y) + dy)}`);
 }
 
 /* -------------------------------------------------------------------------- */

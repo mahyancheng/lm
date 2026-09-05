@@ -179,7 +179,7 @@ describe('P0-1 sector goods prices', () => {
       if (company.sector !== 'robotics') continue;
       company.fundamentals = { ...company.fundamentals, revenueTtmUsd: company.fundamentals.revenueTtmUsd * 8 + 1e9 };
     }
-    // Robotics consumes manufacturing, so more robotics revenue calls on more
+    // Robotics buys from manufacturing, so more robotics revenue calls on more
     // manufacturing output and the manufacturing index has to rise.
     expect(sectorBalances(after).manufacturing.priceIndex).toBeGreaterThan(sectorBalances(before).manufacturing.priceIndex);
   });

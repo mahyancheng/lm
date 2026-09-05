@@ -137,6 +137,41 @@ export const ProductSupplyLineSchema = z
 export type ProductSupplyLine = z.infer<typeof ProductSupplyLineSchema>;
 
 /**
+ * World version 3: how one slot of a line's node is filled — which node sits in
+ * it and where that node comes from.
+ *
+ * The composition IS the product: the same application on one company's
+ * inference API is a different line from the same application on another's.
+ * `supplierCompanyId` equal to the owning company means MAKE — transferred at
+ * the company's own cost; a rival's id means BUY at their published ask; null
+ * means the open market. A null `nodeId` leaves the slot empty, which is legal
+ * only on a slot the table does not require.
+ */
+export const ProductSlotFillSchema = z
+  .object({
+    slotId: z.string().min(1).describe('The slot on the line\'s node this fill answers, e.g. "model", "harness".'),
+    nodeId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('The node placed in the slot, an id into ECONOMIC_NODES admissible for the slot\'s role; null leaves an optional slot empty.'),
+    supplierCompanyId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('Where the node comes from: this company\'s own id to make it, a seller\'s id to buy from their published line, null for the open market.'),
+    supplierProductId: z.string().min(1).nullable().describe('The seller\'s line, or the company\'s own; null exactly when supplierCompanyId is null.'),
+    cutOffNoticeQuarter: QuarterIndexSchema.nullable().describe(
+      'Set by the engine when the supplier has announced it is closing this line to this buyer: the fill falls to the open market at the start of this quarter. Null when nothing is pending. Never set by an action.',
+    ),
+    changedQuarter: QuarterIndexSchema.nullable().describe(
+      'The quarter this fill last changed node or source. A fill changed this quarter delivers at the switch-cost quality factor; null for a fill that has never changed since launch.',
+    ),
+  })
+  .describe('One slot of a world-3 line: the node in it and where it comes from.');
+export type ProductSlotFill = z.infer<typeof ProductSlotFillSchema>;
+
+/**
  * Published terms for a product line as somebody else's input — set with
  * `set_supply_terms`. Publishing a public API, in the owner's own words, is
  * `openToAll: true`.
@@ -201,7 +236,7 @@ export const ProductSchema = z
       .max(5)
       .describe('Fractional change in active customers this quarter before churn. 0.13 means 13% gross additions. Range: -1..5.'),
     grossMarginPct: unitInterval('Gross margin as a fraction of revenue, after inference compute and support cost.'),
-    computeIntensity: unitInterval('How much serving compute one unit of this product consumes, relative to the archetype baseline of 0.5. Rises with model quality and falls with efficiency research.'),
+    computeIntensity: unitInterval('How much serving compute one unit of this product draws, relative to the archetype baseline of 0.5. Rises with model quality and falls with efficiency research.'),
     qualityScore: unitInterval('How good the product is relative to the market frontier. Drives win rates, pricing power and churn.'),
     launchedQuarter: QuarterIndexSchema.describe('Quarter the product went live.'),
     isActive: z.boolean().describe('False once the product has been sunset. Sunset products keep their history for financial comparatives.'),
@@ -233,6 +268,23 @@ export const ProductSchema = z
       .describe(
         'Published terms for this line as somebody else\'s input, set with set_supply_terms. Null (or absent) means not published: this line cannot be anyone\'s supplier yet, whatever its category\'s canSupply says. Only meaningful when the category canSupply is true. Absent on a world-version-1 product.',
       ),
+    /*
+     * World version 3 — the composition. Optional for the one reason every
+     * other world-3 field is: a defaulted key would materialise on every world-1
+     * and world-2 product the moment the schema parsed one, and both frozen
+     * worlds would stop hashing to what they have always hashed to. A slot with
+     * no entry here runs on the table's default node from the open market.
+     */
+    slots: z
+      .array(ProductSlotFillSchema)
+      .max(6)
+      .optional()
+      .describe(
+        'World version 3: how each slot of this line\'s node is filled — the node in it and where it comes from. One entry per slot the company has an opinion about; a slot without one runs on the table\'s default from the open market. Absent outside world 3.',
+      ),
+    targetIndustry: SectorSchema.optional().describe(
+      'World version 3: the industry this line is aimed at, paired with `segment` as the customer type. Together they name the market cell the line sells into. Absent outside world 3, and on a line aimed at the public, whose industry is the consumer sector by definition.',
+    ),
 
     /*
      * World version 3 — the node line. Every field below is optional for the
@@ -1110,12 +1162,12 @@ export const CompanySchema = z
      * on turn one, incumbents included.
      */
     ownedNodes: z
-      // The table is 87 rows. The cap is above it because ownership UNIONS on
+      // The table is 97 rows. The cap is above it because ownership UNIONS on
       // an acquisition: two companies owning thirty nodes each become one
       // owning fifty, and a cap below what a legal acquisition produces would
       // make the resulting session unsavable.
       .array(z.string().min(1))
-      .max(96)
+      .max(112)
       .optional()
       .describe(
         'Ids into ECONOMIC_NODES (nodeGraph.ts) this company may produce. A company has a line on a node when it produces and sells it; owning the node is what makes that legal. Absent on a world-1 or world-2 company.',
@@ -1135,7 +1187,7 @@ export const CompanySchema = z
       .max(6)
       .optional()
       .describe(
-        'Customer data this company holds, pooled by sector, in petabytes. Accrues from what its lines serve, decays every quarter, lifts the quality of what it sells in that sector and feeds any line whose node consumes a dataset. Absent on a world-1 or world-2 company.',
+        'Customer data this company holds, pooled by sector, in petabytes. Accrues from what its lines serve, decays every quarter, lifts the quality of what it sells in that sector and feeds any line whose node carries a dataset slot. Absent on a world-1 or world-2 company.',
       ),
     dataPolicy: DataCollectionLevelSchema.optional().describe(
       'How hard this company collects from its own customers. Absent means "standard", which is what every company starts on and what a world-1 or world-2 company always is.',

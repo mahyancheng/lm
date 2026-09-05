@@ -79,7 +79,7 @@ export function Drawer({
             <h2 id={titleId} className="truncate text-[14px] font-bold text-ink">
               {title}
             </h2>
-            {subtitle !== undefined ? <p className="mt-0.5 truncate text-[11px] text-ink-dim">{subtitle}</p> : null}
+            {subtitle !== undefined ? <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-ink-dim">{subtitle}</p> : null}
           </div>
           <button type="button" onClick={onClose} className="btn btn-ghost tap-target -mr-1.5 shrink-0 px-0" aria-label="Close">
             <Icon name="close" size={15} accent="current" />

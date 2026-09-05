@@ -46,6 +46,7 @@ import type {
   SupplyCustomerRow,
   EntryStepRow,
   Sector,
+  SlotCandidateRow,
   UnitCostRow,
 } from '@frontier/contracts';
 import {
@@ -59,6 +60,9 @@ import {
   canProduce,
   economicNodeById,
   nodeMarketPriceUsd,
+  primaryCustomerOf,
+  slotById,
+  slotsAccepting,
 } from '@frontier/contracts';
 import {
   ENERGY_USD_PER_ACCELERATOR_QUARTER,
@@ -75,12 +79,14 @@ import { regionOf } from './economy/regions';
 import { quarterlyHireCostUsd, reservableUnits } from './validator/rules';
 import { companyEnergyCostFactor } from './economy/regions';
 import { launchableLines } from './companies/categories';
-import { launchableNodes } from './graph/lines';
+import { launchableNodes, lineNodeOf } from './graph/lines';
+import { defaultIndustryFor, fillsOf, slotForInput } from './graph/slots';
+import { describeSource, possessiveOf, proseLabel, withArticle } from './graph/describe';
 import { customersFor, suppliersFor } from './companies/supply';
 import { isMultiSectorWorld, isNodeEconomyWorld } from './economy/sectors';
 import { acceleratorListUsd, cloudRentUsd, reservedRentUsd } from './graph/lines';
 import { unitCostOf } from './graph/cost';
-import { costBreakdown, nodeEntryRoutes } from './graph/options';
+import { costBreakdown, nodeEntryRoutes, slotOptions, type InputRoute, type NodeSlotOptions, type SlotCandidate } from './graph/options';
 
 /* -------------------------------------------------------------------------- */
 /*  Small shared helpers                                                       */
@@ -483,13 +489,18 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
           : {
               type: 'launch_product',
               name: `${node.label} line`,
-              segment: node.buyerSegment ?? 'enterprise',
+              segment: primaryCustomerOf(node),
               categoryId: node.id,
               pricePerSeatUsd: positive(nodeMarketPriceUsd(draft, node.id)),
               computeIntensity: 0.5,
               launchMarketingUsd: 0,
               targetQuality: 0.5,
               supply: [],
+              // The cell the market would put the line in anyway: heaviest
+              // customer, heaviest industry. Slots stay empty so every one
+              // runs on the table's default; the founder composes after.
+              targetIndustry: defaultIndustryFor(node),
+              slots: [],
             },
     }));
     const openNodes = nodeRows.filter((row) => !row.locked).length;
@@ -523,6 +534,8 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
           launchMarketingUsd: 0,
           targetQuality: 0.5,
           supply: [],
+          targetIndustry: null,
+          slots: [],
         },
   }));
   const open = rows.filter((row) => !row.locked).length;
@@ -541,8 +554,136 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
 /*  suppliers                                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** Every company whose published terms would sell `company` this input right now, best quality per dollar first, from `suppliersFor`. */
+/**
+ * The action that builds `productId` on one seller's line. World 3 names the
+ * slot the input node sits in and fills it (`choose_supplier` is refused
+ * there); world 2 names the input category.
+ */
+function buyIntentFor(
+  draft: SessionState,
+  company: Company,
+  productId: string,
+  inputCategoryId: string,
+  supplierCompanyId: string,
+  supplierProductId: string,
+): ActionIntent | null {
+  if (!isNodeEconomyWorld(draft)) return { type: 'choose_supplier', productId, inputCategoryId, supplierCompanyId, supplierProductId };
+  const product = company.products.find((candidate) => candidate.id === productId);
+  const lineNode = product === undefined ? undefined : lineNodeOf(product);
+  if (product === undefined || lineNode === undefined) return null;
+  const slot = slotForInput(lineNode, fillsOf(product), inputCategoryId);
+  if (slot === null) return null;
+  return { type: 'fill_slot', productId, slotId: slot.id, nodeId: inputCategoryId, supplierCompanyId, supplierProductId };
+}
+
+/**
+ * The slot a world-3 suppliers question is really about: on the named line,
+ * the slot the input node fills; without a line, the first slot on any of the
+ * company's own lines that admits it, then the first slot in the table whose
+ * default is that node. Null when nothing in the table takes the node in a
+ * slot, in which case the sellers of the node itself are the honest answer.
+ */
+function slotForSuppliers(
+  draft: SessionState,
+  company: Company,
+  inputNodeId: string,
+  productId: string | null,
+): { readonly parentNodeId: string; readonly slotId: string; readonly productId: string | null } | null {
+  if (productId !== null) {
+    const product = company.products.find((candidate) => candidate.id === productId && candidate.isActive);
+    const lineNode = product === undefined ? undefined : lineNodeOf(product);
+    if (product !== undefined && lineNode !== undefined) {
+      const slot = slotForInput(lineNode, fillsOf(product), inputNodeId);
+      return slot === null ? null : { parentNodeId: lineNode.id, slotId: slot.id, productId: product.id };
+    }
+  }
+  for (const product of company.products) {
+    if (!product.isActive) continue;
+    const lineNode = lineNodeOf(product);
+    if (lineNode === undefined) continue;
+    const slot = slotForInput(lineNode, fillsOf(product), inputNodeId);
+    if (slot !== null) return { parentNodeId: lineNode.id, slotId: slot.id, productId: product.id };
+  }
+  const byDefault = slotsAccepting(inputNodeId).find((entry) => entry.slot.defaultNodeId === inputNodeId) ?? slotsAccepting(inputNodeId)[0];
+  return byDefault === undefined ? null : { parentNodeId: byDefault.node.id, slotId: byDefault.slot.id, productId: null };
+}
+
+/** The named-seller routes of every candidate for one slot, as supplier rows, each carrying the fill that buys it. */
+function offersFromSlot(draft: SessionState, company: Company, options: NodeSlotOptions, productId: string | null): SupplierOfferRow[] {
+  const publishes = new Set<string>();
+  for (const product of company.products) {
+    if (!product.isActive || product.supplyTerms === null || product.supplyTerms === undefined) continue;
+    const own = lineNodeOf(product);
+    if (own !== undefined) publishes.add(own.id);
+  }
+  const rows: SupplierOfferRow[] = [];
+  for (const candidate of options.candidates) {
+    for (const route of candidate.routes) {
+      if (route.kind !== 'buy' || route.supplierCompanyId === null || route.supplierProductId === null) continue;
+      const seller = draft.companies.find((entry) => entry.id === route.supplierCompanyId);
+      const line = seller?.products.find((entry) => entry.id === route.supplierProductId);
+      rows.push({
+        companyId: route.supplierCompanyId,
+        name: clip(seller?.name ?? route.label),
+        productId: route.supplierProductId,
+        productName: clip(line?.name ?? candidate.label),
+        pricePerUnitUsd: positive(route.unitPriceUsd),
+        qualityScorePct: positive(route.qualityScore * 100),
+        isDirectRival: publishes.has(candidate.nodeId),
+        intent:
+          productId === null
+            ? null
+            : {
+                type: 'fill_slot',
+                productId,
+                slotId: options.slotId,
+                nodeId: candidate.nodeId,
+                supplierCompanyId: route.supplierCompanyId,
+                supplierProductId: route.supplierProductId,
+              },
+      });
+    }
+  }
+  return rows;
+}
+
+/** Quality per dollar, the order every seller list in the engine is ranked by. */
+function qualityPerDollar(qualityScorePct: number, priceUsd: number): number {
+  return qualityScorePct / Math.max(1, priceUsd);
+}
+
+/**
+ * Every company whose published terms would sell `company` this input right
+ * now, best quality per dollar first, from `suppliersFor`.
+ *
+ * World 3 reads the question as being about a SLOT: the input node names the
+ * slot it fills, and the answer is every named seller of every node that slot
+ * admits — a founder asking who supplies their inference API is asking what
+ * could go in the model slot, and the answer may be a different API entirely.
+ * Each row carries the `fill_slot` that buys it; `choose_supplier` is refused
+ * there.
+ */
 function suppliersLookup(draft: SessionState, company: Company, inputCategoryId: string, productId: string | null): LookupResult {
+  if (isNodeEconomyWorld(draft)) {
+    const target = slotForSuppliers(draft, company, inputCategoryId, productId);
+    const options = target === null ? undefined : slotOptions(draft, company, target.parentNodeId, target.productId).find((entry) => entry.slotId === target.slotId);
+    if (target !== null && options !== undefined) {
+      const rows = offersFromSlot(draft, company, options, target.productId)
+        .sort((a, b) => qualityPerDollar(b.qualityScorePct, b.pricePerUnitUsd) - qualityPerDollar(a.qualityScorePct, a.pricePerUnitUsd) || (a.companyId < b.companyId ? -1 : 1))
+        .slice(0, MAX_LOOKUP_ROWS);
+      const parentLabel = ECONOMIC_NODES_BY_ID[target.parentNodeId]?.label ?? target.parentNodeId;
+      return {
+        kind: 'suppliers',
+        summary: clip(
+          rows.length === 0
+            ? `Nobody currently publishes anything that could fill the ${options.label.toLowerCase()} slot of ${parentLabel} open to us.`
+            : `${rows.length} compan${rows.length === 1 ? 'y' : 'ies'} would sell us something for the ${options.label.toLowerCase()} slot of ${parentLabel}; best on quality per dollar is ${rows[0]?.name ?? ''}.`,
+        ),
+        inputCategoryId,
+        rows,
+      };
+    }
+  }
   const offers = suppliersFor(draft, company.id, inputCategoryId).slice(0, MAX_LOOKUP_ROWS);
   const rows: SupplierOfferRow[] = offers.map((offer) => ({
     companyId: offer.company.id,
@@ -552,10 +693,7 @@ function suppliersLookup(draft: SessionState, company: Company, inputCategoryId:
     pricePerUnitUsd: positive(offer.pricePerUnitUsd),
     qualityScorePct: positive(offer.qualityScore * 100),
     isDirectRival: offer.isDirectRival,
-    intent:
-      productId === null
-        ? null
-        : { type: 'choose_supplier', productId, inputCategoryId, supplierCompanyId: offer.company.id, supplierProductId: offer.product.id },
+    intent: productId === null ? null : buyIntentFor(draft, company, productId, inputCategoryId, offer.company.id, offer.product.id),
   }));
   const label = inputCategoryId.replace(/_/g, ' ');
   return {
@@ -630,23 +768,43 @@ function unitCostLookup(draft: SessionState, company: Company, nodeId: string): 
   const result = unitCostOf(draft, company, node.id);
   const breakdown = costBreakdown(result).slice(0, MAX_LOOKUP_ROWS);
   const marketPriceUsd = nodeMarketPriceUsd(draft, node.id);
-  const rows: UnitCostRow[] = breakdown.map((row) => ({
-    key: clip(row.key),
-    label: clip(row.label),
-    amountUsd: positive(row.amountUsd),
-    sharePct: positive(row.sharePct),
-    sourceKind: row.sourceKind,
-    sourceName: clip(row.sourceCompanyId === null ? '' : (draft.companies.find((entry) => entry.id === row.sourceCompanyId)?.name ?? '')),
-  }));
+  // The roll-up's own lines, by key, for the slot each row fills: the
+  // breakdown sorts and shares, the line says which slot and which node.
+  const linesByKey = new Map(result.lines.map((line) => [line.key, line]));
+  const rows: UnitCostRow[] = breakdown.map((row) => {
+    const line = linesByKey.get(row.key);
+    return {
+      key: clip(row.key),
+      label: clip(row.label),
+      amountUsd: positive(row.amountUsd),
+      sharePct: positive(row.sharePct),
+      sourceKind: row.sourceKind,
+      sourceName: clip(row.sourceCompanyId === null ? '' : (draft.companies.find((entry) => entry.id === row.sourceCompanyId)?.name ?? '')),
+      slotId: clip(line?.slotId ?? ''),
+      nodeId: clip(line?.nodeId ?? ''),
+    };
+  });
   const biggest = breakdown[0] ?? null;
+  const biggestLine = biggest === null ? undefined : linesByKey.get(biggest.key);
+  const biggestSlot = biggestLine?.slotId === undefined ? undefined : slotById(node, biggestLine.slotId);
+  // The biggest line named by the slot it fills and where that slot is
+  // sourced — "the model slot, on Aletheia's frontier model" — so the
+  // sentence says what a founder could change, not just what it costs.
+  const biggestClause =
+    biggest === null
+      ? ''
+      : biggestLine !== undefined && biggestSlot !== undefined && biggestLine.nodeId !== null && biggestLine.nodeId !== undefined
+        ? `, of which ${whole(biggest.amountUsd)} is the ${biggestSlot.label.toLowerCase()} slot, on ${describeSource(
+            draft,
+            biggestLine,
+            'our own',
+            result.blockedInputNodeIds.includes(biggestLine.nodeId),
+          )}`
+        : `, of which ${whole(biggest.amountUsd)} is ${biggest.label.toLowerCase()}`;
 
   return {
     kind: 'unit_cost',
-    summary: clip(
-      `One ${node.unitLabel} of ${node.label} costs ${whole(result.unitCostUsd)} dollars to make${
-        biggest === null ? '' : `, of which ${whole(biggest.amountUsd)} is ${biggest.label.toLowerCase()}`
-      }; the market pays ${whole(marketPriceUsd)}.`,
-    ),
+    summary: clip(`One ${node.unitLabel} of ${node.label} costs ${whole(result.unitCostUsd)} dollars to make${biggestClause}; the market pays ${whole(marketPriceUsd)}.`),
     nodeId: clip(node.id),
     label: clip(node.label),
     unitLabel: clip(node.unitLabel),
@@ -655,6 +813,142 @@ function unitCostLookup(draft: SessionState, company: Company, nodeId: string): 
     grossMarginPct: marketPriceUsd <= 0 ? 0 : whole(((marketPriceUsd - result.unitCostUsd) / marketPriceUsd) * 100),
     madeInHouseSharePct: positive(result.madeInHouseSharePct),
     blockedInputs: result.blockedInputNodeIds.slice(0, 8).map((id) => clip(ECONOMIC_NODES_BY_ID[id]?.label ?? id)),
+    rows,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  slot_candidates                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** One route to one candidate as the wire row, with the fill that takes it. */
+function slotCandidateRow(
+  draft: SessionState,
+  company: Company,
+  options: NodeSlotOptions,
+  candidate: SlotCandidate,
+  route: InputRoute,
+  productId: string | null,
+): SlotCandidateRow {
+  // Blocked is the market route of a node nobody in the world owns: a make
+  // route means the company owns it and a buy route means a seller does.
+  const blocked = candidate.blocked && route.kind === 'market';
+  const seller = route.kind === 'buy' ? draft.companies.find((entry) => entry.id === route.supplierCompanyId) : undefined;
+  return {
+    nodeId: candidate.nodeId,
+    label: clip(candidate.label),
+    tier: positive(candidate.tier),
+    sourceKind: route.kind,
+    sellerCompanyId: clip(route.kind === 'make' ? company.id : (route.supplierCompanyId ?? '')),
+    sellerName: clip(seller?.name ?? ''),
+    unitPriceUsd: positive(route.unitPriceUsd),
+    qualityScorePct: positive(route.qualityScore * 100),
+    blocked,
+    // A fill that would stop the line shipping is not offered as an action;
+    // the row still says the node exists and why it cannot be had.
+    intent:
+      productId === null || blocked
+        ? null
+        : {
+            type: 'fill_slot',
+            productId,
+            slotId: options.slotId,
+            nodeId: candidate.nodeId,
+            supplierCompanyId: route.supplierCompanyId,
+            supplierProductId: route.supplierProductId,
+          },
+  };
+}
+
+/**
+ * "What could go in this slot, and from whom?"
+ *
+ * Every node the slot admits and every route to each — the company's own line,
+ * each open seller, the open market — from `slotOptions`, the same call the
+ * launch flow and the drawer render, so a price quoted here is the price the
+ * roll-up will book. The node in the slot today comes first, the rest in the
+ * table's order, routes in the roll-up's; each row carries the `fill_slot`
+ * that puts it there when the company named its line.
+ */
+function slotCandidatesLookup(draft: SessionState, company: Company, nodeId: string, slotId: string, productId: string | null): LookupResult {
+  const node = economicNodeById(nodeId);
+  const slot = node === undefined ? undefined : slotById(node, slotId);
+  const empty = (summary: string): LookupResult => ({
+    kind: 'slot_candidates',
+    summary: clip(summary),
+    nodeId: clip(nodeId),
+    slotId: clip(slot === undefined ? '' : slot.id),
+    slotLabel: clip(slot?.label ?? ''),
+    productId: '',
+    rows: [],
+  });
+  if (!isNodeEconomyWorld(draft)) return empty('This world has no slots; a line is built on a fixed catalogue, not composed.');
+  if (node === undefined) return empty(`There is no node called ${nodeId}.`);
+  if (slot === undefined) {
+    return empty(
+      node.slots.length === 0
+        ? `${node.label} has no slots to fill.`
+        : `${node.label} has no slot called ${slotId}; its slots are ${node.slots.map((entry) => entry.id).join(', ')}.`,
+    );
+  }
+
+  // The named line must be this company's, live, and on this node; otherwise
+  // the rows still answer but carry no action, exactly as browsing does.
+  const product = productId === null ? undefined : company.products.find((entry) => entry.id === productId && entry.isActive && lineNodeOf(entry)?.id === node.id);
+  const lineId = product?.id ?? null;
+  const options = slotOptions(draft, company, node.id, lineId).find((entry) => entry.slotId === slot.id);
+  if (options === undefined) return empty(`${node.label} has no slot called ${slotId}.`);
+
+  // The node in the slot today leads, then the table's order: a role with
+  // three nodes and several sellers each can pass the row cap, and the cut
+  // must never take the current fill's own routes with it.
+  const standingNodeId = options.fill?.nodeId ?? null;
+  const candidates = [...options.candidates].sort((a, b) => Number(b.nodeId === standingNodeId) - Number(a.nodeId === standingNodeId));
+  const rows: SlotCandidateRow[] = [];
+  for (const candidate of candidates) {
+    for (const route of candidate.routes) {
+      if (rows.length >= MAX_LOOKUP_ROWS) break;
+      rows.push(slotCandidateRow(draft, company, options, candidate, route, lineId));
+    }
+  }
+
+  const best = [...rows].sort((a, b) => qualityPerDollar(b.qualityScorePct, b.unitPriceUsd) - qualityPerDollar(a.qualityScorePct, a.unitPriceUsd))[0] ?? null;
+  const fill = options.fill;
+  const today =
+    fill === null || fill.nodeId === null
+      ? 'today it is left empty'
+      : `today it runs on ${describeSource(
+          draft,
+          {
+            key: `slot:${slot.id}`,
+            slotId: slot.id,
+            nodeId: fill.nodeId,
+            label: ECONOMIC_NODES_BY_ID[fill.nodeId]?.label ?? fill.nodeId,
+            unitsPerUnit: slot.qtyPerUnit,
+            unitPriceUsd: 0,
+            amountUsd: 0,
+            sourceCompanyId: fill.supplierCompanyId,
+            sourceKind: fill.route === 'make' ? 'make' : fill.route === 'buy' ? 'buy' : 'market',
+          },
+          'our own',
+          fill.route === 'blocked',
+        )}`;
+  const bestSource =
+    best === null ? '' : best.sourceKind === 'make' ? 'our own line' : best.sourceKind === 'buy' ? possessiveOf(best.sellerName) + ' line' : 'the open market';
+
+  return {
+    kind: 'slot_candidates',
+    summary: clip(
+      rows.length === 0
+        ? `Nothing can fill the ${slot.label.toLowerCase()} slot of ${node.label}; ${today}.`
+        : `${rows.length} way${rows.length === 1 ? '' : 's'} to fill the ${slot.label.toLowerCase()} slot of ${node.label}: best on quality per dollar is ${withArticle(
+            proseLabel(best?.label ?? ''),
+          )} from ${bestSource} at ${best?.unitPriceUsd ?? 0} dollars; ${today}.`,
+    ),
+    nodeId: clip(node.id),
+    slotId: clip(slot.id),
+    slotLabel: clip(slot.label),
+    productId: clip(lineId ?? ''),
     rows,
   };
 }
@@ -817,6 +1111,9 @@ export function runLookups(draft: SessionState, companyId: string, requests: rea
         break;
       case 'entry_path':
         out.push(entryPathLookup(draft, company, request.sector, request.nodeId));
+        break;
+      case 'slot_candidates':
+        out.push(slotCandidatesLookup(draft, company, request.nodeId, request.slotId, request.productId));
         break;
       default: {
         const exhaustive: never = request;

@@ -14,7 +14,7 @@
  * ```text
  * generated = node.dataYieldPerUnitQuarter
  *           x servedUnits
- *           x SEGMENT_DATA_WEIGHT[buyerSegment]
+ *           x SEGMENT_DATA_WEIGHT[the line's own customer type]
  *           x COLLECTION_MULTIPLE[policy]
  *           x (1 - PRIVACY_DRAG x world.regulation.privacy x node.dataSensitivity)
  *
@@ -31,7 +31,7 @@
  *    `DATA_QUALITY_MAX x dataEdge`. This is also the fix for world 2's frozen
  *    quality, where `qualityScore` was set at launch and never revisited, so a
  *    breakthrough never improved anything a company already sold.
- * 2. **An input.** A node that consumes a dataset is fed free from the
+ * 2. **An input.** A node with a dataset slot is fed free from the
  *    company's own pool, and buys the shortfall at market. That is priced in
  *    `graph/cost.ts`, which reads `dataPetabytesOf` from here.
  * 3. **Research.** `dataAdequacy` is the fourth resourcing factor, so a
@@ -48,11 +48,12 @@
  * product order, so the ledger rows come out in one order on every machine.
  */
 
-import type { Company, DataAsset, DataCollectionLevel, EconomicNode, ProductSegment, ResolverContext, SessionState } from '@frontier/contracts';
+import type { Company, DataAsset, DataCollectionLevel, EconomicNode, NodeCostCache, Product, ProductSegment, ResolverContext, SessionState } from '@frontier/contracts';
 import type { Sector } from '@frontier/contracts';
 import { economicNodeById } from '@frontier/contracts';
 import { activeCompanies, activeProducts, clamp, emitEvent, unit } from '../companies/util';
-import { lineNodeOf } from './lines';
+import { createNodeCostCache, lineNodeOf } from './lines';
+import { resolveFills } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants, and why each is the number it is                                */
@@ -317,20 +318,30 @@ export function privacyFactor(draft: SessionState, node: EconomicNode): number {
 }
 
 /**
- * How much data one line consumes each quarter to make what it makes.
+ * How much data one line uses each quarter to make what it makes.
  *
- * A dataset the node `consumes` is a real input in real quantity, exactly like
- * a wafer: `qtyPerUnit` petabytes per unit produced. What the company's own
- * pool cannot cover is bought, and that is priced in the roll-up rather than
- * here.
+ * A dataset in one of the node's slots is a real input in real quantity,
+ * exactly like a wafer: `qtyPerUnit` petabytes per unit produced, read off the
+ * dataset the slot is actually filled with. What the company's own pool cannot
+ * cover is bought, and that is priced in the roll-up rather than here.
  */
-export function consumedPetabytes(node: EconomicNode, units: number): number {
+export function consumedPetabytes(
+  state: SessionState,
+  company: Company,
+  product: Product,
+  node: EconomicNode,
+  units: number,
+  cache?: NodeCostCache,
+): number {
   if (units <= 0) return 0;
   let total = 0;
-  for (const input of node.consumes) {
-    const perUnit = petabytesPerUnit(input.nodeId);
+  for (const fill of resolveFills(state, company, product, node, cache)) {
+    if (fill.nodeId === null) continue;
+    const perUnit = petabytesPerUnit(fill.nodeId);
     if (perUnit <= 0) continue;
-    total += input.qtyPerUnit * units * perUnit;
+    const slot = node.slots.find((candidate) => candidate.id === fill.slotId);
+    if (slot === undefined) continue;
+    total += slot.qtyPerUnit * units * perUnit;
   }
   return total;
 }
@@ -389,7 +400,7 @@ interface SectorFlow {
  * Nothing here draws a random number, so it cannot move any other phase's call
  * sequence.
  */
-export function resolveNodeData(draft: SessionState, ctx: ResolverContext): void {
+export function resolveNodeData(draft: SessionState, ctx: ResolverContext, cache: NodeCostCache = createNodeCostCache(draft)): void {
   for (const company of activeCompanies(draft)) {
     applyPolicyStanding(draft, company);
     const flows = new Map<Sector, SectorFlow>();
@@ -408,14 +419,16 @@ export function resolveNodeData(draft: SessionState, ctx: ResolverContext): void
       const node = lineNodeOf(product);
       if (node === undefined) continue;
       const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
-      const segment = node.buyerSegment ?? product.segment;
+      // What a line may keep depends on who it sells to: the line's own
+      // customer type, not the node's typical one.
+      const segment = product.segment;
       const flow = flowFor(node.sector);
       // A line whose node IS a dataset sells its stock rather than observing
       // anything: selling a corpus is `launch_product` on a `dat_` node, with
       // no second lever anywhere.
       if (isDataNode(node.id)) flow.sold += units * petabytesPerUnit(node.id);
       else flow.generated += generatedPetabytes(draft, company, node, units, segment);
-      flow.consumed += consumedPetabytes(node, units);
+      flow.consumed += consumedPetabytes(draft, company, product, node, units, cache);
     }
 
     for (const [sector, flow] of flows) {

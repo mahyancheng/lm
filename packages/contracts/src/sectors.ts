@@ -88,7 +88,7 @@ export interface SectorMeta {
    * the whole economy does not breathe in unison.
    */
   readonly demandCycleQuarters: number;
-  /** Sectors whose output this sector consumes. Inverse of every `outputs`. */
+  /** Sectors whose output this sector buys. Inverse of every `outputs`. */
   readonly inputs: readonly Sector[];
   /** Sectors this sector supplies. Inverse of every `inputs`. */
   readonly outputs: readonly Sector[];

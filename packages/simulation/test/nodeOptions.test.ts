@@ -4,13 +4,14 @@
  *
  * Two things are proved here and neither can be eyeballed on a screen:
  *
- * 1. **A route's price is the roll-up's price.** `inputOptions` exists so the
- *    launch screen renders three buttons instead of walking the graph, and the
- *    only way that is worth anything is if the number on the button is the
- *    number the profit and loss books afterwards. Every route is therefore
- *    checked against `unitCostOf` on the same input in the same session — not
- *    against a restatement of the formula, which would pass while both were
- *    wrong together.
+ * 1. **A route's price is the roll-up's price.** `slotOptions` exists so the
+ *    launch screen renders one row per slot, a sheet of candidates and three
+ *    kinds of route instead of walking the graph, and the only way that is
+ *    worth anything is if the number on the button is the number the profit
+ *    and loss books afterwards. Every route is therefore checked against
+ *    `unitCostOf` on the same slot in the same session — not against a
+ *    restatement of the formula, which would pass while both were wrong
+ *    together.
  * 2. **A rival's economics are not in the projection.** In demo mode the whole
  *    aggregate sits in the browser tab, so `nodeMapFor` is the entire
  *    information boundary for the canvas. The test walks the serialised
@@ -21,17 +22,18 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Company, Product, SessionState } from '@frontier/contracts';
-import { economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
+import { defaultInputsOf, economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
 import { createWorld3Session } from '../src/scenario/world3';
 import { createDemoSession } from '../src/scenario';
 import {
   MARKET_QUALITY,
   biggestCostSentence,
   costBreakdown,
-  inputOptions,
   nodeEntryRoutes,
   nodeSellersFor,
   priceVerdict,
+  slotOptions,
+  type NodeSlotOptions,
 } from '../src/graph/options';
 import { OPEN_MARKET_PREMIUM, unitCostOf } from '../src/graph/cost';
 import { chainNodeIds, neighbourhoodNodeIds, nodeMapFor } from '../src/graph/projection';
@@ -97,24 +99,49 @@ function publishLine(company: Company, nodeId: string, askUsd: number, quality =
 /*  1. The three routes                                                        */
 /* -------------------------------------------------------------------------- */
 
-describe('inputOptions — the three shapes, priced as the roll-up prices them', () => {
-  it('offers market for every input when nothing is made and nobody is named', () => {
+/** The candidate a slot currently resolves to, or undefined. */
+function inSlot(slot: NodeSlotOptions) {
+  return slot.candidates.find((candidate) => candidate.nodeId === slot.fill?.nodeId);
+}
+
+describe('slotOptions — the three shapes, priced as the roll-up prices them', () => {
+  it('offers market on every candidate of every slot when nothing is made and nobody is named', () => {
     const state = bareWorld();
     const company = state.companies[0] as Company;
     const node = economicNodeById(ACCELERATOR);
-    expect(node?.consumes.length ?? 0).toBeGreaterThan(0);
+    expect(node?.slots.length ?? 0).toBeGreaterThan(0);
 
-    const options = inputOptions(state, company, ACCELERATOR);
-    expect(options.length).toBe(node?.consumes.length);
-    for (const option of options) {
-      const market = option.routes.find((route) => route.kind === 'market');
-      expect(market, `${option.inputNodeId} has no market route`).toBeDefined();
-      // The spot price is the node's own settled price plus the premium, to the
-      // cent — the same arithmetic `openMarketPriceUsd` gives the roll-up.
-      expect(market?.unitPriceUsd).toBeCloseTo(nodeMarketPriceUsd(state, option.inputNodeId) * OPEN_MARKET_PREMIUM, 6);
-      expect(market?.premiumPct).toBe(Math.round((OPEN_MARKET_PREMIUM - 1) * 100));
-      expect(market?.qualityScore).toBe(MARKET_QUALITY);
+    const slots = slotOptions(state, company, ACCELERATOR);
+    expect(slots.map((slot) => slot.slotId)).toEqual(node?.slots.map((slot) => slot.id));
+    for (const slot of slots) {
+      // Every slot resolves to its default on the open market, and the market
+      // route on that candidate is the one marked chosen.
+      expect(slot.fill?.nodeId).toBe(node?.slots.find((entry) => entry.id === slot.slotId)?.defaultNodeId ?? null);
+      expect(slot.fill?.route).toBe('market');
+      expect(slot.candidates.length).toBeGreaterThan(0);
+      for (const candidate of slot.candidates) {
+        const market = candidate.routes.find((route) => route.kind === 'market');
+        expect(market, `${slot.slotId}/${candidate.nodeId} has no market route`).toBeDefined();
+        // The spot price is the node's own settled price plus the premium, to
+        // the cent — the same arithmetic `openMarketPriceUsd` gives the roll-up.
+        expect(market?.unitPriceUsd).toBeCloseTo(nodeMarketPriceUsd(state, candidate.nodeId) * OPEN_MARKET_PREMIUM, 6);
+        expect(market?.premiumPct).toBe(Math.round((OPEN_MARKET_PREMIUM - 1) * 100));
+        expect(market?.qualityScore).toBe(MARKET_QUALITY);
+        expect(market?.chosen).toBe(candidate.nodeId === slot.fill?.nodeId);
+        // Nothing is ever disabled: every route is a real choice.
+        expect(candidate.routes.every((route) => typeof route.chosen === 'boolean')).toBe(true);
+      }
     }
+  });
+
+  it('lists every admissible node of a slot, not only the default', () => {
+    const state = bareWorld();
+    const company = state.companies[0] as Company;
+    const api = slotOptions(state, company, 'svc_inference_api').find((slot) => slot.slotId === 'model');
+    expect(api?.candidates.map((candidate) => candidate.nodeId)).toEqual(
+      expect.arrayContaining(['sys_frontier_model', 'sys_efficient_small_model', 'sys_robot_policy_model']),
+    );
+    expect(api?.unitLabel).toBe(economicNodeById('sys_frontier_model')?.unitLabel);
   });
 
   it('quotes a make route at this company\'s own unit cost, with no internal margin', () => {
@@ -123,15 +150,17 @@ describe('inputOptions — the three shapes, priced as the roll-up prices them',
     company.ownedNodes = [...(company.ownedNodes ?? []), WAFER, DIE, ACCELERATOR];
     company.products = [lineOn(WAFER, 5_000, 900)];
 
-    const options = inputOptions(state, company, DIE);
-    const wafer = options.find((option) => option.inputNodeId === WAFER);
-    expect(wafer, 'the die does not consume a wafer any more').toBeDefined();
+    const wafer = slotOptions(state, company, DIE).find((slot) => slot.slotId === 'wafer');
+    expect(wafer, 'the die has no wafer slot any more').toBeDefined();
+    const candidate = inSlot(wafer as NodeSlotOptions);
+    expect(candidate?.nodeId).toBe(WAFER);
 
-    const make = wafer?.routes.find((route) => route.kind === 'make');
+    const make = candidate?.routes.find((route) => route.kind === 'make');
     expect(make?.supplierCompanyId).toBe(company.id);
     // The transfer price is the roll-up's own answer for that node, exactly.
     expect(make?.unitPriceUsd).toBe(unitCostOf(state, company, WAFER).unitCostUsd);
-    expect(wafer?.chosen?.kind).toBe('make');
+    expect(make?.chosen).toBe(true);
+    expect(wafer?.fill?.route).toBe('make');
   });
 
   it('quotes a buy route only from a seller whose terms are open to this buyer', () => {
@@ -155,31 +184,35 @@ describe('inputOptions — the three shapes, priced as the roll-up prices them',
     const sellerLine = publishLine(seller, WAFER, 1_200);
 
     const buyerLine = lineOn(DIE, 2_000, 3_000);
-    buyerLine.supply = [
-      { inputCategoryId: WAFER, supplierCompanyId: seller.id, supplierProductId: sellerLine.id, cutOffNoticeQuarter: null },
+    buyerLine.slots = [
+      { slotId: 'wafer', nodeId: WAFER, supplierCompanyId: seller.id, supplierProductId: sellerLine.id, cutOffNoticeQuarter: null, changedQuarter: null },
     ];
     buyer.products = [buyerLine];
     buyer.ownedNodes = [...(buyer.ownedNodes ?? []), DIE];
 
-    const wafer = inputOptions(state, buyer, DIE, buyerLine.id).find((option) => option.inputNodeId === WAFER);
-    expect(wafer?.chosen?.kind).toBe('buy');
-    expect(wafer?.chosen?.supplierCompanyId).toBe(seller.id);
+    const wafer = slotOptions(state, buyer, DIE, buyerLine.id).find((slot) => slot.slotId === 'wafer');
+    expect(wafer?.fill?.route).toBe('buy');
+    expect(wafer?.fill?.supplierCompanyId).toBe(seller.id);
+    const chosen = inSlot(wafer as NodeSlotOptions)?.routes.find((route) => route.chosen);
+    expect(chosen?.kind).toBe('buy');
+    expect(chosen?.supplierCompanyId).toBe(seller.id);
 
-    // What the screen quotes is what cost of goods will charge: the same input's
-    // line in the roll-up carries the same price and the same counterparty.
+    // What the screen quotes is what cost of goods will charge: the same slot's
+    // row in the roll-up carries the same price and the same counterparty.
     const rollUp = unitCostOf(state, buyer, DIE);
-    const costLine = rollUp.lines.find((entry) => entry.key === WAFER);
+    const costLine = rollUp.lines.find((entry) => entry.key === 'slot:wafer');
     expect(costLine?.sourceKind).toBe('buy');
     expect(costLine?.sourceCompanyId).toBe(seller.id);
-    expect(costLine?.unitPriceUsd).toBeCloseTo(wafer?.chosen?.unitPriceUsd ?? -1, 6);
+    expect(costLine?.nodeId).toBe(WAFER);
+    expect(costLine?.unitPriceUsd).toBeCloseTo(chosen?.unitPriceUsd ?? -1, 6);
   });
 
-  it('reports an input as blocked exactly when the roll-up blocks it', () => {
+  it('reports a candidate as blocked exactly when the roll-up blocks it', () => {
     const state = bareWorld();
     const company = state.companies[0] as Company;
     const node = economicNodeById(ACCELERATOR);
-    const required = node?.consumes.find((input) => !input.substitutable);
-    expect(required, 'the accelerator has no non-substitutable input to block').toBeDefined();
+    const required = (node === undefined ? [] : defaultInputsOf(node)).find((input) => input.blocking);
+    expect(required, 'the accelerator has no blocking input to block').toBeDefined();
 
     // Strip ownership of that input from the whole world: nobody can make it at
     // any price, which is the only thing that blocks.
@@ -190,9 +223,10 @@ describe('inputOptions — the three shapes, priced as the roll-up prices them',
       candidate.products = candidate.products.filter((product) => product.nodeId !== inputId);
     }
 
-    const option = inputOptions(state, company, ACCELERATOR).find((entry) => entry.inputNodeId === inputId);
-    expect(option?.blocked).toBe(true);
-    expect(option?.chosen).toBeNull();
+    const slot = slotOptions(state, company, ACCELERATOR).find((entry) => entry.slotId === required?.slotId);
+    expect(slot?.fill?.route).toBe('blocked');
+    expect(inSlot(slot as NodeSlotOptions)?.blocked).toBe(true);
+    expect(inSlot(slot as NodeSlotOptions)?.routes.some((route) => route.chosen)).toBe(false);
     expect(unitCostOf(state, company, ACCELERATOR).blockedInputNodeIds).toContain(inputId);
   });
 });
@@ -332,9 +366,13 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
     const named = view.nodes.flatMap((node) => [...node.ownerCompanyIds, ...node.producerCompanyIds]);
     expect(named.length).toBeGreaterThan(0);
     for (const companyId of named) expect(view.companyNames[companyId]).toBeTypeOf('string');
-    // Structure is the table's, both edge kinds present.
-    expect(view.wires.some((wire) => wire.kind === 'consumes')).toBe(true);
+    // Structure is the table's, both edge kinds present, and a slot draws one
+    // wire per admissible node with exactly one default among them.
+    expect(view.wires.some((wire) => wire.kind === 'slot')).toBe(true);
     expect(view.wires.some((wire) => wire.kind === 'requires')).toBe(true);
+    const modelWires = view.wires.filter((wire) => wire.kind === 'slot' && wire.toNodeId === 'svc_inference_api' && wire.slotId === 'model');
+    expect(modelWires.length).toBeGreaterThanOrEqual(3);
+    expect(modelWires.filter((wire) => wire.isDefault).map((wire) => wire.fromNodeId)).toEqual(['sys_frontier_model']);
   });
 
   it('never carries a rival\'s list price, ask, unit cost, margin or quality', () => {
@@ -357,10 +395,11 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
       expect(found.has(secret), `${secret} reached the client`).toBe(false);
     }
 
-    // And a supply wire carries the relationship without a price on it.
+    // And a supply wire carries the relationship — which slot, which node, from
+    // whom — without a price on it.
     for (const wire of nodeMapFor(state, viewer.id).supplyWires) {
       expect(Object.keys(wire).sort()).toEqual(
-        ['buyerCompanyId', 'buyerNodeId', 'buyerProductId', 'inputNodeId', 'supplierCompanyId'],
+        ['buyerCompanyId', 'buyerNodeId', 'buyerProductId', 'inputNodeId', 'slotId', 'supplierCompanyId'],
       );
     }
   });
@@ -380,7 +419,25 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
     const focus = mine[0] as string;
     const around = neighbourhoodNodeIds(view, focus);
     expect(around).toContain(focus);
-    for (const input of economicNodeById(focus)?.consumes ?? []) expect(around).toContain(input.nodeId);
+    const focusNode = economicNodeById(focus);
+    for (const input of focusNode === undefined ? [] : defaultInputsOf(focusNode)) expect(around).toContain(input.nodeId);
+  });
+
+  it('fits the chain to what the viewer\'s line actually runs on, not the table\'s default', () => {
+    const state = bareWorld();
+    const viewer = state.companies[0] as Company;
+    const api = lineOn('svc_inference_api', 1_000, 10);
+    api.slots = [{ slotId: 'model', nodeId: 'sys_efficient_small_model', supplierCompanyId: null, supplierProductId: null, cutOffNoticeQuarter: null, changedQuarter: null }];
+    viewer.products = [api];
+
+    const view = nodeMapFor(state, viewer.id);
+    const entry = view.nodes.find((node) => node.nodeId === 'svc_inference_api');
+    expect(entry?.yourInputNodeIds).toEqual(['sys_efficient_small_model']);
+    const chain = chainNodeIds(view);
+    expect(chain).toContain('sys_efficient_small_model');
+    expect(chain).not.toContain('sys_frontier_model');
+    // A rival's fills are not on the viewer's entries.
+    expect(view.nodes.filter((node) => node.yourProductId === null).every((node) => node.yourInputNodeIds.length === 0)).toBe(true);
   });
 
   it('is empty of world-3 lines in a world-2 session, and does not throw', () => {
@@ -395,7 +452,7 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
 /*  6. The cache is honoured                                                   */
 /* -------------------------------------------------------------------------- */
 
-describe('inputOptions with a cost cache', () => {
+describe('slotOptions with a cost cache', () => {
   it('gives the same answer with and without one', () => {
     const state = bareWorld();
     const company = state.companies[0] as Company;
@@ -403,10 +460,8 @@ describe('inputOptions with a cost cache', () => {
     company.products = [lineOn(WAFER, 5_000, 900)];
 
     const cache = createNodeCostCache(state);
-    const withCache = inputOptions(state, company, DIE, null, cache);
-    const without = inputOptions(state, company, DIE);
-    expect(withCache.map((option) => [option.inputNodeId, option.chosen?.kind, option.chosen?.unitPriceUsd])).toEqual(
-      without.map((option) => [option.inputNodeId, option.chosen?.kind, option.chosen?.unitPriceUsd]),
-    );
+    const summarise = (slots: readonly NodeSlotOptions[]) =>
+      slots.map((slot) => [slot.slotId, slot.fill?.nodeId, slot.fill?.route, inSlot(slot)?.routes.find((route) => route.chosen)?.unitPriceUsd]);
+    expect(summarise(slotOptions(state, company, DIE, null, cache))).toEqual(summarise(slotOptions(state, company, DIE)));
   });
 });

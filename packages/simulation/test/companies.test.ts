@@ -944,6 +944,8 @@ describe('financial resolution', () => {
             launchMarketingUsd: 60_000_000,
             targetQuality: 0.8,
             supply: [],
+            targetIndustry: null,
+            slots: [],
           }),
         );
       }

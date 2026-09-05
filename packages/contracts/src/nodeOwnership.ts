@@ -23,10 +23,11 @@
  *
  * `BACKGROUND_TIER_REACH` is one integer per background and applies to that
  * background's own sector only. A frontier laboratory reaches tier 6 in `ai`
- * and *nothing at all* in robotics, energy, manufacturing or logistics.
+ * and *nothing at all* in robotics, energy, manufacturing or logistics; a
+ * freight network reaches tier 7, the operations run on a platform.
  */
 
-import type { Company } from './company';
+import type { Company, ProductSegment } from './company';
 import { ECONOMIC_NODES, ECONOMIC_NODES_BY_ID } from './nodeGraph';
 import { STARTING_MATURITIES, type EconomicNode, type NodeTier } from './nodes';
 import { ALL_BACKGROUND_IDS, sectorForBackground, type BackgroundId } from './session';
@@ -42,8 +43,9 @@ import type { Sector } from './sectors';
  *
  * A precision-components house reaches tier 3 — it makes parts, not products.
  * A grid developer reaches 6, because a grid developer's product *is* a
- * contract. A bootstrapper reaches 4: enough to sell something, not enough to
- * be safe.
+ * contract. A freight network reaches 7, because line haul is an operation run
+ * on a platform. A bootstrapper reaches 4: enough to sell something, not enough
+ * to be safe.
  */
 export const BACKGROUND_TIER_REACH: Readonly<Record<BackgroundId, NodeTier>> = {
   // ai
@@ -61,19 +63,20 @@ export const BACKGROUND_TIER_REACH: Readonly<Record<BackgroundId, NodeTier>> = {
   // energy
   grid_developer: 6,
   renewables_operator: 5,
-  // logistics
-  freight_network: 6,
-  last_mile: 6,
-  // consumer
+  // logistics: line haul and last mile are operations at tier 7
+  freight_network: 7,
+  last_mile: 7,
+  // consumer: a retail platform runs a brand at tier 7
   direct_brand: 5,
-  retail_platform: 6,
+  retail_platform: 7,
 };
 
 /**
  * The two to four nodes that are the reason a founder chose that card. The
- * **first entry is the starting product** — the line the company opens selling
- * — and its `requires` closure is added on top, so a new company can always
- * make the thing it sells.
+ * **first entry is the starting product** — the node of the composed line in
+ * `BACKGROUND_OPENING_LINE` below, which `startingLineNodeFor` reads — and its
+ * `requires` closure is added on top, so a new company can always make the
+ * thing it sells.
  */
 export const BACKGROUND_SIGNATURE_NODES: Readonly<Record<BackgroundId, readonly string[]>> = {
   frontier_lab: ['sys_frontier_model', 'svc_training_run', 'dat_web_corpus', 'dat_preference_data'],
@@ -93,12 +96,237 @@ export const BACKGROUND_SIGNATURE_NODES: Readonly<Record<BackgroundId, readonly 
   retail_platform: ['app_marketplace', 'svc_brand_retail', 'dat_consumer_behaviour'],
 };
 
-/** The node a background's company opens selling. Total over every background. */
+/* -------------------------------------------------------------------------- */
+/*  The composed opening line                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One slot of a seeded line, as the scenario declares it: which node sits in
+ * the slot and where it comes from.
+ *
+ * `source` is `'self'` for the company's own line on that node (MAKE),
+ * `'market'` for the open market, or the slug of the seeded rival whose
+ * published line supplies it (BUY). Slugs belong to the simulation's world-2
+ * seeds; the contracts layer carries them as plain strings and the scenario
+ * test holds every one against a real published line.
+ */
+export interface W3SeedFill {
+  readonly slotId: string;
+  readonly nodeId: string;
+  readonly source: 'self' | 'market' | string;
+}
+
+/**
+ * One line a company opens selling in world 3, composed on purpose.
+ *
+ * `revenueShare` is the fraction of the seed's declared revenue this line
+ * books; a company's lines sum to one. A slot the `fills` do not name runs on
+ * the table's default from the open market. `published` opens the line to
+ * every other company at its list price from quarter zero.
+ */
+export interface W3SeedLine {
+  readonly nodeId: string;
+  readonly revenueShare: number;
+  /** The customer type the line is aimed at. */
+  readonly segment: ProductSegment;
+  /** The industry the line is aimed at; collapses to `consumer` when the customer is the public. */
+  readonly targetIndustry: Sector;
+  readonly published: boolean;
+  readonly fills: readonly W3SeedFill[];
+}
+
+/**
+ * The composed line each background opens selling: the first signature node,
+ * filled with real sources and aimed at a real cell.
+ *
+ * Every node named in a fill is admissible for its slot and every supplier
+ * slug names a seeded rival whose line on that node is published at quarter
+ * zero; `world3Scenario.test.ts` holds both against the built world. A
+ * background has exactly one opening line, so no fill here may say `'self'`:
+ * a humanoid laboratory owns the policy-model node and may open a line on it,
+ * but until it does the humanoid's model comes from the open market.
+ */
+export const BACKGROUND_OPENING_LINE: Readonly<Record<BackgroundId, W3SeedLine>> = {
+  frontier_lab: {
+    nodeId: 'sys_frontier_model',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'ai',
+    published: true,
+    fills: [
+      { slotId: 'corpus', nodeId: 'dat_web_corpus', source: 'kestrel' },
+      { slotId: 'preference', nodeId: 'dat_preference_data', source: 'kestrel' },
+    ],
+  },
+  // The plan's own description of this line: "your AI software suite on
+  // Basalt's inference API with an agent harness from the open market, aimed
+  // at logistics enterprises".
+  enterprise_ai: {
+    nodeId: 'app_ai_software_suite',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'logistics',
+    published: false,
+    fills: [
+      { slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' },
+      { slotId: 'harness', nodeId: 'svc_agent_harness', source: 'market' },
+    ],
+  },
+  // The owner's chain at quarter zero: Sable's model behind Aletheia's harness,
+  // two companies in two slots of one consumer app.
+  consumer_ai: {
+    nodeId: 'app_consumer_subscription',
+    revenueShare: 1,
+    segment: 'consumer',
+    targetIndustry: 'consumer',
+    published: false,
+    fills: [
+      { slotId: 'model', nodeId: 'svc_inference_api', source: 'sable' },
+      { slotId: 'harness', nodeId: 'svc_agent_harness', source: 'aletheia' },
+      { slotId: 'data', nodeId: 'dat_consumer_behaviour', source: 'lumen' },
+    ],
+  },
+  infrastructure: {
+    nodeId: 'svc_training_run',
+    revenueShare: 1,
+    segment: 'developer_api',
+    targetIndustry: 'ai',
+    published: true,
+    fills: [{ slotId: 'corpus', nodeId: 'dat_web_corpus', source: 'kestrel' }],
+  },
+  bootstrapper: {
+    nodeId: 'app_vertical_ai_app',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'manufacturing',
+    published: false,
+    fills: [
+      { slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' },
+      { slotId: 'harness', nodeId: 'svc_copilot_framework', source: 'sable' },
+    ],
+  },
+  warehouse_robotics: {
+    nodeId: 'sys_warehouse_amr',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'logistics',
+    published: false,
+    fills: [
+      { slotId: 'sensors', nodeId: 'cmp_sensor_suite', source: 'halcyon' },
+      { slotId: 'battery', nodeId: 'sys_battery_pack_lfp', source: 'cinder' },
+      { slotId: 'model', nodeId: 'sys_robot_policy_model', source: 'wrenford' },
+      { slotId: 'harness', nodeId: 'svc_robot_control_stack', source: 'palma' },
+    ],
+  },
+  humanoid_lab: {
+    nodeId: 'sys_humanoid_robot',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'manufacturing',
+    published: false,
+    fills: [
+      { slotId: 'actuators', nodeId: 'cmp_precision_actuator', source: 'ironvale' },
+      { slotId: 'sensors', nodeId: 'cmp_sensor_suite', source: 'halcyon' },
+      { slotId: 'model', nodeId: 'sys_robot_policy_model', source: 'market' },
+      { slotId: 'harness', nodeId: 'svc_robot_control_stack', source: 'palma' },
+    ],
+  },
+  contract_manufacturer: {
+    nodeId: 'sys_advanced_package',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'manufacturing',
+    published: true,
+    fills: [],
+  },
+  precision_components: {
+    nodeId: 'cmp_precision_actuator',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'robotics',
+    published: true,
+    fills: [
+      { slotId: 'structure', nodeId: 'mat_machined_structure', source: 'rasan' },
+      { slotId: 'wafer', nodeId: 'mat_wafer_300mm', source: 'tessellate' },
+    ],
+  },
+  grid_developer: {
+    nodeId: 'svc_power_purchase_agreement',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'ai',
+    published: true,
+    fills: [
+      { slotId: 'interconnect', nodeId: 'svc_grid_interconnect', source: 'grimsby' },
+      { slotId: 'generation', nodeId: 'sys_solar_array', source: 'suryan' },
+    ],
+  },
+  renewables_operator: {
+    nodeId: 'sys_solar_array',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'energy',
+    published: true,
+    fills: [
+      { slotId: 'modules', nodeId: 'mat_solar_module', source: 'suryan' },
+      { slotId: 'power', nodeId: 'cmp_power_electronics', source: 'halcyon' },
+      { slotId: 'transformer', nodeId: 'cmp_transformer', source: 'rasan' },
+    ],
+  },
+  freight_network: {
+    nodeId: 'svc_line_haul',
+    revenueShare: 1,
+    segment: 'enterprise',
+    targetIndustry: 'manufacturing',
+    published: false,
+    fills: [
+      { slotId: 'vehicle', nodeId: 'sys_electric_truck', source: 'harbourline' },
+      { slotId: 'routing', nodeId: 'svc_routing_platform', source: 'overland' },
+    ],
+  },
+  last_mile: {
+    nodeId: 'svc_last_mile',
+    revenueShare: 1,
+    segment: 'consumer',
+    targetIndustry: 'consumer',
+    published: false,
+    fills: [
+      { slotId: 'vehicle', nodeId: 'sys_delivery_van', source: 'dune' },
+      { slotId: 'drones', nodeId: 'sys_autonomous_drone', source: 'sentinel' },
+      { slotId: 'routing', nodeId: 'svc_routing_platform', source: 'overland' },
+    ],
+  },
+  direct_brand: {
+    nodeId: 'sys_consumer_device',
+    revenueShare: 1,
+    segment: 'consumer',
+    targetIndustry: 'consumer',
+    published: true,
+    fills: [
+      { slotId: 'soc', nodeId: 'cmp_consumer_soc', source: 'vasant' },
+      { slotId: 'cell', nodeId: 'cmp_battery_cell_lfp', source: 'cinder' },
+    ],
+  },
+  retail_platform: {
+    nodeId: 'app_marketplace',
+    revenueShare: 1,
+    segment: 'consumer',
+    targetIndustry: 'consumer',
+    published: true,
+    fills: [
+      { slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' },
+      { slotId: 'data', nodeId: 'dat_consumer_behaviour', source: 'lumen' },
+    ],
+  },
+};
+
+/**
+ * The node a background's company opens selling: its composed opening line's
+ * node, which is also the first entry of its signature. Total over every
+ * background.
+ */
 export function startingLineNodeFor(background: BackgroundId): string {
-  const signature = BACKGROUND_SIGNATURE_NODES[background];
-  // Every background declares at least two signature nodes; the fallback is
-  // unreachable and exists only so this function is total.
-  return signature[0] ?? 'app_vertical_ai_app';
+  return BACKGROUND_OPENING_LINE[background].nodeId;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -158,15 +386,18 @@ export function startingNodesFor(background: BackgroundId): readonly string[] {
   return inTableOrder(ids);
 }
 
+/** The highest tier in the table, restated for the reach rule. */
+const TOP_TIER: NodeTier = 7;
+
 /**
  * The same rule for a seeded rival, whose reach comes from how capable the
- * scenario says it is: `round(1 + 5 × capabilityLevel)`, clamped to the tiers
+ * scenario says it is: `round(1 + 6 × capabilityLevel)`, clamped to the tiers
  * that exist. A rival at capability 0 still makes materials; a rival at 1
- * reaches the top of its own chain.
+ * reaches the top of its own chain, operations included.
  */
 export function rivalTierReach(capabilityLevel: number): NodeTier {
-  const raw = Math.round(1 + 5 * capabilityLevel);
-  const clamped = Math.min(6, Math.max(0, raw));
+  const raw = Math.round(1 + 6 * capabilityLevel);
+  const clamped = Math.min(TOP_TIER, Math.max(0, raw));
   return clamped as NodeTier;
 }
 

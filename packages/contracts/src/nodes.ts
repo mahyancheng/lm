@@ -14,11 +14,22 @@
  * `ProductCategorySchema` (`productCategories.ts`). Worlds 1 and 2 keep using
  * those and are frozen; nothing here is imported by world-2 code.
  *
+ * ## Slots, not recipes
+ *
+ * A node's inputs are **slots**. A slot names a *role* — "a model", "a harness",
+ * "a battery pack" — and a real quantity in the role's unit; any node of that
+ * role, or the narrower list the slot `accepts`, can fill it. The table carries
+ * a sensible default per slot, which is the recipe a line runs on until its
+ * owner composes it differently, and the composition itself lives on the
+ * product (`Product.slots`), never on the table. That is what lets a consumer
+ * app run on one company's inference API this quarter and another's next, and
+ * what lets a robot maker choose its cell chemistry at the pack.
+ *
  * ## What the one table deletes
  *
- * - **`share`-of-revenue is gone.** `consumes` carries a real `qtyPerUnit` in
- *   the input's own unit. Quantities and prices are the only currency, so a
- *   bill of materials is arithmetic rather than an assertion.
+ * - **`share`-of-revenue is gone.** A slot carries a real `qtyPerUnit` in the
+ *   input's own unit. Quantities and prices are the only currency, so a bill of
+ *   materials is arithmetic rather than an assertion.
  * - **`segmentReferencePrice` is gone.** A price is judged against its own
  *   node's market price. World 2 judged a wafer fab against the customer-
  *   weighted mean price of every product in the enterprise segment across all
@@ -31,10 +42,10 @@
  *   technology was locked for everybody — including the incumbents already
  *   selling it.
  * - **`canSupply` is gone.** Every node can be sold; that is what a node *is*.
- *   "Nobody buys this" is a property of the graph — no `consumes` edge points
- *   at it and `buyerSegment` is null — not a flag that can contradict the
- *   graph, which is how world 2 ended up declaring `logistics_last_mile` a
- *   required input of a line that could never publish it.
+ * - **A single `buyerSegment` is gone.** A node sells into a **market**: a
+ *   weighted set of customer types and a weighted set of industries. A wafer
+ *   sells to enterprises in the sectors whose slots admit it; an enterprise
+ *   application sells to every industry; a consumer app sells to the public.
  * - **`TechEdge` and `TechTrack` are gone.** A second edge list that can
  *   disagree with `requires` is exactly the drift that made `unlocksCategoryIds`
  *   dead weight. Belief propagates along reverse-`requires`; lanes derive from
@@ -42,19 +53,23 @@
  *
  * ## The two invariants that make the table computable
  *
- * 1. **`consumes` strictly decreases tier.** `tier(input) < tier(node)`,
- *    always. That gives a free topological order, makes the cost roll-up
- *    provably terminating, and means no cycle is even representable.
+ * 1. **A slot's role sits strictly below its owner's tier, for every node of
+ *    that role.** Not only the default: every node a player could ever put in
+ *    the slot. That gives a free topological order for any composition, makes
+ *    the cost roll-up provably terminating, and means no cycle is even
+ *    representable.
  * 2. **`requires` is acyclic and non-increasing in tier.** Same-tier `requires`
  *    are legal: knowledge sits sideways.
  *
- * `economicGraphDefects` proves both, plus reference resolution and sector
- * connectivity, and the contract tests run it against the real table.
+ * `economicGraphDefects` proves both, plus slot well-formedness, reference
+ * resolution, unit agreement, market weights and sector connectivity, and the
+ * contract tests run it against the real table.
  */
 
 import { z } from 'zod';
 import { CalendarYearSchema, QuarterIndexSchema, unitInterval, usd } from './ids';
-import { CapacityKindSchema, ProductSegmentSchema, TechCapabilityAreaSchema } from './company';
+import { CapacityKindSchema, PRODUCT_SEGMENTS, ProductSegmentSchema, TechCapabilityAreaSchema, type ProductSegment } from './company';
+import { NodeRoleSchema, type NodeRole } from './nodeRoles';
 import { SectorSchema, type Sector } from './sectors';
 import { TechVisibilitySchema } from './tech';
 
@@ -63,22 +78,24 @@ import { TechVisibilitySchema } from './tech';
 /* -------------------------------------------------------------------------- */
 
 /**
- * The seven tiers, and the only ordering in the economy. Depth is deliberately
- * capped at seven: a `consumes` chain can be at most seven nodes long, which is
- * both the deepest real supply chain worth modelling and the deepest one a
- * phone can draw.
+ * The eight tiers, and the only ordering in the economy. Depth is deliberately
+ * capped: a chain of slots can be at most eight nodes long, which is both the
+ * deepest real supply chain worth modelling and the deepest one a phone can
+ * draw. Tier 7 exists because every chain the owner drew ends in an
+ * *operation* that takes a tier-6 platform in a slot — line haul on a routing
+ * platform, a brand on a marketplace.
  */
-export const NODE_TIERS = [0, 1, 2, 3, 4, 5, 6] as const;
+export const NODE_TIERS = [0, 1, 2, 3, 4, 5, 6, 7] as const;
 export type NodeTier = (typeof NODE_TIERS)[number];
 
-/** The tier a node sits at. Load-bearing: `consumes` must strictly decrease it. */
+/** The tier a node sits at. Load-bearing: every slot's role must sit strictly below it. */
 export const NodeTierSchema = z
   .number()
   .int()
   .min(0)
-  .max(6)
+  .max(7)
   .describe(
-    'Position in the economy, 0 to 6. 0 raw resource, 1 power, 2 material, 3 component, 4 subsystem, 5 system or finished product, 6 platform, network or service. Every consumes edge must point strictly downward.',
+    'Position in the economy, 0 to 7. 0 raw resource, 1 power, 2 material, 3 component, 4 subsystem, 5 system or finished product, 6 platform, network or service, 7 operation run on a platform. Every slot must admit only nodes of strictly lower tier.',
   );
 
 /** Lane titles the map draws above each tier. Whole words; no jargon. */
@@ -90,6 +107,7 @@ export const NODE_TIER_LABELS: Readonly<Record<NodeTier, string>> = {
   4: 'Subsystem',
   5: 'Product',
   6: 'Platform',
+  7: 'Operation',
 };
 
 /** The one node every other node's `energyMwhPerUnit` is an implicit edge to. */
@@ -101,9 +119,9 @@ export const GRID_POWER_TIER: NodeTier = 1;
 /**
  * The node one unit of the "compute" capacity bucket is. Compute is capital, not
  * a consumed input — a training run occupies accelerators, it does not eat them
- * — so this is deliberately *not* a `consumes` edge and takes no part in the
- * tier rule. It counts for connectivity, because an AI company buying compute is
- * a real dependency on the semiconductor chain.
+ * — so this is deliberately *not* a slot and takes no part in the tier rule. It
+ * counts for connectivity, because an AI company buying compute is a real
+ * dependency on the semiconductor chain.
  */
 export const COMPUTE_CAPACITY_NODE_ID = 'sys_ai_accelerator';
 
@@ -177,8 +195,8 @@ export const NODE_PREFIX_TIERS: Readonly<Record<NodeIdPrefix, readonly NodeTier[
   mat_: [2],
   cmp_: [3],
   sys_: [4, 5, 6],
-  svc_: [3, 4, 5, 6],
-  app_: [5, 6],
+  svc_: [3, 4, 5, 6, 7],
+  app_: [5, 6, 7],
   dat_: [2, 3, 4, 5],
 };
 
@@ -196,22 +214,84 @@ export function nodeIdPrefixSuitsTier(id: string, tier: number): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Edges                                                                      */
+/*  Slots                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export const NodeConsumesSchema = z
+/**
+ * Where a slot is drawn. An `input` feeds the node; a `delivery` slot is the
+ * thing the node ships *on* — software delivered on a device — and the canvas
+ * draws it from the output side so the picture reads model → API → software →
+ * device, left to right.
+ */
+export const NODE_SLOT_KINDS = ['input', 'delivery'] as const;
+
+export const NodeSlotKindSchema = z
+  .enum(NODE_SLOT_KINDS)
+  .describe('"input": a material or service one unit takes in. "delivery": what the node ships on, drawn on the output side of the card.');
+export type NodeSlotKind = z.infer<typeof NodeSlotKindSchema>;
+
+/** The most slots one node may carry. Six is what a 390-point card can label. */
+export const MAX_NODE_SLOTS = 6;
+
+/** The most nodes one slot may narrow itself to. */
+export const MAX_SLOT_ACCEPTS = 6;
+
+export const NodeSlotSchema = z
   .object({
-    nodeId: z.string().min(1).describe('The input node. Its tier must be strictly below this node\'s tier.'),
+    id: z.string().min(1).max(24).describe('Unique within the node: "model", "harness", "copper". The key a product fill names.'),
+    role: NodeRoleSchema,
+    label: z.string().min(1).max(24).describe('The port label on the canvas.'),
     qtyPerUnit: z
       .number()
       .min(0)
-      .describe('How many units of the input, in the input\'s own unitLabel, one unit of this node consumes. A real quantity, never a share of revenue: 8 HBM stacks per package, 1.4 kg of silicon per wafer, 0.022 wafers per die.'),
-    substitutable: z
+      .describe('How many units of the filling node, in the admissible nodes\' shared unitLabel, one unit of this node takes. A real quantity, never a share of revenue: 8 HBM stacks per package, 1.4 kg of silicon per wafer, 0.022 wafers per die.'),
+    required: z.boolean().describe('False when the slot may be left empty and the line still ships. True when a line without it is not this product.'),
+    blocking: z
       .boolean()
-      .describe('True when an open-market or alternative input will do. False when the line cannot be produced at all without a real supplier for this input — the inverse of world 2\'s decorative `required`, which an absent supply entry silently satisfied.'),
+      .describe('True when a required slot nobody in the world can fill — no admissible node owned or licensed by anyone — stops the line shipping anything. False when the open market always has some of it.'),
+    accepts: z
+      .array(z.string().min(1))
+      .max(MAX_SLOT_ACCEPTS)
+      .describe('Node ids this slot narrows itself to. Empty means every node of the role.'),
+    defaultNodeId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('The node a line runs on until its owner chooses otherwise. Null only on a slot that is not required: the default is to leave it empty.'),
+    kind: NodeSlotKindSchema,
   })
-  .describe('One material input, in real quantity. The cost roll-up multiplies qtyPerUnit by the input node\'s market price.');
-export type NodeConsumes = z.infer<typeof NodeConsumesSchema>;
+  .describe('One typed input of a node: a role, a quantity, and the rules for filling it.');
+export type NodeSlot = z.infer<typeof NodeSlotSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*  Market                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** A weight inside a market, normalised so each set sums to one at build. */
+const marketWeight = z.number().min(0).max(1).describe('Share of this node\'s end demand, 0..1. The set sums to one.');
+
+/**
+ * Who buys a node outside the supply chain, in two dimensions: the **customer
+ * type** (who signs) and the **industry** (what business they are in). Demand
+ * is modelled per (node × industry × customer) cell, so a line aimed at
+ * logistics enterprises grows with the logistics sector and a line aimed at the
+ * public grows with consumer appetite.
+ */
+export const NodeMarketSchema = z
+  .object({
+    customers: z
+      .record(ProductSegmentSchema, marketWeight)
+      .describe('Customer types and their share of end demand. Every node carries at least one; an intermediate sells to enterprises.'),
+    industries: z
+      .record(SectorSchema, marketWeight)
+      .describe('Industries buying this node and their share. When the customer is the public this collapses to the consumer sector: selling to the public has no industry.'),
+  })
+  .describe('Who buys a node: weighted customer types times weighted industries.');
+export type NodeMarket = z.infer<typeof NodeMarketSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*  Edges                                                                      */
+/* -------------------------------------------------------------------------- */
 
 /** Who reached a node first. Records history; it gates nothing. */
 export const NodePioneerSchema = z
@@ -242,6 +322,7 @@ export const EconomicNodeSchema = z
     blurb: z.string().min(1).max(140).describe('One line saying what this is and why anyone buys it.'),
     sector: SectorSchema,
     tier: NodeTierSchema,
+    role: NodeRoleSchema,
     maturity: NodeMaturitySchema,
 
     /* --- unit ----------------------------------------------------------- */
@@ -268,10 +349,10 @@ export const EconomicNodeSchema = z
       .array(z.string())
       .max(4)
       .describe('Node ids whose ownership a company must hold before it may produce this one. Replaces both TechNode.dependencies and ProductCategory.requiresNodeIds. Acyclic and non-increasing in tier; same-tier entries are legal because knowledge sits sideways. Empty for a commodity.'),
-    consumes: z
-      .array(NodeConsumesSchema)
-      .max(5)
-      .describe('Material inputs in real quantity. Every entry must name a node of strictly lower tier.'),
+    slots: z
+      .array(NodeSlotSchema)
+      .max(MAX_NODE_SLOTS)
+      .describe('Typed inputs in real quantity. Every node of every slot\'s role must sit at a strictly lower tier.'),
 
     /* --- production ------------------------------------------------------ */
     capacityKind: CapacityKindSchema,
@@ -289,7 +370,7 @@ export const EconomicNodeSchema = z
       .number()
       .min(0)
       .describe(
-        'Megawatt-hours one unit consumes. An implicit consumes edge on res_grid_power priced at that node\'s market price — one field instead of ninety hand-authored wires, and it makes every company in the world an energy customer. Must be zero for tiers 0 and 1.',
+        'Megawatt-hours one unit draws. An implicit slot on res_grid_power priced at that node\'s market price — one field instead of ninety hand-authored wires, and it makes every company in the world an energy customer. Must be zero for tiers 0 and 1.',
       ),
     supportCostShare: unitInterval(
       'Support and delivery cost as a share of UNIT COST, not of revenue. Charging it on revenue would make unit cost depend on the price about to be set from unit cost, which is a circularity.',
@@ -323,13 +404,11 @@ export const EconomicNodeSchema = z
     createdQuarter: QuarterIndexSchema.describe('Quarter the node entered the graph.'),
 
     /* --- market ---------------------------------------------------------- */
-    buyerSegment: ProductSegmentSchema.nullable().describe(
-      'Who buys this outside the supply chain, or NULL when nobody does. A wafer has no end customers at all: its only demand is other companies\' consumes edges. This one nullable field is what kills most of world 2\'s segment-mean absurdity.',
-    ),
+    market: NodeMarketSchema,
     endDemandBaseUnits: z
       .number()
       .min(0)
-      .describe('World-wide end demand in units per quarter at neutral conditions. Replaces seedPool and baseAddRate with an honest market size. Zero whenever buyerSegment is null.'),
+      .describe('World-wide end demand in units per quarter at neutral conditions, split across the market\'s cells. Replaces seedPool and baseAddRate with an honest market size. Positive on every node: an intermediate still has buyers the cast does not model.'),
     elasticity: z.number().min(0).max(3).describe('Price elasticity against this node\'s own market price. Higher means buyers leave faster over a price rise.'),
     churnBand: NodeChurnBandSchema,
     dataYieldPerUnitQuarter: z
@@ -338,17 +417,97 @@ export const EconomicNodeSchema = z
       .describe('Petabytes of usable customer data one unit generates per quarter. The owner asked for data collection to be first class: this is where a product earns the data that improves the next one.'),
     dataSensitivity: unitInterval('How exposed the data this node generates is to regulation and to reputational damage when it leaks. Zero for a node that observes nothing personal.'),
   })
-  .describe('One node in the world-3 economy: a thing that can be produced, priced, consumed by other nodes and, sometimes, sold to end customers.');
+  .describe('One node in the world-3 economy: a thing that can be produced, priced, slotted into other nodes and sold into a market.');
 export type EconomicNode = z.infer<typeof EconomicNodeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/*  Slot readers                                                               */
+/* -------------------------------------------------------------------------- */
+
+/** Index by id. Pure; callers pass whichever table they are checking. Insertion order is table order. */
+export function indexNodes(nodes: readonly EconomicNode[]): ReadonlyMap<string, EconomicNode> {
+  return new Map(nodes.map((node) => [node.id, node] as const));
+}
+
+/** Every slot of a node, in the table's order. Named so a reader never touches the field bare. */
+export function slotsOf(node: EconomicNode): readonly NodeSlot[] {
+  return node.slots;
+}
+
+/** One slot by id, or undefined. */
+export function slotById(node: EconomicNode, slotId: string): NodeSlot | undefined {
+  return node.slots.find((slot) => slot.id === slotId);
+}
+
+/**
+ * Every node that may fill a slot, in table order: the `accepts` list when the
+ * slot narrows itself, otherwise every node of the slot's role. Ids the table
+ * does not carry are dropped rather than returned, so a caller can price every
+ * entry it gets back.
+ */
+export function admissibleNodeIds(node: EconomicNode, slot: NodeSlot, byId: ReadonlyMap<string, EconomicNode>): readonly string[] {
+  if (slot.accepts.length > 0) {
+    const wanted = new Set(slot.accepts);
+    const out: string[] = [];
+    for (const candidate of byId.values()) if (wanted.has(candidate.id) && candidate.id !== node.id) out.push(candidate.id);
+    return out;
+  }
+  const out: string[] = [];
+  for (const candidate of byId.values()) if (candidate.role === slot.role && candidate.id !== node.id) out.push(candidate.id);
+  return out;
+}
+
+/**
+ * One line of a node's default recipe: the slot, the node its default names,
+ * the quantity, and whether an unfillable slot stops the line.
+ *
+ * `blocking` carries exactly what the old `substitutable: false` meant, so a
+ * reader that walked `consumes` and read `!substitutable` reads `blocking` here
+ * and behaves identically on the default recipe.
+ */
+export interface DefaultInput {
+  readonly slotId: string;
+  readonly nodeId: string;
+  readonly qtyPerUnit: number;
+  readonly blocking: boolean;
+}
+
+/**
+ * The default recipe: every slot whose default is a node, in slot order. A slot
+ * whose default is empty (an optional delivery device, an evaluation nobody
+ * ordered) is not part of it. This is what the bill-of-materials bands are
+ * judged on and what the map draws before a line is composed.
+ */
+export function defaultInputsOf(node: EconomicNode): readonly DefaultInput[] {
+  const out: DefaultInput[] = [];
+  for (const slot of node.slots) {
+    if (slot.defaultNodeId === null) continue;
+    out.push({ slotId: slot.id, nodeId: slot.defaultNodeId, qtyPerUnit: slot.qtyPerUnit, blocking: slot.blocking });
+  }
+  return out;
+}
+
+/**
+ * The customer type carrying the most weight in a node's market; ties break
+ * in `PRODUCT_SEGMENTS` order. The one reading a node's market collapses to
+ * where a single segment is wanted — a launch's default segment, a data weight.
+ */
+export function primaryCustomerOf(node: EconomicNode): ProductSegment {
+  let best: ProductSegment = 'enterprise';
+  let bestWeight = -1;
+  for (const segment of PRODUCT_SEGMENTS) {
+    const weight = node.market.customers[segment] ?? 0;
+    if (weight > bestWeight) {
+      best = segment;
+      bestWeight = weight;
+    }
+  }
+  return best;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Graph integrity                                                            */
 /* -------------------------------------------------------------------------- */
-
-/** Index by id. Pure; callers pass whichever table they are checking. */
-export function indexNodes(nodes: readonly EconomicNode[]): ReadonlyMap<string, EconomicNode> {
-  return new Map(nodes.map((node) => [node.id, node] as const));
-}
 
 /**
  * (1) Every id a node references resolves to a node in the same table, no node
@@ -361,26 +520,29 @@ export function nodeReferencesResolve(nodes: readonly EconomicNode[]): boolean {
     for (const id of node.requires) {
       if (id === node.id || !byId.has(id)) return false;
     }
-    for (const input of node.consumes) {
-      if (input.nodeId === node.id || !byId.has(input.nodeId)) return false;
+    for (const slot of node.slots) {
+      for (const id of slot.accepts) if (id === node.id || !byId.has(id)) return false;
+      if (slot.defaultNodeId !== null && (slot.defaultNodeId === node.id || !byId.has(slot.defaultNodeId))) return false;
     }
   }
   return true;
 }
 
 /**
- * (2) `consumes` strictly decreases tier, and the implicit energy edge obeys
- * the same rule: a node with `energyMwhPerUnit > 0` consumes `res_grid_power`
- * at tier 1, so it must itself sit at tier 2 or above.
+ * (2) Every node of a slot's role sits strictly below the slot's owner, and the
+ * implicit energy edge obeys the same rule: a node with `energyMwhPerUnit > 0`
+ * draws `res_grid_power` at tier 1, so it must itself sit at tier 2 or
+ * above. Checked at the role level, not the default: a player may fill a slot
+ * with any node of the role.
  */
-export function consumesStrictlyDecreasesTier(nodes: readonly EconomicNode[]): boolean {
-  const byId = indexNodes(nodes);
+export function slotRolesStrictlyDecreaseTier(nodes: readonly EconomicNode[]): boolean {
   for (const node of nodes) {
     if (node.energyMwhPerUnit > 0 && node.tier <= GRID_POWER_TIER) return false;
-    for (const input of node.consumes) {
-      const upstream = byId.get(input.nodeId);
-      if (upstream === undefined) return false;
-      if (upstream.tier >= node.tier) return false;
+    for (const slot of node.slots) {
+      for (const candidate of nodes) {
+        if (candidate.role !== slot.role) continue;
+        if (candidate.tier >= node.tier) return false;
+      }
     }
   }
   return true;
@@ -389,7 +551,7 @@ export function consumesStrictlyDecreasesTier(nodes: readonly EconomicNode[]): b
 /**
  * (3) `requires` is acyclic and never points upward in tier. Same-tier edges
  * are legal, so acyclicity is proved by a depth-first walk rather than implied
- * by the tier ordering as it is for `consumes`.
+ * by the tier ordering as it is for slots.
  */
 export function requiresIsAcyclicAndNonIncreasing(nodes: readonly EconomicNode[]): boolean {
   const byId = indexNodes(nodes);
@@ -419,10 +581,12 @@ export function requiresIsAcyclicAndNonIncreasing(nodes: readonly EconomicNode[]
 
 /**
  * (4) No orphan sector and no isolated node. Every sector carries nodes; every
- * sector is wired to at least one other sector by a `consumes` or `requires`
- * edge in either direction; and every node above tier 0 has at least one edge
- * touching it. World 2's catalogue was ten weakly-connected components with
- * eight fully isolated rows, which is the shape this refuses.
+ * sector is wired to at least one other sector by a slot or `requires` edge in
+ * either direction; and every node above tier 0 has at least one edge touching
+ * it. A slot links its owner to **every** admissible node, not only the default:
+ * a harness nobody's default names is still wired to every app that could run
+ * on it. World 2's catalogue was ten weakly-connected components with eight
+ * fully isolated rows, which is the shape this refuses.
  */
 export function sectorsAreConnected(nodes: readonly EconomicNode[], sectors: readonly Sector[]): boolean {
   const byId = indexNodes(nodes);
@@ -441,7 +605,7 @@ export function sectorsAreConnected(nodes: readonly EconomicNode[], sectors: rea
   };
 
   for (const node of nodes) {
-    for (const input of node.consumes) link(node, input.nodeId);
+    for (const slot of node.slots) for (const id of admissibleNodeIds(node, slot, byId)) link(node, id);
     for (const required of node.requires) link(node, required);
     // The implicit energy edge is a real edge for connectivity too, and so is
     // the compute bucket: an AI line's accelerators come from somebody's fab.
@@ -461,10 +625,33 @@ export function sectorsAreConnected(nodes: readonly EconomicNode[], sectors: rea
   return true;
 }
 
+/** True when every weight is finite and non-negative and at least one is positive. */
+function weightsHavePositiveEntry(weights: Readonly<Record<string, number | undefined>>): boolean {
+  let positive = false;
+  for (const value of Object.values(weights)) {
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value < 0) return false;
+    if (value > 0) positive = true;
+  }
+  return positive;
+}
+
 /**
  * Every defect in one pass, as player-readable lines. Empty means the table is
- * sound. The four predicates above answer yes or no; this says what is wrong,
- * which is what a failing test needs to print.
+ * sound. The predicates above answer yes or no; this says what is wrong, which
+ * is what a failing test needs to print.
+ *
+ * The slot rules, in the order they are checked per slot:
+ *
+ * 1. every `accepts` id exists, is not the owner, and carries the slot's role;
+ * 2. the default is admissible: an existing node of the role, inside `accepts`
+ *    when `accepts` narrows;
+ * 3. `defaultNodeId === null` only on a slot that is not required;
+ * 4. `blocking` only on a required slot;
+ * 5. slot ids are unique within the node;
+ * 6. **every** node of the slot's role sits strictly below the owner's tier;
+ * 7. every admissible node of the slot shares one `unitLabel`, so `qtyPerUnit`
+ *    means the same thing whichever node fills it.
  */
 export function economicGraphDefects(nodes: readonly EconomicNode[], sectors: readonly Sector[]): readonly string[] {
   const defects: string[] = [];
@@ -479,8 +666,9 @@ export function economicGraphDefects(nodes: readonly EconomicNode[], sectors: re
     if (node.saleKind !== 'unit' && node.lifetimeQuarters !== null) defects.push(`${node.id}: lifetimeQuarters set on a ${node.saleKind} node`);
     if (node.saleKind === 'contract' && node.contractQuarters === null) defects.push(`${node.id}: contract sale with no contractQuarters`);
     if (node.saleKind !== 'contract' && node.contractQuarters !== null) defects.push(`${node.id}: contractQuarters set on a ${node.saleKind} node`);
-    if (node.buyerSegment === null && node.endDemandBaseUnits > 0) defects.push(`${node.id}: end demand with no buyer segment`);
-    if (node.buyerSegment !== null && node.endDemandBaseUnits <= 0) defects.push(`${node.id}: buyer segment with no end demand`);
+    if (!weightsHavePositiveEntry(node.market.customers)) defects.push(`${node.id}: market names no customer type`);
+    if (!weightsHavePositiveEntry(node.market.industries)) defects.push(`${node.id}: market names no industry`);
+    if (node.endDemandBaseUnits <= 0) defects.push(`${node.id}: no end demand`);
     if (node.energyMwhPerUnit > 0 && node.tier <= GRID_POWER_TIER) defects.push(`${node.id}: tier ${node.tier} cannot consume grid power`);
     if (node.churnBand.min > node.churnBand.max) defects.push(`${node.id}: churn band is inverted`);
     if (node.researchCostRangeUsd[0] > node.researchCostRangeUsd[1]) defects.push(`${node.id}: research cost range is inverted`);
@@ -493,11 +681,36 @@ export function economicGraphDefects(nodes: readonly EconomicNode[], sectors: re
       else if (upstream === undefined) defects.push(`${node.id}: requires unknown node ${id}`);
       else if (upstream.tier > node.tier) defects.push(`${node.id}: requires ${id} at a higher tier`);
     }
-    for (const input of node.consumes) {
-      const upstream = byId.get(input.nodeId);
-      if (input.nodeId === node.id) defects.push(`${node.id}: consumes itself`);
-      else if (upstream === undefined) defects.push(`${node.id}: consumes unknown node ${input.nodeId}`);
-      else if (upstream.tier >= node.tier) defects.push(`${node.id}: consumes ${input.nodeId} at tier ${upstream.tier}, not below ${node.tier}`);
+
+    const slotIds = new Set<string>();
+    for (const slot of node.slots) {
+      const where = `${node.id}.${slot.id}`;
+      if (slotIds.has(slot.id)) defects.push(`${where}: duplicate slot id`);
+      slotIds.add(slot.id);
+
+      for (const id of slot.accepts) {
+        const accepted = byId.get(id);
+        if (id === node.id) defects.push(`${where}: accepts itself`);
+        else if (accepted === undefined) defects.push(`${where}: accepts unknown node ${id}`);
+        else if (accepted.role !== slot.role) defects.push(`${where}: accepts ${id}, whose role ${accepted.role} is not ${slot.role}`);
+      }
+
+      const admissible = admissibleNodeIds(node, slot, byId);
+      if (admissible.length === 0) defects.push(`${where}: no node can fill it`);
+      if (slot.defaultNodeId === null) {
+        if (slot.required) defects.push(`${where}: required slot with no default`);
+      } else if (!admissible.includes(slot.defaultNodeId)) {
+        defects.push(`${where}: default ${slot.defaultNodeId} is not admissible`);
+      }
+      if (slot.blocking && !slot.required) defects.push(`${where}: blocking slot that is not required`);
+
+      for (const candidate of nodes) {
+        if (candidate.role !== slot.role) continue;
+        if (candidate.tier >= node.tier) defects.push(`${where}: role ${slot.role} carries ${candidate.id} at tier ${candidate.tier}, not below ${node.tier}`);
+      }
+
+      const units = new Set(admissible.map((id) => byId.get(id)?.unitLabel ?? ''));
+      if (units.size > 1) defects.push(`${where}: admissible nodes disagree on unit (${[...units].join(', ')})`);
     }
   }
 
@@ -514,17 +727,17 @@ export function economicGraphDefects(nodes: readonly EconomicNode[], sectors: re
 /* -------------------------------------------------------------------------- */
 
 /**
- * What one unit's declared inputs cost at base prices, energy included.
+ * What one unit's default recipe costs at base prices, energy included.
  *
  * This is the *catalogue* roll-up: it uses `basePriceUsd` rather than the live
  * market price, so it is a pure function of the table and is what the contract
  * tests judge the bill of materials band against. The engine's own roll-up in
  * `@frontier/simulation` is the same arithmetic against the session's stored
- * node prices, memoised per resolution.
+ * node prices and the line's own fills, memoised per resolution.
  */
 export function billOfMaterialsUsd(node: EconomicNode, byId: ReadonlyMap<string, EconomicNode>): number {
   let total = 0;
-  for (const input of node.consumes) {
+  for (const input of defaultInputsOf(node)) {
     const upstream = byId.get(input.nodeId);
     if (upstream === undefined) continue;
     total += input.qtyPerUnit * upstream.basePriceUsd;
@@ -686,8 +899,12 @@ export type UnitCostSourceKind = (typeof UNIT_COST_SOURCE_KINDS)[number];
  * did. Never persisted in session state: derived every time it is asked for.
  */
 export interface UnitCostLine {
-  /** Stable key: an input's node id, or one of `power`, `labour`, `capacity`, `support`, `licence`. */
+  /** Stable key: `slot:${slotId}` for an input, or one of `power`, `labour`, `capacity`, `support`, `licence:${nodeId}`. */
   readonly key: string;
+  /** The slot this row fills, on an input row. Absent on a conversion row. */
+  readonly slotId?: string;
+  /** The node in that slot, or null when the slot is left empty. Absent on a conversion row. */
+  readonly nodeId?: string | null;
   /** What the row says on screen, e.g. "Wafer, 300mm" or "Power". */
   readonly label: string;
   readonly unitsPerUnit: number;
@@ -745,7 +962,7 @@ export interface UnitCostResult {
   readonly lines: readonly UnitCostLine[];
   /** Whole percent of the input bill this company makes rather than buys. */
   readonly madeInHouseSharePct: number;
-  /** Non-substitutable inputs with no supplier and no producer anywhere: the line ships nothing until one exists. */
+  /** Blocking inputs with no supplier and no producer anywhere: the line ships nothing until one exists. */
   readonly blockedInputNodeIds: readonly string[];
 }
 

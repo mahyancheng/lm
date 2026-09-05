@@ -258,7 +258,7 @@ export function supplyBySector(state: SessionState): Record<Sector, number> {
  * How well supplied each sector is, 0 (nothing) to 1 (enough for everyone who
  * calls on it). `2s / (s + c·d)` is exactly 1 when supply equals the coupled
  * demand of the sectors downstream, and saturates rather than rewarding surplus.
- * A sector nobody consumes is always 1: there is nothing for it to be short of.
+ * A sector nobody buys from is always 1: there is nothing for it to be short of.
  */
 export function tightnessBySector(state: SessionState, supply: Record<Sector, number>): Record<Sector, number> {
   const tightness = {} as Record<Sector, number>;

@@ -29,7 +29,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Company, Product, ResearchProject, ResolverContext, SessionState } from '@frontier/contracts';
-import { canProduce, economicNodeById, holdsNode } from '@frontier/contracts';
+import { canProduce, defaultInputsOf, economicNodeById, holdsNode, primaryCustomerOf, type EconomicNode } from '@frontier/contracts';
 import { createRng } from '@frontier/shared';
 import { createDefaultEngine } from '../src/engine';
 import { createWorld3Session } from '../src/scenario/world3';
@@ -70,6 +70,7 @@ const CORPUS = 'dat_web_corpus';
 const PACKAGE = 'sys_advanced_package';
 const HBM = 'cmp_hbm_stack';
 const SUBSCRIPTION = 'app_consumer_subscription';
+const DEVICE = 'sys_consumer_device';
 
 describe('the table these tests are pinned to', () => {
   it('still declares the sectors and edges they quote', () => {
@@ -77,12 +78,13 @@ describe('the table these tests are pinned to', () => {
     expect(economicNodeById(ACTUATOR)?.sector).toBe('robotics');
     expect(economicNodeById(FRONTIER_MODEL)?.sector).toBe('ai');
     expect(economicNodeById(CORPUS)?.sector).toBe('ai');
-    // The model consumes a corpus. That is the input world 2's frontier model
+    // The model takes a corpus in its corpus slot. That is the input world 2's frontier model
     // never had: it declared none at all.
-    expect(economicNodeById(FRONTIER_MODEL)?.consumes.some((input) => input.nodeId === CORPUS)).toBe(true);
-    expect(economicNodeById(PACKAGE)?.consumes.some((input) => input.nodeId === HBM)).toBe(true);
+    expect(defaultInputsOf(economicNodeById(FRONTIER_MODEL) as EconomicNode).some((input) => input.nodeId === CORPUS)).toBe(true);
+    expect(defaultInputsOf(economicNodeById(PACKAGE) as EconomicNode).some((input) => input.nodeId === HBM)).toBe(true);
     expect(economicNodeById(FRONTIER_MODEL)?.dataRequiredPb).toBeGreaterThan(0);
-    expect(economicNodeById(SUBSCRIPTION)).toMatchObject({ sector: 'consumer', buyerSegment: 'consumer', saleKind: 'recurring' });
+    expect(economicNodeById(SUBSCRIPTION)).toMatchObject({ sector: 'consumer', saleKind: 'recurring' });
+    expect(primaryCustomerOf(economicNodeById(SUBSCRIPTION) as EconomicNode)).toBe('consumer');
     // A model requires the corpus and the training run; that is what a pause is about.
     expect(economicNodeById(FRONTIER_MODEL)?.requires.length).toBeGreaterThan(0);
   });
@@ -113,7 +115,7 @@ function lineOn(nodeId: string, units: number, priceUsd: number, craft = 0.6): P
   return {
     id: `prd_${nodeId}`,
     name: nodeId,
-    segment: economicNodeById(nodeId)?.buyerSegment ?? 'enterprise',
+    segment: primaryCustomerOf(economicNodeById(nodeId) as EconomicNode),
     nodeId,
     pricePerSeat: priceUsd,
     activeCustomers: units,
@@ -245,6 +247,8 @@ describe('the production rule', () => {
         launchMarketingUsd: 0,
         targetQuality: 0.5,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       },
       { companyId: company.id, characterId: company.ceoCharacterId ?? 'chr_x', playerId: company.controllerPlayerId, confirmedByHuman: true },
       new BatchBudget(),
@@ -268,7 +272,8 @@ describe('the production rule', () => {
     const cost = unitCostOf(state, company, PACKAGE, createNodeCostCache(state));
     // The memory is on the bill of materials, priced, and the line is not
     // blocked: somebody in the world owns it, so it can be had.
-    const hbmLine = cost.lines.find((line) => line.key === HBM);
+    const hbmLine = cost.lines.find((line) => line.key === 'slot:memory');
+    expect(hbmLine?.nodeId).toBe(HBM);
     expect(hbmLine?.amountUsd).toBeGreaterThan(0);
     expect(cost.blockedInputNodeIds).not.toContain(HBM);
   });
@@ -412,8 +417,8 @@ describe('achieving a node', () => {
     company.products = [lineOn(PACKAGE, 100, 400_000), lineOn(HBM, 1000, 3_000)];
     const made = unitCostOf(state, company, PACKAGE, createNodeCostCache(state));
 
-    const boughtLine = bought.lines.find((line) => line.key === HBM);
-    const madeLine = made.lines.find((line) => line.key === HBM);
+    const boughtLine = bought.lines.find((line) => line.key === 'slot:memory');
+    const madeLine = made.lines.find((line) => line.key === 'slot:memory');
     expect(boughtLine?.sourceKind).toBe('market');
     expect(madeLine?.sourceKind).toBe('make');
     // Strictly cheaper, and cheaper by exactly what the market row cost less
@@ -441,14 +446,15 @@ describe('achieving a node', () => {
 describe('customer data', () => {
   it('accrues from what was served and decays every quarter', () => {
     const { state, company } = world3();
-    // A consumer subscription observes everything and eats no dataset, which is
-    // the clean case: what is left at the end of the quarter is what was
-    // collected, less the decay.
-    const node = economicNodeById(SUBSCRIPTION);
+    // CHANGED DELIBERATELY, slots: every consumer application now learns from a
+    // behaviour-data slot, so the clean case — observes everything, eats no
+    // dataset — is the consumer device: what is left at the end of the quarter
+    // is what was collected, less the decay.
+    const node = economicNodeById(DEVICE);
     expect(node?.dataYieldPerUnitQuarter).toBeGreaterThan(0);
-    expect(node?.consumes.some((input) => input.nodeId.startsWith('dat_'))).toBe(false);
+    expect(defaultInputsOf(node as EconomicNode).some((input) => input.nodeId.startsWith('dat_'))).toBe(false);
     company.dataAssets = [];
-    company.products = [lineOn(SUBSCRIPTION, 20_000_000, 16)];
+    company.products = [lineOn(DEVICE, 20_000_000, 380)];
 
     const generated = generatedPetabytes(state, company, node as NonNullable<typeof node>, 20_000_000, 'consumer');
     expect(generated).toBeGreaterThan(0);
@@ -510,16 +516,16 @@ describe('customer data', () => {
     const { ctx } = recorder();
     priceNodes(state, ctx);
     const bought = unitCostOf(state, company, FRONTIER_MODEL, createNodeCostCache(state));
-    const boughtCorpus = bought.lines.find((line) => line.key === CORPUS);
+    const boughtCorpus = bought.lines.find((line) => line.key === 'slot:corpus');
     expect(boughtCorpus?.amountUsd).toBeGreaterThan(0);
 
     // A pool big enough to cover the whole draw: the corpus line goes to zero
     // and is marked as made, which is what owning your own data means.
     const perUnit = petabytesPerUnit(CORPUS);
-    const qty = economicNodeById(FRONTIER_MODEL)?.consumes.find((input) => input.nodeId === CORPUS)?.qtyPerUnit ?? 0;
+    const qty = defaultInputsOf(economicNodeById(FRONTIER_MODEL) as EconomicNode).find((input) => input.nodeId === CORPUS)?.qtyPerUnit ?? 0;
     company.dataAssets = [{ sector: 'ai', petabytes: qty * perUnit * 10 }];
     const free = unitCostOf(state, company, FRONTIER_MODEL, createNodeCostCache(state));
-    const freeCorpus = free.lines.find((line) => line.key === CORPUS);
+    const freeCorpus = free.lines.find((line) => line.key === 'slot:corpus');
     expect(freeCorpus?.amountUsd).toBe(0);
     expect(freeCorpus?.sourceKind).toBe('make');
     expect(free.unitCostUsd).toBeLessThan(bought.unitCostUsd);

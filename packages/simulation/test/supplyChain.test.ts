@@ -313,6 +313,12 @@ describe('resolveSupplyLedger and cost/revenue reconciliation', () => {
 
   it('world 3 inverts it: the open market is priced, and a named supplier undercuts it', () => {
     const state = createWorld3Session();
+    // CHANGED DELIBERATELY, measured seed: the seed now opens at the indices
+    // its balance implies, and a seller's own energy factor rides the energy
+    // sector's. The claim here is about the two routes at balance, so the
+    // borrowed world is opened neutral.
+    delete state.nodePrices;
+    delete state.sectorPrices;
     for (const company of state.companies) company.products = [];
     const buyer = state.companies[0] as Company;
     const supplier = state.companies[1] as Company;
@@ -339,7 +345,7 @@ describe('resolveSupplyLedger and cost/revenue reconciliation', () => {
 
     buyer.products = [wafer(WAFER, 14_000)];
     const open = unitCostOf(state, buyer, WAFER);
-    const chemicals = open.lines.find((line) => line.key === CHEMICALS);
+    const chemicals = open.lines.find((line) => line.key === 'slot:chemicals');
     // The open market is not free any more: it is the node's settled price plus
     // the premium a spot buyer pays for not having a contract.
     expect(chemicals?.sourceKind).toBe('market');
@@ -351,14 +357,15 @@ describe('resolveSupplyLedger and cost/revenue reconciliation', () => {
     supplier.products = [
       { ...wafer(CHEMICALS, 600), supplyTerms: { openToAll: true, pricePerUnitUsd: 540, exclusiveCustomerIds: [], blockedCustomerIds: [] } },
     ];
+    // CHANGED DELIBERATELY, fills: world 3 names a supplier on the slot.
     buyer.products = [
       {
         ...wafer(WAFER, 14_000),
-        supply: [{ inputCategoryId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null }],
+        slots: [{ slotId: 'chemicals', nodeId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null, changedQuarter: null }],
       },
     ];
     const contracted = unitCostOf(state, buyer, WAFER);
-    expect(contracted.lines.find((line) => line.key === CHEMICALS)?.sourceKind).toBe('buy');
+    expect(contracted.lines.find((line) => line.key === 'slot:chemicals')?.sourceKind).toBe('buy');
     expect(contracted.unitCostUsd).toBeLessThan(open.unitCostUsd);
   });
 
@@ -386,7 +393,7 @@ describe('capacity rationing at the supplier', () => {
     const supplier = companyOf(state, SUPPLIER);
     const supplierProduct = productOf(supplier);
     // Starve the supplier's own capacity so almost nothing is spare: its own
-    // demand already consumes it, and Ironvale's draw cannot be filled whole.
+    // demand already takes it, and Ironvale's draw cannot be filled whole.
     supplier.capacity = { plantUsd: 1, fleetUsd: 0, gridUsd: 0 };
     supplierProduct.activeCustomers = 1; // trivial own usage, capacity is still ~0
 
@@ -746,6 +753,8 @@ describe('launch_product.supply', () => {
           launchMarketingUsd: 100_000,
           targetQuality: 0.7,
           supply: [{ inputCategoryId: 'manufacturing_sensors', supplierCompanyId: SUPPLIER, supplierProductId: supplierProduct.id }],
+          targetIndustry: null,
+          slots: [],
         },
         BUYER,
       ),
@@ -772,6 +781,8 @@ describe('launch_product.supply', () => {
           launchMarketingUsd: 100_000,
           targetQuality: 0.7,
           supply: [{ inputCategoryId: 'manufacturing_sensors', supplierCompanyId: 'cmp_does_not_exist', supplierProductId: 'prd_does_not_exist' }],
+          targetIndustry: null,
+          slots: [],
         },
         BUYER,
       ),

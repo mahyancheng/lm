@@ -51,6 +51,8 @@ export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
   allocate_compute: '/company',
   set_supply_terms: '/products',
   choose_supplier: '/products',
+  fill_slot: '/products',
+  set_target_market: '/products',
   raise_round: '/capital',
   issue_debt: '/capital',
   buyback: '/capital',

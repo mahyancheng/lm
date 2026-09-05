@@ -342,9 +342,10 @@ describe('the lookup catalogue', () => {
   // Eleven since the node economy: `unit_cost` and `entry_path` answer "what
   // does this cost me to build" and "what do I need to research to enter
   // robotics", the two questions world 2's catalogue vocabulary could not put.
-  // Appended at the end, which is the whole point of the assertion below being
-  // an ordered list rather than a set.
-  it('names eleven kinds and bounds a turn to four of them', () => {
+  // Twelve since the composed line: `slot_candidates` answers "what could go
+  // in this slot, from whom, at what price". Appended at the end, which is the
+  // whole point of the assertion below being an ordered list rather than a set.
+  it('names twelve kinds and bounds a turn to four of them', () => {
     expect([...LOOKUP_KINDS]).toEqual([
       'compute_market',
       'acquisition_targets',
@@ -357,6 +358,7 @@ describe('the lookup catalogue', () => {
       'customers',
       'unit_cost',
       'entry_path',
+      'slot_candidates',
     ]);
     expect(MAX_LOOKUPS_PER_TURN).toBe(4);
     expect(MAX_LOOKUP_ROWS).toBe(12);
@@ -375,6 +377,7 @@ describe('the lookup catalogue', () => {
       { kind: 'customers', productId: 'prd_frontier_model_api' },
       { kind: 'unit_cost', nodeId: 'sys_ai_accelerator' },
       { kind: 'entry_path', sector: 'robotics', nodeId: '' },
+      { kind: 'slot_candidates', productId: 'prd_agent_copilot', nodeId: 'app_ai_software_suite', slotId: 'model' },
     ];
     for (const request of requests) {
       const parsed = LookupRequestSchema.safeParse(request);

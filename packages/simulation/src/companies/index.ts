@@ -62,7 +62,6 @@ export {
   NPC_DEFAULT_SUPPLY_MARGIN,
   SUPPLY_CUT_OFF_NOTICE_QUARTERS,
   SUPPLY_PRICE_FACTOR_BOUNDS,
-  SWITCH_QUALITY_FACTOR,
   chooseSupplierDefault,
   customersFor,
   defaultSupplyTerms,
@@ -137,6 +136,8 @@ export {
   seedCapitalUsd,
 } from './entrants';
 export type { AdministrationRow, MarketEntry } from './entrants';
+export { NPC_SLOT_SWITCH_THRESHOLD, NPC_SUPPLY_REPRICE_THRESHOLD, npcFillFor, npcFillsFor, npcSupplyTermsFor, scoredSlotOptions } from './npcSlots';
+export type { ScoredSlotOption } from './npcSlots';
 export {
   GRUDGE_ACTION_THRESHOLD,
   GRUDGE_POACH_AGGRESSION,

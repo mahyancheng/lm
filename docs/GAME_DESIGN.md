@@ -179,7 +179,7 @@ control of their own company. A smaller company can become indispensable to
 governments. Another founder can own minority stakes throughout the industry and
 exercise disproportionate board influence.
 
-The composite **Founder Index** consumes percentiles, never raw dollars —
+The composite **Founder Index** is built from percentiles, never raw dollars —
 otherwise wealth eventually overwhelms every other dimension and the composite
 stops saying anything:
 

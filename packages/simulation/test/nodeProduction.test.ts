@@ -98,6 +98,12 @@ function lineOn(nodeId: string, units: number, priceUsd: number): Product {
  */
 function soloWorld(nodeId: string, units: number, priceUsd: number, plantUsd: number): { state: SessionState; company: Company } {
   const state = createWorld3Session();
+  // CHANGED DELIBERATELY, measured seed: the world-3 seed now opens every node
+  // and every sector at the index its own balance implies. These lemmas are
+  // read at balance — a die at $500 clears its wafer at 14,000, not at the
+  // shortage price — so the borrowed world is opened neutral.
+  delete state.nodePrices;
+  delete state.sectorPrices;
   for (const company of state.companies) {
     company.products = [];
     company.capacity = { plantUsd: 0, fleetUsd: 0, gridUsd: 0 };
@@ -207,7 +213,7 @@ describe('cost of goods in the node economy', () => {
     const cache = createNodeCostCache(state);
     const die = unitCostOf(state, company, DIE, cache);
     const wafer = unitCostOf(state, company, WAFER, cache);
-    const waferLine = die.lines.find((line) => line.key === WAFER);
+    const waferLine = die.lines.find((line) => line.key === 'slot:wafer');
     expect(waferLine?.sourceKind).toBe('make');
     // The wafer enters the die at the wafer's own unit cost, with no internal
     // margin: the group's profit on an internal sale is not a cost to the group.

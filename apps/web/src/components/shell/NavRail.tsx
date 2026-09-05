@@ -20,7 +20,7 @@ export interface NavRailProps {
  * the icon is the thing you recognise at a glance in a column of eighteen, and
  * "CO" and "CA" were never distinguishable at any speed.
  *
- * The queue badge sits on End Quarter because that is the screen that consumes
+ * The queue badge sits on End Quarter because that is the screen that reads
  * it, and a player who has queued twelve actions and forgotten should be told
  * from anywhere in the game.
  */

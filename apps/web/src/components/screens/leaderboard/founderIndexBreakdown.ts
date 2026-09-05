@@ -1,7 +1,7 @@
 /**
  * Taking the composite apart, exactly the way the engine put it together.
  *
- * The Founder Index consumes eight percentiles. Six are published on boards of
+ * The Founder Index is built from eight percentiles. Six are published on boards of
  * their own and are read from there; two — financial resilience and session
  * objectives — have no board, so they are recomputed with the same
  * `percentileRanks` the engine uses, over the same populations, in the same

@@ -51,6 +51,7 @@ export const FINDING_TITLE: Readonly<Record<LookupResult['kind'], string>> = {
   customers: 'Who builds on us',
   unit_cost: 'What this costs to build',
   entry_path: 'The way into this',
+  slot_candidates: 'What could fill this slot',
 };
 
 /** "compute market and own position", for the line shown while the lookups run. */
@@ -262,6 +263,28 @@ export function cardFor(finding: LookupResult): FindingCard {
               : 'not reachable by research',
           intent: row.intent,
           counterparty: row.licensorName === '' ? undefined : row.licensorName,
+        })),
+      };
+    }
+
+    case 'slot_candidates': {
+      // The figure is how many ways the slot could be filled; each line is one
+      // node from one source with the fill that puts it there.
+      const first = finding.rows[0];
+      return {
+        kind: finding.kind,
+        title: FINDING_TITLE.slot_candidates,
+        figure: finding.rows.length === 0 ? 'None' : formatCount(finding.rows.length),
+        caption:
+          finding.rows.length === 0
+            ? `nothing can fill the ${finding.slotLabel.toLowerCase()} slot`
+            : `way${finding.rows.length === 1 ? '' : 's'} to fill the ${finding.slotLabel.toLowerCase()} slot${first === undefined ? '' : `, from ${formatMoney(first.unitPriceUsd)} a unit`}`,
+        lines: finding.rows.slice(0, FINDING_LINES).map((row) => ({
+          label: `${row.label} — ${row.sourceKind === 'make' ? 'make it yourself' : row.sourceKind === 'buy' ? row.sellerName : 'open market'}`,
+          value: `${formatMoney(row.unitPriceUsd)} · quality ${row.qualityScorePct}${row.blocked ? ' · blocked' : ''}`,
+          warn: row.blocked,
+          intent: row.intent,
+          counterparty: row.sourceKind === 'buy' ? row.sellerName : undefined,
         })),
       };
     }

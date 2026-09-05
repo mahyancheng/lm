@@ -66,8 +66,8 @@ import type {
   Sector,
 } from '@frontier/contracts';
 import type { SeededRng } from '@frontier/contracts';
-import { CAPITAL_ENTITY_MEMORY_LIMIT, REGIONS, SECTORS, defaultCategoryFor, makeId, regionMeta, regionSectorAffinity } from '@frontier/contracts';
-import { isMultiSectorWorld } from '../economy/sectors';
+import { CAPITAL_ENTITY_MEMORY_LIMIT, REGIONS, SECTORS, defaultCategoryFor, makeId, regionMeta, regionSectorAffinity, startingNodesForRival } from '@frontier/contracts';
+import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { deployableUsd, moveDryPowder, remember } from '../capital/context';
 import {
   SEC,
@@ -644,6 +644,9 @@ function foundCompany(draft: SessionState, ctx: ResolverContext, rng: SeededRng,
   };
   company.products = company.products.map((product) => ({ ...product, launchedQuarter: ctx.quarter }));
   company.offices = company.offices.map((office) => ({ ...office, openedQuarter: ctx.quarter }));
+  // World 3: an entrant owns what a seeded rival of its capability owns, so a
+  // node whose only owner died is not unmakeable for the rest of the game.
+  if (isNodeEconomyWorld(draft)) company.ownedNodes = [...startingNodesForRival(sector, seed.capabilityLevel)];
   draft.companies = [...draft.companies, company];
 
   draft.securities = [

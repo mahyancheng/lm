@@ -7,7 +7,7 @@
  * mechanical rather than rhetorical. A technically brilliant company can lose
  * financially; a rich founder can lose control; a small company can become
  * indispensable to governments. Ten independent rankings say so out loud, and
- * the composite that sits on top of them consumes **percentiles, never raw
+ * the composite that sits on top of them is built from **percentiles, never raw
  * dollars** — otherwise wealth eventually overwhelms every other dimension and
  * the composite stops saying anything.
  *

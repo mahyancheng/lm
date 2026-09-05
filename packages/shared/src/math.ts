@@ -3,7 +3,7 @@
  *
  * Small numeric helpers the engine leans on constantly.
  *
- * Everything here is pure and deterministic. The only function that consumes
+ * Everything here is pure and deterministic. The only function that reads
  * randomness (`weightedPick`) takes the stream as an argument: nothing in this
  * package reaches for a global source of entropy.
  */
@@ -104,7 +104,7 @@ export function sortedAscending(values: readonly number[]): number[] {
  * ```
  *
  * Chosen deliberately over "fraction strictly below" because the Founder Index
- * consumes these directly:
+ * reads these directly:
  *
  * - a lone subject scores `0.5`, not `0` or `1` — with nobody to compare against,
  *   a percentile carries no information and should say so;

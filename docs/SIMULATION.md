@@ -159,7 +159,7 @@ id-assigned), `rejected` with one of eight `MODIFIER_REJECTION_REASONS`, a
 
 ## 4. The quarter resolver
 
-Eighteen phases, in a fixed order. **The order is part of the contract**, not
+Nineteen phases, in a fixed order. **The order is part of the contract**, not
 decoration: changing it changes causality, not just numbers.
 
 ```text
@@ -174,15 +174,16 @@ QUARTER OPEN
  7 government_resolution     score bids, award contracts, advance milestones
  8 talent_resolution         hiring, departures, morale, compensation
  9 research_resolution       project progress, node achievement, belief drift
-10 product_demand_resolution capacity, pricing, demand, churn
-11 financial_resolution      revenue, COGS, payroll, interest, cash flow
-12 disclosure_resolution     guidance, earnings, leaks, rumours
-13 market_resolution         belief update, pricing, trade settlement
-14 social_resolution         post propagation, press pickup
-15 relationship_update       trust/respect/hostility, memory decay, connections
-16 leaderboard_update        ten boards, recomputed from state
-17 ledger_commit             invariant checks, then commit
-18 snapshot                  next-quarter snapshot                (post_commit)
+10 node_market_resolution    world 3: one price per node from last quarter's supply and demand
+11 product_demand_resolution capacity, pricing, demand, churn
+12 financial_resolution      revenue, COGS, payroll, interest, cash flow
+13 disclosure_resolution     guidance, earnings, leaks, rumours
+14 market_resolution         belief update, pricing, trade settlement
+15 social_resolution         post propagation, press pickup
+16 relationship_update       trust/respect/hostility, memory decay, connections
+17 leaderboard_update        ten boards, recomputed from state
+18 ledger_commit             invariant checks, then commit
+19 snapshot                  next-quarter snapshot                (post_commit)
 ```
 
 Why the ordering matters, concretely:
@@ -215,6 +216,80 @@ Every subsystem function is:
 emitted `SimEvent[]`, the `InvariantCheckResult[]` and a `committed` flag. When
 `committed` is false, an invariant failed and `nextState` is the restored
 pre-resolution state.
+
+### The node market and the composed line (world 3)
+
+World version 3 adds one phase and one kind of state, and both obey the
+contract above. `node_market_resolution` (phase 10) prices every node in
+`ECONOMIC_NODES` once a quarter from **last** quarter's supply and demand —
+deliberately lagged, so the market is a single linear pass over the lines with
+no fixed point to solve, which is what keeps a quarter under a second on the
+Raspberry Pi — and it runs before any company sells a unit against those
+prices. It is world-level and its own phase because burying it in the product
+phase is how world 2 came to run three price systems that never reconciled.
+`docs/ECONOMY.md` §2.7 gives the formula; what matters here is where it sits
+and what it may read.
+
+**A line's composition is state, and every reader resolves it the same way.**
+`Product.slots` holds a `ProductSlotFill` per slot the founder has touched and
+`Product.targetIndustry` the industry the line is aimed at; `resolveFill` in
+`graph/slots.ts` turns a fill into a route — `make`, `buy`, `market`, `empty`
+or `blocked` — and is the *only* place that happens. The roll-up, the market's
+derived demand, the production pass, the data pass, the launch preview, the
+canvas and the Chief of Staff all go through it, so the number a founder sees
+before launching is the number the profit and loss books after
+(`world3Repair.test.ts` holds the roll-up to booked cost of goods to the
+cent). A fill is bounds-checked at every read, never trusted: a node the slot
+does not admit falls back to the table's default, a named seller that no
+longer sells falls to the open market, and `blocked` is asserted only when
+nobody in the world owns or licences the resolved node. Nothing in the chain
+is a fixed point: derived demand reads last quarter's units, and the quality
+read off an input line is that line's stamped `qualityScore` from the close
+of last quarter, so quality propagates down a chain one tier per quarter and
+never reads a number the current quarter has only half written.
+
+**Ordering inside the quarter.** Fills and targets change in
+`product_demand_resolution`, after the node market has priced and before the
+production pass makes and judges the line: `resolveCompositionOrders` applies
+this quarter's `fill_slot` and `set_target_market`, stamping
+`ProductSlotFill.changedQuarter` only when the node or the source actually
+moved. The switch cost is then a pure function of state — a fill whose
+`changedQuarter` equals `state.quarter` contributes at `SWITCH_QUALITY_FACTOR`
+in `effectiveQuality` — with no cross-phase set to remember who switched, so
+a replay from the ledger reconstructs it exactly. Background companies compose
+in `action_collection` through the same validator as a player
+(`companies/npcSlots.ts`, origin `npc_default`): quality per dollar per slot,
+ties by own line then company id then table order, sticky at
+`NPC_SLOT_SWITCH_THRESHOLD`, and a fill moved inside `NPC_SLOT_SETTLE_QUARTERS`
+is not judged again — the switch dip is a fact the engine itself creates and
+a buyer that read it as a signal moved off a seller and back again two
+quarters running. No draw from `ctx.rng` anywhere in it: two runs of one state
+compose byte-identically.
+
+**What the ledger says.** `slot_filled` (company visibility, with the slot,
+the node placed, the node it replaced and both sources) and
+`target_market_set` on every change; `supply_started`, `supply_terms_changed`
+and `supply_cut_off` on the publishing side exactly as §2.6 of the economy
+doc records them for world 2; `node_price_set` from the market phase for the
+largest moves. A re-stated fill emits nothing.
+
+**What the validator refuses, and what it realises.** A slot the node does
+not carry is dropped with a clamp; a required slot emptied is refused; a
+named source that cannot supply is clamped to the open market and named in
+the clamp; `choose_supplier` in world 3 is refused pointing at `fill_slot`; a
+second launch on a node the company already sells is refused pointing at its
+slots; a cell nobody buys in is an advisory and the line sells nothing there
+until it is aimed elsewhere. Whether a company may *produce* a node is
+`canProduce` — its own ownership of the node and of every id in that node's
+`requires` — and is unchanged by slots: filling a slot never needs ownership,
+only a source, but running the line does need the knowledge ladder the table
+declares (an inference API `requires` the frontier-model capability, so an
+enterprise-software founder is told to research, licence or buy it before
+launching one).
+
+Worlds 1 and 2 never reach any of this. `isNodeEconomyWorld` is the single
+gate, every new `Product` and `SessionState` field is optional, and the two
+frozen hashes in `world2Scenario.test.ts` are the proof.
 
 ## 5. Truth versus belief
 
@@ -655,6 +730,10 @@ matter how the world's supply moves, not the code's name.
 | | `unknown_target` (`exclusiveCustomerIds`/`blockedCustomerIds` name a company that does not exist) | KEEP | Structural: cannot admit or block a company that isn't there. |
 | | (a price far from reference, closing to everyone, blocking a live buyer) | REALISE | A real decision, not gated — the consequence is a customer's margin or a one-quarter cut-off notice, per §2.6, not a refusal. |
 | `choose_supplier` | `requirement_not_met` (world 1: not available) | KEEP | Structural, same reason. |
+| `choose_supplier` | `requirement_not_met` (world 3: use `fill_slot`) | KEEP | Structural: a world-3 line is composed by slot, and the slot names the input; there is no input category to choose a supplier for. |
+| `fill_slot` | `unknown_target` (no such line, no node on it, no such slot, a node the slot does not admit) · `requirement_not_met` (a required slot emptied) | KEEP | Structural: the table says what a slot admits and whether it may be empty. A named seller that cannot supply this buyer is **clamped** to the open market and the clamp names it; a re-stated fill is accepted and changes nothing. |
+| `set_target_market` | `unknown_target` (no such line, no node on it) · `requirement_not_met` (below world 3) | KEEP | Structural. A consumer segment aimed at an industry is **noted**, not refused: selling to the public has no industry and the line lands in the consumer cell. A cell the node's market gives no weight is an **advisory** — the line sells nothing there until aimed elsewhere — never a refusal. |
+| `launch_product` | `requirement_not_met` (world 3: a node the company cannot produce) · `duplicate_action` (a second line on a node it already sells) | KEEP | Structural: `canProduce` is the company's own ownership of the node and its `requires`; one line per node per company keeps the roll-up's key honest — the refusal says to change the existing line's slots. Slots the node does not carry are dropped with a clamp; a required slot emptied is refused. |
 | | `unknown_target` (no such product, unrecognised `inputCategoryId` for this category) | KEEP | Structural: the launch category does not declare this input. |
 | | `illegal_value` (a product naming itself as its own supplier) | KEEP | Structural: the one cycle a single action can create. |
 | | `unknown_target` (named supplier company/product does not exist or is inactive) | KEEP | Structural. |

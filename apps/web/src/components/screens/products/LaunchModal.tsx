@@ -112,6 +112,8 @@ export function LaunchModal({ open, onClose, initialCategoryId = null }: LaunchM
       launchMarketingUsd: Number.isFinite(marketingValue) && marketingValue > 0 ? marketingValue : 0,
       targetQuality: quality,
       supply: supplyChoicesFrom(supply),
+      targetIndustry: null,
+      slots: [],
     };
   }, [category, name, price, intensity, quality, marketing, supply]);
 

@@ -165,6 +165,8 @@ describe('launch_product and requiresNodeIds', () => {
         launchMarketingUsd: 100_000,
         targetQuality: 0.5,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       }),
     ]);
     expect(result?.status).toBe('rejected');
@@ -195,6 +197,8 @@ describe('launch_product and requiresNodeIds', () => {
         launchMarketingUsd: 100_000,
         targetQuality: 0.5,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       }),
     ]);
     expect(result?.status).not.toBe('rejected');
@@ -213,6 +217,8 @@ describe('launch_product and requiresNodeIds', () => {
         launchMarketingUsd: 50_000,
         targetQuality: 0.4,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       }),
     ]);
     const company = companyOf(outcome.nextState, PLAYER_COMPANY);

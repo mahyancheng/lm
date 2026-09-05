@@ -118,9 +118,30 @@ function resolveOne(state: SessionState, actions: readonly SubmittedAction[]) {
   return outcome;
 }
 
+/**
+ * The seeded world, with the frontier model in Aletheia's hands.
+ *
+ * CHANGED DELIBERATELY, slots: a rival's reach is `round(1 + 6 x capability)`,
+ * so the coverage pass that once handed Aletheia the model — the only AI node
+ * nobody's rule reached — no longer needs to. CHANGED AGAIN, composed lines:
+ * Aletheia now opens SELLING the frontier model (`W3_RIVAL_LINES`), so it owns
+ * it outright at seed beside the three inference sellers and the addition
+ * below is a no-op kept so the fixture states what it relies on. The royalty
+ * assertions below need an owner that does NOT compete with the licensee's
+ * inference line, or the owner's takings would move for two reasons at once;
+ * Aletheia sells a model and a suite, never inference, which is exactly the
+ * world these tests were written against.
+ */
+function seeded(): SessionState {
+  const state = createWorld3Session();
+  const owner = companyOf(state, MODEL_OWNER);
+  if (!(owner.ownedNodes ?? []).includes(MODEL)) owner.ownedNodes = [...(owner.ownedNodes ?? []), MODEL];
+  return state;
+}
+
 /** The seeded world with the seat solvent enough to sign, and no board in the way. */
 function world3(cashUsd = 4_000_000_000): SessionState {
-  const state = createWorld3Session();
+  const state = seeded();
   const player = companyOf(state, PLAYER);
   player.controllerPlayerId = PLAYER_ID;
   return withoutBoard(withCash(state, cashUsd));
@@ -128,7 +149,11 @@ function world3(cashUsd = 4_000_000_000): SessionState {
 
 describe('the seeded world these tests are pinned to', () => {
   it('still has the owners and the lines they quote', () => {
-    const state = createWorld3Session();
+    const state = seeded();
+    // The raw seed hands the model to the lab that sells it and to the three
+    // inference sellers; the fixture's addition changes nothing.
+    const rawOwners = createWorld3Session().companies.filter((company) => ownsNodeOutright(company, MODEL)).map((company) => company.id);
+    expect(rawOwners).toEqual(['cmp_aletheia', 'cmp_sable', 'cmp_basalt', 'cmp_kestrel']);
     expect(economicNodeById(ACTUATOR)?.sector).toBe('robotics');
     expect(economicNodeById(MODEL)?.sector).toBe('ai');
     // The inference line requires the model: that is what makes a licence over
@@ -264,7 +289,7 @@ describe('licensing a node from the company that owns it', () => {
   });
 
   it('is refused by a rival owner at the floor, and nothing is granted or paid', () => {
-    // Aletheia and the seat both sell into the AI sector, which is the node's
+    // Sable and the seat both sell into the AI sector, which is the node's
     // own sector — so the floor is doubled and six percent is not enough.
     const asked = resolveOne(world3(2_000_000_000), [
       act(world3(2_000_000_000), { type: 'license_node', nodeId: MODEL, ownerCompanyId: MODEL_OWNER, royaltyPct: NPC_LICENCE_ROYALTY_FLOOR_PCT }),
@@ -346,7 +371,7 @@ describe('licensing a node from the company that owns it', () => {
 
 /** Sable's inference line, made to run under Aletheia's licence rather than its own model. */
 function underLicence(royaltyPct: number): SessionState {
-  const state = createWorld3Session();
+  const state = seeded();
   const licensee = companyOf(state, INFERENCE_SELLER);
   licensee.ownedNodes = (licensee.ownedNodes ?? []).filter((id) => id !== MODEL);
   licensee.licences = [{ nodeId: MODEL, ownerCompanyId: MODEL_OWNER, royaltyPct, expiryQuarter: state.quarter + LICENCE_TERM_QUARTERS }];
@@ -383,7 +408,7 @@ describe('the royalty', () => {
   it('is a cost to the licensee and revenue to the owner, of the same dollars', () => {
     const royaltyPct = 8;
     const withLicence = afterOneQuarter(underLicence(royaltyPct));
-    const withoutLicence = afterOneQuarter(createWorld3Session());
+    const withoutLicence = afterOneQuarter(seeded());
 
     const licensee = companyOf(withLicence, INFERENCE_SELLER);
     const baseline = companyOf(withoutLicence, INFERENCE_SELLER);

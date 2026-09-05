@@ -203,6 +203,17 @@ bleed into the other's growth. World 1, and any world-2 company whose
 products are all `compute`-kind, reduces to exactly the single-bucket
 arithmetic the phase always ran.
 
+In **world 3** a bucket is shared between the company's lines on it by
+`bucketShare` (`graph/market.ts`): a quarter of the bucket
+(`CAPACITY_FOOTHOLD_SHARE`) is split equally among every line drawing on it,
+and the rest follows what each line drew last quarter (equally when none of
+them drew). A line alone on its bucket holds all of it; a line the quarter it
+launches opens on its foothold and grows into more as it sells; two lines
+that both want everything converge on an even split. The foothold exists
+because a share taken purely from last quarter's draw gave a freshly launched
+line exactly nothing, forever. The launch flow quotes the same formula
+(`launchCapacityPreview`) on its cost step before the founder commits.
+
 A company that has **never recorded a `plant`/`fleet`/`grid` position** —
 never invested, and not seeded with one — reads as unconstrained rather than
 rationed to nothing: `company.capacity === undefined` is "not tracked yet",
@@ -345,6 +356,176 @@ alongside the ordinary partial-fill row a rationed buyer gets.
 World version 1 has no product categories, so every function here is a
 no-op or an empty result for it, `Product.supply`/`supplyTerms` are absent
 on a world-1 product, and the frozen world's hash does not move.
+
+### 2.7 World 3: the chain is the product — slots, roles, target markets, publishing
+
+World version 3 retires the category catalogue for one **node table**
+(`ECONOMIC_NODES` in `@frontier/contracts`, ninety-odd nodes across eight
+tiers from what comes out of the ground to a tier-7 *operation* such as line
+haul). A line produces a node; what it is made of is no longer a fixed list
+of input ids but a set of **slots**, and what a founder puts in those slots,
+buys them from and aims the line at is the product. The owner's three
+sentences are the specification: *"One product launch, for example a
+consumer app. I can't choose what model, what harness, to which sector."*
+*"LLM node connects to software node, then software node to computer node."*
+*"If any company publishes a public API for its LLM, any other company with a
+harness can decide if they want to put a product on the other company's
+LLM."* Sector means both the industry sold into and the customer type; the
+harness is a layer the player chooses; and this applies to every sector.
+
+**Roles and slots.** A **role** (`NODE_ROLES`, `packages/contracts/src/nodeRoles.ts`)
+is "things a buyer could put in the same slot": `model` holds the frontier,
+small and robot-policy models; `harness` the agent harness and the copilot
+framework; `battery_pack` the NMC and LFP packs; `generation_asset` solar,
+wind and the SMR; and so on. Every node carries `slots: NodeSlot[]` (at most
+six), each `{ id, role, label, qtyPerUnit, required, blocking, accepts,
+defaultNodeId, kind }`: `accepts: []` admits every node of the role, a
+narrower list narrows it; `required: false` may be left empty; `blocking`
+means the line ships nothing while nobody in the world can make any
+admissible node (the old `substitutable: false`, one to one); `kind:
+'delivery'` is what the node ships *on* — a device under an app — and is
+drawn on the output side of the card. `economicGraphDefects` holds the table
+to it: every `accepts` id exists and carries the slot's role, defaults are
+admissible, `blocking ⇒ required`, every node of a slot's role sits strictly
+below its owner's tier, all admissible nodes of a slot share a `unitLabel`,
+`requires` is acyclic and the graph is connected through every admissible
+node. `admissibleNodesFor`, `slotById` and `slotsAccepting(nodeId)` are the
+readers. A node sells into a **market** rather than to one buyer segment:
+`market: { customers: Record<Segment, weight>, industries: Record<Sector,
+weight> }`.
+
+**Composition lives on the product.** `Product.slots: ProductSlotFill[]` —
+`{ slotId, nodeId | null, supplierCompanyId | null, supplierProductId | null,
+cutOffNoticeQuarter | null, changedQuarter | null }` — and
+`Product.targetIndustry: Sector`; the customer type is the existing
+`Product.segment`. Both are optional on the schema so a world-1 or world-2
+save reads unchanged. `resolveFill` in `graph/slots.ts` is the one place a
+fill becomes a route, and every reader — the roll-up, the market's derived
+demand, the production and data passes, the launch preview, the canvas, the
+Chief of Staff — goes through it: the fill (or the launch preview's
+override), then the node (the fill's, else the slot's default; a node the
+slot does not admit falls back to the default rather than being trusted),
+then `make` when the company runs a line on it and the fill names itself or
+nobody, `buy` when the fill names another company whose line is live,
+published and open to this buyer with no cut-off notice in force, otherwise
+`market`, and `blocked` only on a `blocking` slot whose resolved node nobody
+in the world owns or licences. A fill naming a rival while the company runs
+its own line is honoured as a buy: **declining MAKE is allowed**, and the
+fill is what says so.
+
+**Cost.** `unitCostOf(state, company, nodeId, cache?, override?)` iterates
+the node's slots and prices each resolved fill through the same ladder §2.6
+used: a `make` route at the company's own roll-up for that node (recursively,
+to `MAX_COST_DEPTH`), a `buy` route at the seller's published ask as
+`namedSupplierPriceUsd` charges it — held inside `SUPPLIER_ASK_BOUNDS`
+(0.5×–2.5×) of the node's market price so neither a gift nor a hostage price
+escapes the market's gravity — and a `market` route at the node's market
+price times `OPEN_MARKET_PREMIUM` (1.08). A row is keyed `slot:${slotId}` and
+carries `slotId` and `nodeId`, so the breakdown stays stable when a founder
+swaps the node in a slot. The `override.fills` argument serves the launch
+preview and is never memoised: what the Inputs step shows is what the profit
+and loss will book. `world3Repair.test.ts` holds that identity to the cent.
+
+**Quality, and the switch cost.** `effectiveQuality` is recomputed every
+quarter from three terms: the line's craft through the one quality-tier
+lever, the company's data edge in the node's sector, and what its inputs
+deliver — every `buy` **and** every `make` route, weighted by its share of
+the input value of one unit, so a better model behind your own API raises
+the API, and a die that is nine tenths of a package's cost carries nine
+tenths of its supplier's quality. The open market and an empty slot
+contribute nothing. A fill whose `changedQuarter` is this quarter contributes
+at `SWITCH_QUALITY_FACTOR` (0.7): the one quarter of degraded quality a
+switch costs. There is no cross-phase set remembering who switched; replay
+reads it off the fill.
+
+**Target markets.** Demand for a node is a grid of cells, the industry sold
+into by the customer type inside it:
+
+```text
+w(n,i,c)          = market.industries[i] × market.customers[c]
+cellDemand(n,i,c) = endDemandBaseUnits × w × appetite(c) × sectorDemandCycle(i) × sizeFactor(i,c)
+sizeFactor(i,c)   = c ∈ {enterprise, developer_api} ? clamp(sectorRevenue[i] / industryBaselineUsd[i], 0.5, 2) : 1
+```
+
+A line is aimed at exactly one cell — `targetOf(product, node)` and
+`product.segment` — and draws its orders from that cell's pool. **B2B buyers
+are the industry**: the demand a logistics company's slot fills create for an
+inference API lands in the cell (API, logistics, enterprise), so "AI software
+aimed at logistics enterprises" grows with the logistics sector, and
+`industryBaselineUsd` is written once at seed so the size factor reads
+neutral on the day the world opens (and on any save without it). Selling to
+the public has no industry: a consumer line collapses to the single cell
+(n, consumer, consumer). A line aimed at a cell its node's market gives no
+weight draws nothing and is told so in an advisory, never refused.
+
+**The actions.** `launch_product` gains `targetIndustry` and `slots[]` (a
+slot the node does not carry is dropped with a clamp; a required slot
+emptied is refused; a named source that cannot supply is clamped to the open
+market and said so). `fill_slot { productId, slotId, nodeId, supplierCompanyId,
+supplierProductId }` changes the node in a slot, its source, or both, and
+stamps `changedQuarter` only when something actually moved — a re-stated fill
+writes nothing and restarts no switch cost. `set_target_market { productId,
+targetIndustry, segment }` aims a line. `choose_supplier` is refused in
+world 3 with "use fill_slot". One line per node per company: a second launch
+on a node you already sell is refused with "change its slots instead". The
+ledger records `slot_filled` and `target_market_set`.
+
+**Publishing.** Anything you produce you may publish: `set_supply_terms` on a
+node line takes a node branch and ignores the world-2 `canSupply` flag.
+`openToAll: true` is a public API in the owner's sense; a narrowed
+`exclusiveCustomerIds`, a `blockedCustomerIds` entry or closing the line sets
+the affected buyer's `cutOffNoticeQuarter` so it stays supplied one quarter
+and then falls to the open market, the notice-then-effect shape §2.6 already
+used. A company nobody directs publishes every node line open at its list
+price the quarter it has none and reprices when the list has moved more than
+`NPC_SUPPLY_REPRICE_THRESHOLD` (5%) from what it published.
+
+**Rivals compose too.** `companies/npcSlots.ts` fills every slot of every
+undirected line by **quality per dollar**: each admissible node from each
+source — the company's own line at its roll-up cost and its own quality,
+each published seller at the ask the roll-up would charge and that line's
+quality, the open market at the premium and `MARKET_QUALITY` (0.5) — with
+ties broken by own line, then lower company id, then table order, so two runs
+of one state compose identically. It is sticky at `NPC_SLOT_SWITCH_THRESHOLD`
+(1.15), and a fill the company moved fewer than `NPC_SLOT_SETTLE_QUARTERS`
+(4) quarters ago is not judged again: the switch cost itself depresses a
+seller's stamped quality for the quarter it switched in, and a buyer reading
+that dip as a signal moved off the seller and back again two quarters running
+before the settle window existed. A direct rival — a company selling the node
+this company publishes — is excluded unless nothing else is on offer, and a
+fill standing on one is not sticky once something else is. A slot left empty
+is left alone. No RNG anywhere in it.
+
+**The seeded world.** `scenario/world3/lines.ts` composes every rival on
+purpose — Sable's inference API on Sable's own small model, Basalt's on
+Aletheia's frontier model, Aletheia's software suite on Basalt's API,
+Ironvale's warehouse robot on Cinder's LFP pack and Wrenford's policy model,
+Overland's routing platform on Sable's API, Copa's marketplace on Basalt's —
+and `BACKGROUND_OPENING_LINE` gives each of the fifteen backgrounds a
+composed opening line (enterprise AI: a suite on Basalt's API with an agent
+harness from the open market, aimed at logistics enterprises). Published seed
+lines open with terms at list price. Rivals then recompose by their own
+policy from quarter one, which is the point: the seed is a starting position,
+not a promise.
+
+**What the founder sees.** The launch flow is *What to sell → Inputs → Target
+→ Cost to make → Price*; tapping a slot opens the candidate sheet
+(`SlotCandidateSheet`) with every admissible node — market price, best route
+price, quality, producer count — and under the picked node every route,
+make yourself, each named seller, open market, all tappable and none
+disabled. The line drawer carries the same rows, the target, the cost by
+slot and "Sell this to other companies". The canvas draws slot ports under
+each of the founder's cards, the filled node with its supplier beneath, the
+delivery device one column right, and the target under the card. The Chief
+of Staff describes a line with `describeLine` — *"your AI software suite on
+Basalt Compute's inference API with an agent harness from the open market,
+aimed at logistics enterprises"* — answers `unit_cost` by slot and
+`slot_candidates` with a `fill_slot` on every row, and its `suppliers` lookup
+in world 3 answers with the slot's candidates.
+
+Worlds 1 and 2 are untouched: nothing on their paths imports the node table,
+every new `Product` and `SessionState` field is optional, and both frozen
+hashes hold.
 
 ## 3. People
 

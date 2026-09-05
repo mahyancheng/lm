@@ -52,14 +52,15 @@ import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { lineNodeIdOf } from '../graph/lines';
 import { unitCostOf } from '../graph/cost';
 import { nodeSellersFor } from '../graph/options';
+import { SWITCH_QUALITY_FACTOR, fillsOf, withFill } from '../graph/slots';
 import { activeCompanies, activeProducts, clamp, companyActions, emitEvent, intentsOfType, money, ratio, unit, usdLabel } from './util';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** How much of a switched input's quality shift lands the quarter it switches. The rest is the switching cost. */
-export const SWITCH_QUALITY_FACTOR = 0.7;
+/** The switch-cost factor lives with the fills now; re-exported so world 2's readers keep their import. */
+export { SWITCH_QUALITY_FACTOR } from '../graph/slots';
 /** Bounds on how far a supplier's own price can move the cost it charges, relative to its category's reference. */
 export const SUPPLY_PRICE_FACTOR_BOUNDS = { min: 0.25, max: 4 } as const;
 /** Quarters of notice a buyer gets before a cut-off actually drops it to unsupplied. */
@@ -538,6 +539,32 @@ export function resolveSupplyOrders(draft: SessionState, ctx: ResolverContext): 
   /* --- notices that have run their term: drop to unsupplied ---------------- */
   for (const company of activeCompanies(draft)) {
     for (const product of activeProducts(company)) {
+      // World 3: a fill whose notice has run falls to the open market. The
+      // node stays in the slot; only the source is gone.
+      for (const fill of fillsOf(product)) {
+        if (fill.cutOffNoticeQuarter === null || fill.cutOffNoticeQuarter > ctx.quarter) continue;
+        const supplierId = fill.supplierCompanyId;
+        const { fills } = withFill(fillsOf(product), fill.slotId, fill.nodeId, null, null, ctx.quarter);
+        product.slots = [...fills];
+        const eventId = emitEvent(
+          draft,
+          ctx,
+          'cost_recognised',
+          company.id,
+          supplierId,
+          { kind: 'supply_cut_off', productId: product.id, slotId: fill.slotId, inputNodeId: fill.nodeId, formerSupplierCompanyId: supplierId },
+          'company',
+        );
+        const supplierName = draft.companies.find((candidate) => candidate.id === supplierId)?.name ?? 'its supplier';
+        ctx.log({
+          phase: 'product_demand_resolution',
+          text: `${company.name}'s ${product.name} lost ${supplierName} as its ${fill.slotId.replace(/_/g, ' ')} supplier, as notified last quarter.`,
+          deltaLabel: 'cut off',
+          refEventIds: [eventId],
+          tone: 'warning',
+          subjectId: company.id,
+        });
+      }
       for (const line of product.supply ?? []) {
         if (line.cutOffNoticeQuarter === null || line.cutOffNoticeQuarter > ctx.quarter) continue;
         const supplierId = line.supplierCompanyId;
@@ -572,8 +599,11 @@ export function resolveSupplyOrders(draft: SessionState, ctx: ResolverContext): 
     for (const { intent } of intentsOfType(actions, 'set_supply_terms')) {
       const product = company.products.find((candidate) => candidate.id === intent.productId);
       if (product === undefined) continue;
-      const category = categoryOf(company, product);
-      if (!category.canSupply) continue; // structurally refused by the validator; belt and braces here
+      // World 3: anything a company produces it may publish, so a node line is
+      // never held to the world-2 catalogue flag. Below world 3 the validator
+      // has already refused a line that cannot supply; belt and braces here.
+      const nodeLine = isNodeEconomyWorld(draft) && lineNodeIdOf(product) !== null;
+      if (!nodeLine && !categoryOf(company, product).canSupply) continue;
       const before = product.supplyTerms ?? null;
       const wasPublished = before !== null;
       product.supplyTerms = { ...intent.terms };
@@ -585,11 +615,34 @@ export function resolveSupplyOrders(draft: SessionState, ctx: ResolverContext): 
       if (wasPublished) {
         for (const buyer of activeCompanies(draft)) {
           for (const buyerProduct of activeProducts(buyer)) {
+            const stillAllowed =
+              !intent.terms.blockedCustomerIds.includes(buyer.id) && (intent.terms.openToAll || intent.terms.exclusiveCustomerIds.includes(buyer.id));
+            // World 3: the same notice on a fill that names this line.
+            for (const fill of fillsOf(buyerProduct)) {
+              if (fill.supplierCompanyId !== company.id || fill.supplierProductId !== product.id || fill.cutOffNoticeQuarter !== null) continue;
+              if (stillAllowed) continue;
+              const noticeQuarter = ctx.quarter + SUPPLY_CUT_OFF_NOTICE_QUARTERS;
+              buyerProduct.slots = fillsOf(buyerProduct).map((entry) => (entry.slotId === fill.slotId ? { ...entry, cutOffNoticeQuarter: noticeQuarter } : entry));
+              const noticeId = emitEvent(
+                draft,
+                ctx,
+                'cost_recognised',
+                company.id,
+                buyer.id,
+                { kind: 'supply_terms_changed', productId: product.id, buyerCompanyId: buyer.id, buyerProductId: buyerProduct.id, noticeQuarter },
+                'company',
+              );
+              ctx.log({
+                phase: 'product_demand_resolution',
+                text: `${company.name} is closing ${product.name} to ${buyer.name}; the cut takes effect in ${SUPPLY_CUT_OFF_NOTICE_QUARTERS} quarter.`,
+                deltaLabel: 'notice given',
+                refEventIds: [noticeId],
+                tone: 'warning',
+                subjectId: buyer.id,
+              });
+            }
             for (const line of buyerProduct.supply ?? []) {
               if (line.supplierCompanyId !== company.id || line.supplierProductId !== product.id || line.cutOffNoticeQuarter !== null) continue;
-              const stillAllowed =
-                !intent.terms.blockedCustomerIds.includes(buyer.id) &&
-                (intent.terms.openToAll || intent.terms.exclusiveCustomerIds.includes(buyer.id));
               if (stillAllowed) continue;
               line.cutOffNoticeQuarter = ctx.quarter + SUPPLY_CUT_OFF_NOTICE_QUARTERS;
               const noticeId = emitEvent(
@@ -650,6 +703,9 @@ export function resolveSupplyOrders(draft: SessionState, ctx: ResolverContext): 
     for (const { intent } of intentsOfType(actions, 'choose_supplier')) {
       const product = company.products.find((candidate) => candidate.id === intent.productId);
       if (product === undefined) continue;
+
+      // World 3 refuses choose_supplier at validation in favour of fill_slot,
+      // which `resolveCompositionOrders` applies; nothing of it reaches here.
       const before = supplyLineOf(product, intent.inputCategoryId);
       const changed = before?.supplierCompanyId !== intent.supplierCompanyId || before?.supplierProductId !== intent.supplierProductId;
       if (!changed) continue;

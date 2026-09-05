@@ -3,7 +3,7 @@
 /**
  * The Founder Index, taken apart.
  *
- * The composite consumes eight percentiles, never raw dollars, so that wealth
+ * The composite is built from eight percentiles, never raw dollars, so that wealth
  * cannot eventually overwhelm every other dimension. Six of them are published
  * on boards of their own and are read from there; two are recomputed with the
  * same helper the engine uses, and only ever for the player's own founder.

@@ -156,6 +156,10 @@ export const SIM_EVENT_TYPES = [
   // and then lapsed. Appended, never inserted.
   'node_licensed',
   'node_licence_lapsed',
+  // World 3's composed lines: a slot filled with a node and a source, and a
+  // line aimed at a market cell. Appended, never inserted.
+  'slot_filled',
+  'target_market_set',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');
@@ -351,7 +355,7 @@ export const LeaderboardEntrySchema = z
     subjectKind: LeaderboardSubjectKindSchema,
     label: z.string().min(1).max(80).describe('Display name.'),
     value: z.number().describe('Raw value in the board\'s own units.'),
-    percentile: unitInterval('Value expressed as a percentile within the session. The composite index consumes percentiles, never raw dollars.'),
+    percentile: unitInterval('Value expressed as a percentile within the session. The composite index is built from percentiles, never raw dollars.'),
     delta: z.number().describe('Change in raw value since last quarter.'),
   })
   .describe('One row of a leaderboard.');

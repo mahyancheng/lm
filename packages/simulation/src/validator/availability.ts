@@ -47,9 +47,11 @@ import {
   DIVIDEND_MAX_PAYOUT_PCT,
   ECONOMIC_NODES,
   ECONOMIC_NODES_BY_ID,
+  SECTORS,
   TOLL_MAX_PCT,
   nodeMarketPriceUsd,
   holdsNode,
+  primaryCustomerOf,
   requiresClosure,
   requiresExplicitConfirmation,
 } from '@frontier/contracts';
@@ -67,6 +69,7 @@ import { quarterlyHireCostUsd, reservableUnits } from './rules';
 import { sellersFor } from '../companies/sellers';
 import { LICENCE_ROYALTY_BOUNDS, NPC_LICENCE_ROYALTY_FLOOR_PCT, licenceOfferOf, ownsNodeOutright } from '../graph/licensing';
 import { launchableNodes, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
+import { defaultIndustryFor, resolveFills, targetOf } from '../graph/slots';
 import { categoryOf } from '../companies/categories';
 import { defaultSupplyTerms, suppliersFor } from '../companies/supply';
 
@@ -276,13 +279,15 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
         intent: {
           type,
           name: `Availability probe ${company.id}`,
-          segment: first?.node.buyerSegment ?? 'enterprise',
+          segment: first === null ? 'enterprise' : primaryCustomerOf(first.node),
           categoryId: first?.node.id ?? null,
           pricePerSeatUsd: first === null ? 1_000 : Math.max(1, Math.round(nodeMarketPriceUsd(draft, first.node.id))),
           computeIntensity: 0.5,
           launchMarketingUsd: cash,
           targetQuality: 0.5,
           supply: [],
+          targetIndustry: first === null ? null : defaultIndustryFor(first.node),
+          slots: [],
         },
         bounds: [
           usdBound('launchMarketingUsd', 'Launch marketing', cash),
@@ -449,6 +454,24 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
       };
 
     case 'set_supply_terms': {
+      // World 3: every active node line may be published, open to all at its
+      // own list price until the company says otherwise.
+      if (isNodeEconomyWorld(draft)) {
+        const nodeLines = activeProducts.filter((product) => lineNodeIdOf(product) !== null);
+        const first = nodeLines[0];
+        if (first === undefined) return { intent: null, reason: `${company.name} runs no node line to publish.`, ...NOTHING };
+        const current = first.supplyTerms ?? null;
+        const terms =
+          current === null
+            ? { openToAll: true, pricePerUnitUsd: Math.max(0, first.pricePerSeat), exclusiveCustomerIds: [], blockedCustomerIds: [] }
+            : { ...current, exclusiveCustomerIds: [...current.exclusiveCustomerIds], blockedCustomerIds: [...current.blockedCustomerIds] };
+        return {
+          intent: { type, productId: first.id, terms },
+          bounds: [usdBound('terms.pricePerUnitUsd', `Price per unit (${first.name})`, null)],
+          targets: nodeLines.map((entry) => ({ id: entry.id, label: `${entry.name}${entry.supplyTerms ? ' — published' : ''}` })),
+          maxCashUsd: null,
+        };
+      }
       const suppliable = activeProducts.find((product) => categoryOf(company, product).canSupply);
       if (suppliable === undefined) {
         return { intent: null, reason: `Nothing ${company.name} sells can be published as another company's input.`, ...NOTHING };
@@ -464,37 +487,10 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
     }
 
     case 'choose_supplier': {
-      // World 3: an input is a NODE the company's own line consumes, so the
-      // probe walks the table rather than the world-2 catalogue. Both branches
-      // end in the same `suppliersFor` call, which is itself node-aware in
-      // world 3 — one lookup, two id spaces, and they cannot be confused
-      // because every node id carries a table prefix.
+      // World 3 composes a line by slot, so the world-2 action is refused there
+      // and the probe says which action to use instead.
       if (isNodeEconomyWorld(draft)) {
-        const line = activeProducts.find((product) => {
-          const nodeId = lineNodeIdOf(product);
-          return nodeId !== null && (ECONOMIC_NODES_BY_ID[nodeId]?.consumes.length ?? 0) > 0;
-        });
-        const lineNodeId = line === undefined ? null : lineNodeIdOf(line);
-        const inputNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId]?.consumes[0];
-        if (line === undefined || inputNode === undefined) {
-          return { intent: null, reason: `Nothing ${company.name} makes consumes an input somebody else could supply.`, ...NOTHING };
-        }
-        const nodeOffers = suppliersFor(draft, company.id, inputNode.nodeId);
-        const bestNode = nodeOffers[0] ?? null;
-        return {
-          intent: {
-            type,
-            productId: line.id,
-            inputCategoryId: inputNode.nodeId,
-            supplierCompanyId: bestNode?.company.id ?? null,
-            supplierProductId: bestNode?.product.id ?? null,
-          },
-          bounds: [],
-          targets: nodeOffers
-            .slice(0, 24)
-            .map((entry) => ({ id: entry.company.id, label: `${entry.company.name} — ${ECONOMIC_NODES_BY_ID[inputNode.nodeId]?.label ?? inputNode.nodeId} at ${Math.round(entry.pricePerUnitUsd)} a unit` })),
-          maxCashUsd: null,
-        };
+        return { intent: null, reason: 'A world-3 line is composed by slot: use fill_slot.', ...NOTHING };
       }
       const withInputs = activeProducts.find((product) => categoryOf(company, product).inputs.length > 0);
       if (withInputs === undefined) {
@@ -986,6 +982,53 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
         intent: { type, nodeId: fresh.id, royaltyPct: NPC_LICENCE_ROYALTY_FLOOR_PCT, openToAll: true },
         bounds: [percentBound('royaltyPct', 'Royalty', LICENCE_ROYALTY_BOUNDS.min, LICENCE_ROYALTY_BOUNDS.max)],
         targets: owned.slice(0, 24).map((node) => ({ id: node.id, label: node.label })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'fill_slot': {
+      if (!isNodeEconomyWorld(draft)) return { intent: null, reason: 'Slots are only composed in the node economy.', ...NOTHING };
+      // The first slot of the first node line that has one, re-stated as it
+      // resolves today: a legal fill that changes nothing, so the probe never
+      // proposes a switch the founder did not ask for.
+      const line = activeProducts.find((product) => {
+        const nodeId = lineNodeIdOf(product);
+        const lineNode = nodeId === null ? undefined : ECONOMIC_NODES_BY_ID[nodeId];
+        return lineNode !== undefined && lineNode.slots.length > 0;
+      });
+      const lineNodeId = line === undefined ? null : lineNodeIdOf(line);
+      const lineNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId];
+      if (line === undefined || lineNode === undefined) {
+        return { intent: null, reason: `Nothing ${company.name} makes has a slot to fill.`, ...NOTHING };
+      }
+      const fills = resolveFills(draft, company, line, lineNode);
+      const first = fills.find((fill) => fill.nodeId !== null) ?? fills[0];
+      if (first === undefined) return { intent: null, reason: `Nothing ${company.name} makes has a slot to fill.`, ...NOTHING };
+      return {
+        intent: {
+          type,
+          productId: line.id,
+          slotId: first.slotId,
+          nodeId: first.nodeId,
+          supplierCompanyId: first.route === 'make' || first.route === 'buy' ? first.supplierCompanyId : null,
+          supplierProductId: first.route === 'make' || first.route === 'buy' ? first.supplierProductId : null,
+        },
+        bounds: [],
+        targets: lineNode.slots.map((slot) => ({ id: slot.id, label: `${slot.label} (${line.name})${slot.required ? '' : ' — optional'}` })),
+        maxCashUsd: null,
+      };
+    }
+
+    case 'set_target_market': {
+      if (!isNodeEconomyWorld(draft)) return { intent: null, reason: 'Lines are only aimed at a market cell in the node economy.', ...NOTHING };
+      const line = activeProducts.find((product) => lineNodeIdOf(product) !== null);
+      const lineNodeId = line === undefined ? null : lineNodeIdOf(line);
+      const lineNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId];
+      if (line === undefined || lineNode === undefined) return { intent: null, reason: `${company.name} runs no node line to aim.`, ...NOTHING };
+      return {
+        intent: { type, productId: line.id, targetIndustry: targetOf(line, lineNode), segment: line.segment },
+        bounds: [],
+        targets: SECTORS.map((sector) => ({ id: sector, label: `${sector.replace(/_/g, ' ')} (${line.name})` })),
         maxCashUsd: null,
       };
     }

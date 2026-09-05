@@ -11,7 +11,7 @@ import { cx } from './tokens';
 /**
  * The floating action queue.
  *
- * Screens add to it; End Quarter consumes it. It is deliberately always
+ * Screens add to it; End Quarter reads it. It is deliberately always
  * visible while non-empty, because the whole quarter is a set of commitments a
  * player should be able to see the size of without leaving what they are doing.
  *

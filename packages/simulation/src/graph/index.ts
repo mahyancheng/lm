@@ -19,6 +19,7 @@ export {
   capacityRateUsd,
   capacityStockOf,
   createNodeCostCache,
+  drawPerUnitAtTier,
   drawPerUnitOf,
   ownedNodeIdsOf,
   indexNodeLines,
@@ -34,18 +35,48 @@ export {
 export type { LaunchableNode, NodeLineIndex } from './lines';
 
 export {
+  CAPACITY_FOOTHOLD_SHARE,
+  DEMAND_LEVEL_BOUNDS,
   NEUTRAL_SEGMENT_APPETITE,
   NODE_PRICE_REPORT_LIMIT,
   NODE_PRICE_REPORT_THRESHOLD,
   NODE_WORLD_SHIFTER,
+  SIZED_CUSTOMERS,
+  SIZE_FACTOR_BOUNDS,
+  bucketShare,
+  cellDemandLevel,
+  cellEndDemandUnits,
   endDemandUnits,
+  industrySizeFactors,
+  launchCapacityPreview,
+  marketCellWeight,
+  marketCellsOf,
   nodeBalances,
   priceNodes,
   producibleUnits,
   segmentAppetite,
+  sizeFactorFor,
   worldShifterFor,
 } from './market';
-export type { NodeBalance } from './market';
+export type { LaunchCapacityPreview, NodeBalance, WeightedCell } from './market';
+
+export {
+  SWITCH_QUALITY_FACTOR,
+  admissibleSetFor,
+  cellKey,
+  cellOf,
+  defaultIndustryFor,
+  fillFor,
+  fillsOf,
+  resolveFill,
+  resolveFills,
+  slotAdmits,
+  slotForInput,
+  supplierAskFor,
+  targetOf,
+  withFill,
+} from './slots';
+export type { FillOverride, FillRoute, MarketCell, ResolvedFill, SupplierAsk } from './slots';
 
 export {
   LICENCE_ROYALTY_BOUNDS,
@@ -78,22 +109,22 @@ export {
   lineIsBlocked,
   namedSupplierPriceUsd,
   openMarketPriceUsd,
-  supplierAskFor,
   unitCostOf,
   unitCostOfProduct,
 } from './cost';
-export type { SupplierAsk } from './cost';
+
+export { DESCRIBED_SLOTS, describeLine, describeSource, industryWord, possessiveOf, proseLabel, targetPhrase, withArticle } from './describe';
 
 export {
   MARKET_QUALITY,
   biggestCostSentence,
   costBreakdown,
-  inputOptions,
   nodeEntryRoutes,
   nodeSellersFor,
   priceVerdict,
+  slotOptions,
 } from './options';
-export type { CostBreakdownRow, InputRoute, InputRouteKind, MissingNodeRoute, NodeEntryRoutes, NodeInputOptions, PriceVerdict } from './options';
+export type { CostBreakdownRow, InputRoute, InputRouteKind, MissingNodeRoute, NodeEntryRoutes, NodeSlotOptions, PriceVerdict, SlotCandidate } from './options';
 
 export { chainNodeIds, neighbourhoodNodeIds, nodeMapFor, structuralWires } from './projection';
 export type { NodeMapEntry, NodeMapView, NodeMapWire, NodeSupplyWire } from './projection';

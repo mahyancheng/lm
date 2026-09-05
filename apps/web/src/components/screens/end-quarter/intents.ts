@@ -6,7 +6,7 @@
  * - **What is it?** — `describeIntent`, a label plus the terms a player is
  *   actually committing to, formatted through `@frontier/shared` so a figure
  *   reads the same here as it does on the screen that produced it.
- * - **When does it run?** — `phaseOfIntent`, the resolution phase that consumes
+ * - **When does it run?** — `phaseOfIntent`, the resolution phase that reads
  *   it. UI_SYSTEM §17 groups End Quarter by exactly this.
  * - **What does it cost?** — `cashEffectOf`, an *estimate* built from the
  *   validator's own affordability model (`quarterlyHireCostUsd`) and from the
@@ -164,6 +164,21 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
           term('Input', humanise(intent.inputCategoryId)),
           term('Supplier', intent.supplierCompanyId ?? 'Open market'),
         ],
+      };
+
+    case 'fill_slot':
+      return {
+        label: `Fill the ${humanise(intent.slotId)} slot of ${intent.productId}`,
+        terms: [
+          term('Node', intent.nodeId === null ? 'Left empty' : humanise(intent.nodeId)),
+          term('Source', intent.supplierCompanyId ?? 'Open market'),
+        ],
+      };
+
+    case 'set_target_market':
+      return {
+        label: `Aim ${intent.productId} at a market`,
+        terms: [term('Industry', humanise(intent.targetIndustry)), term('Customer type', humanise(intent.segment))],
       };
 
     case 'set_marketing_budget':
@@ -458,7 +473,7 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
 /* -------------------------------------------------------------------------- */
 
 /**
- * The resolution phase that consumes each action type.
+ * The resolution phase that reads each action type.
  *
  * Mirrors the resolver's own routing: `RESOLUTION_PHASES` fixes the order, and
  * every action is read by exactly one phase after `action_collection` has
@@ -519,6 +534,8 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   marketing_campaign: 'product_demand_resolution',
   set_supply_terms: 'product_demand_resolution',
   choose_supplier: 'product_demand_resolution',
+  fill_slot: 'product_demand_resolution',
+  set_target_market: 'product_demand_resolution',
 
   give_guidance: 'disclosure_resolution',
   respond_crisis: 'disclosure_resolution',

@@ -79,6 +79,7 @@ import { isNodePublic } from '../research/projection';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { CAPACITY_UNIT_USD, createNodeCostCache, drawPerUnitOf, lineNodeIdOf, lineNodeOf } from '../graph/lines';
 import { unitCostOf } from '../graph/cost';
+import { npcFillsFor, npcSupplyTermsFor } from './npcSlots';
 import { activeCompanies, activeProducts, capabilityIndex, clamp, emitEvent, money, ratio, roleHeadcount, totalHeadcount, unit } from './util';
 
 /** True when some other source already queued an action for this company this quarter. */
@@ -755,6 +756,19 @@ export function applyNodeDefaults(draft: SessionState, ctx: ResolverContext, sta
       const nextUsd = Math.max(floorUsd, Math.round((before + (targetUsd - before) * NPC_PRICE_TRACKING) * 100) / 100);
       if (Math.abs(nextUsd - before) <= before * NPC_PRICE_MOVE_FLOOR) continue;
       intents.push({ type: 'set_product_price', productId: product.id, pricePerSeatUsd: nextUsd });
+    }
+
+    // The composed line: every node line publishes itself and refills its
+    // slots by the policies in npcSlots.ts, each skipped where the company has
+    // already been told this quarter.
+    for (const product of activeProducts(company)) {
+      const node = lineNodeOf(product);
+      if (node === undefined) continue;
+      if (!told('set_supply_terms', product.id)) {
+        const terms = npcSupplyTermsFor(product);
+        if (terms !== null) intents.push(terms);
+      }
+      if (!told('fill_slot', product.id)) intents.push(...npcFillsFor(draft, company, product, node, cache));
     }
 
     if (intents.length === 0) continue;

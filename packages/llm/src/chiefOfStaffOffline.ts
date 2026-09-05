@@ -72,6 +72,9 @@ export const COS_QUESTION_KINDS = [
   // STAGE 5 — consolidated across every company the seat directs, not this
   // one alone. Appended: enum growth stays at the end.
   'group',
+  // World 3 — what a line is built on: the composition sentence the dossier
+  // carries per line. Appended before the fallback, as `group` was.
+  'composition',
   'unclassified',
 ] as const;
 export type CosQuestionKind = (typeof COS_QUESTION_KINDS)[number];
@@ -86,6 +89,10 @@ export type CosQuestionKind = (typeof COS_QUESTION_KINDS)[number];
  * is no model to do better.
  */
 const PATTERNS: readonly (readonly [CosQuestionKind, readonly string[]])[] = [
+  // Tested first: "what is my app built on" and "which model does our suite
+  // run on" share no needle with anything below, and "run on" must not be
+  // read as "run out".
+  ['composition', ['built on', 'built with', 'run on', 'runs on', 'running on', 'which model', 'what model', 'which harness', 'what harness', 'composed of', 'made up of', 'aimed at', 'built as']],
   ['runway', ['runway', 'how long can we last', 'how long do we have', 'out of money', 'run out']],
   ['burn', ['burn', 'burning', 'spending a quarter', 'how much are we spending']],
   ['cash', ['cash', 'how much money', 'bank', 'balance', 'liquid']],
@@ -170,11 +177,13 @@ function marketRequest(kind: LookupKind, message: string): LookupRequest | null 
     // (`answerFromFinding`, `actionsFromFindings`) still answer them.
     case 'suppliers':
     case 'customers':
-    // `unit_cost` and `entry_path` are the same shape of problem: both need a
-    // node id or a sector the founder named, which a keyword table cannot
-    // safely guess from free text, so neither is ever built here.
+    // `unit_cost`, `entry_path` and `slot_candidates` are the same shape of
+    // problem: each needs a node id, a slot id or a sector the founder named,
+    // which a keyword table cannot safely guess from free text, so none is
+    // ever built here.
     case 'unit_cost':
     case 'entry_path':
+    case 'slot_candidates':
     // `own_position` is always appended and is never the market half.
     case 'own_position':
       return null;
@@ -208,6 +217,14 @@ export function sourcingRequestsFor(message: string): LookupRequest[] {
 /* -------------------------------------------------------------------------- */
 
 const pctWhole = (value: number): string => `${Math.round(value)}%`;
+
+/** A row label in running prose: "Inference API" reads "inference API"; an acronym keeps its case. */
+const inProse = (label: string): string => {
+  const first = label.charAt(0);
+  const second = label.charAt(1);
+  if (first === '' || second === '' || first !== first.toUpperCase() || second !== second.toLowerCase()) return label;
+  return `${first.toLowerCase()}${label.slice(1)}`;
+};
 
 /** One finding as the sentences a founder reads. Every figure comes off the row. */
 export function answerFromFinding(finding: LookupResult): string {
@@ -310,7 +327,18 @@ export function answerFromFinding(finding: LookupResult): string {
         ? `${finding.label} costs nothing we can measure to make.`
         : `One ${finding.unitLabel} of ${finding.label} costs ${formatMoney(finding.unitCostUsd)} to make against a market price of ${formatMoney(
             finding.marketPriceUsd,
-          )}${finding.rows[0] === undefined ? '' : `, and the biggest line of that is ${finding.rows[0].label.toLowerCase()} at ${formatMoney(finding.rows[0].amountUsd)}`}.`;
+          )}${finding.rows[0] === undefined ? '' : `, and the biggest line of that is ${inProse(finding.rows[0].label)} at ${formatMoney(finding.rows[0].amountUsd)}`}.`;
+
+    case 'slot_candidates': {
+      if (finding.rows.length === 0) return `Nothing can fill the ${finding.slotLabel.toLowerCase()} slot right now.`;
+      const named = finding.rows.slice(0, 3).map(
+        (row) =>
+          `${row.label} ${row.sourceKind === 'make' ? 'made ourselves' : row.sourceKind === 'buy' ? `from ${row.sellerName}` : 'from the open market'} at ${formatMoney(
+            row.unitPriceUsd,
+          )} a unit, quality ${row.qualityScorePct} of 100${row.blocked ? ' (blocked: nobody owns it)' : ''}`,
+      );
+      return `${finding.rows.length} way${finding.rows.length === 1 ? '' : 's'} to fill the ${finding.slotLabel.toLowerCase()} slot: ${named.join('; ')}.`;
+    }
 
     case 'entry_path':
       return finding.alreadyIn
@@ -370,6 +398,13 @@ export function actionsFromFindings(findings: readonly LookupResult[]): ActionIn
         if (row?.intent != null) out.push(row.intent);
         break;
       }
+      case 'slot_candidates': {
+        // The row the engine ranks first that carries a fill: the slot's own
+        // order is the roll-up's, so this is the top route of the first node.
+        const row = finding.rows.find((entry) => entry.intent !== null);
+        if (row?.intent != null) out.push(row.intent);
+        break;
+      }
       // `customers` names counterparties; it carries no action of our own to offer.
       case 'customers':
       default:
@@ -425,8 +460,30 @@ const PATHS: Readonly<Record<CosQuestionKind, string>> = {
   people: 'People',
   board: 'Boardroom',
   group: 'Group',
+  composition: 'Products',
   unclassified: 'Command Centre',
 };
+
+/**
+ * The line a message names, by its name or by the node it sells: "what is my
+ * Copilot built on" picks Nexus Copilot. Null when no line is named, in which
+ * case every composed line is read out.
+ */
+export function namedLine(lines: readonly CosProductLine[], message: string): CosProductLine | null {
+  const text = message.toLowerCase();
+  const active = lines.filter((line) => line.isActive);
+  const byName = active.filter((line) => line.name.length > 0 && text.includes(line.name.toLowerCase()));
+  if (byName.length > 0) return [...byName].sort((a, b) => b.name.length - a.name.length || (a.productId < b.productId ? -1 : 1))[0] as CosProductLine;
+  const byNode = active.filter((line) => line.categoryId.length > 0 && text.includes(line.categoryId.replace(/^[a-z]{3}_/, '').replace(/_/g, ' ')));
+  if (byNode.length > 0) return [...byNode].sort((a, b) => b.categoryId.length - a.categoryId.length || (a.productId < b.productId ? -1 : 1))[0] as CosProductLine;
+  return null;
+}
+
+/** "Your AI software suite …" — the composition sentence as its own sentence. */
+function compositionSentence(line: CosProductLine): string {
+  const text = line.composition.trim();
+  return text.length === 0 ? '' : `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
+}
 
 /**
  * The answer to one classified question, from the dossier alone.
@@ -434,9 +491,24 @@ const PATHS: Readonly<Record<CosQuestionKind, string>> = {
  * Returns null when the dossier does not hold enough to answer, which is a real
  * answer: saying "I do not have that" beats estimating it.
  */
-export function answerFromDossier(kind: CosQuestionKind, dossier: ChiefOfStaffDossier): string | null {
+export function answerFromDossier(kind: CosQuestionKind, dossier: ChiefOfStaffDossier, message = ''): string | null {
   const f = dossier.finances;
   switch (kind) {
+    case 'composition': {
+      // The sentence is the engine's (`describeLine`), carried on the dossier
+      // line; nothing here reads the graph. A world without slots says so.
+      const composed = dossier.products.lines.filter((line) => line.isActive && line.composition.trim().length > 0);
+      if (composed.length === 0) {
+        return dossier.products.lines.length === 0
+          ? 'There is no product line to describe.'
+          : 'Our lines are not composed by slot in this world: each is a catalogued product with its own inputs, not a chain of chosen nodes.';
+      }
+      const named = namedLine(composed, message);
+      if (named !== null) return `${named.name}: ${compositionSentence(named)} Change the model, harness or supplier with fill_slot; change who it is aimed at with set_target_market.`;
+      const listed = composed.slice(0, 3).map((line) => `${line.name} — ${compositionSentence(line)}`);
+      return `${listed.join(' ')}${composed.length > 3 ? ` And ${composed.length - 3} more.` : ''}`;
+    }
+
     case 'cash':
       return `Cash on hand is ${formatMoney(f.cashUsd)}. Net cash movement is ${formatMoney(f.quarterlyBurnUsd)} a quarter and debt outstanding is ${formatMoney(
         f.debtUsd,
@@ -608,10 +680,10 @@ export function offlineChiefOfStaff(input: ChiefOfStaffInput): ChiefOfStaffInter
   }
 
   const kind = classifyQuestion(input.playerMessage);
-  const answer = dossier === null ? null : answerFromDossier(kind, dossier);
+  const answer = dossier === null ? null : answerFromDossier(kind, dossier, input.playerMessage);
 
   if (answer === null) {
-    const known = dossier === null ? '' : ' I can answer cash, runway, burn, best and worst product, who is circling us, what needs deciding and what actions are open — ask one of those and I will answer it from state.';
+    const known = dossier === null ? '' : ' I can answer cash, runway, burn, best and worst product, what a line is built on, who is circling us, what needs deciding and what actions are open — ask one of those and I will answer it from state.';
     return {
       mode: 'answer',
       reply: truncate(

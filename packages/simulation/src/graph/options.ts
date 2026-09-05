@@ -1,43 +1,40 @@
 /**
  * @frontier/simulation — graph/options.ts
  *
- * What a founder is actually choosing between when they wire an input, and
- * what stands between them and a node they cannot make yet.
+ * What a founder is actually choosing between when they fill a slot, and what
+ * stands between them and a node they cannot make yet.
  *
- * The launch flow asks two questions in the owner's order — *what does this
- * cost me to make*, then *where does each input come from* — and both are
- * answered here rather than on the client. A screen renders three buttons per
- * input and never walks the graph: `inputOptions` hands it exactly the three
- * shapes the roll-up itself would price the input at, in the roll-up's own
- * order of preference.
+ * The launch flow asks, in the owner's order — *what to sell*, *what goes in
+ * each slot and where it comes from*, *who it is aimed at*, *what it costs to
+ * make*, then *the price* — and the second and fourth of those are answered
+ * here rather than on the client. A screen renders one row per slot, a sheet
+ * of candidate nodes under it and three kinds of route under each candidate,
+ * and never walks the graph: `slotOptions` hands it exactly the shapes the
+ * roll-up itself would price a slot at.
  *
- *   MAKE    you already run a line on it — transferred at your own unit cost.
- *   BUY     a named seller with live terms, at their ask and their quality.
- *   MARKET  spot, at the node's settled price plus `OPEN_MARKET_PREMIUM`.
+ *   MAKE    you already run a line on the candidate — transferred at your own unit cost.
+ *   BUY     a named seller with live terms on it, at their ask and their quality.
+ *   MARKET  spot, at the candidate's settled price plus `OPEN_MARKET_PREMIUM`.
  *
  * Every price on a route comes from `cost.ts` — `unitCostOf`,
  * `openMarketPriceUsd`, `namedSupplierPriceUsd` — so the number a founder is
  * shown before launching is the number the profit and loss will book after it.
  * A route that quoted its own arithmetic would be world 2's per-product margin
  * all over again: a figure that agrees with the income statement until it
- * doesn't.
+ * doesn't. None of the routes is ever disabled: declining to make a thing you
+ * could make is a decision, and the fill records it.
  *
  * Nothing here reads a random number or a clock, and nothing here is reached
  * below world version 3.
  */
 
-import type { Company, EconomicNode, NodeCostCache, SessionState, UnitCostResult } from '@frontier/contracts';
-import {
-  ECONOMIC_NODES_BY_ID,
-  canProduce,
-  economicNodeById,
-  holdsNode,
-  nodeMarketPriceUsd,
-} from '@frontier/contracts';
-import { OPEN_MARKET_PREMIUM, namedSupplierPriceUsd, openMarketPriceUsd, supplierAskFor, unitCostOf } from './cost';
-import { lineNodeIdOf, lineOf } from './lines';
+import type { Company, EconomicNode, NodeCostCache, NodeSlot, NodeSlotKind, NodeRole, SessionState, UnitCostResult } from '@frontier/contracts';
+import { ECONOMIC_NODES_BY_ID, admissibleNodesFor, canProduce, economicNodeById, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
+import { OPEN_MARKET_PREMIUM, namedSupplierPriceUsd, openMarketPriceUsd, unitCostOf } from './cost';
+import { lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf } from './lines';
 import { dataSelfSupplyShare } from './data';
 import { licenceOfferOf, licenceUpfrontUsd, ownsNodeOutright } from './licensing';
+import { resolveFill, type ResolvedFill } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Routes                                                                     */
@@ -46,45 +43,64 @@ import { licenceOfferOf, licenceUpfrontUsd, ownsNodeOutright } from './licensing
 /** The three shapes an input can be answered with, in the roll-up's own order. */
 export type InputRouteKind = 'make' | 'buy' | 'market';
 
-/** One way of getting one input, priced exactly as the roll-up would price it. */
+/** One way of getting one candidate node, priced exactly as the roll-up would price it. */
 export interface InputRoute {
   readonly kind: InputRouteKind;
   /** The counterparty: this company for `make`, the seller for `buy`, null for `market`. */
   readonly supplierCompanyId: string | null;
-  /** The seller's own line, for the `choose_supplier` action. Null for `make` and `market`. */
+  /** The seller's own line for `buy`, the company's own for `make`. Null for `market`. */
   readonly supplierProductId: string | null;
   /** Who this route is with, in words: "Make it yourself", a seller's name, "Open market". */
   readonly label: string;
-  /** What one unit of the input costs by this route. */
+  /** What one unit of the candidate costs by this route: the number the roll-up books. */
   readonly unitPriceUsd: number;
+  /**
+   * What the counterparty itself states: a seller's published ask for `buy`,
+   * before the seller's own energy and load factor and the market's bounds
+   * turn it into `unitPriceUsd`. Equal to `unitPriceUsd` on `make` and `market`.
+   */
+  readonly askUsd: number;
   /** The quality that flows through with it, 0..1. Market is the node's own baseline. */
   readonly qualityScore: number;
-  /** Whole percent this route is above (positive) or below (negative) the node's market price. */
+  /** Whole percent this route is above (positive) or below (negative) the candidate's market price. */
   readonly premiumPct: number;
-  /** True when this is the route the roll-up would take right now. */
+  /** True when this is the route the slot resolves to right now. */
   readonly chosen: boolean;
 }
 
-/** One declared input of a node, with every route open to this company. */
-export interface NodeInputOptions {
-  readonly inputNodeId: string;
+/** One node that could fill a slot, with every route this company could get it by. */
+export interface SlotCandidate {
+  readonly nodeId: string;
   readonly label: string;
-  /** What one unit of the *input* is, e.g. "wafer", "MWh". */
-  readonly unitLabel: string;
-  /** How many of them one unit of the parent node consumes. */
-  readonly qtyPerUnit: number;
-  /** A substitutable input can always be had; a non-substitutable one can block the line. */
-  readonly substitutable: boolean;
-  /** The node's one settled market price this quarter. */
+  readonly tier: number;
+  /** The candidate's one settled market price this quarter. */
   readonly marketPriceUsd: number;
-  /** Make first, then every open seller best-quality-per-dollar first, then market. */
-  readonly routes: readonly InputRoute[];
-  /** The route the roll-up takes today, or null when the input is blocked. */
-  readonly chosen: InputRoute | null;
-  /** True when nothing can fill it: non-substitutable, nobody named, nobody owns it. */
+  /** How many live lines make it. A relationship, so public. */
+  readonly producerCount: number;
+  /** True when putting this node in the slot would block the line: a blocking slot, and nobody in the world owns it. */
   readonly blocked: boolean;
-  /** The share of this input the company's own data pool already covers, whole percent. */
+  /** The share of a dataset candidate the company's own pool would cover, whole percent. Zero for anything else. */
   readonly selfSuppliedPct: number;
+  /** Make first when the company runs a line on it, then every open seller best-quality-per-dollar first, then market. */
+  readonly routes: readonly InputRoute[];
+}
+
+/** One slot of a node, with every node that could fill it and every route to each. */
+export interface NodeSlotOptions {
+  readonly slotId: string;
+  readonly role: NodeRole;
+  readonly label: string;
+  readonly required: boolean;
+  readonly blocking: boolean;
+  readonly kind: NodeSlotKind;
+  /** How many units of the filling node one unit of the parent takes. */
+  readonly qtyPerUnit: number;
+  /** What one unit of the filling node is, e.g. "wafer", "seat". Every admissible node shares it. */
+  readonly unitLabel: string;
+  /** How the slot resolves today: the node in it and the route. Null only for a slot the table no longer carries. */
+  readonly fill: ResolvedFill | null;
+  /** Every admissible node, in table order. */
+  readonly candidates: readonly SlotCandidate[];
 }
 
 /**
@@ -145,101 +161,134 @@ function premiumPctOf(priceUsd: number, marketPriceUsd: number): number {
 }
 
 /**
- * Every input of `nodeId`, with every route this company could fill it by.
+ * Every slot of `nodeId`, with every node that could fill it and every route
+ * this company could fill it by.
  *
  * `productId` is the company's own line on the node when it already has one —
- * that is what makes a named supplier's choice visible. Pass null while the
- * line is still being launched: nothing is named yet, so the chosen route is
- * whatever the roll-up would fall through to, which is exactly what the launch
- * screen has to show before a wire is drawn.
+ * that is what makes its fills visible. Pass null while the line is still being
+ * launched: nothing is filled yet, so each slot resolves to the table's default
+ * and the roll-up's own order, which is exactly what the launch screen has to
+ * show before a founder has touched anything.
  *
- * The quantities and the order are the node's own. A screen renders this list
- * top to bottom and is finished.
+ * The slots and the candidates come in the table's own order. A screen renders
+ * this list top to bottom and is finished.
  */
-export function inputOptions(
+export function slotOptions(
   state: SessionState,
   company: Company,
   nodeId: string,
   productId: string | null = null,
   cache?: NodeCostCache,
-): readonly NodeInputOptions[] {
+): readonly NodeSlotOptions[] {
   const node = economicNodeById(nodeId);
   if (node === undefined) return [];
 
+  const product = productId === null ? null : (company.products.find((candidate) => candidate.id === productId) ?? null);
   const line = lineOf(state, company.id, nodeId, cache);
   const unitsPerQuarter = Math.max(1, line?.unitsSoldLastQuarter ?? 0);
+  const owned = cache?.ownedNodeIds ?? ownedNodeIdsOf(state);
 
-  return node.consumes.map((input) => {
-    const inputNode = ECONOMIC_NODES_BY_ID[input.nodeId];
-    const marketPriceUsd = nodeMarketPriceUsd(state, input.nodeId);
-    const routes: InputRoute[] = [];
-
-    // The company's own pool answers a dataset input before any route does —
-    // the same order `rollUp` reads it in, so a pool that covers the whole draw
-    // shows as fully self-supplied rather than as a market purchase.
-    const selfShare = dataSelfSupplyShare(company, node, input.nodeId, input.qtyPerUnit, unitsPerQuarter);
-
-    /* --- make -------------------------------------------------------------- */
-    const ownLine = lineOf(state, company.id, input.nodeId, cache);
-    if (ownLine !== undefined) {
-      const ownCost = unitCostOf(state, company, input.nodeId, cache);
-      routes.push({
-        kind: 'make',
-        supplierCompanyId: company.id,
-        supplierProductId: ownLine.productId,
-        label: 'Make it yourself',
-        unitPriceUsd: ownCost.unitCostUsd,
-        qualityScore: qualityOfOwnLine(company, ownLine.productId),
-        premiumPct: premiumPctOf(ownCost.unitCostUsd, marketPriceUsd),
-        chosen: true,
-      });
-    }
-
-    /* --- buy --------------------------------------------------------------- */
-    const chosenSupplier = productId === null ? null : supplierAskFor(state, company, productId, input.nodeId);
-    for (const seller of nodeSellersFor(state, company.id, input.nodeId)) {
-      const priceUsd = namedSupplierPriceUsd(state, seller.company, seller.askUsd, input.nodeId);
-      routes.push({
-        kind: 'buy',
-        supplierCompanyId: seller.company.id,
-        supplierProductId: seller.productId,
-        label: seller.company.name,
-        unitPriceUsd: priceUsd,
-        qualityScore: seller.qualityScore,
-        premiumPct: premiumPctOf(priceUsd, marketPriceUsd),
-        // A named supplier only wins when nothing is made in house: that is the
-        // roll-up's order, not a preference expressed here.
-        chosen: ownLine === undefined && chosenSupplier !== null && chosenSupplier.companyId === seller.company.id,
-      });
-    }
-
-    /* --- market ------------------------------------------------------------ */
-    const spotUsd = openMarketPriceUsd(state, input.nodeId);
-    const blocked = isBlocked(state, company, input.nodeId, input.substitutable, selfShare, cache);
-    routes.push({
-      kind: 'market',
-      supplierCompanyId: null,
-      supplierProductId: null,
-      label: 'Open market',
-      unitPriceUsd: spotUsd,
-      qualityScore: MARKET_QUALITY,
-      premiumPct: Math.round((OPEN_MARKET_PREMIUM - 1) * 100),
-      chosen: ownLine === undefined && chosenSupplier === null && !blocked,
-    });
-
+  return node.slots.map((slot) => {
+    const fill = resolveFill(state, company, product, node, slot, cache);
+    const admissible = admissibleNodesFor(node.id, slot.id);
+    const candidates = admissible.map((candidate) => slotCandidate(state, company, node, slot, candidate, fill, unitsPerQuarter, owned, cache));
     return {
-      inputNodeId: input.nodeId,
-      label: inputNode?.label ?? input.nodeId,
-      unitLabel: inputNode?.unitLabel ?? 'unit',
-      qtyPerUnit: input.qtyPerUnit,
-      substitutable: input.substitutable,
-      marketPriceUsd,
-      routes,
-      chosen: routes.find((route) => route.chosen) ?? null,
-      blocked,
-      selfSuppliedPct: Math.round(Math.min(1, Math.max(0, selfShare)) * 100),
+      slotId: slot.id,
+      role: slot.role,
+      label: slot.label,
+      required: slot.required,
+      blocking: slot.blocking,
+      kind: slot.kind,
+      qtyPerUnit: slot.qtyPerUnit,
+      unitLabel: admissible[0]?.unitLabel ?? 'unit',
+      fill,
+      candidates,
     };
   });
+}
+
+/** One candidate node for one slot, with every route to it priced as the roll-up would. */
+function slotCandidate(
+  state: SessionState,
+  company: Company,
+  node: EconomicNode,
+  slot: NodeSlot,
+  candidate: EconomicNode,
+  fill: ResolvedFill,
+  unitsPerQuarter: number,
+  owned: ReadonlySet<string>,
+  cache?: NodeCostCache,
+): SlotCandidate {
+  const marketPriceUsd = nodeMarketPriceUsd(state, candidate.id);
+  const inSlot = fill.nodeId === candidate.id;
+  const routes: InputRoute[] = [];
+
+  // The company's own pool answers a dataset candidate before any route does —
+  // the same order `rollUp` reads it in, so a pool that covers the whole draw
+  // shows as fully self-supplied rather than as a market purchase.
+  const selfShare = dataSelfSupplyShare(company, node, candidate.id, slot.qtyPerUnit, unitsPerQuarter);
+
+  /* --- make -------------------------------------------------------------- */
+  const ownLine = lineOf(state, company.id, candidate.id, cache);
+  if (ownLine !== undefined) {
+    const ownCost = unitCostOf(state, company, candidate.id, cache);
+    routes.push({
+      kind: 'make',
+      supplierCompanyId: company.id,
+      supplierProductId: ownLine.productId,
+      label: 'Make it yourself',
+      unitPriceUsd: ownCost.unitCostUsd,
+      askUsd: ownCost.unitCostUsd,
+      qualityScore: qualityOfOwnLine(company, ownLine.productId),
+      premiumPct: premiumPctOf(ownCost.unitCostUsd, marketPriceUsd),
+      chosen: inSlot && fill.route === 'make',
+    });
+  }
+
+  /* --- buy --------------------------------------------------------------- */
+  for (const seller of nodeSellersFor(state, company.id, candidate.id)) {
+    const priceUsd = namedSupplierPriceUsd(state, seller.company, seller.askUsd, candidate.id);
+    routes.push({
+      kind: 'buy',
+      supplierCompanyId: seller.company.id,
+      supplierProductId: seller.productId,
+      label: seller.company.name,
+      unitPriceUsd: priceUsd,
+      askUsd: seller.askUsd,
+      qualityScore: seller.qualityScore,
+      premiumPct: premiumPctOf(priceUsd, marketPriceUsd),
+      chosen: inSlot && fill.route === 'buy' && fill.supplierProductId === seller.productId,
+    });
+  }
+
+  /* --- market ------------------------------------------------------------ */
+  // Blocked is the strong claim `resolveFill` makes: a blocking slot whose node
+  // nobody in the world owns or licences. A pool that covers the whole draw, or
+  // a line of the company's own, never blocks.
+  const blocked = slot.blocking && selfShare < 1 && ownLine === undefined && producersOf(state, candidate.id, cache).length === 0 && !owned.has(candidate.id);
+  const spotUsd = openMarketPriceUsd(state, candidate.id);
+  routes.push({
+    kind: 'market',
+    supplierCompanyId: null,
+    supplierProductId: null,
+    label: 'Open market',
+    unitPriceUsd: spotUsd,
+    askUsd: spotUsd,
+    qualityScore: MARKET_QUALITY,
+    premiumPct: Math.round((OPEN_MARKET_PREMIUM - 1) * 100),
+    chosen: inSlot && fill.route === 'market',
+  });
+
+  return {
+    nodeId: candidate.id,
+    label: candidate.label,
+    tier: candidate.tier,
+    marketPriceUsd,
+    producerCount: producersOf(state, candidate.id, cache).length,
+    blocked,
+    selfSuppliedPct: Math.round(Math.min(1, Math.max(0, selfShare)) * 100),
+    routes,
+  };
 }
 
 /**
@@ -253,34 +302,6 @@ export const MARKET_QUALITY = 0.5;
 /** The quality one of this company's own lines delivers, for a `make` route. */
 function qualityOfOwnLine(company: Company, productId: string): number {
   return company.products.find((product) => product.id === productId)?.qualityScore ?? MARKET_QUALITY;
-}
-
-/**
- * Whether an input cannot be had at any price.
- *
- * The same strong test `priceInput` applies: substitutable never blocks, a pool
- * that covers the draw never blocks, and otherwise it blocks only when nobody
- * in the world owns or licences the node — not merely when nobody happens to be
- * running a line on it this quarter, which the market already prices.
- */
-function isBlocked(
-  state: SessionState,
-  company: Company,
-  inputNodeId: string,
-  substitutable: boolean,
-  selfShare: number,
-  cache?: NodeCostCache,
-): boolean {
-  if (substitutable || selfShare >= 1) return false;
-  if (lineOf(state, company.id, inputNodeId, cache) !== undefined) return false;
-  const owned = cache?.ownedNodeIds;
-  if (owned !== undefined) return !owned.has(inputNodeId);
-  for (const candidate of state.companies) {
-    if (!candidate.isActive) continue;
-    if ((candidate.ownedNodes ?? []).includes(inputNodeId)) return false;
-    if ((candidate.licences ?? []).some((licence) => licence.nodeId === inputNodeId)) return false;
-  }
-  return true;
 }
 
 /* -------------------------------------------------------------------------- */

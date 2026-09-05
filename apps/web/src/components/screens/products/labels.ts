@@ -49,7 +49,7 @@ export function productGrossProfit(product: Product): number {
   return productRevenue(product) * product.grossMarginPct;
 }
 
-/** Accelerator-equivalents this product's installed base consumes to be served. */
+/** Accelerator-equivalents this product's installed base draws to be served. */
 export function productServingUnits(session: SessionState, product: Product): number {
   const perUnit = customersPerUnit(session, product.computeIntensity);
   return perUnit <= 0 ? 0 : product.activeCustomers / perUnit;

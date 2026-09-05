@@ -17,6 +17,15 @@ import {
 import {
   ACTION_TYPES,
   ALL_BACKGROUNDS,
+  FillSlotActionSchema,
+  LaunchProductActionSchema,
+  LaunchSlotChoiceSchema,
+  SetTargetMarketActionSchema,
+  CosProductLineSchema,
+  LookupRequestSchema,
+  LookupResultSchema,
+  SlotCandidateRowSchema,
+  UnitCostRowSchema,
   ALL_BACKGROUND_IDS,
   ActionIntentSchema,
   BALANCE_SHEET_TOLERANCE_USD,
@@ -849,7 +858,7 @@ describe('constants and invariants', () => {
   // discriminated unions rather than inserted, which is what the append-only
   // test below polices.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.10.0');
+    expect(CONTRACTS_VERSION).toBe('1.11.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {
@@ -948,8 +957,22 @@ const LLM_FACING_SCHEMAS: ReadonlyArray<readonly [string, z.ZodTypeAny]> = [
   ['GmProposalBatchSchema', GmProposalBatchSchema],
   ['WorldModifierProposalSchema', WorldModifierProposalSchema],
   ['ActionIntentSchema', ActionIntentSchema],
+  // The three world-3 composition actions, pinned on their own beside the
+  // union so a regression in one names itself.
+  ['LaunchProductActionSchema', LaunchProductActionSchema],
+  ['LaunchSlotChoiceSchema', LaunchSlotChoiceSchema],
+  ['FillSlotActionSchema', FillSlotActionSchema],
+  ['SetTargetMarketActionSchema', SetTargetMarketActionSchema],
   ['NpcActionBundleSchema', NpcActionBundleSchema],
   ['ChiefOfStaffInterpretationSchema', ChiefOfStaffInterpretationSchema],
+  // The sourcing loop's two halves and the dossier line, pinned on their own:
+  // every key of a request is what the model must emit, every key of a result
+  // and a line is a sentence in the prompt.
+  ['LookupRequestSchema', LookupRequestSchema],
+  ['LookupResultSchema', LookupResultSchema],
+  ['CosProductLineSchema', CosProductLineSchema],
+  ['UnitCostRowSchema', UnitCostRowSchema],
+  ['SlotCandidateRowSchema', SlotCandidateRowSchema],
   ['InnovationProposalSchema', InnovationProposalSchema],
   ['ConditionalCommitmentSchema', ConditionalCommitmentSchema],
   ['CharacterReplySchema', CharacterReplySchema],

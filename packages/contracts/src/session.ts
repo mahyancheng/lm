@@ -677,6 +677,12 @@ export const SessionStateSchema = z
       .describe(
         'World version 3: the price index of every economic node, whole numbers around a baseline of 100, multiplied into that node\'s own basePriceUsd. One price per node per quarter, computed from last quarter\'s supply and demand and stored here rather than recomputed inside any loop. Absent in world versions 1 and 2, where the neutral reading is the baseline.',
       ),
+    industryBaselineUsd: z
+      .record(SectorSchema, z.number().min(0))
+      .optional()
+      .describe(
+        'World version 3: each sector\'s revenue at seed, in dollars, written once when the world is built. The denominator of the size factor that scales enterprise and developer demand in a market cell with how large the buying industry has become. Absent in worlds 1 and 2, and on a world-3 save from before the field existed, both of which read neutral.',
+      ),
     regionTolls: z
       .record(z.string(), z.number().int().min(0).max(TOLL_MAX_PCT))
       .optional()

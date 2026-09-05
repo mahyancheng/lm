@@ -1699,7 +1699,7 @@ export function useLeaderboards(board?: Leaderboard['board']): Leaderboard[] {
   }, [session, board]);
 }
 
-/** The queue the End Quarter screen consumes and the tray displays. */
+/** The queue the End Quarter screen reads and the tray displays. */
 export function useQueuedActions(): QueuedActionEntry[] {
   const { queuedActions, validations } = useStore();
   return useMemo(

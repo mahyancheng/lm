@@ -8,20 +8,21 @@
  * the cursor. Everything geometric it does comes out of `geometry.ts`, so the
  * picture can be asserted without mounting anything.
  *
- * What is drawn, from the back forward: a dotted grid, the solid flow wires,
- * the dashed supplier wires with their hanging nodes, then the cards. Cards
- * last, so a wire never draws over the thing it connects.
+ * What is drawn, from the back forward: a dotted grid, the faint admissible
+ * wires of the selected card, the solid flow wires, the dashed slot wires with
+ * their hanging nodes, then the cards. Cards last, so a wire never draws over
+ * the thing it connects.
  *
  * Accessibility and the phone come first in two concrete ways. Every card, port
- * and hanging supplier has an invisible 44px hit rectangle over its glyph, so a
- * 9px sub-port dot is still a thumb-sized target. And the canvas takes a
+ * and hanging node has an invisible 44px hit rectangle over its glyph, so a
+ * 9px slot-port dot is still a thumb-sized target. And the canvas takes a
  * `focusNodeIds` and refits whenever it changes, which is how a 390px screen
  * always has something readable on it rather than a wall of cards at 30%.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatMoney } from '@frontier/shared';
-import { Icon, TONE_VAR, cx } from '@/components/ui';
+import { Icon, TONE_VAR, cx, sectorLabel } from '@/components/ui';
 import {
   CARD_RADIUS,
   MAX_SCALE,
@@ -35,6 +36,7 @@ import {
   SUB_PORT_R,
   SUPPLIER_R,
   TAP,
+  TARGET_H,
   type Point,
   type Viewport,
   boundsOf,
@@ -49,7 +51,7 @@ import {
   viewportTransform,
   zoomAbout,
 } from './geometry';
-import { STANDING_TONE, focusBoxes, type CanvasModel, type CanvasNode, type CanvasSubPort } from './model';
+import { STANDING_TONE, focusBoxes, targetLineOf, type CanvasModel, type CanvasNode, type CanvasSlotPort, type CanvasWire } from './model';
 
 export interface CanvasProps {
   readonly model: CanvasModel;
@@ -57,8 +59,8 @@ export interface CanvasProps {
   readonly focusNodeIds: readonly string[] | null;
   readonly selectedNodeId: string | null;
   readonly onSelectNode: (nodeId: string) => void;
-  /** Tapping a sub-port opens the wiring for that input. */
-  readonly onSelectInput?: (nodeId: string, inputNodeId: string) => void;
+  /** Tapping a slot port, or the node hanging under it, opens that slot's candidates. */
+  readonly onSelectInput?: (nodeId: string, slotId: string) => void;
   /** Canvas height in CSS pixels. The width is whatever the column gives it. */
   readonly height?: number;
   readonly className?: string;
@@ -195,17 +197,28 @@ export function Canvas({
           <rect width="100%" height="100%" fill="url(#fc-canvas-dots)" />
 
           <g transform={viewportTransform(viewport)}>
-            {model.wires.map((wire) => (
-              <path
-                key={wire.key}
-                d={wire.path}
-                fill="none"
-                stroke="var(--fc-ink-faint)"
-                strokeWidth={wire.kind === 'requires' ? 1 : 1.6}
-                strokeDasharray={wire.kind === 'requires' ? '3 4' : undefined}
-                opacity={wire.kind === 'requires' ? 0.36 : 0.55}
-              />
-            ))}
+            {/* Faint first, so structure draws over the alternatives. A faint
+                wire is every other node a slot admits, and it is shown only
+                for the selected card: the map's answer to "what else could go
+                here" without drawing every harness on every app at once. */}
+            {model.wires
+              .filter((wire) => wire.emphasis === 'faint' && selectedNodeId !== null && (wire.fromNodeId === selectedNodeId || wire.toNodeId === selectedNodeId))
+              .map((wire) => (
+                <path key={wire.key} d={wire.path} fill="none" stroke="var(--fc-ink-faint)" strokeWidth={1} strokeDasharray="2 5" opacity={0.4} />
+              ))}
+            {model.wires
+              .filter((wire) => wire.emphasis === 'solid')
+              .map((wire) => (
+                <path
+                  key={wire.key}
+                  d={wire.path}
+                  fill="none"
+                  stroke={wireStroke(wire)}
+                  strokeWidth={wire.kind === 'requires' ? 1 : wire.kind === 'delivery' ? 1.8 : 1.6}
+                  strokeDasharray={wire.kind === 'requires' ? '3 4' : undefined}
+                  opacity={wire.kind === 'requires' ? 0.36 : wire.kind === 'delivery' ? 0.75 : 0.55}
+                />
+              ))}
 
             {model.nodes.map((node) => (
               <NodeCard
@@ -243,45 +256,52 @@ export function Canvas({
 /*  One card                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/** The stroke of a solid wire: a delivery wire carries the brand, structure stays quiet. */
+function wireStroke(wire: CanvasWire): string {
+  return wire.kind === 'delivery' ? TONE_VAR.brand : 'var(--fc-ink-faint)';
+}
+
 interface NodeCardProps {
   readonly node: CanvasNode;
   readonly selected: boolean;
   readonly onSelect: () => void;
-  readonly onSelectInput?: (nodeId: string, inputNodeId: string) => void;
+  readonly onSelectInput?: (nodeId: string, slotId: string) => void;
   readonly tapped: (action: () => void) => () => void;
 }
 
 /**
- * The card, its name below it, its ports and its hanging suppliers.
+ * The card, its name below it, its ports and its hanging nodes.
  *
  * The name is deliberately *outside* the card — that is the reference's
  * arrangement and it is the right one, because it leaves the card itself for
  * one icon and one state colour, and a card that carries one encoding can be
- * read at any zoom.
+ * read at any zoom. A delivery slot drawn as a wire to a card on the right
+ * takes no port on the bottom edge: the card it points at is its hanging node.
  */
 function NodeCard({ node, selected, onSelect, onSelectInput, tapped }: NodeCardProps): React.JSX.Element {
   const { box } = node;
   const tone = TONE_VAR[STANDING_TONE[node.standing]];
   const input = inputPortOf(box);
   const output = outputPortOf(box);
-  const ports = subPortsOf(box, node.subPorts.length);
-  const slots = supplierSlotsOf(box, node.subPorts.length);
+  const hanging = node.slots.filter((port) => !port.viaWire);
+  const ports = subPortsOf(box, hanging.length);
+  const slots = supplierSlotsOf(box, hanging.length);
 
   return (
     <g>
-      {/* Hanging suppliers first: behind the card, so a wire that leaves the
+      {/* Hanging nodes first: behind the card, so a wire that leaves the
           bottom edge is covered by the card rather than crossing it. */}
-      {node.subPorts.map((port, index) => {
+      {hanging.map((port, index) => {
         const from = ports[index];
         const to = slots[index];
         if (from === undefined || to === undefined) return null;
         return (
-          <SubPortBranch
-            key={port.inputNodeId}
+          <SlotBranch
+            key={port.slotId}
             port={port}
             from={from}
             to={to}
-            onSelect={onSelectInput === undefined ? undefined : tapped(() => onSelectInput(node.nodeId, port.inputNodeId))}
+            onSelect={onSelectInput === undefined ? undefined : tapped(() => onSelectInput(node.nodeId, port.slotId))}
           />
         );
       })}
@@ -348,6 +368,19 @@ function NodeCard({ node, selected, onSelect, onSelectInput, tapped }: NodeCardP
       >
         {clip(node.subtitle, 30)}
       </text>
+      {/* Where the viewer's own line is aimed: the industry and who signs. */}
+      {node.target === null ? null : (
+        <text
+          x={box.x + box.width / 2}
+          y={box.y + box.height + NAME_GAP + NAME_H + SUBTITLE_H + TARGET_H - 5}
+          textAnchor="middle"
+          fontSize={9.5}
+          fontWeight={600}
+          fill={TONE_VAR.brand}
+        >
+          {clip(targetLineOf(node.target, sectorLabel), 30)}
+        </text>
+      )}
 
       {/* The card's own 44px target, over everything it owns. */}
       <rect
@@ -359,38 +392,58 @@ function NodeCard({ node, selected, onSelect, onSelectInput, tapped }: NodeCardP
         style={{ cursor: 'pointer' }}
         onPointerUp={onSelect}
       >
-        <title>{`${node.label} — ${node.subtitle}`}</title>
+        <title>{node.description === null ? `${node.label} — ${node.subtitle}` : `${node.label} — ${node.description}`}</title>
       </rect>
     </g>
   );
 }
 
-/** One sub-port, its dashed wire, and whatever hangs on the end of it. */
-function SubPortBranch({
+/** The second line under a hanging node: who the slot's node comes from, or why it cannot. */
+export function fillCaption(port: CanvasSlotPort): string {
+  const fill = port.fill;
+  if (fill === null) return 'empty';
+  if (fill.blocked) return 'nobody makes it';
+  if (fill.supplier !== null) return fill.supplier.name;
+  return 'open market';
+}
+
+/** One slot port, its dashed wire, and the node hanging on the end of it. */
+function SlotBranch({
   port,
   from,
   to,
   onSelect,
 }: {
-  readonly port: CanvasSubPort;
+  readonly port: CanvasSlotPort;
   readonly from: Point;
   readonly to: Point;
   readonly onSelect?: () => void;
 }): React.JSX.Element {
-  const tone = port.blocked ? TONE_VAR.loss : port.madeInHouse ? TONE_VAR.brand : port.supplier === null ? 'var(--fc-ink-faint)' : TONE_VAR.info;
+  const fill = port.fill;
+  const tone =
+    fill === null
+      ? 'var(--fc-ink-faint)'
+      : fill.blocked
+        ? TONE_VAR.loss
+        : fill.route === 'make'
+          ? TONE_VAR.brand
+          : fill.route === 'buy'
+            ? TONE_VAR.info
+            : 'var(--fc-ink-faint)';
 
   return (
     <g>
       <path d={supplierWire(from, to)} fill="none" stroke={tone} strokeWidth={1.2} strokeDasharray="4 4" opacity={0.7} />
       <circle cx={from.x} cy={from.y} r={SUB_PORT_R} fill="var(--fc-surface)" stroke={tone} strokeWidth={1.6} />
-      {/* A red asterisk on a required input — the reference's own mark, and the
-          one that says "this line ships nothing without it". */}
+      {/* A red asterisk on a required slot — the reference's own mark, and the
+          one that says "this line is not this product without it". */}
       {port.required ? (
         <text x={from.x + 6} y={from.y - 4} fontSize={11} fontWeight={700} fill={TONE_VAR.loss}>
           *
         </text>
       ) : null}
 
+      {/* The node in the slot, by its initials; a `+` when the slot is empty. */}
       <circle
         cx={to.x}
         cy={to.y}
@@ -398,23 +451,23 @@ function SubPortBranch({
         fill="var(--fc-surface)"
         stroke={tone}
         strokeWidth={1.6}
-        strokeDasharray={port.supplier === null ? '3 3' : undefined}
+        strokeDasharray={fill === null ? '3 3' : undefined}
       />
-      {port.supplier === null ? (
+      {fill === null ? (
         <text x={to.x} y={to.y + 4} textAnchor="middle" fontSize={13} fontWeight={600} fill="var(--fc-ink-faint)">
           +
         </text>
       ) : (
         <text x={to.x} y={to.y + 4} textAnchor="middle" fontSize={9} fontWeight={700} fill={tone}>
-          {initials(port.supplier.name)}
+          {initials(fill.nodeLabel)}
         </text>
       )}
 
-      <text x={to.x} y={to.y + SUPPLIER_R + 12} textAnchor="middle" fontSize={9} fill="var(--fc-ink-dim)">
-        {clip(port.label, 16)}
+      <text x={to.x} y={to.y + SUPPLIER_R + 11} textAnchor="middle" fontSize={9} fill="var(--fc-ink-dim)">
+        {clip(port.label, 14)}
       </text>
-      <text x={to.x} y={to.y + SUPPLIER_R + 22} textAnchor="middle" fontSize={8.5} fill="var(--fc-ink-faint)">
-        {port.blocked ? 'nobody makes it' : (port.supplier?.name ?? 'open market')}
+      <text x={to.x} y={to.y + SUPPLIER_R + 20} textAnchor="middle" fontSize={8.5} fill="var(--fc-ink-faint)">
+        {clip(fillCaption(port), 16)}
       </text>
 
       {onSelect === undefined ? null : (
@@ -427,7 +480,7 @@ function SubPortBranch({
           style={{ cursor: 'pointer' }}
           onPointerUp={onSelect}
         >
-          <title>{`${port.label}${port.required ? ' (required)' : ''}`}</title>
+          <title>{`${port.label}${port.required ? ' (required)' : ''}${fill === null ? '' : ` — ${fill.nodeLabel}, ${fillCaption(port)}`}`}</title>
         </rect>
       )}
     </g>
@@ -462,7 +515,7 @@ function CanvasButton({
   );
 }
 
-/** Two letters, for a supplier too small to carry a name. */
+/** Two letters, for a node too small to carry a name. */
 export function initials(name: string): string {
   const words = name.split(/\s+/).filter(Boolean);
   const first = words[0]?.[0] ?? '?';

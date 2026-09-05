@@ -82,6 +82,11 @@ export function drawPerUnitOf(node: EconomicNode, product: Product | undefined):
   return node.capacityDrawPerUnit * (product === undefined ? 1 : qualityTierFactor(product));
 }
 
+/** The same draw at a quality tier a line has not been launched at yet: what the launch preview costs against. */
+export function drawPerUnitAtTier(node: EconomicNode, qualityTier: number): number {
+  return node.capacityDrawPerUnit * (0.5 + Math.max(0, qualityTier));
+}
+
 /** The product behind a line, for the two readers that need its quality tier. */
 export function productOf(state: SessionState, companyId: string, productId: string): Product | undefined {
   const company = state.companies.find((candidate) => candidate.id === companyId);

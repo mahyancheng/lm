@@ -1,51 +1,59 @@
 'use client';
 
 /**
- * The world-3 launch ticket: Line → Cost to make → Inputs → Price.
+ * The world-3 launch ticket: What to sell → Inputs → Target → Cost to make → Price.
  *
- * The order is the owner's, and the second step is the one that matters. A
- * founder sees the whole unit cost — every input, every conversion line, sorted
- * biggest first, with the largest named in a sentence — **before** the form
- * shows them a price field at all. World 2 asked for a price against a
- * catalogue reference and computed a margin from compute cost alone; here the
+ * The order is the owner's. A founder picks a node, fills each of its slots —
+ * which model, which harness, from whom — says who the line is aimed at, sees
+ * the whole unit cost of exactly that composition grouped by slot with the
+ * largest named in a sentence, and only then is shown a price field. The
  * margin on the last step is `price − unitCost` over price, where `unitCost` is
- * the number cost of goods will book.
+ * the number cost of goods will book for the fills chosen two steps earlier.
  *
- * A node the company cannot make is never selectable, and never a dead end: it
- * names what is missing and offers the three real routes — research it, licence
- * it, or buy the output instead — with the world's actual answer to each.
+ * A node the company cannot make is never a dead end: the Inputs step names
+ * what is missing and offers the three real routes — research it, licence it,
+ * or buy the output instead — with the world's actual answer to each.
  *
- * World 2's `LaunchModal` is untouched beside this file. Two flows, because
+ * It presents as a sheet — a bottom sheet on a phone, a side pane from `sm`
+ * up — and the slot sheet is hosted inside it rather than stacked over it.
+ * World 2's `LaunchModal` is untouched beside this file: two flows, because
  * they are two economies, and the frozen one does not get edited.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ActionValidationResult, EconomicNode } from '@frontier/contracts';
 import { economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
-import {
-  biggestCostSentence,
-  costBreakdown,
-  inputOptions,
-  nodeEntryRoutes,
-  unitCostOf,
-  type InputRoute,
-  type NodeInputOptions,
-} from '@frontier/simulation';
-import { formatMoney, formatPct } from '@frontier/shared';
-import { CashAfter, Icon, Modal, SliderField, Tag, ValidationBanner, roundStep } from '@/components/ui';
+import { biggestCostSentence, costBreakdown, launchCapacityPreview, nodeEntryRoutes, slotOptions, unitCostOf } from '@frontier/simulation';
+import { formatCount, formatMoney, formatPct } from '@frontier/shared';
+import { CashAfter, Drawer, Icon, SliderField, Tag, ValidationBanner, roundStep, sectorLabel } from '@/components/ui';
 import { setPendingResearchNode, useActiveCompany, useGameActions, useSession } from '@/lib/game';
 import {
+  CUSTOMER_CHIP,
+  DEFAULT_QUALITY_TIER,
   NODE_LAUNCH_STEPS,
+  capacitySentence,
+  costRowsBySlot,
   costingBlockers,
-  defaultWiring,
+  customerChoices,
+  defaultFills,
+  defaultTarget,
   entryRoutes,
+  fillSummary,
+  industryChoices,
   launchIntent,
   launchOptions,
   lockReason,
+  previewFills,
   priceSentence,
+  roleCaption,
+  targetSentence,
+  tierCaption,
+  withChoice,
+  type FillMap,
   type NodeLaunchStep,
-  type WiringMap,
+  type TargetChoice,
 } from './nodeLaunch';
+import { SlotCandidateSheet } from './SlotCandidateSheet';
 
 export interface NodeLaunchModalProps {
   readonly open: boolean;
@@ -53,6 +61,8 @@ export interface NodeLaunchModalProps {
   /** Open straight onto this node — from a card on the canvas. */
   readonly initialNodeId?: string | null;
 }
+
+const LAST_STEP: NodeLaunchStep = 4;
 
 export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLaunchModalProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
@@ -65,67 +75,66 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [marketing, setMarketing] = useState('250000');
-  const [quality, setQuality] = useState(0.5);
-  const [wiring, setWiring] = useState<WiringMap>({});
+  const [tier, setTier] = useState(DEFAULT_QUALITY_TIER);
+  const [fills, setFills] = useState<FillMap>({});
+  const [target, setTarget] = useState<TargetChoice | null>(null);
+  const [sheetSlotId, setSheetSlotId] = useState<string | null>(null);
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
   const node: EconomicNode | undefined = economicNodeById(nodeId);
 
   /* --- the engine's own answers ------------------------------------------ */
-  const cost = useMemo(() => (node === undefined ? null : unitCostOf(session, company, node.id)), [session, company, node]);
-  const rows = useMemo(() => (cost === null ? [] : costBreakdown(cost)), [cost]);
-  const inputs = useMemo(() => (node === undefined ? [] : inputOptions(session, company, node.id)), [session, company, node]);
+  const slots = useMemo(() => (node === undefined ? [] : slotOptions(session, company, node.id, null)), [session, company, node]);
   const routes = useMemo(() => (node === undefined ? null : nodeEntryRoutes(session, company, node.id)), [session, company, node]);
   const marketPriceUsd = node === undefined ? 0 : nodeMarketPriceUsd(session, node.id);
+  const aim = target ?? (node === undefined ? null : defaultTarget(node));
 
+  // The preview costs the composition the founder is drafting at the tier they
+  // are drafting it at — never the memoised line, because there is no line yet.
+  const cost = useMemo(
+    () => (node === undefined ? null : unitCostOf(session, company, node.id, undefined, { fills: previewFills(fills), qualityTier: tier })),
+    [session, company, node, fills, tier],
+  );
   const companyNames = useMemo(() => new Map(session.companies.map((entry) => [entry.id, entry.name])), [session.companies]);
-  const headline = cost === null ? '' : biggestCostSentence(cost, rows, companyNames, (value) => formatMoney(value, 'full'));
+  const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, companyNames, company.id)), [node, cost, companyNames, company.id]);
+  const headline = cost === null ? '' : biggestCostSentence(cost, costBreakdown(cost), companyNames, (value) => formatMoney(value, 'full'));
   const blockers = cost === null ? [] : costingBlockers(cost);
+  // What the line opens with of the company's own bucket: the same share the
+  // production pass will apply the quarter it lands.
+  const capacity = useMemo(() => (node === undefined ? '' : capacitySentence(launchCapacityPreview(session, company, node.id, tier), node, formatCount)), [session, company, node, tier]);
 
-  /* --- opening on a node from the canvas ---------------------------------- */
-  useEffect(() => {
-    if (!open || initialNodeId === null) return;
-    const target = economicNodeById(initialNodeId);
-    if (target === undefined) return;
-    setNodeId(target.id);
-    setName(`${target.label} line`);
-    setPrice(String(Math.round(nodeMarketPriceUsd(session, target.id))));
-    setStep(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialNodeId]);
-
-  // The wiring step opens on whatever the roll-up already does, so a founder who
-  // changes nothing launches at the cost they were just shown.
-  useEffect(() => {
-    setWiring(defaultWiring(inputs));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId]);
-
-  function pickNode(next: EconomicNode, locked: boolean): void {
-    if (locked) return;
+  /* --- opening on a node ---------------------------------------------------- */
+  function startOn(next: EconomicNode): void {
     setNodeId(next.id);
     setName((current) => (current.trim().length > 0 ? current : `${next.label} line`));
     setPrice(String(Math.round(nodeMarketPriceUsd(session, next.id))));
+    setFills(defaultFills(slotOptions(session, company, next.id, null)));
+    setTarget(defaultTarget(next));
+    setSheetSlotId(null);
     setStep(1);
   }
 
-  function wire(inputNodeId: string, route: InputRoute): void {
-    setWiring((current) => ({
-      ...current,
-      [inputNodeId]:
-        route.kind === 'buy'
-          ? { supplierCompanyId: route.supplierCompanyId, supplierProductId: route.supplierProductId }
-          : { supplierCompanyId: null, supplierProductId: null },
-    }));
+  useEffect(() => {
+    if (!open || initialNodeId === null) return;
+    const next = economicNodeById(initialNodeId);
+    if (next === undefined) return;
+    startOn(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialNodeId]);
+
+  // A locked node is not a dead end: the Inputs step names what is missing and
+  // the three routes in, so the row opens like any other.
+  function pickNode(next: EconomicNode): void {
+    startOn(next);
   }
 
   const priceUsd = Math.max(0, Number.parseFloat(price) || 0);
   const marketingUsd = Math.max(0, Number.parseFloat(marketing) || 0);
   const intent = useMemo(
-    () => (node === undefined ? null : launchIntent({ node, name, priceUsd, marketingUsd, quality, wiring })),
-    [node, name, priceUsd, marketingUsd, quality, wiring],
+    () => (node === undefined || aim === null ? null : launchIntent({ node, name, priceUsd, marketingUsd, qualityTier: tier, target: aim, fills })),
+    [node, name, priceUsd, marketingUsd, tier, aim, fills],
   );
-  const preview = intent === null || step !== 3 ? null : validateIntent(intent);
+  const preview = intent === null || step !== LAST_STEP ? null : validateIntent(intent);
 
   function submit(): void {
     if (intent === null) return;
@@ -137,299 +146,324 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
     setName('');
     setPrice('');
     setMarketing('250000');
-    setQuality(0.5);
-    setWiring({});
+    setTier(DEFAULT_QUALITY_TIER);
+    setFills({});
+    setTarget(null);
+    setSheetSlotId(null);
     setResult(null);
     onClose();
   }
 
+  const sheetSlot = sheetSlotId === null ? null : (slots.find((slot) => slot.slotId === sheetSlotId) ?? null);
+  const nextLabel: Readonly<Record<number, string>> = { 1: 'Aim it', 2: 'Cost it', 3: 'Set a price' };
+
   return (
-    <Modal
+    <Drawer
       open={open}
       onClose={close}
       title="Open a line"
-      subtitle="What it costs to make comes before what you charge for it."
-      width="lg"
+      subtitle={node === undefined || step === 0 ? 'What it costs to make comes before what you charge for it.' : `${node.label} · per ${node.unitLabel}`}
+      width={560}
       footer={
-        <>
-          <button type="button" className="btn" onClick={close}>
-            Close
+        sheetSlot !== null ? (
+          <button type="button" className="btn btn-primary min-h-11" onClick={() => setSheetSlotId(null)}>
+            Done with this slot
           </button>
-          {step > 0 ? (
-            <button type="button" className="btn" onClick={() => setStep((current) => (current - 1) as NodeLaunchStep)}>
-              Back
+        ) : (
+          <>
+            <button type="button" className="btn min-h-11" onClick={close}>
+              Close
             </button>
-          ) : null}
-          {step === 3 ? (
-            <button type="button" className="btn btn-primary" disabled={intent === null} onClick={submit}>
-              Queue launch
-            </button>
-          ) : step > 0 ? (
-            <button type="button" className="btn btn-primary" onClick={() => setStep((current) => (current + 1) as NodeLaunchStep)}>
-              {step === 1 ? 'Wire the inputs' : 'Set a price'}
-            </button>
-          ) : null}
-        </>
+            {step > 0 ? (
+              <button type="button" className="btn min-h-11" onClick={() => setStep((current) => (current - 1) as NodeLaunchStep)}>
+                Back
+              </button>
+            ) : null}
+            {step === LAST_STEP ? (
+              <button type="button" className="btn btn-primary min-h-11" disabled={intent === null} onClick={submit}>
+                Queue launch
+              </button>
+            ) : step > 0 ? (
+              <button type="button" className="btn btn-primary min-h-11" onClick={() => setStep((current) => (current + 1) as NodeLaunchStep)}>
+                {nextLabel[step] ?? 'Next'}
+              </button>
+            ) : null}
+          </>
+        )
       }
     >
-      {/* --- breadcrumb ---------------------------------------------------- */}
-      <div className="mb-4 flex flex-wrap items-center gap-1.5 text-[11px]">
-        {NODE_LAUNCH_STEPS.map((label, index) => (
-          <span key={label} className="flex items-center gap-1.5">
-            {index > 0 ? <span className="text-ink-faint">›</span> : null}
-            <button
-              type="button"
-              disabled={index > step}
-              onClick={() => (index <= step ? setStep(index as NodeLaunchStep) : undefined)}
-              className={
-                index === step
-                  ? 'min-h-11 rounded-pill bg-brand-wash px-2 font-semibold text-brand'
-                  : index < step
-                    ? 'min-h-11 rounded-pill px-2 font-medium text-ink-dim'
-                    : 'min-h-11 rounded-pill px-2 font-medium text-ink-faint'
-              }
-            >
-              {label}
-            </button>
-          </span>
-        ))}
-      </div>
+      {sheetSlot !== null ? (
+        <SlotCandidateSheet
+          slot={sheetSlot}
+          companyId={company.id}
+          choice={fills[sheetSlot.slotId]}
+          onChoose={(choice) => setFills((current) => withChoice(current, sheetSlot, choice))}
+          onBack={() => setSheetSlotId(null)}
+        />
+      ) : (
+        <>
+          {/* --- breadcrumb ------------------------------------------------ */}
+          <div className="mb-4 flex flex-wrap items-center gap-1 text-[11px]">
+            {NODE_LAUNCH_STEPS.map((label, index) => (
+              <span key={label} className="flex items-center gap-1">
+                {index > 0 ? <span className="text-ink-faint">›</span> : null}
+                <button
+                  type="button"
+                  disabled={index > step}
+                  onClick={() => (index <= step ? setStep(index as NodeLaunchStep) : undefined)}
+                  className={
+                    index === step
+                      ? 'min-h-11 rounded-pill bg-brand-wash px-2 font-semibold text-brand'
+                      : index < step
+                        ? 'min-h-11 rounded-pill px-2 font-medium text-ink-dim'
+                        : 'min-h-11 rounded-pill px-2 font-medium text-ink-faint'
+                  }
+                >
+                  {label}
+                </button>
+              </span>
+            ))}
+          </div>
 
-      {/* --- 0. which node -------------------------------------------------- */}
-      {step === 0 ? (
-        <ul className="space-y-1.5">
-          {options.map((option) => (
-            <li key={option.node.id}>
-              <button
-                type="button"
-                onClick={() => pickNode(option.node, option.locked)}
-                disabled={option.locked}
-                className={`flex min-h-11 w-full items-center gap-2.5 rounded-card border px-3 py-2 text-left ${
-                  option.node.id === nodeId ? 'border-brand bg-brand-wash' : 'border-hairline bg-surface'
-                } ${option.locked ? 'opacity-60' : ''}`}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12.5px] font-medium text-ink">{option.label}</div>
-                  <div className="truncate text-[10.5px] text-ink-faint">
-                    {option.unitLabel} · {formatMoney(nodeMarketPriceUsd(session, option.node.id))} on the market
-                  </div>
+          {/* --- 0. what to sell -------------------------------------------- */}
+          {step === 0 ? (
+            <ul className="space-y-1.5">
+              {options.map((option) => (
+                <li key={option.node.id}>
+                  <button
+                    type="button"
+                    onClick={() => pickNode(option.node)}
+                    className={`flex min-h-11 w-full items-center gap-2.5 rounded-card border px-3 py-2 text-left ${
+                      option.node.id === nodeId ? 'border-brand bg-brand-wash' : 'border-hairline bg-surface'
+                    } ${option.locked ? 'opacity-70' : ''}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12.5px] font-medium text-ink">{option.label}</div>
+                      <div className="truncate text-[10.5px] text-ink-faint">
+                        {option.unitLabel} · {formatMoney(nodeMarketPriceUsd(session, option.node.id))} on the market
+                      </div>
+                    </div>
+                    {option.alreadySold ? <Tag tone="info">Already yours</Tag> : null}
+                    {option.locked ? <Tag tone="warn">Locked</Tag> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {/* --- 1. inputs: one row per slot -------------------------------- */}
+          {step === 1 && node !== undefined ? (
+            <div className="space-y-3">
+              {routes !== null && !routes.canProduce ? (
+                <div className="rounded-card border border-warn bg-warn-wash px-3 py-2.5">
+                  <p className="text-[12px] leading-snug font-semibold text-warn">{lockReason(routes)}</p>
+                  <ul className="mt-2 space-y-1.5">
+                    {entryRoutes(routes, (value) => formatMoney(value, 'full')).map((route) => (
+                      <li key={route.kind} className="text-[11px] leading-snug">
+                        <span className={route.available ? 'font-semibold text-ink' : 'font-semibold text-ink-faint'}>{route.headline}</span>
+                        <span className="text-ink-dim"> — {route.detail}</span>
+                        {route.kind === 'research' && route.available ? (
+                          <button
+                            type="button"
+                            className="ml-1.5 min-h-11 text-brand underline"
+                            onClick={() => setPendingResearchNode(routes.missing[0]?.nodeId ?? node.id)}
+                          >
+                            Open on the map
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                {option.alreadySold ? <Tag tone="info">Already yours</Tag> : null}
-                {option.locked ? <Tag tone="warn">Locked</Tag> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+              ) : null}
 
-      {/* --- 1. what it costs to make -------------------------------------- */}
-      {step === 1 && node !== undefined && cost !== null ? (
-        <div className="space-y-4">
-          {routes !== null && !routes.canProduce ? (
-            <div className="rounded-card border border-warn bg-warn-wash px-3 py-2.5">
-              <p className="text-[12px] leading-snug font-semibold text-warn">{lockReason(routes)}</p>
-              <ul className="mt-2 space-y-1.5">
-                {entryRoutes(routes, (value) => formatMoney(value, 'full')).map((route) => (
-                  <li key={route.kind} className="text-[11px] leading-snug">
-                    <span className={route.available ? 'font-semibold text-ink' : 'font-semibold text-ink-faint'}>{route.headline}</span>
-                    <span className="text-ink-dim"> — {route.detail}</span>
-                    {route.kind === 'research' && route.available ? (
-                      <button
-                        type="button"
-                        className="ml-1.5 min-h-11 text-brand underline"
-                        onClick={() => setPendingResearchNode(routes.missing[0]?.nodeId ?? node.id)}
-                      >
-                        Open on the map
-                      </button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
+              {slots.length === 0 ? (
+                <p className="text-[12px] text-ink-dim">{node.label} takes no inputs. There is nothing to compose.</p>
+              ) : (
+                <>
+                  <p className="text-[11px] leading-snug text-ink-faint">
+                    Each slot takes any node of its kind, from anyone who sells it. Tap a slot to choose the node and where it comes from.
+                  </p>
+                  <ul className="space-y-1.5">
+                    {slots.map((slot) => (
+                      <li key={slot.slotId}>
+                        <button
+                          type="button"
+                          onClick={() => setSheetSlotId(slot.slotId)}
+                          className="flex min-h-11 w-full items-center gap-2.5 rounded-card border border-hairline bg-surface px-3 py-2 text-left"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="truncate text-[12.5px] font-medium text-ink">{slot.label}</span>
+                              {slot.required ? <span className="font-bold text-loss">*</span> : null}
+                              {roleCaption(slot) === '' ? null : <span className="shrink-0 text-[10.5px] text-ink-faint">· {roleCaption(slot)}</span>}
+                              <span className="figure ml-auto shrink-0 text-[10.5px] text-ink-faint">
+                                {slot.qtyPerUnit} {slot.unitLabel}
+                              </span>
+                            </div>
+                            <div className="truncate text-[11px] text-ink-dim">{fillSummary(slot, fills[slot.slotId], company.id)}</div>
+                          </div>
+                          <Icon name="chevronRight" size={14} accent="neutral" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
           ) : null}
 
-          <div>
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="label-caps-faint">Unit cost</span>
-              <span className="figure text-[20px] font-semibold text-ink">{formatMoney(cost.unitCostUsd, 'full')}</span>
+          {/* --- 2. target: who it is aimed at ------------------------------ */}
+          {step === 2 && node !== undefined && aim !== null ? (
+            <div className="space-y-4">
+              <div>
+                <span className="label-caps-faint">Who signs</span>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {customerChoices(node).map((entry) => (
+                    <button
+                      key={entry.customer}
+                      type="button"
+                      onClick={() => setTarget({ customer: entry.customer, industry: aim.industry })}
+                      className={`min-h-11 rounded-pill border px-3 text-[11.5px] ${
+                        entry.customer === aim.customer ? 'border-brand bg-brand-wash font-semibold text-brand' : 'border-hairline text-ink-dim'
+                      }`}
+                    >
+                      {CUSTOMER_CHIP[entry.customer]}
+                      <span className="figure ml-1 text-[10px] text-ink-faint">{Math.round(entry.weight * 100)}%</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {aim.customer === 'consumer' ? null : (
+                <div>
+                  <span className="label-caps-faint">In which industry</span>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {industryChoices(node, aim.customer).map((entry) => (
+                      <button
+                        key={entry.industry}
+                        type="button"
+                        onClick={() => setTarget({ customer: aim.customer, industry: entry.industry })}
+                        className={`min-h-11 rounded-pill border px-3 text-[11.5px] ${
+                          entry.industry === aim.industry ? 'border-brand bg-brand-wash font-semibold text-brand' : 'border-hairline text-ink-dim'
+                        }`}
+                      >
+                        {sectorLabel(entry.industry)}
+                        <span className="figure ml-1 text-[10px] text-ink-faint">{Math.round(entry.weight * 100)}%</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="rounded-card bg-brand-wash px-3 py-2 text-[12px] leading-snug text-ink">{targetSentence(node, aim)}</p>
+              <p className="text-[10.5px] leading-snug text-ink-faint">
+                Demand is modelled per industry and customer type: a line aimed at logistics enterprises grows with the logistics sector. You can re-aim a live line later.
+              </p>
             </div>
-            <p className="mt-0.5 text-[10.5px] text-ink-faint">per {node.unitLabel}</p>
-            {headline === '' ? null : <p className="mt-2 text-[12px] leading-snug text-ink-dim">{headline}</p>}
-          </div>
+          ) : null}
 
-          <ul className="divide-y divide-hairline">
-            {rows.map((row) => (
-              <li key={row.key} className="flex items-center gap-2 py-1.5">
-                <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{row.label}</span>
-                <span className="figure w-10 shrink-0 text-right text-[10.5px] text-ink-faint">{row.sharePct}%</span>
-                <span className="figure w-24 shrink-0 text-right text-[12px] text-ink">{formatMoney(row.amountUsd, 'full')}</span>
-              </li>
-            ))}
-          </ul>
+          {/* --- 3. what it costs to make ----------------------------------- */}
+          {step === 3 && node !== undefined && cost !== null && grouped !== null ? (
+            <div className="space-y-4">
+              <div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="label-caps-faint">Unit cost</span>
+                  <span className="figure text-[20px] font-semibold text-ink">{formatMoney(cost.unitCostUsd, 'full')}</span>
+                </div>
+                <p className="mt-0.5 text-[10.5px] text-ink-faint">per {node.unitLabel}, with the inputs you chose</p>
+                {headline === '' ? null : <p className="mt-2 text-[12px] leading-snug text-ink-dim">{headline}</p>}
+                {capacity === '' ? null : <p className="mt-2 rounded-card bg-brand-wash px-3 py-2 text-[11.5px] leading-snug text-ink">{capacity}</p>}
+              </div>
 
-          {blockers.length === 0 ? null : (
-            <p className="rounded-card bg-loss-wash px-3 py-2 text-[11px] leading-snug font-semibold text-loss">
-              Nobody in the world makes {blockers.join(', ')}. This line ships nothing until somebody does.
-            </p>
-          )}
-        </div>
-      ) : null}
+              {grouped.inputs.length === 0 ? null : (
+                <div>
+                  <span className="label-caps-faint">Inputs, by slot</span>
+                  <ul className="mt-1 divide-y divide-hairline">
+                    {grouped.inputs.map((row) => (
+                      <li key={row.key} className="flex items-center gap-2 py-1.5">
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12px] text-ink">{row.label}</span>
+                          <span className="block truncate text-[10.5px] text-ink-faint">{row.detail}</span>
+                        </span>
+                        <span className="figure w-10 shrink-0 text-right text-[10.5px] text-ink-faint">{row.sharePct}%</span>
+                        <span className="figure w-24 shrink-0 text-right text-[12px] text-ink">{formatMoney(row.amountUsd, 'full')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-      {/* --- 2. wire the inputs -------------------------------------------- */}
-      {step === 2 && node !== undefined ? (
-        <div className="space-y-3">
-          {inputs.length === 0 ? (
-            <p className="text-[12px] text-ink-dim">{node.label} consumes nothing. There is nothing to wire.</p>
-          ) : (
-            inputs.map((option) => (
-              <InputRow
-                key={option.inputNodeId}
-                option={option}
-                chosenSupplierId={wiring[option.inputNodeId]?.supplierCompanyId ?? null}
-                onWire={(route) => wire(option.inputNodeId, route)}
+              <div>
+                <span className="label-caps-faint">Making it</span>
+                <ul className="mt-1 divide-y divide-hairline">
+                  {grouped.making.map((row) => (
+                    <li key={row.key} className="flex items-center gap-2 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
+                        {row.label}
+                        {row.detail === '' ? '' : <span className="text-ink-faint"> · {row.detail}</span>}
+                      </span>
+                      <span className="figure w-10 shrink-0 text-right text-[10.5px] text-ink-faint">{row.sharePct}%</span>
+                      <span className="figure w-24 shrink-0 text-right text-[12px] text-ink">{formatMoney(row.amountUsd, 'full')}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {blockers.length === 0 ? null : (
+                <p className="rounded-card bg-loss-wash px-3 py-2 text-[11px] leading-snug font-semibold text-loss">
+                  Nobody in the world makes {blockers.join(', ')}. This line ships nothing until somebody does, or until you fill that slot with something else.
+                </p>
+              )}
+            </div>
+          ) : null}
+
+          {/* --- 4. price ---------------------------------------------------- */}
+          {step === LAST_STEP && node !== undefined && cost !== null ? (
+            <div className="space-y-4">
+              <label className="block">
+                <span className="label-caps-faint">Line name</span>
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="mt-1 min-h-11 w-full rounded-card border border-hairline bg-surface px-3 text-[13px] text-ink"
+                  placeholder={`${node.label} line`}
+                />
+              </label>
+
+              <SliderField
+                label={`Price per ${node.unitLabel}`}
+                value={priceUsd}
+                min={0}
+                max={Math.max(marketPriceUsd * 4, priceUsd, 10)}
+                step={roundStep(Math.max(marketPriceUsd * 4, 10))}
+                onChange={(value) => setPrice(String(Math.round(value)))}
+                format={(value) => formatMoney(value, 'full')}
               />
-            ))
-          )}
-        </div>
-      ) : null}
+              <p className="text-[11.5px] leading-snug text-ink-dim">
+                {priceSentence(priceUsd, marketPriceUsd, cost.unitCostUsd, (value) => formatMoney(value, 'full'))}
+              </p>
 
-      {/* --- 3. price ------------------------------------------------------ */}
-      {step === 3 && node !== undefined && cost !== null ? (
-        <div className="space-y-4">
-          <label className="block">
-            <span className="label-caps-faint">Line name</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              className="mt-1 min-h-11 w-full rounded-card border border-hairline bg-surface px-3 text-[13px] text-ink"
-              placeholder={`${node.label} line`}
-            />
-          </label>
+              <SliderField label="Quality tier" value={tier} min={0} max={1} step={0.05} onChange={setTier} format={(value) => formatPct(value)} />
+              <p className="text-[10.5px] leading-snug text-ink-faint">{tierCaption(tier)}</p>
 
-          <SliderField
-            label={`Price per ${node.unitLabel}`}
-            value={priceUsd}
-            min={0}
-            max={Math.max(marketPriceUsd * 4, priceUsd, 10)}
-            step={roundStep(Math.max(marketPriceUsd * 4, 10))}
-            onChange={(value) => setPrice(String(Math.round(value)))}
-            format={(value) => formatMoney(value, 'full')}
-          />
-          <p className="text-[11.5px] leading-snug text-ink-dim">
-            {priceSentence(priceUsd, marketPriceUsd, cost.unitCostUsd, (value) => formatMoney(value, 'full'))}
-          </p>
-
-          <SliderField
-            label="Quality tier"
-            value={quality}
-            min={0}
-            max={1}
-            step={0.05}
-            onChange={setQuality}
-            format={(value) => formatPct(value)}
-          />
-          <p className="text-[10.5px] leading-snug text-ink-faint">
-            A higher tier buys quality and draws proportionally more capacity per unit. It costs real unit cost, not a
-            phantom margin.
-          </p>
-
-          <SliderField
-            label="Launch marketing"
-            value={marketingUsd}
-            min={0}
-            max={Math.max(company.financials.cash, marketingUsd, 1_000_000)}
-            step={roundStep(Math.max(company.financials.cash, 1_000_000))}
-            onChange={(value) => setMarketing(String(Math.round(value)))}
-            format={(value) => formatMoney(value)}
-          />
-          <CashAfter company={company} spendUsd={marketingUsd} label="Cash after the launch" />
-
-          {preview === null ? null : <ValidationBanner result={preview} />}
-          {result === null ? null : <ValidationBanner result={result} />}
-        </div>
-      ) : null}
-    </Modal>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/*  One input, three buttons                                                   */
-/* -------------------------------------------------------------------------- */
-
-/**
- * One declared input with every route open to it.
- *
- * Three shapes, exactly as the engine hands them over: make it (your cost), buy
- * it from a named seller (their price, their quality), or take the open market
- * (spot, at a premium). The screen renders buttons; it does no graph search and
- * prices nothing.
- */
-function InputRow({
-  option,
-  chosenSupplierId,
-  onWire,
-}: {
-  readonly option: NodeInputOptions;
-  readonly chosenSupplierId: string | null;
-  readonly onWire: (route: InputRoute) => void;
-}): React.JSX.Element {
-  return (
-    <div className="rounded-card border border-hairline bg-surface px-3 py-2.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[12.5px] font-medium text-ink">
-          {option.label}
-          {option.substitutable ? null : <span className="ml-1 font-bold text-loss">*</span>}
-        </span>
-        <span className="figure text-[10.5px] text-ink-faint">
-          {option.qtyPerUnit} {option.unitLabel} per unit
-        </span>
-      </div>
-
-      {option.blocked ? (
-        <p className="mt-1.5 text-[11px] leading-snug font-semibold text-loss">
-          Nobody in the world owns this node, so it cannot be had at any price.
-        </p>
-      ) : null}
-      {option.selfSuppliedPct > 0 ? (
-        <p className="mt-1.5 text-[11px] leading-snug text-brand">
-          Your own data pool covers {option.selfSuppliedPct}% of this, free.
-        </p>
-      ) : null}
-
-      <div className="mt-2 space-y-1.5">
-        {option.routes.map((route) => {
-          const selected =
-            route.kind === 'buy' ? route.supplierCompanyId === chosenSupplierId : route.kind === 'make' ? true : chosenSupplierId === null;
-          return (
-            <button
-              key={`${route.kind}:${route.supplierCompanyId ?? 'market'}`}
-              type="button"
-              disabled={route.kind === 'make'}
-              onClick={() => onWire(route)}
-              className={`flex min-h-11 w-full items-center gap-2 rounded-card border px-2.5 py-1.5 text-left ${
-                selected && route.kind !== 'make' ? 'border-brand bg-brand-wash' : 'border-hairline'
-              } ${route.kind === 'make' ? 'border-brand bg-brand-wash opacity-90' : ''}`}
-            >
-              <Icon
-                name={route.kind === 'make' ? 'building' : route.kind === 'buy' ? 'handshake' : 'globe'}
-                size={15}
-                accent={route.kind === 'market' ? 'neutral' : 'brand'}
+              <SliderField
+                label="Launch marketing"
+                value={marketingUsd}
+                min={0}
+                max={Math.max(company.financials.cash, marketingUsd, 1_000_000)}
+                step={roundStep(Math.max(company.financials.cash, 1_000_000))}
+                onChange={(value) => setMarketing(String(Math.round(value)))}
+                format={(value) => formatMoney(value)}
               />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-ink">{route.label}</span>
-                <span className="block truncate text-[10px] text-ink-faint">
-                  {route.kind === 'make'
-                    ? 'transferred at your own cost, no internal margin'
-                    : route.kind === 'market'
-                      ? `spot, ${route.premiumPct}% over the market`
-                      : `quality ${formatPct(route.qualityScore)}${route.premiumPct === 0 ? '' : `, ${route.premiumPct > 0 ? '+' : ''}${route.premiumPct}% against the market`}`}
-                </span>
-              </span>
-              <span className="figure shrink-0 text-[12px] text-ink">{formatMoney(route.unitPriceUsd, 'full')}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+              <CashAfter company={company} spendUsd={marketingUsd} label="Cash after the launch" />
+
+              {preview === null ? null : <ValidationBanner result={preview} />}
+              {result === null ? null : <ValidationBanner result={result} />}
+            </div>
+          ) : null}
+        </>
+      )}
+    </Drawer>
   );
 }

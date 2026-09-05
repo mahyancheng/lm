@@ -79,7 +79,8 @@ export const CHIEF_OF_STAFF_SYSTEM = [
   '',
   'Sourcing — when you cannot answer from the dossier alone:',
   `- The dossier is your own company. It does not contain the market: who sells compute and at what price, which companies could be bought and for how much, what could be borrowed, what is open at the agencies, what hiring costs. For those you may ask, once, by answering with mode \`research\` and a \`lookups\` array of at most ${MAX_LOOKUPS_PER_TURN} requests from this catalogue: ${LOOKUP_KINDS.join(', ')}.`,
-  `- Two of those need something the founder named: \`unit_cost\` takes a \`nodeId\` from the node table (the dossier's own lines carry theirs as \`categoryId\`), and \`entry_path\` takes either a \`sector\` or a \`nodeId\`. Ask \`unit_cost\` when the question is what something costs us to build or whether a price leaves a margin; ask \`entry_path\` when it is what we would have to research, licence or buy to make something we cannot make today.`,
+  `- Three of those need something the founder named: \`unit_cost\` takes a \`nodeId\` from the node table (the dossier's own lines carry theirs as \`categoryId\`), \`entry_path\` takes either a \`sector\` or a \`nodeId\`, and \`slot_candidates\` takes a \`nodeId\`, a \`slotId\` and our own \`productId\` on that node (or null). Ask \`unit_cost\` when the question is what something costs us to build or whether a price leaves a margin; ask \`entry_path\` when it is what we would have to research, licence or buy to make something we cannot make today; ask \`slot_candidates\` when it is which model, harness, battery or supplier could go into one slot of a line, at what price and quality.`,
+  '- In the node economy a line is COMPOSED: each slot of its node holds one node from one source (our own line, a named seller\'s published line, or the open market), and the line is aimed at one customer type in one industry. Every line in the dossier carries this as `composition` and `targetIndustry`; quote them when asked what a line is built on. `fill_slot` changes the node in one slot and who supplies it; `set_target_market` changes who the line is aimed at; `set_supply_terms` publishes one of our lines so other companies can build on it. A `slot_candidates` row carries the exact `fill_slot`; use it verbatim.',
   '- In `research` mode `reply` is one line saying what you are going off to check ("Checking the compute market and what it does to cash"), and `interpretedInstructions` MUST be empty. The lookups are run against canonical state and handed straight back to you.',
   '- **Ask for research only when the answer genuinely is not in the dossier.** "How much cash have we got" is in it; "can I buy a small data centre" is not.',
   '- When a turn arrives carrying findings, research mode is CLOSED and asking again is refused. Answer it: is there any, can we buy, from whom, at what price, how much capacity, where the cash balance lands afterwards, and what a raise or a debt issue would change. Then attach the actions ready to approve, each naming the seller from the row you took it from.',
@@ -177,7 +178,9 @@ export function renderDossier(dossier: ChiefOfStaffDossier): string {
   // A line is quoted in its own unit — "per wafer", "per MWh" — because that is
   // what it sells, and its unit cost beside its price, because in the node
   // economy the two are the whole conversation. Outside it both extra figures
-  // are zero and the sentence falls back to the world-2 shape.
+  // are zero and the sentence falls back to the world-2 shape. The composition
+  // — which node sits in each slot, from whom, aimed at whom — closes the
+  // line, because "what is this built on" is the question fill_slot answers.
   const products = [
     p.lines.length === 0
       ? 'No product lines.'
@@ -192,7 +195,9 @@ export function renderDossier(dossier: ChiefOfStaffDossier): string {
                 line.grossMarginPct,
               )}, churn ${wholePct(line.churnQuarterly)}${line.backlogUnits > 0 ? `, ${line.backlogUnits} on backlog` : ''}${
                 line.installedBase > 0 ? `, ${line.installedBase} in service` : ''
-              }${line.ownsNode ? '' : line.unitCostUsd > 0 ? ' — we do not own this node outright' : ''}`,
+              }${line.ownsNode ? '' : line.unitCostUsd > 0 ? ' — we do not own this node outright' : ''}${
+                line.composition === '' ? '' : `. Built as: ${line.composition}`
+              }`,
           ),
         ),
     p.ownedNodeCount === 0
@@ -498,7 +503,33 @@ export function renderFinding(finding: LookupResult): string {
             `${finding.madeInHouseSharePct}% of the input bill is made in house`,
             ...(finding.blockedInputs.length === 0 ? [] : [`Blocked on ${finding.blockedInputs.join(', ')} — nobody in the world owns it, so the line ships nothing`]),
           ]),
-          bullets(finding.rows.map((row) => `${row.label} — ${money(row.amountUsd)}, ${row.sharePct}% of the unit cost${row.sourceName === '' ? '' : `, from ${row.sourceName}`}`)),
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.slotId === '' ? '' : `${row.slotId} slot: `}${row.label} — ${money(row.amountUsd)}, ${row.sharePct}% of the unit cost${
+                  row.sourceName === '' ? '' : `, from ${row.sourceName}`
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'slot_candidates':
+      return section(
+        'Finding — what could fill this slot',
+        [
+          finding.summary,
+          `${finding.slotLabel} slot (${finding.slotId}) of ${finding.nodeId}${finding.productId === '' ? ', browsing without a line of ours' : ` on our line ${finding.productId}`}.`,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.label} (${row.nodeId}, tier ${row.tier}) — ${
+                  row.sourceKind === 'make' ? 'make it ourselves' : row.sourceKind === 'buy' ? `from ${row.sellerName} (${row.sellerCompanyId})` : 'from the open market'
+                } at ${money(row.unitPriceUsd)} a unit, quality ${row.qualityScorePct} of 100${row.blocked ? ' — BLOCKED: nobody in the world owns this node, so the line would ship nothing' : ''}${
+                  row.intent === null ? '' : ' — fill_slot ready'
+                }`,
+            ),
+          ),
         ].join('\n\n'),
       );
 

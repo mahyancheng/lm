@@ -424,8 +424,9 @@ describe('every enum grew at the end', () => {
     // after that when world 3 gained the node market, and the four research and
     // data rows after that when world 3 put research on the one graph, and the
     // two licensing rows after that when it made the right to produce somebody
-    // else's node a thing you can buy — the same append-only contract, ten rows
-    // further along.
+    // else's node a thing you can buy, and the two composition rows after that
+    // when a line's slots and target market became things a player chooses —
+    // the same append-only contract, twelve rows further along.
     expect(SIM_EVENT_TYPES.slice(start + 10)).toEqual([
       'accelerators_bought',
       'capacity_invested',
@@ -439,6 +440,8 @@ describe('every enum grew at the end', () => {
       'data_resolved',
       'node_licensed',
       'node_licence_lapsed',
+      'slot_filled',
+      'target_market_set',
     ]);
     expect(new Set(SIM_EVENT_TYPES).size).toBe(SIM_EVENT_TYPES.length);
   });

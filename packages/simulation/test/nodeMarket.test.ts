@@ -9,7 +9,7 @@
  *    `unitCostUsd` equal to the sum of its own lines exactly rather than to a
  *    second calculation that agrees approximately.
  *
- * Nothing consumes either yet — the profit and loss books them in the next
+ * Nothing takes either yet — the profit and loss books them in the next
  * stage — which is exactly why the arithmetic has to be pinned now, while it
  * can be read on its own.
  *
@@ -28,6 +28,7 @@ import {
   NODE_PRICE_BASELINE,
   NODE_PRICE_BOUNDS,
   NODE_TIERS,
+  defaultInputsOf,
   economicNodeById,
   nodeMarketPriceUsd,
   nodePriceIndex,
@@ -38,10 +39,13 @@ import { ResolutionRecorder } from '../src/resolver';
 import { createWorld2Session } from '../src/scenario/world2';
 import { createWorld3Session } from '../src/scenario/world3';
 import {
+  CAPACITY_FOOTHOLD_SHARE,
   CAPACITY_RATE_USD_PER_MILLION,
   MAX_COST_DEPTH,
   OPEN_MARKET_PREMIUM,
+  bucketShare,
   createNodeCostCache,
+  launchCapacityPreview,
   nodeBalances,
   nodeLinesOf,
   priceNodes,
@@ -77,11 +81,16 @@ describe('the table the arithmetic below is pinned to', () => {
     expect(economicNodeById(WAFER)).toMatchObject({ basePriceUsd: 14_000, capacityDrawPerUnit: 0.222, labourPerUnit: 0.004, energyMwhPerUnit: 1.4, supportCostShare: 0.03 });
     expect(economicNodeById(DIE)).toMatchObject({ basePriceUsd: 420, capacityDrawPerUnit: 0.000_5, labourPerUnit: 0.000_05, energyMwhPerUnit: 0.02, supportCostShare: 0.04 });
     expect(economicNodeById(POWER)?.basePriceUsd).toBe(51);
-    expect(economicNodeById(WAFER)?.consumes).toEqual([
-      { nodeId: SILICON, qtyPerUnit: 1.4, substitutable: true },
-      { nodeId: CHEMICALS, qtyPerUnit: 1, substitutable: false },
+    // CHANGED DELIBERATELY, slots: the fixed `consumes` list is now the default
+    // recipe read off the node's slots; `blocking` carries what `!substitutable`
+    // did, so the arithmetic below is pinned to the same quantities and flags.
+    expect(defaultInputsOf(economicNodeById(WAFER) as NonNullable<ReturnType<typeof economicNodeById>>)).toEqual([
+      { slotId: 'silicon', nodeId: SILICON, qtyPerUnit: 1.4, blocking: false },
+      { slotId: 'chemicals', nodeId: CHEMICALS, qtyPerUnit: 1, blocking: true },
     ]);
-    expect(economicNodeById(DIE)?.consumes).toEqual([{ nodeId: WAFER, qtyPerUnit: 0.022, substitutable: false }]);
+    expect(defaultInputsOf(economicNodeById(DIE) as NonNullable<ReturnType<typeof economicNodeById>>)).toEqual([
+      { slotId: 'wafer', nodeId: WAFER, qtyPerUnit: 0.022, blocking: true },
+    ]);
     expect(CAPACITY_RATE_USD_PER_MILLION).toBe(55_000);
     expect(OPEN_MARKET_PREMIUM).toBe(1.08);
   });
@@ -116,6 +125,12 @@ function lineOn(nodeId: string, units: number, priceUsd: number): Product {
 function emptyWorld(): SessionState {
   const state = createWorld3Session();
   for (const company of state.companies) company.products = [];
+  // CHANGED DELIBERATELY, measured seed: the world-3 seed now opens every node
+  // and every sector at the index its own balance implies. The arithmetic
+  // below is pinned at balance — an energy factor of 0.95, chemicals at 600 —
+  // so the borrowed world is opened neutral, exactly as it read before.
+  delete state.nodePrices;
+  delete state.sectorPrices;
   return state;
 }
 
@@ -206,13 +221,15 @@ describe('the unit cost roll-up', () => {
     expect(bought.unitCostUsd - integrated.unitCostUsd).toBeCloseTo(gap, 6);
     expect(bought.unitCostUsd).toBeGreaterThan(integrated.unitCostUsd);
 
-    expect(integrated.lines.find((line) => line.key === WAFER)?.sourceKind).toBe('make');
-    expect(bought.lines.find((line) => line.key === WAFER)?.sourceKind).toBe('market');
+    // CHANGED DELIBERATELY, fills: a cost row is keyed by the SLOT it fills, so
+    // it keeps its identity when the node in the slot is switched.
+    expect(integrated.lines.find((line) => line.key === 'slot:wafer')?.sourceKind).toBe('make');
+    expect(bought.lines.find((line) => line.key === 'slot:wafer')?.sourceKind).toBe('market');
     expect(integrated.madeInHouseSharePct).toBe(100);
     expect(bought.madeInHouseSharePct).toBe(0);
   });
 
-  it('blocks a line whose non-substitutable input nobody in the world can make, and says which', () => {
+  it('blocks a line whose blocking input nobody in the world can make, and says which', () => {
     // CHANGED DELIBERATELY, stage 3: "blocked" now means nobody *owns* the
     // input, not merely that nobody is running a line on it this quarter. A
     // node with an owner and no producer is bought on the open market, dearly —
@@ -227,9 +244,10 @@ describe('the unit cost roll-up', () => {
 
     const wafer = unitCostOf(state, maker, WAFER, createNodeCostCache(state));
     expect(wafer.blockedInputNodeIds).toEqual([CHEMICALS]);
-    // Silicon is substitutable, so it still prices on the open market.
-    expect(wafer.lines.find((line) => line.key === SILICON)?.sourceKind).toBe('market');
-    expect(wafer.lines.find((line) => line.key === CHEMICALS)?.amountUsd).toBe(0);
+    // Silicon is not a blocking input, so it still prices on the open market.
+    expect(wafer.lines.find((line) => line.key === 'slot:silicon')?.sourceKind).toBe('market');
+    expect(wafer.lines.find((line) => line.key === 'slot:chemicals')?.amountUsd).toBe(0);
+    expect(wafer.lines.find((line) => line.key === 'slot:chemicals')?.nodeId).toBe(CHEMICALS);
   });
 
   it('prices — rather than blocks — an input somebody owns but nobody is making', () => {
@@ -242,7 +260,7 @@ describe('the unit cost roll-up', () => {
 
     const wafer = unitCostOf(state, maker, WAFER, createNodeCostCache(state));
     expect(wafer.blockedInputNodeIds).toEqual([]);
-    const chemicals = wafer.lines.find((line) => line.key === CHEMICALS);
+    const chemicals = wafer.lines.find((line) => line.key === 'slot:chemicals');
     expect(chemicals?.sourceKind).toBe('market');
     expect(chemicals?.amountUsd).toBeGreaterThan(0);
   });
@@ -251,15 +269,17 @@ describe('the unit cost roll-up', () => {
     const state = emptyWorld();
     const { maker, supplier } = twoCompanies(state);
     supplier.products = [{ ...lineOn(CHEMICALS, 0, 600), supplyTerms: { openToAll: true, pricePerUnitUsd: 540, exclusiveCustomerIds: [], blockedCustomerIds: [] } }];
+    // CHANGED DELIBERATELY, fills: a world-3 line names its supplier on the
+    // slot it fills, never on the world-2 `supply` array.
     maker.products = [
       {
         ...lineOn(WAFER, 0, 14_000),
-        supply: [{ inputCategoryId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null }],
+        slots: [{ slotId: 'chemicals', nodeId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null, changedQuarter: null }],
       },
     ];
 
     const wafer = unitCostOf(state, maker, WAFER, createNodeCostCache(state));
-    const chemicals = wafer.lines.find((line) => line.key === CHEMICALS);
+    const chemicals = wafer.lines.find((line) => line.key === 'slot:chemicals');
     expect(chemicals?.sourceKind).toBe('buy');
     expect(chemicals?.sourceCompanyId).toBe(supplier.id);
     // The ask, at this seller's own cost base: `sellerPriceFactor` — the energy
@@ -281,12 +301,12 @@ describe('the unit cost roll-up', () => {
     maker.products = [
       {
         ...lineOn(WAFER, 0, 14_000),
-        supply: [{ inputCategoryId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null }],
+        slots: [{ slotId: 'chemicals', nodeId: CHEMICALS, supplierCompanyId: supplier.id, supplierProductId: `prd_${CHEMICALS}`, cutOffNoticeQuarter: null, changedQuarter: null }],
       },
     ];
 
     const wafer = unitCostOf(state, maker, WAFER, createNodeCostCache(state));
-    expect(wafer.lines.find((line) => line.key === CHEMICALS)?.unitPriceUsd).toBe(600 * 2.5);
+    expect(wafer.lines.find((line) => line.key === 'slot:chemicals')?.unitPriceUsd).toBe(600 * 2.5);
   });
 
   it('charges a licence royalty on the node\'s market price, not on the line\'s own ask', () => {
@@ -439,8 +459,12 @@ describe('the node market', () => {
     const balances = nodeBalances(state);
     expect(balances[WAFER]?.derivedDemandUnits).toBeCloseTo(1_000_000 * 0.022, 6);
     expect(balances[POWER]?.derivedDemandUnits).toBeCloseTo(1_000_000 * 0.02, 6);
-    // A wafer has no end customers at all: its only demand is the edge above.
-    expect(balances[WAFER]?.endDemandUnits).toBe(0);
+    // CHANGED DELIBERATELY, slots: a wafer now has end customers of its own —
+    // the fabless designers the cast does not model — so its end demand is its
+    // market's, and the derived demand above sits beside it rather than being
+    // the whole of it.
+    expect(balances[WAFER]?.endDemandUnits).toBeGreaterThan(0);
+    expect(balances[WAFER]?.demandUnits).toBeCloseTo((balances[WAFER]?.endDemandUnits ?? 0) + 1_000_000 * 0.022, 6);
   });
 
   it('rations one bucket across the lines that share it', () => {
@@ -453,6 +477,61 @@ describe('the node market', () => {
     maker.products = [lineOn(DIE, 0, 420), lineOn(SILICON, 0, 11)];
     const shared = nodeBalances(state)[DIE]?.supplyUnits ?? 0;
     expect(shared).toBe(Math.floor(alone / 2));
+  });
+
+  it('keeps a foothold for a line that drew nothing last quarter, so a launched line can sell', () => {
+    // THE STARVATION TRAP. Sharing a bucket purely by last quarter's draw gave a
+    // line that had never sold — every line the quarter it launches — a share of
+    // exactly zero: nothing producible, nothing sold, nothing drawn, forever. A
+    // vertical app opened beside a suite sat at zero units for seven quarters.
+    expect(CAPACITY_FOOTHOLD_SHARE).toBeGreaterThan(0);
+    expect(CAPACITY_FOOTHOLD_SHARE).toBeLessThan(1);
+    // Alone on the bucket: the whole of it, whatever it drew.
+    expect(bucketShare(0, 0, 1)).toBe(1);
+    expect(bucketShare(5, 5, 1)).toBe(1);
+    // Nobody drew: an even split.
+    expect(bucketShare(0, 0, 2)).toBeCloseTo(0.5, 12);
+    expect(bucketShare(0, 0, 4)).toBeCloseTo(0.25, 12);
+    // One line drew everything, the other nothing: the newcomer still opens with
+    // its foothold, and the two shares sum to the bucket.
+    const newcomer = bucketShare(0, 100, 2);
+    const incumbent = bucketShare(100, 100, 2);
+    expect(newcomer).toBeCloseTo(CAPACITY_FOOTHOLD_SHARE / 2, 12);
+    expect(incumbent).toBeCloseTo(1 - CAPACITY_FOOTHOLD_SHARE / 2, 12);
+    expect(newcomer + incumbent).toBeCloseTo(1, 12);
+    // Two lines that both filled their share converge on an even split rather
+    // than freezing wherever they started: the split is a contraction toward 1/n.
+    let shareA = 0.9;
+    for (let quarter = 0; quarter < 12; quarter += 1) shareA = bucketShare(shareA, 1, 2);
+    expect(Math.abs(shareA - 0.5)).toBeLessThan(0.02);
+
+    // And through the engine: a maker whose die line sold 1,000 units last
+    // quarter opens a silicon line beside it on the same plant.
+    const state = emptyWorld();
+    const { maker } = twoCompanies(state);
+    maker.capacity = { plantUsd: 1_000_000, fleetUsd: 0, gridUsd: 0 };
+    maker.products = [lineOn(DIE, 1_000, 420), lineOn(SILICON, 0, 11)];
+    const lines = nodeLinesOf(state);
+    const { linesByCompany } = indexNodeLines(lines);
+    const die = lines.find((line) => line.nodeId === DIE) as NodeLineRef;
+    const silicon = lines.find((line) => line.nodeId === SILICON) as NodeLineRef;
+    const dieUnits = producibleUnits(state, die, linesByCompany);
+    const siliconUnits = producibleUnits(state, silicon, linesByCompany);
+    expect(siliconUnits).toBeGreaterThan(0);
+    // The incumbent keeps the rest of the bucket rather than being halved.
+    const stockUnits = maker.capacity.plantUsd / 1_000_000;
+    const dieDraw = (economicNodeById(DIE)?.capacityDrawPerUnit ?? 0) * (0.5 + 0.5);
+    expect(dieUnits).toBe(Math.floor((stockUnits * (1 - CAPACITY_FOOTHOLD_SHARE / 2)) / dieDraw));
+    // The launch preview quotes exactly the foothold the production pass will
+    // apply: the same formula, the same number.
+    maker.products = [lineOn(DIE, 1_000, 420)];
+    const preview = launchCapacityPreview(state, maker, SILICON, 0.5);
+    expect(preview?.capacityKind).toBe('plant');
+    expect(preview?.sharers).toBe(1);
+    expect(preview?.share).toBeCloseTo(CAPACITY_FOOTHOLD_SHARE / 2, 12);
+    expect(preview?.unitsPerQuarter).toBe(siliconUnits);
+    // A node no bucket constrains has nothing to preview.
+    expect(launchCapacityPreview(state, maker, 'dat_web_corpus', 0.5)).toBeNull();
   });
 
   it('never lets a price leave its bounds, however extreme the imbalance', () => {

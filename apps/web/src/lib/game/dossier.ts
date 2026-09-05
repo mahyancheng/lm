@@ -38,8 +38,10 @@ import {
   availableActionsFor,
   categoryOf,
   dataPolicyOf,
+  describeLine,
   isNodeEconomyWorld,
   lineNodeIdOf,
+  targetOf,
   totalDataPetabytes,
   unitCostOf,
   consolidatedEnterpriseValueOf,
@@ -69,8 +71,10 @@ export const DOSSIER_FEED_ITEMS = 10;
  * `unitLabel` carries the node's own unit — "wafer", "MWh", "rack", never the
  * buyer segment's "seat" — and the line's unit cost and the node's market price
  * are on it, because "what does this cost me and what does the market pay" is
- * the question the role is asked most. Before world 3 those three read as an
- * industry line, its catalogue unit, and zero.
+ * the question the role is asked most, and its composition — `describeLine`'s
+ * sentence — beside them, because "what is this built on" is the next one.
+ * Before world 3 those read as an industry line, its catalogue unit, zero, and
+ * an empty sentence.
  */
 function productLinesOf(session: SessionState, company: Company): CosProductLine[] {
   const nodeEconomy = isNodeEconomyWorld(session);
@@ -100,6 +104,10 @@ function productLinesOf(session: SessionState, company: Company): CosProductLine
       backlogUnits: Math.max(0, Math.round(product.backlogUnits ?? 0)),
       installedBase: Math.max(0, Math.round(product.installedBase ?? 0)),
       ownsNode: nodeId !== null && holdsNode(company, nodeId, session.quarter),
+      // The composition, in the engine's words and from this seat: which node
+      // sits in each slot, from whom, aimed at whom. Empty outside world 3.
+      targetIndustry: node === undefined ? '' : targetOf(product, node),
+      composition: node === undefined ? '' : describeLine(session, company, product, company.id),
     };
   });
 }

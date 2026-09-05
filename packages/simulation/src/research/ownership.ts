@@ -31,7 +31,7 @@
  *    gains `LINE_QUALITY_UPSTREAM_GAIN`. That is the fix for world 2's frozen
  *    `qualityScore`, set at launch and never revisited.
  * 2. Owning `cmp_hbm_stack` means you can now MAKE the memory your accelerator
- *    consumes, so the roll-up prices that input at your own cost instead of at
+ *    takes in a slot, so the roll-up prices that input at your own cost instead of at
  *    market plus the open-market premium. The unit cost falls, visibly, in the
  *    same breakdown the player was already reading, with no bonus multiplier
  *    anywhere.

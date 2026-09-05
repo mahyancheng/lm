@@ -38,7 +38,7 @@ import {
   StaffRoleSchema,
   SupplyTermsSchema,
 } from './company';
-import { RegionSchema } from './sectors';
+import { RegionSchema, SectorSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
 import { BoardProposalKindSchema, CommitmentConditionSchema } from './governance';
 import { GovernmentBidSchema } from './government';
@@ -102,6 +102,118 @@ export const LaunchSupplyChoiceSchema = z
   .describe('One supplier chosen for one input category, named at launch.');
 export type LaunchSupplyChoice = z.infer<typeof LaunchSupplyChoiceSchema>;
 
+/**
+ * World version 3: one slot composed at launch — the node placed in it and
+ * where that node comes from. The same four fields `fill_slot` changes later,
+ * without the engine-only `cutOffNoticeQuarter` and `changedQuarter` a launch
+ * can never set. Named separately from `ProductSlotFillSchema` for the reason
+ * `LaunchSupplyChoiceSchema` is: one is state, the other is what an action may
+ * say.
+ */
+export const LaunchSlotChoiceSchema = z
+  .object({
+    slotId: z.string().min(1).describe('The slot on the launched node this choice fills, e.g. "model", "harness". A slot the node does not carry is dropped at validation.'),
+    nodeId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('The node to place in the slot, admissible for its role; null leaves a slot that is not required empty, and is refused on one that is.'),
+    supplierCompanyId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('Where the node comes from: your own company id to make it on your own line, a seller\'s id to buy from their published line, null for the open market.'),
+    supplierProductId: z.string().min(1).nullable().describe('The seller\'s line, or your own; null exactly when supplierCompanyId is null.'),
+  })
+  .describe('One slot of a world-3 line composed at launch: the node in it and where it comes from.');
+export type LaunchSlotChoice = z.infer<typeof LaunchSlotChoiceSchema>;
+
+/**
+ * The launch action, named so the LLM-facing schema list can pin it on its
+ * own. World version 2 names a catalogue category and suppliers per input
+ * category; world version 3 names a node, the industry the line is aimed at
+ * and the composition of its slots.
+ */
+export const LaunchProductActionSchema = z
+  .object({
+    type: z.literal('launch_product'),
+    name: z.string().min(1).max(80).describe('Product name.'),
+    segment: ProductSegmentSchema,
+    // Required-but-nullable rather than optional: every LLM-facing schema
+    // in this file must emit every key. Null means "choose the industry
+    // line for me" — the validator resolves it to
+    // `defaultCategoryFor(company.sector, segment)` and names the choice
+    // back in the clamp, exactly as a null providerCompanyId does for
+    // compute.
+    categoryId: z
+      .string()
+      .nullable()
+      .describe('Id into PRODUCT_CATEGORIES (@frontier/contracts): the industry line this product launches into, e.g. "ai_frontier_models" or "manufacturing_batteries". World version 3: the id of the ECONOMIC_NODES node this line produces. Null lets the engine choose the company\'s sector default for this segment.'),
+    pricePerSeatUsd: usd('Launch price per seat per quarter.'),
+    computeIntensity: unitInterval('How much serving compute each unit draws. Higher intensity buys quality and costs margin. World version 3: the quality tier, one lever scaling both the capacity a unit draws and the quality delivered.'),
+    launchMarketingUsd: usd('One-off launch marketing spend.'),
+    targetQuality: unitInterval('Quality the team is aiming for. The engine delivers this discounted by the company\'s real capabilities and by how rushed the launch is.'),
+    // Required-and-empty rather than optional: every LLM-facing schema in
+    // this file must emit every key, so an ordinary commodity launch with
+    // nothing to name here still sends `[]`. Each entry a name from the
+    // launch category's own `inputs`; anything else is dropped at
+    // validation rather than refused, exactly as a stray categoryId is.
+    supply: z.array(LaunchSupplyChoiceSchema).max(6).describe('World version 2: suppliers named for this launch, one per input category the launch category declares. Unnamed inputs default to the open market. World version 3 ignores this and reads `slots`.'),
+    // Appended for world version 3. Both required-and-nullable or
+    // required-and-empty, for the reason every other key here is.
+    targetIndustry: SectorSchema.nullable().describe(
+      'World version 3: the industry this line is aimed at, paired with `segment` as the customer type. Null lets the engine aim it at the heaviest industry in the node\'s own market. Ignored below world version 3, and collapsed to consumer when the segment is consumer.',
+    ),
+    slots: z
+      .array(LaunchSlotChoiceSchema)
+      .max(6)
+      .describe('World version 3: the composition — which node fills each slot of the launched node and where it comes from. A slot not named here runs on the table\'s default from the open market. Empty below world version 3.'),
+  })
+  .describe(
+    'Launch a new product line. World version 2: the category must be one the company has the research access for — see requiresNodeIds on the catalogue entry. World version 3: categoryId names a node the company can produce, and one line per node per company — a second launch on a node you already sell is refused; change its slots instead.',
+  );
+export type LaunchProductAction = z.infer<typeof LaunchProductActionSchema>;
+
+/**
+ * World version 3: change the node in one slot of a line, or where that node
+ * comes from, or both. The engine stamps the fill with the quarter it changed
+ * so the switch costs one quarter of degraded quality on that input.
+ */
+export const FillSlotActionSchema = z
+  .object({
+    type: z.literal('fill_slot'),
+    productId: z.string().min(1).describe('Your own world-3 line whose slot is being filled.'),
+    slotId: z.string().min(1).describe('The slot on the line\'s node, e.g. "model", "harness". Must be one the node carries.'),
+    nodeId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('The node to place in the slot, admissible for its role; null empties a slot that is not required, and is refused on one that is.'),
+    supplierCompanyId: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('Where the node comes from: your own company id to make it on your own line, a seller\'s id to buy from their published line, null for the open market. A seller that does not sell this node to you falls to the open market, and the clamp says so.'),
+    supplierProductId: z.string().min(1).nullable().describe('The seller\'s line, or your own; null exactly when supplierCompanyId is null.'),
+  })
+  .describe('Fill one slot of a world-3 line: the node in it and where it comes from. A change costs one quarter of degraded quality on that slot while the integration beds in. Re-stating the current fill changes nothing.');
+export type FillSlotAction = z.infer<typeof FillSlotActionSchema>;
+
+/**
+ * World version 3: aim a line at a market cell — the customer type that signs
+ * and the industry they are in. A cell nobody buys in is an advisory, never a
+ * refusal: the line sells nothing there until it is aimed elsewhere.
+ */
+export const SetTargetMarketActionSchema = z
+  .object({
+    type: z.literal('set_target_market'),
+    productId: z.string().min(1).describe('Your own world-3 line being aimed.'),
+    targetIndustry: SectorSchema.describe('The industry the line sells into. Collapses to consumer when the segment is consumer: selling to the public has no industry.'),
+    segment: ProductSegmentSchema,
+  })
+  .describe('Aim a world-3 line at a customer type and an industry. Together they name the demand cell it sells from; a cell the node\'s market gives no weight is allowed and warned about.');
+export type SetTargetMarketAction = z.infer<typeof SetTargetMarketActionSchema>;
+
 /* -------------------------------------------------------------------------- */
 /*  ActionIntent                                                               */
 /* -------------------------------------------------------------------------- */
@@ -109,7 +221,7 @@ export type LaunchSupplyChoice = z.infer<typeof LaunchSupplyChoiceSchema>;
 /**
  * Every action a player or NPC company may take in a quarter.
  *
- * Grouped below by the resolution phase that consumes them, which is also the
+ * Grouped below by the resolution phase that reads them, which is also the
  * order the engine applies them in.
  */
 export const ActionIntentSchema = z
@@ -186,33 +298,7 @@ export const ActionIntentSchema = z
       })
       .describe('Reprice a product. Demand response depends on segment elasticity, quality relative to rivals and switching cost.'),
 
-    z
-      .object({
-        type: z.literal('launch_product'),
-        name: z.string().min(1).max(80).describe('Product name.'),
-        segment: ProductSegmentSchema,
-        // Required-but-nullable rather than optional: every LLM-facing schema
-        // in this file must emit every key. Null means "choose the industry
-        // line for me" — the validator resolves it to
-        // `defaultCategoryFor(company.sector, segment)` and names the choice
-        // back in the clamp, exactly as a null providerCompanyId does for
-        // compute.
-        categoryId: z
-          .string()
-          .nullable()
-          .describe('Id into PRODUCT_CATEGORIES (@frontier/contracts): the industry line this product launches into, e.g. "ai_frontier_models" or "manufacturing_batteries". Null lets the engine choose the company\'s sector default for this segment.'),
-        pricePerSeatUsd: usd('Launch price per seat per quarter.'),
-        computeIntensity: unitInterval('How much serving compute each unit consumes. Higher intensity buys quality and costs margin.'),
-        launchMarketingUsd: usd('One-off launch marketing spend.'),
-        targetQuality: unitInterval('Quality the team is aiming for. The engine delivers this discounted by the company\'s real capabilities and by how rushed the launch is.'),
-        // Required-and-empty rather than optional: every LLM-facing schema in
-        // this file must emit every key, so an ordinary commodity launch with
-        // nothing to name here still sends `[]`. Each entry a name from the
-        // launch category's own `inputs`; anything else is dropped at
-        // validation rather than refused, exactly as a stray categoryId is.
-        supply: z.array(LaunchSupplyChoiceSchema).max(6).describe('Suppliers named for this launch, one per input category the launch category declares. Unnamed inputs default to the open market.'),
-      })
-      .describe('Launch a new product line. World version 2: the category must be one the company has the research access for — see requiresNodeIds on the catalogue entry.'),
+    LaunchProductActionSchema,
 
     z
       .object({
@@ -631,6 +717,15 @@ export const ActionIntentSchema = z
         openToAll: z.boolean().describe('True to take all comers at these terms. False advertises the price and leaves the owner free to refuse a direct rival.'),
       })
       .describe('Advertise what you will licence one of your nodes for. Publishing binds you to nothing but the price, and never to a renewal.'),
+
+    /* ------------------ composition (world 3, second pass) ------------- */
+    // Appended, never inserted. The chain is the product: which node fills
+    // each slot of a line, where it comes from, and who the line is aimed at
+    // are the founder's to choose, and these two are how they choose them
+    // after launch. `choose_supplier` is refused in world 3 in favour of
+    // `fill_slot`, which names the slot rather than guessing it from a node.
+    FillSlotActionSchema,
+    SetTargetMarketActionSchema,
   ])
   .describe('One intended action. Submitting it is not doing it: the engine validates, clamps and then resolves.');
 export type ActionIntent = z.infer<typeof ActionIntentSchema>;
@@ -691,6 +786,9 @@ export const ACTION_TYPES = [
   'set_data_policy',
   'license_node',
   'publish_licence_terms',
+  // World 3, second pass: the composed line. Appended, never inserted.
+  'fill_slot',
+  'set_target_market',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 

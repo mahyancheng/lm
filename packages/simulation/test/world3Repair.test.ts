@@ -7,8 +7,10 @@
  *
  * 1. **One number for cost.** The profit and loss books the roll-up. Not a
  *    capped version of it, not a cousin of it: what the Products screen prints
- *    as `unitCostUsd` times what the line shipped, and the gross margin on the
- *    income statement agrees with the gross margin on the line.
+ *    as `unitCostUsd` times what the line shipped, to the cent, plus exactly
+ *    the one named extra the cost row states — a logistics toll — and the
+ *    gross margin on the income statement agrees with the gross margin on the
+ *    line.
  * 2. **An order book is bounded by what the company could build.** Not by the
  *    world's whole appetite.
  * 3. **Quality is written every quarter.** A line's `qualityScore` is what the
@@ -90,17 +92,20 @@ const playerOf = (state: SessionState): Company => {
 /* -------------------------------------------------------------------------- */
 
 describe('cost of goods in the node economy', () => {
-  it('is the roll-up itself: every dollar of the unit cost the line stamped is booked', { timeout: 120_000 }, () => {
-    const states = run(sessionFor(BACKGROUNDS[1] as NewGameBackground), 8);
+  it('is the roll-up itself, to the cent, plus exactly the named extras the row carries', { timeout: 120_000 }, () => {
+    const engine = createDefaultEngine();
+    let state = sessionFor(BACKGROUNDS[1] as NewGameBackground);
     let checked = 0;
 
-    for (const state of states.slice(1)) {
+    for (let quarter = 0; quarter < 8; quarter += 1) {
+      const outcome = engine.resolver.resolveQuarter(state, [], null, []);
+      state = outcome.nextState;
       for (const company of state.companies) {
         if (!company.isActive) continue;
-        // Government contract revenue carries its own support share, and a
-        // logistics toll is a charge another company levies: both are named
-        // additions to cost of goods rather than part of the roll-up, so the
-        // identity is stated on a company that has neither.
+        // Government contract revenue carries its own support share and a
+        // compliance charge, and a logistics toll is a charge another company
+        // levies: the first two are excluded by skipping the primes, the third
+        // is read off the row itself.
         const hasContract = state.governmentContracts.some((contract) => contract.primeCompanyId === company.id && contract.status === 'active');
         if (hasContract) continue;
         const lines = company.products.filter((product) => product.isActive && lineNodeIdOf(product) !== null);
@@ -110,11 +115,20 @@ describe('cost of goods in the node economy', () => {
         for (const product of lines) rollUpUsd += Math.max(0, product.unitsSoldQuarterly ?? 0) * (product.unitCostUsd ?? 0);
         if (rollUpUsd <= 0) continue;
 
-        // The profit and loss books the roll-up and whatever named extras it
-        // carries; it may never book LESS. The wedge this test exists for was
-        // a line whose roll-up was $7.3M against a booked $2.1M.
-        expect(company.financials.cogs, `${company.id} booked less than its own roll-up`).toBeGreaterThanOrEqual(rollUpUsd - 1);
-        expect(company.financials.cogs, `${company.id} booked far more than its own roll-up`).toBeLessThanOrEqual(rollUpUsd * 1.35 + 1);
+        const row = outcome.events.find((event) => event.type === 'cost_recognised' && event.actorId === company.id && typeof event.payload.nodeCogsUsd === 'number');
+        expect(row, `${company.id} booked no cost row`).toBeDefined();
+        if (row === undefined) continue;
+        // THE IDENTITY. What the lines stamped is what the row books as the
+        // roll-up, to the cent: the wedge this test exists for was a line whose
+        // roll-up was $7.3M against a booked $2.1M.
+        expect(Math.abs((row.payload.nodeCogsUsd as number) - rollUpUsd), `${company.id} booked a roll-up other than its lines'`).toBeLessThan(0.01 * (lines.length + 1));
+        // And cost of goods is that roll-up plus exactly one named extra — the
+        // logistics toll the row itself states; a node line's support share is
+        // already a line of its roll-up — never a third opinion about cost.
+        // Before this was pinned the test tolerated thirty-five percent of
+        // unexplained extras.
+        const tollUsd = (row.payload.logisticsTollUsd as number | undefined) ?? 0;
+        expect(Math.abs(company.financials.cogs - (rollUpUsd + tollUsd)), `${company.id} books an extra beside the roll-up and the toll`).toBeLessThan(0.01 * (lines.length + 3));
         checked += 1;
       }
     }
@@ -240,6 +254,9 @@ describe('customer data', () => {
 /*  5. Lines track the node market                                             */
 /* -------------------------------------------------------------------------- */
 
+/** A twentieth: what a third of the gap a quarter leaves after seven quarters. */
+const PRICE_TRACKING_RESIDUAL = 0.05;
+
 describe('a company nobody is directing', () => {
   it('closes the gap between what it charges and what its node settled at', { timeout: 120_000 }, () => {
     const states = run(sessionFor(BACKGROUNDS[1] as NewGameBackground), 8);
@@ -262,8 +279,13 @@ describe('a company nobody is directing', () => {
         if (state === states[states.length - 1]) {
           seen += 1;
           // A third of the gap a quarter over seven quarters leaves a twentieth
-          // of it; anything that has not widened is tracking.
-          if (gap <= opening + 1e-9) closed += 1;
+          // of it; anything inside that residual is tracking. CHANGED
+          // DELIBERATELY, slots: a line asked at exactly its node's base price
+          // opens with NO gap, and once the index moves it can never be "not
+          // widened" however closely it follows — ten of the twenty-four seeded
+          // rivals open that way — so the residual the comment always claimed
+          // is what is measured.
+          if (gap <= Math.max(opening, PRICE_TRACKING_RESIDUAL) + 1e-9) closed += 1;
         }
       }
     }

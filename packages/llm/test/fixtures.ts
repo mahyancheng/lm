@@ -542,6 +542,8 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           backlogUnits: 0,
           installedBase: 0,
           ownsNode: false,
+          targetIndustry: '',
+          composition: '',
         },
         {
           productId: 'prd_consumer_copilot',
@@ -562,6 +564,8 @@ export function chiefOfStaffDossier(overrides: Partial<ChiefOfStaffDossier> = {}
           backlogUnits: 0,
           installedBase: 0,
           ownsNode: false,
+          targetIndustry: '',
+          composition: '',
         },
       ],
       computeOwned: 40_000,

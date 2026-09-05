@@ -8,11 +8,112 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ChiefOfStaffInterpretationSchema, ChiefOfStaffMemorySchema, EMPTY_CHIEF_OF_STAFF_MEMORY } from '@frontier/contracts';
-import { composeChiefOfStaff, enforceInterpretationPolicy, enforceModePolicy, renderDossier } from '../src/compose/chiefOfStaff';
-import { answerFromDossier, bestProduct, classifyQuestion, offlineChiefOfStaff, worstProduct } from '../src/chiefOfStaffOffline';
+import type { ChiefOfStaffDossier, LookupResult } from '@frontier/contracts';
+import { ChiefOfStaffInterpretationSchema, ChiefOfStaffMemorySchema, EMPTY_CHIEF_OF_STAFF_MEMORY, LookupResultSchema } from '@frontier/contracts';
+import { composeChiefOfStaff, enforceInterpretationPolicy, enforceModePolicy, renderDossier, renderFinding } from '../src/compose/chiefOfStaff';
+import {
+  actionsFromFindings,
+  answerFromDossier,
+  answerFromFinding,
+  bestProduct,
+  classifyQuestion,
+  namedLine,
+  offlineChiefOfStaff,
+  worstProduct,
+} from '../src/chiefOfStaffOffline';
 import { forgetBefore, readMemory, rememberExchange, standingPreferenceOf } from '../src/chiefOfStaffMemory';
 import { chiefOfStaffDossier, chiefOfStaffInput } from './fixtures';
+
+/* -------------------------------------------------------------------------- */
+/*  World-3 fixtures: a composed line and a slot_candidates finding             */
+/* -------------------------------------------------------------------------- */
+
+const SUITE_COMPOSITION = "your AI software suite on Basalt Compute's inference API with a copilot framework from the open market, aimed at logistics enterprises";
+const COPILOT_COMPOSITION = "your consumer subscription on Sable Reasoning's inference API with an agent harness from the open market, aimed at consumers";
+
+/** The Nexus dossier with both lines composed, as the world-3 dossier builder would hand them over. */
+function composedDossier(): ChiefOfStaffDossier {
+  const base = chiefOfStaffDossier();
+  const [agent, copilot] = base.products.lines;
+  if (agent === undefined || copilot === undefined) throw new Error('fixture has two lines');
+  return chiefOfStaffDossier({
+    products: {
+      ...base.products,
+      lines: [
+        { ...agent, categoryId: 'app_ai_software_suite', unitCostUsd: 582, marketPriceUsd: 2_385, ownsNode: true, targetIndustry: 'logistics', composition: SUITE_COMPOSITION },
+        { ...copilot, categoryId: 'app_consumer_subscription', unitCostUsd: 12, marketPriceUsd: 40, ownsNode: true, targetIndustry: 'consumer', composition: COPILOT_COMPOSITION },
+      ],
+    },
+  });
+}
+
+function slotCandidatesFinding(): LookupResult {
+  return {
+    kind: 'slot_candidates',
+    summary: "3 ways to fill the model slot of AI software suite: best on quality per dollar is an inference API from Basalt Compute's line at 9 dollars; today it runs on Basalt Compute's inference API.",
+    nodeId: 'app_ai_software_suite',
+    slotId: 'model',
+    slotLabel: 'Model',
+    productId: 'prd_enterprise_agent',
+    rows: [
+      {
+        nodeId: 'svc_inference_api',
+        label: 'Inference API',
+        tier: 5,
+        sourceKind: 'buy',
+        sellerCompanyId: 'cmp_basalt',
+        sellerName: 'Basalt Compute',
+        unitPriceUsd: 9,
+        qualityScorePct: 85,
+        blocked: false,
+        intent: { type: 'fill_slot', productId: 'prd_enterprise_agent', slotId: 'model', nodeId: 'svc_inference_api', supplierCompanyId: 'cmp_basalt', supplierProductId: 'prd_basalt_line2' },
+      },
+      {
+        nodeId: 'svc_inference_api',
+        label: 'Inference API',
+        tier: 5,
+        sourceKind: 'buy',
+        sellerCompanyId: 'cmp_sable',
+        sellerName: 'Sable Reasoning',
+        unitPriceUsd: 13,
+        qualityScorePct: 80,
+        blocked: false,
+        intent: { type: 'fill_slot', productId: 'prd_enterprise_agent', slotId: 'model', nodeId: 'svc_inference_api', supplierCompanyId: 'cmp_sable', supplierProductId: 'prd_sable_line2' },
+      },
+      {
+        nodeId: 'svc_inference_api',
+        label: 'Inference API',
+        tier: 5,
+        sourceKind: 'market',
+        sellerCompanyId: '',
+        sellerName: '',
+        unitPriceUsd: 11,
+        qualityScorePct: 50,
+        blocked: true,
+        intent: null,
+      },
+    ],
+  };
+}
+
+function unitCostFinding(): LookupResult {
+  return {
+    kind: 'unit_cost',
+    summary: "One seat of AI software suite costs 582 dollars to make, of which 360 is the model slot, on Basalt Compute's inference API; the market pays 2385.",
+    nodeId: 'app_ai_software_suite',
+    label: 'AI software suite',
+    unitLabel: 'seat',
+    unitCostUsd: 582,
+    marketPriceUsd: 2_385,
+    grossMarginPct: 76,
+    madeInHouseSharePct: 0,
+    blockedInputs: [],
+    rows: [
+      { key: 'slot:model', label: 'Inference API', amountUsd: 360, sharePct: 62, sourceKind: 'buy', sourceName: 'Basalt Compute', slotId: 'model', nodeId: 'svc_inference_api' },
+      { key: 'support', label: 'Support and delivery', amountUsd: 53, sharePct: 9, sourceKind: 'conversion', sourceName: '', slotId: '', nodeId: '' },
+    ],
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  The dossier in the prompt                                                  */
@@ -61,6 +162,26 @@ describe('the typed dossier', () => {
   it('tells the model which screen the founder asked from', () => {
     const { prompt } = composeChiefOfStaff(chiefOfStaffInput({ dossier, screen: '/capital' }));
     expect(prompt).toContain('the /capital screen');
+  });
+
+  it('prints each composed line as its composition sentence, after the price', () => {
+    const text = renderDossier(composedDossier());
+    expect(text).toContain(`$900 per seat against $582 to make, market $2.4k`);
+    expect(text).toContain(`Built as: ${SUITE_COMPOSITION}`);
+    expect(text).toContain(`Built as: ${COPILOT_COMPOSITION}`);
+    // The price clause comes first, the composition closes the line.
+    const line = text.split('\n').find((entry) => entry.includes('Nexus Enterprise Agent')) ?? '';
+    expect(line.indexOf('$900 per seat')).toBeLessThan(line.indexOf('Built as:'));
+    // A world-2 line, with no composition, prints no empty clause.
+    expect(renderDossier(dossier)).not.toContain('Built as:');
+  });
+
+  it('tells the model about the composed line: the slot_candidates lookup and the two actions that change a line', () => {
+    const { system } = composeChiefOfStaff(chiefOfStaffInput({ dossier: composedDossier() }));
+    expect(system).toContain('slot_candidates');
+    expect(system).toContain('`fill_slot` changes the node in one slot and who supplies it');
+    expect(system).toContain('`set_target_market` changes who the line is aimed at');
+    expect(system).toContain('quote them when asked what a line is built on');
   });
 
   it('puts standing preferences and remembered exchanges in front of the model', () => {
@@ -141,6 +262,81 @@ describe('the offline responder', () => {
 
   it('reads runway before cash, because "how long does our cash last" is a runway question', () => {
     expect(classifyQuestion('how long will our cash last before we run out')).toBe('runway');
+  });
+
+  it('hears "what is my app built on" as a question about the composition', () => {
+    expect(classifyQuestion('what is my app built on?')).toBe('composition');
+    expect(classifyQuestion('Which model does our suite run on?')).toBe('composition');
+    expect(classifyQuestion('what harness are we using')).toBe('composition');
+    expect(classifyQuestion('who is our copilot aimed at')).toBe('composition');
+    // "run on" is not "run out".
+    expect(classifyQuestion('are we about to run out of money')).toBe('runway');
+  });
+
+  it('answers the composition from the line\'s own sentence, naming the line the founder named', () => {
+    const composed = composedDossier();
+    const every = answerFromDossier('composition', composed);
+    expect(every).toContain(`Nexus Enterprise Agent — Your AI software suite on Basalt Compute's inference API`);
+    expect(every).toContain(`Nexus Copilot — Your consumer subscription on Sable Reasoning's inference API`);
+
+    const one = answerFromDossier('composition', composed, 'what is Nexus Copilot built on?');
+    expect(one).toContain('Nexus Copilot: Your consumer subscription');
+    expect(one).not.toContain('Nexus Enterprise Agent');
+    expect(one).toContain('fill_slot');
+    expect(one).toContain('set_target_market');
+    // Named by the node it sells, when the founder says the node rather than the line.
+    expect(namedLine(composed.products.lines, 'which model is the ai software suite on')?.productId).toBe('prd_enterprise_agent');
+
+    // A world-2 dossier has no composition to read, and says so rather than inventing one.
+    expect(answerFromDossier('composition', dossier)).toContain('not composed by slot');
+  });
+
+  it('answers "what is my app built on" offline, from the dossier, pointing at Products', () => {
+    const result = offlineChiefOfStaff(chiefOfStaffInput({ dossier: composedDossier(), playerMessage: 'what is my app built on?' }));
+    expect(ChiefOfStaffInterpretationSchema.safeParse(result).success).toBe(true);
+    expect(result.mode).toBe('answer');
+    expect(result.reply).toContain("Basalt Compute's inference API");
+    expect(result.reply).toContain('aimed at logistics enterprises');
+    expect(result.reply).toContain('Products');
+    expect(result.interpretedInstructions).toEqual([]);
+    expect(result.requiresConfirmation).toBe(true);
+  });
+
+  it('reads a slot_candidates finding back and takes its fill verbatim', () => {
+    const finding = slotCandidatesFinding();
+    expect(LookupResultSchema.safeParse(finding).success).toBe(true);
+
+    const rendered = renderFinding(finding);
+    expect(rendered).toContain('what could fill this slot');
+    expect(rendered).toContain('from Basalt Compute (cmp_basalt) at $9 a unit, quality 85 of 100 — fill_slot ready');
+    expect(rendered).toContain('from the open market at $11 a unit, quality 50 of 100 — BLOCKED');
+    expect(rendered).not.toMatch(/\$\d+\.\d{3,}/);
+
+    const answer = answerFromFinding(finding);
+    expect(answer).toContain('3 ways to fill the model slot');
+    expect(answer).toContain('Inference API from Basalt Compute at $9 a unit');
+    expect(answer).toContain('(blocked: nobody owns it)');
+
+    const [action] = actionsFromFindings([finding]);
+    expect(action).toEqual(finding.kind === 'slot_candidates' ? finding.rows[0]?.intent : null);
+    if (action?.type === 'fill_slot') expect(action.supplierCompanyId).toBe('cmp_basalt');
+
+    // The second-turn offline reply carries the finding and the fill to approve.
+    const second = offlineChiefOfStaff(chiefOfStaffInput({ dossier: composedDossier(), playerMessage: 'which model could our suite run on?', findings: [finding] }));
+    expect(second.mode).toBe('plan');
+    expect(second.reply).toContain('Basalt Compute');
+    expect(second.interpretedInstructions[0]?.type).toBe('fill_slot');
+    expect(second.requiresConfirmation).toBe(true);
+  });
+
+  it('renders a unit-cost finding by slot', () => {
+    const finding = unitCostFinding();
+    expect(LookupResultSchema.safeParse(finding).success).toBe(true);
+    const rendered = renderFinding(finding);
+    expect(rendered).toContain('model slot: Inference API — $360, 62% of the unit cost, from Basalt Compute');
+    expect(rendered).toContain('- Support and delivery — $53');
+    expect(rendered).not.toContain(' slot: Support');
+    expect(answerFromFinding(finding)).toContain('the biggest line of that is inference API at $360');
   });
 
   it('ranks products by revenue and by margin', () => {

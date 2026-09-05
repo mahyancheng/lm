@@ -1,28 +1,59 @@
 /**
  * The world-3 launch flow, as pure functions.
  *
- * The owner's order, and it is not negotiable: pick a node → **see what it
- * costs to make** → wire the inputs → set a price against the node's own market
- * price → launch. Cost comes before price because a founder who prices before
- * they have costed is guessing, and world 2 let them: it showed a reference
- * price on the launch form and a margin computed from compute alone.
+ * The owner's order, and it is not negotiable: **what to sell → what goes in
+ * each slot and where it comes from → who it is aimed at → what it costs to
+ * make → the price.** Cost comes before price because a founder who prices
+ * before they have costed is guessing, and world 2 let them: it showed a
+ * reference price on the launch form and a margin computed from compute alone.
  *
- * Nothing here computes an economic number. `costBreakdown`, `inputOptions`,
- * `nodeEntryRoutes` and `priceVerdict` are the engine's, and this module only
- * decides which of them a step needs and what the words around them are. A
- * screen that restated any of that arithmetic would be a second economy.
+ * Nothing here computes an economic number. `slotOptions`, `unitCostOf`,
+ * `costBreakdown`, `nodeEntryRoutes`, `marketCellWeight` and `priceVerdict`
+ * are the engine's, and this module only decides which of them a step needs,
+ * what the words around them are, and how the founder's draft — a fill per
+ * slot, a target cell, a tier — becomes the one `launch_product` ticket the
+ * validator is asked to accept. A screen that restated any of that arithmetic
+ * would be a second economy.
  */
 
-import type { ActionIntent, Company, EconomicNode, SessionState, UnitCostResult } from '@frontier/contracts';
-import { economicNodeById } from '@frontier/contracts';
-import { launchableNodes, type LaunchableNode, type NodeEntryRoutes, type NodeInputOptions } from '@frontier/simulation';
+import type {
+  ActionIntent,
+  Company,
+  EconomicNode,
+  LaunchSlotChoice,
+  ProductSegment,
+  ProductSlotFill,
+  Sector,
+  SessionState,
+  UnitCostLine,
+  UnitCostResult,
+} from '@frontier/contracts';
+import { NODE_ROLE_LABELS, PRODUCT_SEGMENTS, SECTORS, SECTOR_META, economicNodeById, primaryCustomerOf } from '@frontier/contracts';
+import {
+  defaultIndustryFor,
+  launchableNodes,
+  marketCellWeight,
+  type InputRoute,
+  type LaunchCapacityPreview,
+  type LaunchableNode,
+  type NodeEntryRoutes,
+  type NodeSlotOptions,
+  type ResolvedFill,
+  type SlotCandidate,
+} from '@frontier/simulation';
 
 /* -------------------------------------------------------------------------- */
-/*  The four steps                                                             */
+/*  The five steps                                                             */
 /* -------------------------------------------------------------------------- */
 
-export const NODE_LAUNCH_STEPS = ['Line', 'Cost to make', 'Inputs', 'Price'] as const;
-export type NodeLaunchStep = 0 | 1 | 2 | 3;
+export const NODE_LAUNCH_STEPS = ['What to sell', 'Inputs', 'Target', 'Cost to make', 'Price'] as const;
+export type NodeLaunchStep = 0 | 1 | 2 | 3 | 4;
+
+/** The craft quality every world-3 launch aims at. One lever is enough, and the tier is that lever. */
+export const LAUNCH_TARGET_QUALITY = 0.75;
+
+/** The quality tier a launch opens at: the node's own draw, the node's own craft. */
+export const DEFAULT_QUALITY_TIER = 0.5;
 
 /* -------------------------------------------------------------------------- */
 /*  Which node                                                                 */
@@ -142,49 +173,325 @@ export function entryRoutes(routes: NodeEntryRoutes, formatUsd: (value: number) 
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Wiring                                                                     */
+/*  What the line opens with                                                   */
 /* -------------------------------------------------------------------------- */
 
-/** One input's chosen route, as the launch form holds it before the action is built. */
-export interface WiringChoice {
+/**
+ * The capacity sentence on the cost step: how much of the company's own bucket
+ * the new line starts with, in units a quarter, and where the rest is.
+ *
+ * A second line on a bucket does not get the bucket: `bucketShare` opens it on
+ * a foothold beside the lines already drawing there and lets it grow into more
+ * as it sells. A founder who is not told that reads a healthy unit cost and
+ * then watches the line ship a fraction of what the suite beside it ships.
+ * Empty for a node no bucket constrains.
+ */
+export function capacitySentence(preview: LaunchCapacityPreview | null, node: EconomicNode, formatUnits: (value: number) => string): string {
+  if (preview === null) return '';
+  const bucket = CAPACITY_BUCKET_NAME[preview.capacityKind] ?? preview.capacityKind;
+  const units = `${formatUnits(preview.unitsPerQuarter)} ${node.unitLabel} a quarter`;
+  if (preview.sharers === 0) return `Made on your ${bucket}: room for about ${units} at this tier. Add capacity to make more.`;
+  const others = preview.sharers === 1 ? 'the line already on it keeps' : `the ${preview.sharers} lines already on it keep`;
+  const head = `Opens with ${Math.round(preview.share * 100)}% of your ${bucket} — about ${units} at this tier — and ${others} the rest.`;
+  const tail = preview.unitsPerQuarter <= 0 ? ' That share is under one unit, so nothing ships until you add capacity or close a line.' : ' It grows into more as it sells; add capacity if both lines need it.';
+  return head + tail;
+}
+
+/** The bucket a capacity kind is, in the founder's words. */
+const CAPACITY_BUCKET_NAME: Readonly<Record<string, string>> = { compute: 'compute', plant: 'plant', fleet: 'fleet', grid: 'grid' };
+
+/* -------------------------------------------------------------------------- */
+/*  Fills: one choice per slot                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One slot's choice as the form holds it: the node in the slot and where it
+ * comes from. The company's own id as supplier means MAKE; a seller's id means
+ * BUY from that seller's line; null means the open market. A null node leaves
+ * the slot empty, which is legal only on a slot the table does not require.
+ */
+export interface SlotChoice {
+  readonly nodeId: string | null;
   readonly supplierCompanyId: string | null;
   readonly supplierProductId: string | null;
 }
 
-export type WiringMap = Readonly<Record<string, WiringChoice>>;
+/** The form's composition: a choice per slot id. */
+export type FillMap = Readonly<Record<string, SlotChoice>>;
 
-/**
- * The `supply` array `launch_product` takes.
- *
- * A choice with no supplier is dropped rather than sent as a pair of nulls: an
- * absent entry already means the open market, and a deliberate null means
- * *unsupplied*, which is a different and much worse thing.
- */
-export function supplyFromWiring(wiring: WiringMap): { inputCategoryId: string; supplierCompanyId: string | null; supplierProductId: string | null }[] {
-  return Object.entries(wiring)
-    .filter(([, choice]) => choice.supplierCompanyId !== null && choice.supplierProductId !== null)
-    .map(([inputCategoryId, choice]) => ({
-      inputCategoryId,
-      supplierCompanyId: choice.supplierCompanyId,
-      supplierProductId: choice.supplierProductId,
-    }));
+/** The choice that leaves a slot empty. */
+export const EMPTY_CHOICE: SlotChoice = { nodeId: null, supplierCompanyId: null, supplierProductId: null };
+
+/** A resolved fill as a form choice: the same node and the same source the roll-up would take. */
+export function choiceOfFill(fill: ResolvedFill): SlotChoice {
+  if (fill.nodeId === null) return EMPTY_CHOICE;
+  const named = fill.route === 'make' || fill.route === 'buy';
+  return {
+    nodeId: fill.nodeId,
+    supplierCompanyId: named ? fill.supplierCompanyId : null,
+    supplierProductId: named ? fill.supplierProductId : null,
+  };
+}
+
+/** The choice a route stands for on a candidate node. */
+export function choiceOfRoute(nodeId: string, route: InputRoute): SlotChoice {
+  if (route.kind === 'market') return { nodeId, supplierCompanyId: null, supplierProductId: null };
+  return { nodeId, supplierCompanyId: route.supplierCompanyId, supplierProductId: route.supplierProductId };
 }
 
 /**
- * What the wiring step defaults to: whatever route the roll-up would take
- * anyway.
+ * What the form opens on: whatever route each slot resolves to before a founder
+ * has touched anything — the table's default, made in-house when the company
+ * already runs a line on it, so the first costing shown is the costing a
+ * founder who changes nothing will launch at.
  *
- * A founder who changes nothing gets exactly the costing they were shown on the
- * previous step, which is the whole reason costing comes first.
+ * Every slot gets an entry, including the make route on a slot the company
+ * fills itself: an entry naming nobody would read as *declining* MAKE, which is
+ * allowed but must be a choice, not an accident of a missing key.
  */
-export function defaultWiring(options: readonly NodeInputOptions[]): WiringMap {
-  const out: Record<string, WiringChoice> = {};
-  for (const option of options) {
-    const chosen = option.chosen;
-    if (chosen === null || chosen.kind !== 'buy') continue;
-    out[option.inputNodeId] = { supplierCompanyId: chosen.supplierCompanyId, supplierProductId: chosen.supplierProductId };
+export function defaultFills(options: readonly NodeSlotOptions[]): FillMap {
+  const out: Record<string, SlotChoice> = {};
+  for (const slot of options) {
+    out[slot.slotId] = slot.fill === null ? EMPTY_CHOICE : choiceOfFill(slot.fill);
   }
   return out;
+}
+
+/** Whether a slot may be left empty at all. Required slots cannot, and the sheet offers no such button on one. */
+export function canLeaveEmpty(slot: Pick<NodeSlotOptions, 'required'>): boolean {
+  return !slot.required;
+}
+
+/**
+ * The kind of node a slot takes, for its row, when the slot's own label does
+ * not already say so: an app's "Model" slot takes an API, a robot's "Arms" slot
+ * a robot. Empty when label and role read the same, singular or plural, so a
+ * row never says "Wafer · Wafer".
+ */
+export function roleCaption(slot: Pick<NodeSlotOptions, 'label' | 'role'>): string {
+  const role = NODE_ROLE_LABELS[slot.role];
+  const stem = (text: string): string => text.toLowerCase().replace(/s$/, '');
+  return stem(role) === stem(slot.label) ? '' : role;
+}
+
+/**
+ * The fills with one slot set. An empty choice on a required slot is refused
+ * and the map comes back unchanged: the validator would refuse the ticket, so
+ * the form never holds a draft the validator would not take.
+ */
+export function withChoice(fills: FillMap, slot: Pick<NodeSlotOptions, 'slotId' | 'required'>, choice: SlotChoice): FillMap {
+  if (choice.nodeId === null && !canLeaveEmpty(slot)) return fills;
+  return { ...fills, [slot.slotId]: choice };
+}
+
+/** The fills as the engine's preview override reads them: one product fill per chosen slot, never memoised. */
+export function previewFills(fills: FillMap): readonly ProductSlotFill[] {
+  return Object.entries(fills).map(([slotId, choice]) => ({
+    slotId,
+    nodeId: choice.nodeId,
+    supplierCompanyId: choice.supplierCompanyId,
+    supplierProductId: choice.supplierCompanyId === null ? null : choice.supplierProductId,
+    cutOffNoticeQuarter: null,
+    changedQuarter: null,
+  }));
+}
+
+/** The `slots` array `launch_product` takes: one entry per slot of the node the form has a choice for, in slot order. */
+export function slotChoicesFor(node: EconomicNode, fills: FillMap): readonly LaunchSlotChoice[] {
+  const out: LaunchSlotChoice[] = [];
+  for (const slot of node.slots) {
+    const choice = fills[slot.id];
+    if (choice === undefined) continue;
+    out.push({
+      slotId: slot.id,
+      nodeId: choice.nodeId,
+      supplierCompanyId: choice.supplierCompanyId,
+      supplierProductId: choice.supplierCompanyId === null ? null : choice.supplierProductId,
+    });
+  }
+  return out;
+}
+
+/** The candidate a choice names, or null for an empty slot or a node the slot no longer admits. */
+export function candidateOf(slot: NodeSlotOptions, choice: SlotChoice | undefined): SlotCandidate | null {
+  if (choice === undefined || choice.nodeId === null) return null;
+  return slot.candidates.find((candidate) => candidate.nodeId === choice.nodeId) ?? null;
+}
+
+/** The route a choice stands on, among a candidate's routes, or null when it names nobody the candidate lists. */
+export function routeOf(candidate: SlotCandidate, choice: SlotChoice): InputRoute | null {
+  if (choice.supplierCompanyId === null) return candidate.routes.find((route) => route.kind === 'market') ?? null;
+  return (
+    candidate.routes.find(
+      (route) => route.kind !== 'market' && route.supplierCompanyId === choice.supplierCompanyId && route.supplierProductId === choice.supplierProductId,
+    ) ?? null
+  );
+}
+
+/**
+ * The cheapest way to get one candidate, its quality riding along. Ties go to
+ * the higher quality, so two routes at one price are told apart by the thing
+ * that differs.
+ */
+export function bestRouteOf(candidate: SlotCandidate): InputRoute | null {
+  let best: InputRoute | null = null;
+  for (const route of candidate.routes) {
+    if (best === null || route.unitPriceUsd < best.unitPriceUsd || (route.unitPriceUsd === best.unitPriceUsd && route.qualityScore > best.qualityScore)) {
+      best = route;
+    }
+  }
+  return best;
+}
+
+/** How one slot reads on its row: the node in it and where it comes from, in a few words. */
+export function fillSummary(slot: NodeSlotOptions, choice: SlotChoice | undefined, companyId: string): string {
+  const candidate = candidateOf(slot, choice);
+  if (candidate === null) return slot.required ? 'Nothing chosen' : 'Left empty';
+  if (candidate.blocked && (choice?.supplierCompanyId ?? null) === null) return `${candidate.label} · nobody makes it`;
+  const supplierId = choice?.supplierCompanyId ?? null;
+  if (supplierId === null) return `${candidate.label} · open market`;
+  if (supplierId === companyId) return `${candidate.label} · made by you`;
+  const route = choice === undefined ? null : routeOf(candidate, choice);
+  return `${candidate.label} · ${route?.label ?? 'named seller'}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Target: who it is aimed at                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** Where a line is aimed: who signs, and what business they are in. */
+export interface TargetChoice {
+  readonly customer: ProductSegment;
+  readonly industry: Sector;
+}
+
+/** The customer type in words, after an industry: "Logistics enterprises". */
+export const CUSTOMER_PLURAL: Readonly<Record<ProductSegment, string>> = {
+  consumer: 'the public',
+  enterprise: 'enterprises',
+  developer_api: 'developers',
+  government: 'government buyers',
+};
+
+/** The short chip label for a customer type. */
+export const CUSTOMER_CHIP: Readonly<Record<ProductSegment, string>> = {
+  consumer: 'The public',
+  enterprise: 'Enterprises',
+  developer_api: 'Developers',
+  government: 'Government',
+};
+
+/** The target a launch opens on: the heaviest customer type and the heaviest industry in the node's own market. */
+export function defaultTarget(node: EconomicNode): TargetChoice {
+  return { customer: primaryCustomerOf(node), industry: defaultIndustryFor(node) };
+}
+
+/** Every customer type with its share of the node's end demand, in `PRODUCT_SEGMENTS` order. Zero-weight types stay: a founder may aim there and be told. */
+export function customerChoices(node: EconomicNode): readonly { readonly customer: ProductSegment; readonly weight: number }[] {
+  return PRODUCT_SEGMENTS.map((customer) => ({ customer, weight: node.market.customers[customer] ?? 0 }));
+}
+
+/** Every industry with the weight of its cell for `customer`, in `SECTORS` order. */
+export function industryChoices(node: EconomicNode, customer: ProductSegment): readonly { readonly industry: Sector; readonly weight: number }[] {
+  return SECTORS.map((industry) => ({ industry, weight: marketCellWeight(node, industry, customer) }));
+}
+
+/** The industry the ticket carries. Selling to the public has no industry, so a consumer target sends none. */
+export function targetIndustryOf(target: TargetChoice): Sector | null {
+  return target.customer === 'consumer' ? null : target.industry;
+}
+
+/**
+ * The cell's weight in words: "Logistics enterprises are 22% of who buys this."
+ *
+ * Whole percent, per the house rules. A cell with no weight says so plainly
+ * rather than showing 0%, because a line aimed there sells nothing and the
+ * founder should read that before the validator's advisory says it.
+ */
+export function targetSentence(node: EconomicNode, target: TargetChoice): string {
+  if (target.customer === 'consumer') {
+    const share = Math.round(marketCellWeight(node, 'consumer', 'consumer') * 100);
+    return share === 0
+      ? `Nobody in the public buys ${node.label.toLowerCase()}: a line aimed there sells nothing.`
+      : `The public is ${share}% of who buys this.`;
+  }
+  const who = `${SECTOR_META[target.industry].label} ${CUSTOMER_PLURAL[target.customer]}`;
+  const share = Math.round(marketCellWeight(node, target.industry, target.customer) * 100);
+  return share === 0 ? `${who} do not buy ${node.label.toLowerCase()}: a line aimed there sells nothing.` : `${who} are ${share}% of who buys this.`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Cost, grouped by slot                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** One row of the cost step: a slot with what fills it, or one conversion line. */
+export interface CostRow {
+  readonly key: string;
+  /** The slot's label for an input row, the conversion line's label otherwise. */
+  readonly label: string;
+  /** What is in the slot, or empty for a conversion row. */
+  readonly detail: string;
+  readonly amountUsd: number;
+  /** Whole percent of the unit cost. */
+  readonly sharePct: number;
+  readonly sourceKind: UnitCostLine['sourceKind'];
+}
+
+/**
+ * The roll-up in the order a founder reads a bill of materials: one row per
+ * slot in slot order, each naming the node in it and where it comes from, then
+ * the conversion lines. Amounts are the engine's; this only labels them.
+ */
+export function costRowsBySlot(node: EconomicNode, result: UnitCostResult, companyNames: ReadonlyMap<string, string>, companyId: string): { readonly inputs: readonly CostRow[]; readonly making: readonly CostRow[] } {
+  const total = result.unitCostUsd;
+  const share = (amount: number): number => (total <= 0 ? 0 : Math.round((amount / total) * 100));
+  const inputs: CostRow[] = [];
+  for (const slot of node.slots) {
+    const line = result.lines.find((entry) => entry.slotId === slot.id);
+    if (line === undefined) continue;
+    const filledWith = line.nodeId ?? null;
+    const source =
+      filledWith === null
+        ? 'left empty'
+        : line.sourceKind === 'make'
+          ? 'made by you'
+          : line.sourceKind === 'buy' && line.sourceCompanyId !== null
+            ? (companyNames.get(line.sourceCompanyId) ?? line.sourceCompanyId)
+            : result.blockedInputNodeIds.includes(filledWith)
+              ? 'nobody makes it'
+              : 'open market';
+    const detail = filledWith === null ? source : `${economicNodeById(filledWith)?.label ?? filledWith} · ${source}`;
+    inputs.push({ key: line.key, label: slot.label, detail, amountUsd: line.amountUsd, sharePct: share(line.amountUsd), sourceKind: line.sourceKind });
+  }
+  const making: CostRow[] = result.lines
+    .filter((line) => line.sourceKind === 'conversion')
+    .map((line) => ({
+      key: line.key,
+      label: line.label,
+      detail: line.sourceCompanyId === null || line.sourceCompanyId === companyId ? '' : (companyNames.get(line.sourceCompanyId) ?? ''),
+      amountUsd: line.amountUsd,
+      sharePct: share(line.amountUsd),
+      sourceKind: line.sourceKind,
+    }));
+  return { inputs, making };
+}
+
+/** Whether the costing step has anything a founder must act on before pricing. */
+export function costingBlockers(result: UnitCostResult): readonly string[] {
+  return result.blockedInputNodeIds.map((nodeId) => economicNodeById(nodeId)?.label ?? nodeId);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The tier                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the one slider does, under it: the capacity a unit draws and the
+ * quality it delivers both scale by `0.5 + tier`, the engine's own factor.
+ */
+export function tierCaption(tier: number): string {
+  const factor = Math.round((0.5 + Math.max(0, tier)) * 100) / 100;
+  return `Each unit draws ${factor}× the node's baseline capacity and delivers quality in the same proportion. Capacity is real unit cost, not a phantom margin.`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -196,36 +503,38 @@ export interface LaunchDraft {
   readonly name: string;
   readonly priceUsd: number;
   readonly marketingUsd: number;
-  /** The quality tier the line aims at, 0..1. Buys quality and costs real capacity. */
-  readonly quality: number;
-  readonly wiring: WiringMap;
+  /** The quality tier, 0..1: one lever scaling the capacity a unit draws and the quality it delivers. */
+  readonly qualityTier: number;
+  readonly target: TargetChoice;
+  readonly fills: FillMap;
 }
 
 /**
  * The `launch_product` intent, or null when the form is not yet a legal ticket.
  *
  * `categoryId` carries the NODE id in world 3 — the two id spaces are disjoint,
- * every node id having a table prefix — and `segment` is the node's own buyer
- * segment rather than a founder's guess, because who buys a wafer is a fact
- * about wafers.
+ * every node id having a table prefix. `segment` and `targetIndustry` are the
+ * founder's target cell, `slots` their composition, `computeIntensity` the
+ * tier — the engine writes it to `qualityTier` — and `targetQuality` is fixed:
+ * one lever, not two. `supply` is world 2's and goes empty.
  */
 export function launchIntent(draft: LaunchDraft): ActionIntent | null {
   const name = draft.name.trim();
   if (name.length === 0) return null;
   if (!Number.isFinite(draft.priceUsd) || draft.priceUsd < 0) return null;
+  const tier = Number.isFinite(draft.qualityTier) ? Math.min(1, Math.max(0, draft.qualityTier)) : DEFAULT_QUALITY_TIER;
   return {
     type: 'launch_product',
     name: name.slice(0, 80),
-    segment: draft.node.buyerSegment ?? 'enterprise',
+    segment: draft.target.customer,
     categoryId: draft.node.id,
     pricePerSeatUsd: draft.priceUsd,
-    // The node's own research intensity stands in for the world-2 compute
-    // slider: a line's compute draw in world 3 is `capacityDrawPerUnit`, which
-    // the table sets, so this field is no longer a lever a founder pulls.
-    computeIntensity: draft.node.researchComputeIntensity,
+    computeIntensity: tier,
     launchMarketingUsd: Number.isFinite(draft.marketingUsd) && draft.marketingUsd > 0 ? draft.marketingUsd : 0,
-    targetQuality: draft.quality,
-    supply: supplyFromWiring(draft.wiring),
+    targetQuality: LAUNCH_TARGET_QUALITY,
+    supply: [],
+    targetIndustry: targetIndustryOf(draft.target),
+    slots: [...slotChoicesFor(draft.node, draft.fills)],
   };
 }
 
@@ -252,9 +561,4 @@ export function priceSentence(
   const margin = Math.round(((priceUsd - unitCostUsd) / priceUsd) * 100);
   const marginPart = margin < 0 ? `${Math.abs(margin)}% under cost` : `a ${margin}% gross margin`;
   return against === '' ? `${marginPart}.` : `${against}, ${marginPart}.`;
-}
-
-/** Whether the costing step has anything a founder must act on before pricing. */
-export function costingBlockers(result: UnitCostResult): readonly string[] {
-  return result.blockedInputNodeIds.map((nodeId) => economicNodeById(nodeId)?.label ?? nodeId);
 }

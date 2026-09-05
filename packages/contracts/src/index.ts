@@ -54,8 +54,9 @@
  * | `governance`  | Boards, directors, proposals, votes, commitments            |
  * | `government`  | Agencies, opportunities, bids, contracts, past performance  |
  * | `tech`        | The Frontier Map: nodes, edges, projects, innovation        |
- * | `nodes`       | World 3: the economic node schema and graph integrity       |
- * | `nodeGraph`   | World 3: the node table itself, about ninety rows           |
+ * | `nodeRoles`   | World 3: the substitution classes a slot is typed against   |
+ * | `nodes`       | World 3: the node schema, slots, markets, graph integrity    |
+ * | `nodeGraph`   | World 3: the node table itself, ninety-seven rows           |
  * | `nodeOwnership`| World 3: who may produce what, where a founder starts      |
  * | `people`      | Characters, relationships, memory, connection hierarchy     |
  * | `social`      | Networks, accounts, posts, engagement, media stories        |
@@ -76,6 +77,7 @@ export * from './modifiers';
 export * from './events';
 export * from './company';
 export * from './productCategories';
+export * from './nodeRoles';
 export * from './nodes';
 export * from './nodeGraph';
 export * from './ownership';
@@ -101,4 +103,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.10.0';
+export const CONTRACTS_VERSION = '1.11.0';

@@ -196,7 +196,7 @@ describe('the resolution report', () => {
    * "Competition" and renders it; the screen used to hand the player exactly the
    * fields `redactRival` strips and the RLS policies deny — rival morale,
    * attrition, runway, per-product churn and internal research confidence. The
-   * projection is what decides entitlement, and the screen consumes it before a
+   * projection is what decides entitlement, and the screen reads it before a
    * line reaches a bucket at all.
    */
   it('projects the quarter to one seat before grouping it', () => {

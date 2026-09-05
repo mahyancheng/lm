@@ -38,9 +38,9 @@
  * decision**, through `gates`. The pipeline used to layer over every edge kind,
  * which on a graph with weak edges — "this makes that credible", "evidence
  * about this updates belief in that" — buries the real prerequisite depth under
- * an accumulation of hints. The node canvas therefore gates on `consumes` and
+ * an accumulation of hints. The node canvas therefore gates on slot wires and
  * `requires` and nothing else, and passes the node table's own `tier` as a
- * `layerHint`: the table guarantees `consumes` strictly decreases tier, so a
+ * `layerHint`: the table guarantees every node a slot admits sits strictly below its owner's tier, so a
  * node's tier is a truthful floor for its column and relaxation can only push
  * it further right, never left.
  *

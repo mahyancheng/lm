@@ -10,7 +10,7 @@
  * The reading a player needs in one glance is *capacity against demand on both
  * sides of the split*: training capacity against the compute the running
  * research programmes have claimed, and serving capacity against what the
- * installed customer base actually consumes. Selling past serving capacity is a
+ * installed customer base actually draws. Selling past serving capacity is a
  * churn event; letting a reservation lapse into a shortage is how sessions are
  * lost.
  */
@@ -37,7 +37,7 @@ export function researchComputeDemand(projects: readonly ResearchProject[]): num
     .reduce((total, project) => total + project.computeAllocated, 0);
 }
 
-/** Accelerator-equivalents the installed customer base consumes to be served. */
+/** Accelerator-equivalents the installed customer base draws to be served. */
 export function inferenceComputeDemand(session: SessionState, company: Company): number {
   return company.products
     .filter((product) => product.isActive)

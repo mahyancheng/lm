@@ -32,7 +32,7 @@
  * quarter and writes it for every active company, launch spend included.
  */
 
-import type { CapacityKind, Company, PredationRow, Product, ProductSegment, ResolverContext, RivalPressureRow, SessionState } from '@frontier/contracts';
+import type { CapacityKind, Company, PredationRow, Product, ProductSegment, ProductSlotFill, ResolverContext, RivalPressureRow, SessionState } from '@frontier/contracts';
 import {
   ANTITRUST_EXPOSURE_WEIGHTS,
   combinedPressure,
@@ -45,6 +45,7 @@ import {
   canProduce,
   economicNodeById,
   nodeMarketPriceUsd,
+  primaryCustomerOf,
 } from '@frontier/contracts';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import {
@@ -80,7 +81,8 @@ import { categoryEffectiveQuality, requiredInputUnsupplied, resolveSupplyOrders 
 import { categoryOf, capacityUsd } from './categories';
 import { executiveDialsFor, marketingPlan } from './policy';
 import { resolveNodeProduction, type StagedLineInputs } from '../graph/production';
-import { lineNodeIdOf } from '../graph/lines';
+import { cellOf, fillsOf, withFill } from '../graph/slots';
+import { lineNodeIdOf, lineNodeOf } from '../graph/lines';
 import { sectorEconomy, sectorOf } from '../economy/sectors';
 import { companyRegionFitFactor } from '../economy/regions';
 import {
@@ -512,6 +514,10 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
   // an input built on this quarter is an input this quarter's quality and
   // cost reflect. A no-op in world version 1, which has no product categories.
   const switchedSupplierLines = resolveSupplyOrders(draft, ctx);
+  // World 3: slots filled and lines aimed this quarter, on the same contract —
+  // a composition changed this quarter is the composition this quarter's cost
+  // and quality are read off. A no-op below world 3.
+  resolveCompositionOrders(draft, ctx);
 
   // Sector conditions are read by every company, so they are computed once:
   // building them per company would walk the whole company list per company.
@@ -663,14 +669,26 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
         product.unitCostUsd = 0;
         product.contractBilledUsd = 0;
         if (node.saleKind === 'contract') product.contractRemainingQuarters = 0;
-        product.supply = intent.supply
-          .filter((entry) => node.consumes.some((input) => input.nodeId === entry.inputCategoryId))
-          .map((entry) => ({
-            inputCategoryId: entry.inputCategoryId,
+        // The composition lives on the product's slots, exactly as the launch
+        // named it — the validator has already bounds-checked every choice
+        // against the table and the world, and dropped what it could not
+        // repair. Nothing is stamped as changed: a line's opening composition
+        // is not a switch. The target industry is written only when aimed;
+        // unaimed, `targetOf` reads the node's heaviest industry.
+        const fills: ProductSlotFill[] = [];
+        for (const entry of intent.slots) {
+          if (!node.slots.some((slot) => slot.id === entry.slotId) || fills.some((fill) => fill.slotId === entry.slotId)) continue;
+          fills.push({
+            slotId: entry.slotId,
+            nodeId: entry.nodeId,
             supplierCompanyId: entry.supplierCompanyId,
-            supplierProductId: entry.supplierProductId,
+            supplierProductId: entry.supplierCompanyId === null ? null : entry.supplierProductId,
             cutOffNoticeQuarter: null,
-          }));
+            changedQuarter: null,
+          });
+        }
+        product.slots = fills;
+        if (intent.targetIndustry !== null) product.targetIndustry = intent.targetIndustry;
         product.supplyTerms = null;
       }
       if (category !== null) {
@@ -758,6 +776,102 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
 }
 
 /**
+ * Apply this quarter's `fill_slot` and `set_target_market` actions.
+ *
+ * Both are the founder's own decisions about their own line, already
+ * bounds-checked by the validator; here they are written and recorded. A fill
+ * that re-states the current composition writes nothing and emits nothing, so
+ * a re-issued choice never restarts the switch cost. World 3 only.
+ */
+export function resolveCompositionOrders(draft: SessionState, ctx: ResolverContext): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  for (const company of activeCompanies(draft)) {
+    const actions = companyActions(draft, ctx, company.id);
+
+    for (const { intent } of intentsOfType(actions, 'fill_slot')) {
+      const product = company.products.find((candidate) => candidate.id === intent.productId && candidate.isActive);
+      const node = product === undefined ? undefined : lineNodeOf(product);
+      const slot = node?.slots.find((entry) => entry.id === intent.slotId);
+      if (product === undefined || node === undefined || slot === undefined) continue;
+      const before = fillsOf(product).find((entry) => entry.slotId === slot.id) ?? null;
+      const written = withFill(fillsOf(product), slot.id, intent.nodeId, intent.supplierCompanyId, intent.supplierProductId, ctx.quarter);
+      if (!written.changed) continue;
+      product.slots = [...written.fills];
+      const sourceName =
+        intent.supplierCompanyId === null
+          ? 'the open market'
+          : intent.supplierCompanyId === company.id
+            ? 'its own line'
+            : (draft.companies.find((candidate) => candidate.id === intent.supplierCompanyId)?.name ?? intent.supplierCompanyId);
+      const inputLabel = intent.nodeId === null ? 'nothing' : (economicNodeById(intent.nodeId)?.label ?? intent.nodeId);
+      const eventId = emitEvent(
+        draft,
+        ctx,
+        'slot_filled',
+        company.id,
+        intent.supplierCompanyId,
+        {
+          productId: product.id,
+          nodeId: node.id,
+          slotId: slot.id,
+          inputNodeId: intent.nodeId,
+          fromInputNodeId: before === null ? slot.defaultNodeId : before.nodeId,
+          fromSupplierCompanyId: before?.supplierCompanyId ?? null,
+          toSupplierCompanyId: intent.supplierCompanyId,
+        },
+        'company',
+      );
+      ctx.log({
+        phase: 'product_demand_resolution',
+        text:
+          intent.nodeId === null
+            ? `${company.name} left ${product.name}'s ${slot.label.toLowerCase()} slot empty.`
+            : `${company.name} put ${inputLabel} from ${sourceName} in ${product.name}'s ${slot.label.toLowerCase()} slot${before !== null && (before.nodeId !== intent.nodeId || before.supplierCompanyId !== null) ? ', switching away from what it ran on' : ''}.`,
+        deltaLabel: 'slot filled',
+        refEventIds: [eventId],
+        tone: 'neutral',
+        subjectId: company.id,
+      });
+    }
+
+    for (const { intent } of intentsOfType(actions, 'set_target_market')) {
+      const product = company.products.find((candidate) => candidate.id === intent.productId && candidate.isActive);
+      const node = product === undefined ? undefined : lineNodeOf(product);
+      if (product === undefined || node === undefined) continue;
+      const before = cellOf(product, node);
+      product.segment = intent.segment;
+      product.targetIndustry = intent.targetIndustry;
+      const after = cellOf(product, node);
+      if (before.industry === after.industry && before.customer === after.customer) continue;
+      const eventId = emitEvent(
+        draft,
+        ctx,
+        'target_market_set',
+        company.id,
+        product.id,
+        {
+          productId: product.id,
+          nodeId: node.id,
+          fromIndustry: before.industry,
+          fromSegment: before.customer,
+          toIndustry: after.industry,
+          toSegment: after.customer,
+        },
+        'company',
+      );
+      ctx.log({
+        phase: 'product_demand_resolution',
+        text: `${company.name} aimed ${product.name} at ${after.customer === 'consumer' ? 'the public' : `${after.industry.replace(/_/g, ' ')} ${after.customer.replace(/_/g, ' ')} customers`}.`,
+        deltaLabel: 'target set',
+        refEventIds: [eventId],
+        tone: 'neutral',
+        subjectId: company.id,
+      });
+    }
+  }
+}
+
+/**
  * The node a world-3 launch produces.
  *
  * The founder's own choice when they can actually make it, and otherwise the
@@ -775,7 +889,7 @@ export function launchNodeIdFor(company: Company, requestedId: string | null, se
   for (const id of owned) {
     const node = economicNodeById(id);
     if (node === undefined) continue;
-    if (node.buyerSegment !== segment) continue;
+    if (primaryCustomerOf(node) !== segment) continue;
     if (node.tier > bestTier) {
       best = id;
       bestTier = node.tier;

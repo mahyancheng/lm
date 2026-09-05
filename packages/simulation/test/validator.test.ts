@@ -293,6 +293,8 @@ describe('product and marketing', () => {
         launchMarketingUsd: 9_000_000,
         targetQuality: 0.6,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       }),
     );
     expect(result.status).toBe('clamped');
@@ -311,6 +313,8 @@ describe('product and marketing', () => {
         launchMarketingUsd: 1_000,
         targetQuality: 0.6,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       }),
     );
     expect(codes(result)).toContain('duplicate_action');

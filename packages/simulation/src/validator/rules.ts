@@ -27,7 +27,10 @@ import type {
   ActionType,
   Character,
   Company,
+  EconomicNode,
+  NodeSlot,
   ProductSegment,
+  Sector,
   SessionState,
   StaffRole,
 } from '@frontier/contracts';
@@ -51,7 +54,9 @@ import { dependencySatisfied } from '../research/nodes';
 import { unheldRequirements } from '../research/ownership';
 import { launchNodeIdFor } from '../companies/products';
 import { LICENCE_ROYALTY_BOUNDS, boundedRoyaltyPct, licenceUpfrontUsd, licenceFrom, ownsNodeOutright } from '../graph/licensing';
-import { cloudRentUsd, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
+import { cloudRentUsd, lineNodeIdOf, lineNodeOf, lineOf, reservedRentUsd } from '../graph/lines';
+import { defaultIndustryFor, slotAdmits } from '../graph/slots';
+import { marketCellWeight } from '../graph/market';
 import { expectedFill, isShortFill, realisesAvailability, reservableUnits, shortFillLine } from '../fills';
 import {
   COMP_BAND_MULTIPLIER,
@@ -540,6 +545,128 @@ const setProductPrice: Rule<'set_product_price'> = (intent, verdict, ctx) => {
   );
 };
 
+/** One slot choice as an action names it: the four fields a launch or a fill_slot may say. */
+interface SlotChoice {
+  readonly slotId: string;
+  readonly nodeId: string | null;
+  readonly supplierCompanyId: string | null;
+  readonly supplierProductId: string | null;
+}
+
+/**
+ * Bounds-check one slot choice against the table and the world.
+ *
+ * Refused (null): a required slot left empty. Repaired, with the reason
+ * appended to `reasons`: a node the slot does not admit falls to the slot's
+ * default, and a source that cannot supply the node — an own line the company
+ * does not run, a company that does not exist or is not trading, a line on a
+ * different node, no published terms, terms closed to this buyer, or a
+ * product naming itself — falls to the open market. `ownProductId` is the
+ * line being filled, so a fill_slot cannot make a line its own input.
+ */
+function checkSlotChoice(ctx: RuleContext, node: EconomicNode, slot: NodeSlot, choice: SlotChoice, ownProductId: string | null, reasons: string[]): SlotChoice | null {
+  let nodeId = choice.nodeId;
+  if (nodeId === null && slot.required) {
+    return null;
+  }
+  if (nodeId !== null && !slotAdmits(node, slot, nodeId)) {
+    const label = ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId;
+    reasons.push(`${node.label}'s ${slot.label.toLowerCase()} slot does not take ${label}; ${slot.defaultNodeId === null ? 'left empty' : `running on ${ECONOMIC_NODES_BY_ID[slot.defaultNodeId]?.label ?? slot.defaultNodeId}`} instead.`);
+    nodeId = slot.defaultNodeId;
+    if (nodeId === null) return { slotId: slot.id, nodeId: null, supplierCompanyId: null, supplierProductId: null };
+  }
+  if (nodeId === null) return { slotId: slot.id, nodeId: null, supplierCompanyId: null, supplierProductId: null };
+
+  const market: SlotChoice = { slotId: slot.id, nodeId, supplierCompanyId: null, supplierProductId: null };
+  const supplierCompanyId = choice.supplierCompanyId;
+  if (supplierCompanyId === null) return market;
+  const nodeLabel = ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId;
+
+  if (supplierCompanyId === ctx.company.id) {
+    const own = lineOf(ctx.draft, ctx.company.id, nodeId);
+    if (own === undefined || own.productId === ownProductId) {
+      reasons.push(`${ctx.company.name} runs no line on ${nodeLabel} to make it from; buying ${nodeLabel} on the open market instead.`);
+      return market;
+    }
+    if (choice.supplierProductId !== own.productId) {
+      reasons.push(`${ctx.company.name}'s own line on ${nodeLabel} is "${own.productId}", not "${choice.supplierProductId ?? ''}"; making it there.`);
+    }
+    return { slotId: slot.id, nodeId, supplierCompanyId, supplierProductId: own.productId };
+  }
+
+  const supplier = ctx.draft.companies.find((candidate) => candidate.id === supplierCompanyId);
+  if (supplier === undefined || !supplier.isActive) {
+    reasons.push(`"${supplierCompanyId}" is not an active company in this session; buying ${nodeLabel} on the open market instead.`);
+    return market;
+  }
+  const line = supplier.products.find((candidate) => candidate.id === choice.supplierProductId && candidate.isActive);
+  if (line === undefined || lineNodeIdOf(line) !== nodeId) {
+    reasons.push(`${supplier.name} does not sell ${nodeLabel} on "${choice.supplierProductId ?? ''}"; buying it on the open market instead.`);
+    return market;
+  }
+  const terms = line.supplyTerms ?? null;
+  if (terms === null) {
+    reasons.push(`${supplier.name} has not published terms for ${line.name}; buying ${nodeLabel} on the open market instead.`);
+    return market;
+  }
+  if (terms.blockedCustomerIds.includes(ctx.company.id) || (!terms.openToAll && !terms.exclusiveCustomerIds.includes(ctx.company.id))) {
+    reasons.push(`${line.name} is not open to ${ctx.company.name}; buying ${nodeLabel} on the open market instead.`);
+    return market;
+  }
+  return { slotId: slot.id, nodeId, supplierCompanyId, supplierProductId: line.id };
+}
+
+/**
+ * The composition a launch names, bounds-checked slot by slot. Null when a
+ * required slot was left empty (the launch is refused); otherwise the checked
+ * choices, whether anything moved, and why.
+ */
+function validateSlotChoices(
+  ctx: RuleContext,
+  verdict: Verdict<IntentOf<'launch_product'>>,
+  node: EconomicNode,
+  choices: readonly SlotChoice[],
+  ownProductId: string | null,
+): { readonly slots: SlotChoice[]; readonly changed: boolean; readonly reasons: string[] } | null {
+  const reasons: string[] = [];
+  const kept: SlotChoice[] = [];
+  const seen = new Set<string>();
+  let changed = false;
+  for (const choice of choices) {
+    const slot = node.slots.find((entry) => entry.id === choice.slotId);
+    if (slot === undefined || seen.has(choice.slotId)) {
+      reasons.push(`${node.label} has no slot called "${choice.slotId}"${seen.has(choice.slotId) ? ' twice' : ''}; that choice was dropped.`);
+      changed = true;
+      continue;
+    }
+    seen.add(slot.id);
+    const checked = checkSlotChoice(ctx, node, slot, choice, ownProductId, reasons);
+    if (checked === null) {
+      verdict.reject('requirement_not_met', `${node.label} needs a ${slot.label.toLowerCase()}: that slot cannot be left empty.`);
+      return null;
+    }
+    if (
+      checked.nodeId !== choice.nodeId ||
+      checked.supplierCompanyId !== choice.supplierCompanyId ||
+      checked.supplierProductId !== choice.supplierProductId
+    ) {
+      changed = true;
+    }
+    kept.push(checked);
+  }
+  return { slots: kept, changed, reasons };
+}
+
+/** A line aimed at a cell nobody buys in is allowed and told so: the pool is zero, not the launch. */
+function noteEmptyCell<T extends ActionIntent>(verdict: Verdict<T>, companyName: string, node: EconomicNode, industry: Sector, segment: ProductSegment): void {
+  const collapsed: Sector = segment === 'consumer' ? 'consumer' : industry;
+  if (marketCellWeight(node, collapsed, segment) > 0) return;
+  verdict.note(
+    'requirement_not_met',
+    `${segment === 'consumer' ? 'The public' : `${collapsed.replace(/_/g, ' ')} ${segment.replace(/_/g, ' ')} customers`} do not buy ${node.label}: ${companyName} may aim there, and will sell nothing until it aims elsewhere.`,
+  );
+}
+
 const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
   const clash = ctx.company.products.find((p) => p.name.toLowerCase() === intent.name.trim().toLowerCase() && p.isActive);
   if (clash !== undefined) {
@@ -584,20 +711,43 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
         `Launching ${ECONOMIC_NODES_BY_ID[resolved]?.label ?? resolved}, the highest thing ${ctx.company.name} can make for this segment.`,
       );
     }
-    // Suppliers named at launch must name an input this node actually consumes;
-    // an entry that does not is dropped rather than failing the whole launch.
     const node = ECONOMIC_NODES_BY_ID[resolved];
-    const kept = intent.supply.filter((entry) => node?.consumes.some((input) => input.nodeId === entry.inputCategoryId) === true);
-    if (kept.length !== intent.supply.length) {
+    // One line per node per company: the roll-up keys a company's cost on the
+    // node, so a second line on it would be the first one's cost under another
+    // name. The composition is the thing to change.
+    if (lineOf(ctx.draft, ctx.company.id, resolved) !== undefined) {
+      verdict.reject(
+        'duplicate_action',
+        `${ctx.company.name} already sells ${node?.label ?? resolved}; change its slots instead of launching a second line on it.`,
+      );
+      return;
+    }
+    // World 2's supplier-per-category list means nothing against a node's
+    // slots: dropped, and said so, rather than silently ignored.
+    if (intent.supply.length > 0) {
       verdict.clamp(
         (draft) => {
-          draft.supply = kept;
+          draft.supply = [];
         },
         'unknown_target',
-        `${intent.supply.length - kept.length} supplier choice${intent.supply.length - kept.length === 1 ? '' : 's'} named an input ${
-          node?.label ?? resolved
-        } does not use, and ${intent.supply.length - kept.length === 1 ? 'was' : 'were'} dropped.`,
+        `${intent.supply.length} supplier choice${intent.supply.length === 1 ? '' : 's'} named by input category ${
+          intent.supply.length === 1 ? 'was' : 'were'
+        } dropped: a world-3 line is composed by slot, in \`slots\`.`,
       );
+    }
+    if (node !== undefined) {
+      const composed = validateSlotChoices(ctx, verdict, node, intent.slots, null);
+      if (composed === null) return;
+      if (composed.changed) {
+        verdict.clamp(
+          (draft) => {
+            draft.slots = composed.slots;
+          },
+          'unknown_target',
+          composed.reasons.join(' '),
+        );
+      }
+      noteEmptyCell(verdict, ctx.company.name, node, intent.targetIndustry ?? defaultIndustryFor(node), intent.segment);
     }
     return;
   }
@@ -1149,10 +1299,24 @@ const setSupplyTerms: Rule<'set_supply_terms'> = (intent, verdict, ctx) => {
     verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
     return;
   }
-  const category = categoryOf(ctx.company, product);
-  if (!category.canSupply) {
-    verdict.reject('requirement_not_met', `${category.label} is not a line other companies can build on.`);
-    return;
+  // World 3: anything a company produces it may publish — a node line is a
+  // seller of its node the moment its terms are open. The world-2 catalogue
+  // flag is never consulted for one.
+  if (isNodeEconomyWorld(ctx.draft)) {
+    if (lineNodeIdOf(product) === null) {
+      verdict.reject('requirement_not_met', `${product.name} does not produce a node, so it cannot be anybody's input.`);
+      return;
+    }
+    if (!product.isActive) {
+      verdict.reject('requirement_not_met', `${product.name} is no longer sold.`);
+      return;
+    }
+  } else {
+    const category = categoryOf(ctx.company, product);
+    if (!category.canSupply) {
+      verdict.reject('requirement_not_met', `${category.label} is not a line other companies can build on.`);
+      return;
+    }
   }
   if (intent.terms.pricePerUnitUsd < 0) {
     verdict.reject('illegal_value', 'A supply price cannot be negative.');
@@ -1184,39 +1348,22 @@ const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
     verdict.reject('requirement_not_met', 'Choosing a supplier is not available in this world.');
     return;
   }
+  // World 3 composes a line by slot: the slot is named, never guessed from a
+  // node, so the world-2 action is refused in favour of the one that says so.
+  if (isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'A world-3 line is composed by slot: use fill_slot, naming the slot, the node and its source.');
+    return;
+  }
   const product = ctx.company.products.find((candidate) => candidate.id === intent.productId);
   if (product === undefined) {
     verdict.reject('unknown_target', `${ctx.company.name} has no product "${intent.productId}".`);
     return;
   }
-  // World 3: an input is a NODE the line's own node consumes, and a supplier is
-  // a company running a line on that node. World 2's catalogue answers neither
-  // question — its `categoryOf` resolves a product category, and every world-3
-  // input id is a node id — so both tests are made against the table here. The
-  // two id spaces are disjoint (every node id carries a table prefix), so the
-  // branch below cannot capture a world-2 action.
-  const nodeEconomy = isNodeEconomyWorld(ctx.draft);
-  const lineNodeId = nodeEconomy ? lineNodeIdOf(product) : null;
-  if (nodeEconomy) {
-    const lineNode = lineNodeId === null ? undefined : ECONOMIC_NODES_BY_ID[lineNodeId];
-    if (lineNode === undefined) {
-      verdict.reject('unknown_target', `${product.name} does not produce a node, so it has no inputs to wire.`);
-      return;
-    }
-    if (!lineNode.consumes.some((entry) => entry.nodeId === intent.inputCategoryId)) {
-      verdict.reject(
-        'unknown_target',
-        `${lineNode.label} does not consume ${ECONOMIC_NODES_BY_ID[intent.inputCategoryId]?.label ?? intent.inputCategoryId.replace(/_/g, ' ')}.`,
-      );
-      return;
-    }
-  } else {
-    const category = categoryOf(ctx.company, product);
-    const input = category.inputs.find((entry) => entry.categoryId === intent.inputCategoryId);
-    if (input === undefined) {
-      verdict.reject('unknown_target', `${category.label} is not built on ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
-      return;
-    }
+  const category = categoryOf(ctx.company, product);
+  const input = category.inputs.find((entry) => entry.categoryId === intent.inputCategoryId);
+  if (input === undefined) {
+    verdict.reject('unknown_target', `${category.label} is not built on ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+    return;
   }
   if (intent.supplierCompanyId === null) return; // the open market, or a deliberate refusal — always legal
   if (intent.supplierCompanyId === ctx.company.id && intent.supplierProductId === intent.productId) {
@@ -1233,23 +1380,10 @@ const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
     verdict.reject('unknown_target', `${supplierCompany.name} has no active product "${intent.supplierProductId}".`);
     return;
   }
-  if (nodeEconomy) {
-    // A seller of a node is a company running a line on it. There is no
-    // `canSupply` flag in world 3: anything anybody makes, they can sell, which
-    // is what makes the one node table one market rather than two.
-    if (lineNodeIdOf(supplierProduct) !== intent.inputCategoryId) {
-      verdict.reject(
-        'unknown_target',
-        `${supplierProduct.name} does not make ${ECONOMIC_NODES_BY_ID[intent.inputCategoryId]?.label ?? intent.inputCategoryId.replace(/_/g, ' ')}.`,
-      );
-      return;
-    }
-  } else {
-    const supplierCategory = categoryOf(supplierCompany, supplierProduct);
-    if (supplierCategory.id !== intent.inputCategoryId || !supplierCategory.canSupply) {
-      verdict.reject('unknown_target', `${supplierProduct.name} does not supply ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
-      return;
-    }
+  const supplierCategory = categoryOf(supplierCompany, supplierProduct);
+  if (supplierCategory.id !== intent.inputCategoryId || !supplierCategory.canSupply) {
+    verdict.reject('unknown_target', `${supplierProduct.name} does not supply ${intent.inputCategoryId.replace(/_/g, ' ')}.`);
+    return;
   }
   const terms = supplierProduct.supplyTerms ?? null;
   if (terms === null) {
@@ -1264,6 +1398,89 @@ const chooseSupplier: Rule<'choose_supplier'> = (intent, verdict, ctx) => {
     verdict.reject('requirement_not_met', `${supplierProduct.name} is not open to ${ctx.company.name}.`);
     return;
   }
+};
+
+/**
+ * Fill one slot of a world-3 line.
+ *
+ * Structural refusals only: a world below 3, an unknown or closed product, a
+ * product that is not a node line, a slot the node does not carry, a node the
+ * slot does not admit, a required slot emptied. A source that cannot supply
+ * the node — a seller not selling it, closed to this buyer, or the company
+ * naming a line it does not run — is clamped to the open market with the
+ * reason, because the node choice is still the instruction. Re-stating the
+ * current fill is accepted and changes nothing at resolution.
+ */
+const fillSlot: Rule<'fill_slot'> = (intent, verdict, ctx) => {
+  if (!isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'Slots are only composed in the node economy.');
+    return;
+  }
+  const product = ctx.company.products.find((candidate) => candidate.id === intent.productId);
+  if (product === undefined || !product.isActive) {
+    verdict.reject('unknown_target', `${ctx.company.name} has no active product "${intent.productId}".`);
+    return;
+  }
+  const node = lineNodeOf(product);
+  if (node === undefined) {
+    verdict.reject('unknown_target', `${product.name} does not produce a node, so it has no slots to fill.`);
+    return;
+  }
+  const slot = node.slots.find((entry) => entry.id === intent.slotId);
+  if (slot === undefined) {
+    verdict.reject('unknown_target', `${node.label} has no slot called "${intent.slotId}"; its slots are ${node.slots.map((entry) => entry.id).join(', ')}.`);
+    return;
+  }
+  if (intent.nodeId === null && slot.required) {
+    verdict.reject('requirement_not_met', `${node.label} needs a ${slot.label.toLowerCase()}: that slot cannot be left empty.`);
+    return;
+  }
+  if (intent.nodeId !== null && !slotAdmits(node, slot, intent.nodeId)) {
+    verdict.reject(
+      'unknown_target',
+      `${node.label}'s ${slot.label.toLowerCase()} slot does not take ${ECONOMIC_NODES_BY_ID[intent.nodeId]?.label ?? intent.nodeId}.`,
+    );
+    return;
+  }
+  const reasons: string[] = [];
+  const checked = checkSlotChoice(ctx, node, slot, intent, product.id, reasons);
+  if (checked === null) return; // unreachable: the required-empty case was refused above
+  if (checked.supplierCompanyId !== intent.supplierCompanyId || checked.supplierProductId !== intent.supplierProductId) {
+    verdict.clamp(
+      (draft) => {
+        draft.supplierCompanyId = checked.supplierCompanyId;
+        draft.supplierProductId = checked.supplierProductId;
+      },
+      'unknown_target',
+      reasons.join(' '),
+    );
+  }
+};
+
+/**
+ * Aim a world-3 line at a market cell. Both fields are enums, so the only
+ * structural refusals are the world, the product and its being a node line;
+ * a cell the node's market gives no weight is an advisory, never a refusal.
+ */
+const setTargetMarket: Rule<'set_target_market'> = (intent, verdict, ctx) => {
+  if (!isNodeEconomyWorld(ctx.draft)) {
+    verdict.reject('requirement_not_met', 'Lines are only aimed at a market cell in the node economy.');
+    return;
+  }
+  const product = ctx.company.products.find((candidate) => candidate.id === intent.productId);
+  if (product === undefined || !product.isActive) {
+    verdict.reject('unknown_target', `${ctx.company.name} has no active product "${intent.productId}".`);
+    return;
+  }
+  const node = lineNodeOf(product);
+  if (node === undefined) {
+    verdict.reject('unknown_target', `${product.name} does not produce a node, so it sells into no market cell.`);
+    return;
+  }
+  if (intent.segment === 'consumer' && intent.targetIndustry !== 'consumer') {
+    verdict.note('requirement_not_met', 'Selling to the public has no industry: a consumer line lands in the consumer cell whatever industry it names.');
+  }
+  noteEmptyCell(verdict, ctx.company.name, node, intent.targetIndustry, intent.segment);
 };
 
 /* -------------------------------------------------------------------------- */
@@ -2294,6 +2511,8 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   merge_subsidiary: mergeSubsidiary,
   license_node: licenseNode,
   publish_licence_terms: publishLicenceTerms,
+  fill_slot: fillSlot,
+  set_target_market: setTargetMarket,
 };
 
 /**

@@ -10,7 +10,11 @@
  * is one arithmetic, itemised, and `unitCostUsd` is the sum of the lines
  * exactly rather than a second calculation that happens to agree.
  *
- * ## How an input is priced, in order
+ * ## How a slot is priced
+ *
+ * Every slot of the line's node is resolved through `resolveFill` in
+ * `graph/slots.ts` — the fill on the product, or the table's default — and the
+ * route it comes back with is priced here, in the roll-up's own order:
  *
  * 1. **Make.** The company has its own line on that input, so it is transferred
  *    at *its* unit cost, with no internal margin. This is the whole payoff of
@@ -21,15 +25,25 @@
  *    loaded they already are, world 2's one good idea about the compute market,
  *    generalised to every node — and bounded to `[market × 0.5, market × 2.5]`
  *    so neither a gift nor a hostage price can leave the market's gravity.
- * 3. **Market.** Nobody named, but somebody makes it or it is substitutable:
+ * 3. **Market.** Nobody named, but somebody makes it or the slot never blocks:
  *    the node's market price times `OPEN_MARKET_PREMIUM`. Spot is dearer than a
  *    contract. That one number is what turns naming a supplier from a pure
  *    penalty — world 2 charged up to 65% of *revenue* for a named supplier and
  *    returned a hardcoded zero for the open market — into the obvious move.
- * 4. **Blocked.** Non-substitutable, nobody named and nobody in the world makes
- *    it: recorded in `blockedInputNodeIds`, contributes nothing, and the line
- *    ships nothing — but now for a reason a player can read on the canvas and
- *    fix by buying, licensing or researching.
+ * 4. **Blocked.** A blocking slot whose resolved node nobody in the world owns
+ *    or licences: recorded in `blockedInputNodeIds`, contributes nothing, and
+ *    the line ships nothing — but now for a reason a player can read on the
+ *    canvas and fix by buying, licensing, researching or refilling the slot.
+ * 5. **Empty.** A slot the table does not require, left unfilled: a zero row
+ *    with no node, so the screen still shows the port.
+ *
+ * MAKE is what the fill says, not automatic: a fill naming a rival prices as a
+ * buy even when the company runs its own line on the node, and a missing fill
+ * keeps the default — own line first — so a line that has never composed
+ * anything costs exactly what it always cost.
+ *
+ * Rows are keyed `slot:${slotId}` rather than by input node, so a row keeps its
+ * identity across a node switch and a screen can diff two compositions.
  *
  * A **dataset** input is answered before any of the four: the company's own
  * pool feeds it free, because that is the point of having collected it, and
@@ -47,29 +61,24 @@
  *
  * ## Termination
  *
- * `consumes` strictly decreases tier and tiers are capped at seven, so the
- * recursion is provably at most seven deep and no visited set is needed. The
- * depth guard below is defensive only: a future bad row must not hang the Pi,
- * so beyond the guard an input answers its market price instead of recursing.
+ * Every slot's role sits strictly below its owner and tiers are capped at
+ * eight, so the recursion is provably at most eight deep and no visited set is
+ * needed. The depth guard below is defensive only: a future bad row must not
+ * hang the Pi, so beyond the guard an input answers its market price instead of
+ * recursing.
  *
  * Memoisation lives on `ResolverContext.costCache`, one table per quarter
  * resolution. Never module-level: that would leak one save's prices into
  * another's and break replay.
  */
 
-import type { Company, NodeCostCache, SessionState, UnitCostLine, UnitCostResult } from '@frontier/contracts';
-import {
-  GRID_POWER_NODE_ID,
-  NODE_TIERS,
-  economicNodeById,
-  nodeMarketPriceUsd,
-  requiresClosure,
-  type Product,
-} from '@frontier/contracts';
+import type { Company, NodeCostCache, NodeSlot, SessionState, UnitCostLine, UnitCostResult } from '@frontier/contracts';
+import { GRID_POWER_NODE_ID, NODE_TIERS, economicNodeById, nodeMarketPriceUsd, requiresClosure, type Product } from '@frontier/contracts';
 import { companyEnergyCostFactor } from '../economy/regions';
 import { sellerPriceFactor } from '../companies/sellers';
-import { capacityRateUsd, drawPerUnitOf, lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf } from './lines';
+import { capacityRateUsd, drawPerUnitAtTier, drawPerUnitOf, lineNodeIdOf, lineOf, productOf } from './lines';
 import { dataSelfSupplyShare } from './data';
+import { resolveFill, type FillOverride, type ResolvedFill } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                  */
@@ -89,62 +98,13 @@ export const OPEN_MARKET_PREMIUM = 1.08;
 export const SUPPLIER_ASK_BOUNDS = { min: 0.5, max: 2.5 } as const;
 
 /**
- * How deep the roll-up may recurse. The tier invariant proves seven is enough;
- * this is the guard that keeps a corrupt table from becoming a hang.
+ * How deep the roll-up may recurse. The tier invariant proves the tier count is
+ * enough; this is the guard that keeps a corrupt table from becoming a hang.
  */
 export const MAX_COST_DEPTH = NODE_TIERS.length;
 
 /** Quarters in a year, for turning annual compensation into a quarter of labour. */
 const QUARTERS_PER_YEAR = 4;
-
-/* -------------------------------------------------------------------------- */
-/*  Supplier lookup                                                            */
-/* -------------------------------------------------------------------------- */
-
-/** A named supplier this company buys one input from, with the ask it publishes. */
-export interface SupplierAsk {
-  readonly companyId: string;
-  readonly productId: string;
-  readonly askUsd: number;
-}
-
-/**
- * The supplier a company has named for one input of one of its lines.
- *
- * The choice is stored on the buying product's `supply` array. In world 3 the
- * entry names an input *node*; in world 2 it named a product category. The two
- * id spaces are disjoint — every node id carries a `res_`, `mat_`, `cmp_`,
- * `sys_`, `svc_`, `app_` or `dat_` prefix — so reading the same field both ways
- * cannot confuse them.
- *
- * A supplier that has given notice stops supplying at the quarter on the
- * notice, and one that has not published terms, or has blocked this buyer, is
- * not a supplier at all: the input falls through to the open market.
- */
-export function supplierAskFor(
-  state: SessionState,
-  buyer: Company,
-  buyerProductId: string | null,
-  inputNodeId: string,
-): SupplierAsk | null {
-  if (buyerProductId === null) return null;
-  const product = buyer.products.find((candidate) => candidate.id === buyerProductId);
-  if (product === undefined) return null;
-  const choice = (product.supply ?? []).find((entry) => entry.inputCategoryId === inputNodeId);
-  if (choice === undefined || choice.supplierCompanyId === null || choice.supplierProductId === null) return null;
-  if (choice.cutOffNoticeQuarter !== null && state.quarter >= choice.cutOffNoticeQuarter) return null;
-
-  const supplier = state.companies.find((candidate) => candidate.id === choice.supplierCompanyId);
-  if (supplier === undefined || !supplier.isActive) return null;
-  const line = supplier.products.find((candidate) => candidate.id === choice.supplierProductId);
-  if (line === undefined || !line.isActive) return null;
-  const terms = line.supplyTerms;
-  if (terms === undefined || terms === null) return null;
-  if (terms.blockedCustomerIds.includes(buyer.id)) return null;
-  if (!terms.openToAll && !terms.exclusiveCustomerIds.includes(buyer.id)) return null;
-
-  return { companyId: supplier.id, productId: line.id, askUsd: Math.max(0, terms.pricePerUnitUsd) };
-}
 
 /* -------------------------------------------------------------------------- */
 /*  The roll-up                                                                */
@@ -199,24 +159,50 @@ function labelOf(nodeId: string): string {
  *
  * `cache` is optional: absent means every call recomputes, which is correct and
  * merely slower — a screen explaining one cost does not need a memo table.
+ * `override` is the launch preview's composition for a line that does not
+ * exist yet; a result built on it is never memoised, because the memo is keyed
+ * on the company's real line and a preview is not that.
  */
-export function unitCostOf(state: SessionState, company: Company, nodeId: string, cache?: NodeCostCache): UnitCostResult {
-  return rollUp(state, company, nodeId, cache, 0);
+export function unitCostOf(state: SessionState, company: Company, nodeId: string, cache?: NodeCostCache, override?: FillOverride): UnitCostResult {
+  return rollUp(state, company, nodeId, cache, 0, override);
 }
 
 function emptyResult(nodeId: string): UnitCostResult {
   return { nodeId, unitCostUsd: 0, lines: [], madeInHouseSharePct: 0, blockedInputNodeIds: [] };
 }
 
-function rollUp(state: SessionState, company: Company, nodeId: string, cache: NodeCostCache | undefined, depth: number): UnitCostResult {
+/** A zero row for a slot that contributes nothing: left empty, or blocked. */
+function zeroLine(slot: NodeSlot, fill: ResolvedFill): UnitCostLine {
+  return {
+    key: `slot:${slot.id}`,
+    slotId: slot.id,
+    nodeId: fill.nodeId,
+    label: fill.nodeId === null ? `${slot.label}: none` : labelOf(fill.nodeId),
+    unitsPerUnit: slot.qtyPerUnit,
+    unitPriceUsd: 0,
+    amountUsd: 0,
+    sourceCompanyId: null,
+    sourceKind: 'market',
+  };
+}
+
+function rollUp(
+  state: SessionState,
+  company: Company,
+  nodeId: string,
+  cache: NodeCostCache | undefined,
+  depth: number,
+  override?: FillOverride,
+): UnitCostResult {
   const node = economicNodeById(nodeId);
   if (node === undefined) return emptyResult(nodeId);
 
   const key = `${company.id}|${nodeId}`;
-  const memo = cache?.units.get(key);
+  const memo = override === undefined ? cache?.units.get(key) : undefined;
   if (memo !== undefined) return memo;
 
   const line = lineOf(state, company.id, nodeId, cache);
+  const product = line === undefined ? null : (productOf(state, company.id, line.productId) ?? null);
   const lines: UnitCostLine[] = [];
   const blocked: string[] = [];
   let inputTotal = 0;
@@ -227,18 +213,39 @@ function rollUp(state: SessionState, company: Company, nodeId: string, cache: No
   // reading the node market takes, so there is no fixed point here either.
   const unitsPerQuarter = Math.max(1, line?.unitsSoldLastQuarter ?? 0);
 
-  for (const input of node.consumes) {
+  for (const slot of node.slots) {
+    const fill = resolveFill(state, company, product, node, slot, cache, override);
+    if (fill.nodeId === null) {
+      // An optional slot left empty: a zero row, so the port is still on the
+      // screen and a founder can see there is something they could put there.
+      lines.push(zeroLine(slot, fill));
+      continue;
+    }
     // A dataset input is fed from the company's OWN pool first, free. That is
     // the entire point of having collected it, and it is why an AI laboratory
     // wants customers as much as it wants accelerators. Only the shortfall goes
     // through the make/buy/market ladder below, and a line whose pool covers
-    // the whole draw is never blocked: it already has the thing.
-    const selfShare = dataSelfSupplyShare(company, node, input.nodeId, input.qtyPerUnit, unitsPerQuarter);
+    // the whole draw is never blocked: it already has the thing. Keyed on the
+    // node actually in the slot, so a line that swaps one corpus for another
+    // is judged on the pool it would really draw from.
+    const selfShare = dataSelfSupplyShare(company, node, fill.nodeId, slot.qtyPerUnit, unitsPerQuarter);
+    if (fill.route === 'blocked' && selfShare < 1) {
+      // A blocked input still shows on screen, at zero, so the row a founder
+      // has to act on is the row they are already looking at. It carries the
+      // `market` kind because that is where it *would* come from; that it is
+      // blocked is said by `blockedInputNodeIds`, which is what the product
+      // phase reads before it ships anything.
+      blocked.push(fill.nodeId);
+      lines.push(zeroLine(slot, fill));
+      continue;
+    }
     if (selfShare >= 1) {
       lines.push({
-        key: input.nodeId,
-        label: labelOf(input.nodeId),
-        unitsPerUnit: input.qtyPerUnit,
+        key: `slot:${slot.id}`,
+        slotId: slot.id,
+        nodeId: fill.nodeId,
+        label: labelOf(fill.nodeId),
+        unitsPerUnit: slot.qtyPerUnit,
         unitPriceUsd: 0,
         amountUsd: 0,
         sourceCompanyId: company.id,
@@ -247,35 +254,19 @@ function rollUp(state: SessionState, company: Company, nodeId: string, cache: No
       continue;
     }
 
-    const priced = priceInput(state, company, line?.productId ?? null, input.nodeId, input.substitutable, cache, depth);
-    if (priced === null) {
-      // A blocked input still shows on screen, at zero, so the row a founder
-      // has to act on is the row they are already looking at. It carries the
-      // `market` kind because that is where it *would* come from; that it is
-      // blocked is said by `blockedInputNodeIds`, which is what the product
-      // phase reads before it ships anything.
-      blocked.push(input.nodeId);
-      lines.push({
-        key: input.nodeId,
-        label: labelOf(input.nodeId),
-        unitsPerUnit: input.qtyPerUnit,
-        unitPriceUsd: 0,
-        amountUsd: 0,
-        sourceCompanyId: null,
-        sourceKind: 'market',
-      });
-      continue;
-    }
+    const priced = priceResolved(state, company, fill, cache, depth);
     // The part of a dataset input the company's own pool already covers costs
     // nothing; the rest is bought at whatever the ladder found.
     const unitPriceUsd = priced.unitPriceUsd * (1 - selfShare);
-    const amount = input.qtyPerUnit * unitPriceUsd;
+    const amount = slot.qtyPerUnit * unitPriceUsd;
     inputTotal += amount;
     if (priced.sourceKind === 'make') madeInHouse += amount;
     lines.push({
-      key: input.nodeId,
-      label: labelOf(input.nodeId),
-      unitsPerUnit: input.qtyPerUnit,
+      key: `slot:${slot.id}`,
+      slotId: slot.id,
+      nodeId: fill.nodeId,
+      label: labelOf(fill.nodeId),
+      unitsPerUnit: slot.qtyPerUnit,
       unitPriceUsd,
       amountUsd: amount,
       sourceCompanyId: priced.sourceCompanyId,
@@ -311,8 +302,9 @@ function rollUp(state: SessionState, company: Company, nodeId: string, cache: No
   const capacityRate = capacityRateUsd(state, company, node.capacityKind, cache);
   // The draw is the node's own, scaled by this line's quality tier — exactly
   // the draw `producibleUnits` rations against, so the units a line may make
-  // and the capacity each of them is charged for are the same arithmetic.
-  const draw = drawPerUnitOf(node, line === undefined ? undefined : company.products.find((candidate) => candidate.id === line.productId));
+  // and the capacity each of them is charged for are the same arithmetic. A
+  // preview costs at the tier the founder is about to launch at.
+  const draw = override?.qualityTier !== undefined ? drawPerUnitAtTier(node, override.qualityTier) : drawPerUnitOf(node, product ?? undefined);
   const capacity = draw * capacityRate;
   lines.push({
     key: 'capacity',
@@ -365,7 +357,7 @@ function rollUp(state: SessionState, company: Company, nodeId: string, cache: No
     madeInHouseSharePct: inputTotal <= 0 ? 0 : Math.round((madeInHouse / inputTotal) * 100),
     blockedInputNodeIds: blocked,
   };
-  cache?.units.set(key, result);
+  if (override === undefined) cache?.units.set(key, result);
   return result;
 }
 
@@ -377,22 +369,20 @@ function licencesInForce(company: Company, nodeId: string, quarter: number): rea
   return held.filter((licence) => licence.expiryQuarter > quarter && closure.has(licence.nodeId));
 }
 
-/** One priced input, or null when it is blocked. */
+/** One priced input. */
 interface PricedInput {
   readonly unitPriceUsd: number;
   readonly sourceCompanyId: string | null;
   readonly sourceKind: UnitCostLine['sourceKind'];
 }
 
-function priceInput(
-  state: SessionState,
-  company: Company,
-  buyerProductId: string | null,
-  inputNodeId: string,
-  substitutable: boolean,
-  cache: NodeCostCache | undefined,
-  depth: number,
-): PricedInput | null {
+/**
+ * Price a resolved fill by its route. The route was decided in `resolveFill`;
+ * this only says what each route costs, through the three functions the launch
+ * flow quotes with.
+ */
+function priceResolved(state: SessionState, company: Company, fill: ResolvedFill, cache: NodeCostCache | undefined, depth: number): PricedInput {
+  const inputNodeId = fill.nodeId ?? '';
   // Defensive only: the tier invariant makes a chain deeper than the tier count
   // unrepresentable, so past the guard the market price is the honest answer
   // rather than a hang.
@@ -401,8 +391,7 @@ function priceInput(
   }
 
   // (1) Make. Transferred at this company's own cost, with no internal margin.
-  const own = lineOf(state, company.id, inputNodeId, cache);
-  if (own !== undefined) {
+  if (fill.route === 'make') {
     const upstream = rollUp(state, company, inputNodeId, cache, depth + 1);
     return { unitPriceUsd: upstream.unitCostUsd, sourceCompanyId: company.id, sourceKind: 'make' };
   }
@@ -416,29 +405,16 @@ function priceInput(
   // table. It is what keeps "who do I buy this from" a real question after
   // the published ask has been read: two suppliers quoting the same number
   // are not the same supplier.
-  const supplier = supplierAskFor(state, company, buyerProductId, inputNodeId);
-  if (supplier !== null) {
-    const seller = state.companies.find((candidate) => candidate.id === supplier.companyId);
+  if (fill.route === 'buy' && fill.supplierCompanyId !== null) {
+    const seller = state.companies.find((candidate) => candidate.id === fill.supplierCompanyId);
     return {
-      unitPriceUsd: namedSupplierPriceUsd(state, seller, supplier.askUsd, inputNodeId),
-      sourceCompanyId: supplier.companyId,
+      unitPriceUsd: namedSupplierPriceUsd(state, seller, fill.askUsd ?? 0, inputNodeId),
+      sourceCompanyId: fill.supplierCompanyId,
       sourceKind: 'buy',
     };
   }
 
-  // (3) Market, or (4) blocked.
-  //
-  // Blocked is the strong claim and is held to the strong test: not "nobody is
-  // running a line on it this quarter" — the market already prices that, at the
-  // top of the node's band — but "nobody in the world owns or licences it, so
-  // it cannot be had at any price". A world where every node has an owner
-  // therefore never blocks, and a node the World Director has only just
-  // proposed does, which is the distinction that makes the state worth having.
-  if (!substitutable) {
-    const somebodyMakesIt = producersOf(state, inputNodeId, cache).length > 0;
-    const somebodyCouldMakeIt = somebodyMakesIt || (cache?.ownedNodeIds ?? ownedNodeIdsOf(state)).has(inputNodeId);
-    if (!somebodyCouldMakeIt) return null;
-  }
+  // (3) Market.
   return { unitPriceUsd: openMarketPriceUsd(state, inputNodeId), sourceCompanyId: null, sourceKind: 'market' };
 }
 
@@ -446,7 +422,7 @@ function priceInput(
 /*  Readers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** Whether this line can ship at all: every non-substitutable input has a source. */
+/** Whether this line can ship at all: every blocking input has a source. */
 export function lineIsBlocked(result: UnitCostResult): boolean {
   return result.blockedInputNodeIds.length > 0;
 }

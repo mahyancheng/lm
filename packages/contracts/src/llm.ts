@@ -181,6 +181,19 @@ export const CosProductLineSchema = z
     backlogUnits: intCount('Ordered and not yet shipped. 0 for anything but a unit-sale line.'),
     installedBase: intCount('Durable units still in service, which retire into next quarter\'s replacement demand. 0 for anything but a unit-sale line.'),
     ownsNode: z.boolean().describe('Whether the company owns or licences the node it is producing. False outside the node economy.'),
+    // World 3's composition, as words. Both are plain strings bounded like
+    // every lookup text field rather than `lookupText`, which is declared
+    // further down this module and cannot be referenced here.
+    targetIndustry: z
+      .string()
+      .max(200)
+      .describe('The industry this line is aimed at, e.g. "logistics", paired with `segment` as the customer type. "" outside the node economy.'),
+    composition: z
+      .string()
+      .max(200)
+      .describe(
+        'The line described from the founder\'s seat, e.g. "your AI software suite on Basalt\'s inference API with an agent harness from the open market, aimed at logistics enterprises". Names the two slots carrying most of the unit cost and their sources. "" outside the node economy.',
+      ),
   })
   .describe('One product line as the founder would discuss it.');
 export type CosProductLine = z.infer<typeof CosProductLineSchema>;
@@ -195,7 +208,7 @@ export const CosProductsSchema = z
     reservationExpiryQuarter: QuarterIndexSchema.nullable().describe('Quarter the current reservation lapses, or null.'),
     cloudSpendQuarterlyUsd: z.number().describe('On-demand cloud spend per quarter.'),
     ownedNodeCount: intCount('How many nodes the company owns or licences outright: everything it is entitled to produce. 0 outside the node economy.'),
-    dataPetabytes: intCount('Customer data held, in petabytes, across every sector. Improves quality and feeds any line that consumes a dataset.'),
+    dataPetabytes: intCount('Customer data held, in petabytes, across every sector. Improves quality and feeds any line with a dataset slot.'),
     dataPolicy: z.string().min(1).describe('How much is collected from customers: "minimal", "standard" or "aggressive". Aggressive buys data and costs churn and reputation.'),
   })
   .describe('What the company sells, what it is entitled to make, and the capacity and data it sells on.');
@@ -531,6 +544,10 @@ export const LOOKUP_KINDS = [
   // world-3 screens answer that the world-2 catalogue had no vocabulary for.
   'unit_cost',
   'entry_path',
+  // Appended for the composed line: "what could go in this slot, from whom,
+  // at what price and quality" — every node a slot admits and every source
+  // for each, each row carrying the fill_slot intent that puts it there.
+  'slot_candidates',
 ] as const;
 export type LookupKind = (typeof LOOKUP_KINDS)[number];
 
@@ -615,6 +632,19 @@ export const LookupRequestSchema = z
         nodeId: lookupText('One node to reach, an id into ECONOMIC_NODES, or "" to ask about a whole sector.'),
       })
       .describe('What this company would have to own before it could make anything in a sector, and the three ways to get each piece: research it, licence it, or buy the output.'),
+
+    z
+      .object({
+        kind: z.literal('slot_candidates'),
+        productId: z
+          .string()
+          .min(1)
+          .nullable()
+          .describe('Our own line on the node, so each row\'s fill_slot intent can name it, or null to browse a node we do not sell yet.'),
+        nodeId: z.string().min(1).describe('The node whose slot is being filled, an id into ECONOMIC_NODES — the dossier\'s own lines carry theirs as `categoryId`.'),
+        slotId: z.string().min(1).describe('The slot on that node, e.g. "model", "harness", "battery".'),
+      })
+      .describe('Every node that could fill one slot of a line and every source for each — our own line, each open seller, the open market — with price and quality, each row carrying the exact fill_slot intent.'),
   ])
   .describe('One question the Chief of Staff wants answered from canonical state before it replies.');
 export type LookupRequest = z.infer<typeof LookupRequestSchema>;
@@ -734,7 +764,7 @@ export const SupplierOfferRowSchema = z
     pricePerUnitUsd: usd('Its published price per unit.'),
     qualityScorePct: intCount('Its quality out of 100.'),
     isDirectRival: z.boolean().describe('True when we already sell into the same line ourselves.'),
-    intent: ActionIntentSchema.nullable().describe('The choose_supplier intent that would build the named product on this one, or null when no product was named.'),
+    intent: ActionIntentSchema.nullable().describe('The intent that would build the named product on this one — fill_slot in the node economy, choose_supplier before it — or null when no product was named.'),
   })
   .describe('One company that would currently sell us this input, best quality per dollar first.');
 export type SupplierOfferRow = z.infer<typeof SupplierOfferRowSchema>;
@@ -760,15 +790,33 @@ export const UnitCostRowSchema = z
     sharePct: intCount('That amount as a whole percentage of the unit cost.'),
     sourceKind: z.enum(['make', 'buy', 'market', 'conversion']).describe('Where it comes from: our own line, a named seller, the open market, or conversion (power, labour, capacity, support, licence).'),
     sourceName: lookupText('The counterparty\'s name when there is one, or "".'),
+    slotId: lookupText('The slot this row fills, e.g. "model", or "" on a conversion row (power, labour, capacity, support, licence).'),
+    nodeId: lookupText('The node in that slot, an id into ECONOMIC_NODES, or "" on a conversion row or an empty slot.'),
   })
   .describe('One line of a unit-cost roll-up. The rows sum to the unit cost exactly; there is no second calculation.');
 export type UnitCostRow = z.infer<typeof UnitCostRowSchema>;
+
+export const SlotCandidateRowSchema = z
+  .object({
+    nodeId: z.string().min(1).describe('The node that would sit in the slot, an id into ECONOMIC_NODES. Name it verbatim in the action.'),
+    label: lookupText('Its name, e.g. "Frontier model".'),
+    tier: intCount('Its tier, 0 (a raw resource) to 7 (an operation).'),
+    sourceKind: z.enum(['make', 'buy', 'market']).describe('Where it would come from: our own line, a named seller\'s published line, or the open market.'),
+    sellerCompanyId: lookupText('The seller for "buy", our own id for "make", or "" for the open market.'),
+    sellerName: lookupText('The seller\'s name for "buy", "" otherwise.'),
+    unitPriceUsd: usd('What one unit costs by this route: our own unit cost, the seller\'s ask at their cost base, or the market price plus the spot premium.'),
+    qualityScorePct: intCount('The quality that flows through with it, out of 100. The open market delivers the middle of the band.'),
+    blocked: z.boolean().describe('True when putting this node in the slot would stop the line shipping: a blocking slot, and nobody in the world owns the node.'),
+    intent: ActionIntentSchema.nullable().describe('The fill_slot intent that puts this node from this source in the slot, or null when no product was named or the route would block the line.'),
+  })
+  .describe('One way of filling one slot: a node and a source, priced exactly as the cost roll-up would price it.');
+export type SlotCandidateRow = z.infer<typeof SlotCandidateRowSchema>;
 
 export const EntryStepRowSchema = z
   .object({
     nodeId: z.string().min(1).describe('The node that has to be owned, an id into ECONOMIC_NODES.'),
     label: lookupText('Its name.'),
-    tier: intCount('Its tier, 0 (a raw resource) to 6 (a finished application).'),
+    tier: intCount('Its tier, 0 (a raw resource) to 7 (an operation).'),
     researchable: z.boolean().describe('Whether a research programme can reach it at all.'),
     researchLowUsd: usd('Low end of the table\'s estimate for a programme against it.'),
     researchHighUsd: usd('High end of the same estimate.'),
@@ -911,6 +959,18 @@ export const LookupResultSchema = z
         rows: z.array(EntryStepRowSchema).max(MAX_LOOKUP_ROWS),
       })
       .describe('What this company would have to own to enter a sector, and how to get each piece.'),
+
+    z
+      .object({
+        kind: z.literal('slot_candidates'),
+        summary: lookupText('One sentence stating the finding: how many ways the slot could be filled, the best on quality per dollar, and what fills it today.'),
+        nodeId: lookupText('The node asked about.'),
+        slotId: lookupText('The slot asked about, or "" when the node has no such slot.'),
+        slotLabel: lookupText('The slot\'s label on the canvas, e.g. "Model".'),
+        productId: lookupText('Our own line the rows\' intents name, or "" when none was named.'),
+        rows: z.array(SlotCandidateRowSchema).max(MAX_LOOKUP_ROWS),
+      })
+      .describe('Every node that could fill one slot and every source for each, priced as the roll-up would price them.'),
   ])
   .describe('The answer to one lookup, read off canonical state by the engine. Every figure is a whole number of dollars or units.');
 export type LookupResult = z.infer<typeof LookupResultSchema>;

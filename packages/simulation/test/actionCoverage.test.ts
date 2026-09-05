@@ -14,7 +14,7 @@
  * the second count — the proposal it becomes is itself the trace.
  *
  * When a new action type is added to the contract, this test fails until the
- * engine actually consumes it.
+ * engine actually reads it.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -241,6 +241,8 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
         launchMarketingUsd: 400_000,
         targetQuality: 0.6,
         supply: [],
+        targetIndustry: null,
+        slots: [],
       };
     case 'sunset_product':
       return { type, productId: 'prd_player_assistant', windDownQuarters: 4 };
@@ -424,6 +426,13 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
     case 'publish_licence_terms':
       // World 3 only, for the same reason.
       return { type, nodeId: 'sys_ai_accelerator', royaltyPct: 8, openToAll: true };
+    case 'fill_slot':
+      // World 3 only: nothing below it has a slot to fill, so this is refused
+      // here for the same reason; world-3 behaviour is tested in nodeSlots.test.ts.
+      return { type, productId: 'prd_player_assistant', slotId: 'model', nodeId: 'svc_inference_api', supplierCompanyId: null, supplierProductId: null };
+    case 'set_target_market':
+      // World 3 only, for the same reason.
+      return { type, productId: 'prd_player_assistant', targetIndustry: 'logistics', segment: 'enterprise' };
     case 'merge_subsidiary':
       // World 1 has no live subsidiary to merge — an acquisition there
       // absorbs outright already — so this is refused there for the same
@@ -493,6 +502,9 @@ const LATER_WORLD_ONLY_ACTIONS = new Set<ActionType>([
   // licence one out or ask to licence one in.
   'license_node',
   'publish_licence_terms',
+  // World 3 only: a line below it has no slots and sells into no market cell.
+  'fill_slot',
+  'set_target_market',
 ]);
 
 describe('every accepted action changes something', () => {
@@ -509,8 +521,9 @@ describe('every accepted action changes something', () => {
     // 44 was pinned before transfer_between_group and merge_subsidiary
     // (group control, STAGE 4) were appended, 46 before world 3 appended
     // abandon_research_project and set_data_policy, and 48 before it appended
-    // license_node and publish_licence_terms.
-    expect(ACTION_TYPES.length).toBe(50);
+    // license_node and publish_licence_terms, and 50 before the composed line
+    // appended fill_slot and set_target_market.
+    expect(ACTION_TYPES.length).toBe(52);
     expect([...LATER_WORLD_ONLY_ACTIONS]).toEqual([
       'buy_accelerators',
       'invest_capacity',
@@ -521,6 +534,8 @@ describe('every accepted action changes something', () => {
       'set_data_policy',
       'license_node',
       'publish_licence_terms',
+      'fill_slot',
+      'set_target_market',
     ]);
   });
 

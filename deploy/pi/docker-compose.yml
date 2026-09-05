@@ -1,0 +1,119 @@
+# Frontier Capital on the Raspberry Pi.
+#
+# One service, one port, two volumes. The Pi is a shared machine — it also runs
+# the household WhatsApp/Routine backend and a Postgres that belongs to another
+# application — so every limit here is a promise to the *other* tenants, not a
+# tuning knob for this one.
+#
+#   docker compose up -d          # after `docker load` has put the image here
+#   docker compose logs -f
+#   docker compose down
+#
+# Reachable on the tailnet only, at http://<pi>:8110. There is no public URL,
+# no reverse proxy and no TLS in this deployment, by design.
+
+# The project name fixes the volume names (frontier-capital_claude-home, and
+# the saves volume) regardless of which directory compose is run from — run
+# from deploy/pi/ the default would be "pi", orphaning the real volumes.
+name: frontier-capital
+
+services:
+  app:
+    image: frontier-capital:pi
+    # This base file is the Mac path: an image built with `docker build` and
+    # shipped by `docker save | docker load`, never pulled. The registry path —
+    # the image GitHub Actions publishes to GHCR — is the `docker-compose.ghcr.yml`
+    # overlay, which swaps `image` and `pull_policy` and nothing else.
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: deploy/pi/Dockerfile
+      # The compose spec takes a LIST here (`platforms`); the singular
+      # `platform` is valid only at service level, and Compose v5 refuses the
+      # whole file if it appears under `build`.
+      platforms:
+        - linux/arm64
+    platform: linux/arm64
+    container_name: frontier-capital
+
+    # 8110 is free on this host. 3000 inside is what `next start` binds.
+    ports:
+      - "8110:3000"
+
+    env_file: .env
+
+    # Memory is the whole reason this deployment needed thought.
+    #
+    # A quarter runs the World Director and one strategist per rival, and each
+    # `claude-session` call spawns a ~213 MB Claude Code process. The gateway
+    # serialises them (LLM_MAX_CONCURRENCY=1), so the steady-state ceiling is
+    # one Next server plus one agent subprocess.
+    #
+    # `mem_limit` is what this container may hold in RAM; `memswap_limit` is
+    # memory *plus* swap, so 2g here means "1 GB of RAM, and at most 1 GB of the
+    # host's 2 GB swap". The pairing matters: with `mem_limit` alone, a spike
+    # gets the container killed outright; with the swap headroom it gets slow
+    # instead, which is the right failure for a game whose worst outcome should
+    # be a longer overlay.
+    #
+    # INERT ON THE PI TODAY. Its kernel exposes no memory cgroup controller
+    # (`cat /sys/fs/cgroup/cgroup.controllers` → `cpuset cpu io pids`), so Docker
+    # prints "memory limit capabilities ... Limitation discarded" and `docker
+    # stats` shows 0B / 0B. The values stay because they are right and take
+    # effect the moment the kernel supports them — see README, "Memory" — but
+    # until then the only bound is LLM_MAX_CONCURRENCY=1 plus NODE_OPTIONS.
+    mem_limit: 1g
+    memswap_limit: 2g
+
+    restart: unless-stopped
+
+    healthcheck:
+      # `node -e` rather than curl or wget: neither is guaranteed to survive in
+      # a slim base image, and the container already has a Node that can fetch.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/llm/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      # Generous: the first request after a cold start compiles nothing but does
+      # build the gateway, and this host is not fast.
+      start_period: 60s
+      retries: 3
+
+    volumes:
+      # The Agent SDK's config directory: the Claude Code session transcripts
+      # that let a Chief-of-Staff thread or a conversation with a director be
+      # resumed instead of restarted. Losing it costs conversational memory and
+      # nothing else.
+      - claude-home:/home/node/.claude
+
+      # Server-side saves. `SAVE_DIR=/data/saves` in .env turns them on.
+      #
+      # Its own volume, deliberately NOT claude-home: a save is the player's
+      # record of their own game and must survive anything done to the SDK's
+      # cache, including deleting that volume to reclaim space. Demo mode still
+      # keeps no world on the server — what is stored here is the same save file
+      # the browser writes, byte for byte, filed under a profile name so the
+      # game started on the phone can be continued on the laptop.
+      #
+      # OWNERSHIP, ONCE. Docker creates a *new* named volume's mount point as
+      # root, and this container runs as `node` (uid 1000). On a host where
+      # /data has never been prepared the app finds it unwritable and reports
+      # server saves as unavailable — every browser then keeps its saves in
+      # localStorage exactly as before, so nothing breaks; the phone and the
+      # laptop simply stay separate games. One idempotent command turns them on:
+      #
+      #   docker compose run --rm --user 0 --entrypoint sh app \
+      #     -c 'install -d -o node -g node -m 0700 /data /data/saves'
+      #
+      # `run` rather than an init service on purpose: update.sh refuses to
+      # update when the compose merge yields more than one service, and that
+      # guard is what stops an overlay from silently starting a second
+      # container nobody is routed to. A second service here would trip it.
+      - saves:/data
+
+volumes:
+  claude-home:
+  saves:

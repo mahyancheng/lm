@@ -1,0 +1,1056 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   Frontier Capital — design tokens
+   Bright, flat, cheerful 2D business-sim. Off-white world, white cards, soft
+   diffuse shadows, friendly saturated accents. Colour carries meaning and
+   nothing else; the cartoon comes from shape, radius and motion.
+
+   Every token NAME here is load-bearing: eighteen screens and thirty
+   components style themselves exclusively through these. Change values, never
+   names. `apps/web/ART_DIRECTION.md` is the prose version of this file.
+   ========================================================================== */
+
+@theme {
+  /* --- layered surfaces ---------------------------------------------------
+     The stack runs light-to-lighter-to-tinted:
+       base   — the page behind everything (off-white)
+       panel  — a card (pure white)
+       raised — a row, a chip, a hover, a track (soft blue-grey tint)
+     `raised` is *tinted*, not darker-or-lighter dogma: it is simply the
+     surface that must separate itself from a white card.                    */
+  --color-base: #f2f5f9;
+  --color-panel: #ffffff;
+  --color-raised: #eef2f7;
+  --color-overlay: #ffffff;
+
+  /* --- hairlines ---------------------------------------------------------- */
+  --color-hair: #e4e9f0;
+  --color-hair-strong: #d2dbe6;
+
+  /* --- text hierarchy -----------------------------------------------------
+     Dark slate ink ramp. The faint tier carries the app's whole explanatory
+     layer at 10-11px, so it is held to the WCAG AA body-text floor rather
+     than the large-text one: 4.5:1 against every surface it sits on
+     (4.79 on base, 5.24 on panel, 4.66 on raised). `interaction.test.ts`
+     recomputes these from this file on every run.                           */
+  --color-ink: #1e293b;
+  --color-ink-dim: #4b5a70;
+  --color-ink-faint: #5f6d84;
+
+  /* --- flat accents -------------------------------------------------------
+     One value per tone, because `text-gain` and `bg-gain` are the same token
+     in fifty places each. Each is deep enough to read as 11px text on white
+     (3.4:1 or better) and saturated enough to read as a flat fill.          */
+  --color-gain: #059669;
+  --color-loss: #ef4444;
+  --color-warn: #c2740a;
+  --color-info: #0284c7;
+  --color-brand: #3b82f6;
+
+  /* --- solid variants -----------------------------------------------------
+     For a filled control or badge that carries WHITE text: every one of these
+     clears 4.5:1 against #ffffff. Use these, never the plain tone, whenever
+     white sits on top of the colour.                                        */
+  --color-brand-strong: #2563eb;
+  --color-gain-strong: #047857;
+  --color-loss-strong: #dc2626;
+  --color-warn-strong: #b45309;
+  --color-info-strong: #0369a1;
+
+  /* --- accent washes (light tints for chips, banners, highlights) --------- */
+  --color-gain-wash: #e8f7f1;
+  --color-loss-wash: #fdecec;
+  --color-warn-wash: #fdf2e0;
+  --color-info-wash: #e6f4fc;
+  --color-brand-wash: #eaf1fe;
+
+  /* --- flat pastels -------------------------------------------------------
+     The supporting set for categorical tags, multi-series charts and
+     illustration. They mean "different from each other" and nothing more, so
+     never use one where gain/loss/warn/info/brand would carry meaning.      */
+  --color-pop-1: #6366f1;
+  --color-pop-2: #14b8a6;
+  --color-pop-3: #f472b6;
+  --color-pop-4: #f59e0b;
+  --color-pop-5: #8b5cf6;
+  --color-pop-6: #22c55e;
+  --color-pop-7: #fb7185;
+  --color-pop-8: #38bdf8;
+
+  /* --- illustration -------------------------------------------------------
+     Flat-vector people and places. Skin, hair and garment ramps are picked
+     per entity from fnv1a64(entityId) — never at random — so a character
+     draws identically forever.                                              */
+  --color-skin-1: #f6d5bd;
+  --color-skin-2: #eebd9a;
+  --color-skin-3: #d69f74;
+  --color-skin-4: #a9714a;
+  --color-skin-5: #7b4b2c;
+  --color-hair-1: #2f2a29;
+  --color-hair-2: #5b3a26;
+  --color-hair-3: #9a6b3f;
+  --color-hair-4: #d9a441;
+  --color-hair-5: #b0464b;
+  --color-hair-6: #8e93a3;
+  --color-cloth-suit: #3f4d63;
+  --color-cloth-lab: #f4f7fb;
+  --color-cloth-hoodie: #4f7cf0;
+  --color-cloth-casual: #10a5a0;
+  --color-build-face: #dfe7f2;
+  --color-build-side: #c6d2e3;
+  --color-build-roof: #9fb2cc;
+  --color-build-glass: #a8d5f2;
+  --color-sky: #dbeafe;
+  --color-ground: #e2e8f0;
+
+  /* --- typography --------------------------------------------------------- */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono",
+    "Roboto Mono", Menlo, Consolas, monospace;
+  /* The newspaper's face: a system serif stack, so the Pi image fetches
+     nothing at runtime. iOS resolves to New York / Iowan, Android to Noto
+     Serif, desktops to Palatino or Georgia. `lib/text/measure.ts` measures
+     with this same stack. */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+    "Noto Serif", Georgia, "Times New Roman", serif;
+
+  /* --- newspaper -----------------------------------------------------------
+     The News screen is one paper surface with hairline rules, not a stack of
+     white cards. Headlines are set in `ink`, bodies in `ink-dim`, so a neutral
+     headline never shares the body's colour. Rules are two weights: the
+     hairline between briefs, and the heavy rule under the masthead.          */
+  --color-paper: #fbfbf8;
+  --color-rule: #cfd6df;
+  --color-rule-heavy: #1e293b;
+  --color-kicker: #4b5a70;
+  --color-headline: #1e293b;
+  --color-body: #4b5a70;
+
+  /* --- geometry ----------------------------------------------------------- */
+  --radius-panel: 14px;
+  --radius-card: 12px;
+  --radius-chip: 8px;
+  --radius-field: 10px;
+  --radius-pill: 999px;
+
+  /* --- soft diffuse shadows ----------------------------------------------
+     Light theme: shadows are a whisper of slate, never black. Four steps —
+     resting card, lifted card, floating control, full sheet.                */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.05);
+  --shadow-pop: 0 2px 4px rgba(15, 23, 42, 0.05), 0 8px 20px rgba(15, 23, 42, 0.08);
+  --shadow-float: 0 6px 16px rgba(15, 23, 42, 0.1), 0 16px 40px rgba(15, 23, 42, 0.12);
+  --shadow-sheet: 0 12px 48px rgba(15, 23, 42, 0.18);
+
+  /* --- shell metrics ------------------------------------------------------ */
+  --spacing-rail: 232px;
+  --spacing-statusbar: 56px;
+  --spacing-bottombar: 60px;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --rail-width: 232px;
+    --statusbar-height: 56px;
+    /* The mobile quick-nav's fixed height. Anything else pinned to the bottom
+       of a phone viewport clears it by this much. */
+    --bottombar-height: 60px;
+    /* The smallest a tap target may be. Scenes and controls both read it. */
+    --tap: 44px;
+    /* The phone's sub-tab strip: the row of sibling screens under the header. */
+    --subtab-height: 46px;
+    /* The one accent detail inside every flat icon. A filled surface overrides
+       it with its own fill (see the .icon-knockout-* utilities) so the detail
+       reads as a cut-out rather than as a second colour that would vanish. */
+    --fc-icon-accent: var(--color-brand);
+  }
+
+  html {
+    background-color: #f2f5f9;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* The body background is explicit: nothing borrows a host theme. */
+  body {
+    background-color: #f2f5f9;
+    color: #1e293b;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    min-height: 100dvh;
+    /* A screen contains its own width — wide content lives in a `.scroll-x`
+       or a `.scene-frame`. The body is deliberately NOT `overflow-x: hidden`:
+       that would make it a scroll container and break every sticky header
+       (the status bar, the rail, the data-table thead). */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Figures are tabular everywhere by default inside data surfaces. */
+  table,
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Headings gain the friendlier, rounder weight the art direction asks for:
+     heavier, tighter, and never thin. Figures keep their tabular face. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* --- focus rings: visible, never decorative --------------------------- */
+  :focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::selection {
+    background: #dbeafe;
+    color: #1e293b;
+  }
+
+  /* --- scrollbars: light, quiet, still grabbable ------------------------ */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* ==========================================================================
+   Components — the vocabulary every screen shares
+   ========================================================================== */
+
+@layer components {
+  /* Every figure that can be compared vertically uses this. Money stays
+     legible: the tabular numerals are not negotiable in a re-skin. */
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .figure {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Small-caps section label. */
+  .label-caps {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-ink-dim);
+  }
+
+  .label-caps-faint {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
+
+  /* A white card with a hairline and a soft diffuse shadow. */
+  .panel-surface {
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-hair);
+    border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-card);
+  }
+
+  .raised-surface {
+    background-color: var(--color-raised);
+    border: 1px solid var(--color-hair);
+    border-radius: var(--radius-card);
+  }
+
+  .hairline {
+    border-color: var(--color-hair);
+  }
+
+  /* Buttons -------------------------------------------------------------
+     Rounded, roomy and bouncy. Heights clear a comfortable tap; icon-only
+     controls get a square minimum so they never fall under 28px either way. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    min-width: 34px;
+    padding: 0 14px;
+    border-radius: var(--radius-field);
+    border: 1px solid var(--color-hair-strong);
+    background-color: var(--color-panel);
+    color: var(--color-ink);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 140ms ease, border-color 140ms ease,
+      color 140ms ease, box-shadow 140ms ease, transform 140ms
+        cubic-bezier(0.2, 0.9, 0.3, 1.2);
+    white-space: nowrap;
+  }
+
+  .btn:hover:not(:disabled) {
+    background-color: var(--color-raised);
+    border-color: #bcc8d8;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
+  }
+
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background-color: var(--color-brand-strong);
+    border-color: var(--color-brand-strong);
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(37, 99, 235, 0.28);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background-color: #1d4ed8;
+    border-color: #1d4ed8;
+  }
+
+  .btn-danger {
+    background-color: var(--color-loss-strong);
+    border-color: var(--color-loss-strong);
+    color: #ffffff;
+    font-weight: 700;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(220, 38, 38, 0.24);
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    border-color: transparent;
+    color: var(--color-ink-dim);
+    box-shadow: none;
+  }
+
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--color-raised);
+    color: var(--color-ink);
+  }
+
+  .btn-sm {
+    height: 28px;
+    min-width: 28px;
+    padding: 0 10px;
+    font-size: 11px;
+    border-radius: var(--radius-chip);
+  }
+
+  /* Big, friendly call to action. Additive: nothing existing changes. */
+  .btn-lg {
+    height: 46px;
+    min-width: 46px;
+    padding: 0 22px;
+    font-size: 14px;
+    border-radius: 14px;
+  }
+
+  /* Form controls ------------------------------------------------------- */
+  .field {
+    width: 100%;
+    height: 34px;
+    padding: 0 11px;
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-hair-strong);
+    border-radius: var(--radius-field);
+    color: var(--color-ink);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
+  }
+
+  .field::placeholder {
+    color: var(--color-ink-faint);
+  }
+
+  .field:focus {
+    border-color: var(--color-brand);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    outline: none;
+  }
+
+  textarea.field {
+    height: auto;
+    padding: 9px 11px;
+    line-height: 1.55;
+    resize: vertical;
+    font-family: var(--font-sans);
+  }
+
+  select.field {
+    appearance: none;
+    padding-right: 26px;
+  }
+
+  /* The action-form slider (`SliderField`). The input itself is the tap zone
+     — a full 44px tall — while the drawn track stays 10px. The brand fill is
+     painted by --fc-fill, set inline from the current value; Firefox gets the
+     same fill from ::-moz-range-progress instead of the gradient. */
+  .fc-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: var(--tap);
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: pan-y;
+  }
+
+  .fc-slider:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .fc-slider::-webkit-slider-runnable-track {
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-hair-strong);
+    background: linear-gradient(
+      to right,
+      var(--color-brand) var(--fc-fill, 0%),
+      var(--color-raised) var(--fc-fill, 0%)
+    );
+  }
+
+  .fc-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    margin-top: -8px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    border: 2px solid var(--color-brand-strong);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
+  }
+
+  .fc-slider::-moz-range-track {
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-hair-strong);
+    background-color: var(--color-raised);
+  }
+
+  .fc-slider::-moz-range-progress {
+    height: 10px;
+    border-radius: 999px;
+    background-color: var(--color-brand);
+  }
+
+  .fc-slider::-moz-range-thumb {
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    border: 2px solid var(--color-brand-strong);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
+  }
+
+  .fc-slider:focus-visible {
+    outline: none;
+  }
+
+  .fc-slider:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  }
+
+  .fc-slider:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  }
+
+  /* Data table ----------------------------------------------------------
+     Light stripes, a white sticky header, a soft tinted hover. */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background-color: var(--color-panel);
+    border-bottom: 1px solid var(--color-hair);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+    white-space: nowrap;
+  }
+
+  .data-table tbody td {
+    border-bottom: 1px solid var(--color-hair);
+    padding: 9px 12px;
+    vertical-align: middle;
+  }
+
+  /* Striping, highlight and hover all paint the CELL, and all three share a
+     specificity of (0,2,3) — so the order below IS the precedence: a striped
+     row loses to a highlighted one, and both lose to the pointer. */
+  .data-table tbody tr:nth-child(even) td {
+    background-color: #fafcfe;
+  }
+
+  .data-table tbody tr[data-highlight="true"] td {
+    background-color: var(--color-brand-wash);
+  }
+
+  .data-table.dense tbody td {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  .data-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .data-table tbody tr[data-clickable="true"] {
+    cursor: pointer;
+  }
+
+  .data-table tbody tr[data-clickable="true"]:hover td {
+    background-color: var(--color-raised);
+  }
+
+  /* A clickable row is a control: it takes focus and shows that it has it. */
+  .data-table tbody tr[data-clickable="true"]:focus-visible {
+    outline: 2px solid var(--color-brand-strong);
+    outline-offset: -2px;
+  }
+
+  .data-table tbody tr[data-clickable="true"]:focus-visible td {
+    background-color: var(--color-brand-wash);
+  }
+
+  /* Scroll containers: wide content never scrolls the page body. */
+  .scroll-x {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  /* A scene contains itself: it scrolls or scales INSIDE its own frame, and
+     never widens the page. Illustrated surfaces sit in one of these. */
+  .scene-frame {
+    position: relative;
+    overflow: hidden;
+    max-width: 100%;
+    border-radius: var(--radius-panel);
+  }
+
+  /* Any zone a finger must find. 44x44 is the floor, not the target. */
+  .tap-target {
+    min-width: var(--tap);
+    min-height: var(--tap);
+  }
+
+  /* --- phone shell -------------------------------------------------------
+     Additive: nothing above changes, and every one of these is inert on a
+     desktop viewport (where env() resolves to 0 and the bars are hidden). */
+
+  /* The fixed bottom tab bar. Its height is the token PLUS whatever the device
+     reserves at the bottom edge, so the tabs sit above the home indicator
+     rather than under it. */
+  .bottom-nav {
+    min-height: var(--bottombar-height);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Anything else that ends at the bottom of a phone viewport: a sheet's
+     footer, a nav sheet. These carry their own padding as well as the inset,
+     because a `pb-*` utility would otherwise win and drop the inset. */
+  .safe-pb-3 {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .safe-pb-4 {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The horizontal strip of sibling screens under the header. It scrolls
+     inside itself — the page body never does. */
+  .subtab-strip {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    max-width: 100%;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .subtab-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .subtab-strip > * {
+    scroll-snap-align: center;
+  }
+
+  /* The scroll region's bottom padding on a phone: clear the fixed tab bar,
+     the home indicator and a comfortable margin. Flat 2rem from `lg`, where
+     the tab bar is gone. */
+  .main-scroll-pad {
+    padding-bottom: calc(var(--bottombar-height) + 2.25rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 1024px) {
+    .main-scroll-pad {
+      padding-bottom: 2rem;
+    }
+  }
+
+  /* --- newspaper ---------------------------------------------------------
+     The News screen's vocabulary. Every colour is a token above; every size is
+     a phone size. Nothing here is a card: the paper is the surface and rules
+     divide it. */
+
+  .np-paper {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+  }
+
+  /* Small caps above a headline: "LOGISTICS · HARBOURLINE". */
+  .np-kicker {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-kicker);
+  }
+
+  /* A headline: serif, ink, tight, balanced when the browser can. The size is
+     set inline by the fitted headline; this is the face. */
+  .np-headline {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: -0.012em;
+    color: var(--color-headline);
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+
+  /* One sentence under the headline, in a lighter serif. */
+  .np-deck {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    color: var(--color-body);
+    text-wrap: pretty;
+  }
+
+  /* Reading text: the serif at a size a thumb-length away can read. */
+  .np-body {
+    font-family: var(--font-serif);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--color-body);
+    overflow-wrap: anywhere;
+  }
+
+  /* The lead's opening paragraph: a dropped initial three lines tall. */
+  .np-dropcap::first-letter {
+    float: left;
+    font-family: var(--font-serif);
+    font-weight: 700;
+    font-size: 3.05em;
+    line-height: 0.82;
+    padding: 0.06em 0.08em 0 0;
+    color: var(--color-headline);
+  }
+
+  .np-rule {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .np-rule-heavy {
+    border-top: 2px solid var(--color-rule-heavy);
+  }
+
+  /* The masthead's double rule: heavy over hairline. */
+  .np-rule-double {
+    border-top: 3px double var(--color-rule-heavy);
+  }
+
+  /* A section tab in small caps. The active one is underlined in ink. */
+  .np-tab {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-kicker);
+    border-bottom: 2px solid transparent;
+  }
+
+  .np-tab[aria-selected="true"] {
+    color: var(--color-headline);
+    border-bottom-color: var(--color-rule-heavy);
+  }
+
+  /* The nameplate. Letter-spaced small caps would be a magazine; a newspaper
+     nameplate is the serif at display weight, tight. */
+  .np-nameplate {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-headline);
+  }
+
+  /* Two columns of body text when the measurer says both fill. */
+  .np-columns-2 {
+    column-count: 2;
+    column-gap: 16px;
+    column-rule: 1px solid var(--color-rule);
+  }
+
+  /* The grab affordance at the top of a bottom sheet. Purely visual: the sheet
+     is closed with the button, Escape or the scrim. */
+  .sheet-grip {
+    width: 38px;
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background-color: var(--color-hair-strong);
+  }
+}
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+
+@layer utilities {
+  .tone-gain {
+    color: var(--color-gain);
+  }
+  .tone-loss {
+    color: var(--color-loss);
+  }
+  .tone-warn {
+    color: var(--color-warn);
+  }
+  .tone-info {
+    color: var(--color-info);
+  }
+  .tone-brand {
+    color: var(--color-brand);
+  }
+  .tone-neutral {
+    color: var(--color-ink-dim);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  /* --- icon accents ------------------------------------------------------
+     An icon's one accent detail is painted with `--fc-icon-accent`. On a plain
+     surface that is the brand tone and the mark reads as two flat colours. On
+     a FILLED surface a second colour would either vanish or fight, so set the
+     property to the fill itself and the detail becomes a knockout. Put one of
+     these on the filled element (the chip, the tab, the button). */
+  .icon-knockout-panel {
+    --fc-icon-accent: var(--color-panel);
+  }
+  .icon-knockout-raised {
+    --fc-icon-accent: var(--color-raised);
+  }
+  .icon-knockout-base {
+    --fc-icon-accent: var(--color-base);
+  }
+  .icon-knockout-brand {
+    --fc-icon-accent: var(--color-brand-strong);
+  }
+  .icon-knockout-wash {
+    --fc-icon-accent: var(--color-brand-wash);
+  }
+
+  /* --- motion: transform and opacity only, every one of them cheap ------
+     Nothing here drives layout, nothing here runs a loop in JavaScript, and
+     every animation is disabled wholesale under prefers-reduced-motion. */
+
+  /* Arrival animations fill `backwards`, not `both`, on purpose: every one of
+     them ends on the element's natural state, so holding the last keyframe
+     would buy nothing and would keep `transform` under the animation's control
+     forever — which pins a containing block on the element and outranks the
+     cascade for anything else that wants to move it. `backwards` still applies
+     the first keyframe through a `stagger-*` delay, which is the part we need. */
+  .animate-fade-in {
+    animation: fc-fade-in 180ms ease-out backwards;
+  }
+
+  .animate-rise {
+    animation: fc-rise 220ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+  }
+
+  /* A card, a chip or a person arriving: a small overshoot, then settle. */
+  .animate-pop-in {
+    animation: fc-pop-in 320ms cubic-bezier(0.22, 1.15, 0.36, 1) backwards;
+  }
+
+  /* Idle life for a flat-vector character or an icon. Infinite, tiny, cheap. */
+  .animate-bob {
+    animation: fc-bob 2.6s ease-in-out infinite;
+  }
+
+  .animate-bob-slow {
+    animation: fc-bob 4.2s ease-in-out infinite;
+  }
+
+  /* A gentle lean, for a sign, a plant, a hovering balloon. */
+  .animate-sway {
+    animation: fc-sway 5s ease-in-out infinite;
+  }
+
+  /* A figure that has just changed: it rises into place and settles. Pair it
+     with a React `key` on the value so a new number remounts and replays. */
+  .animate-count-up {
+    animation: fc-count-up 420ms cubic-bezier(0.2, 0.9, 0.3, 1.05) backwards;
+  }
+
+  .animate-pulse-soft {
+    animation: fc-pulse-soft 2.2s ease-in-out infinite;
+  }
+
+  /* Stagger a list: put `animate-pop-in stagger-3` on the fourth child. */
+  .stagger-1 {
+    animation-delay: 40ms;
+  }
+  .stagger-2 {
+    animation-delay: 80ms;
+  }
+  .stagger-3 {
+    animation-delay: 120ms;
+  }
+  .stagger-4 {
+    animation-delay: 160ms;
+  }
+  .stagger-5 {
+    animation-delay: 200ms;
+  }
+  .stagger-6 {
+    animation-delay: 240ms;
+  }
+
+  /* A card that answers the pointer.
+     These use the INDIVIDUAL `translate` / `scale` properties rather than
+     `transform`, deliberately: a running animation outranks the cascade for
+     the property it animates, so a card mid-`animate-pop-in` could not also
+     lift if the two shared `transform`. Separate properties compose. */
+  .hover-lift {
+    transition: translate 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1),
+      box-shadow 160ms ease, border-color 160ms ease;
+  }
+
+  .hover-lift:hover {
+    translate: 0 -2px;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .press-pop {
+    transition: scale 120ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  }
+
+  .press-pop:active {
+    scale: 0.97;
+  }
+}
+
+@keyframes fc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc-pop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes fc-sway {
+  0%,
+  100% {
+    transform: rotate(-1.4deg);
+  }
+  50% {
+    transform: rotate(1.4deg);
+  }
+}
+
+@keyframes fc-count-up {
+  0% {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-1.5px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fc-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes fc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pulse-dot {
+  animation: fc-pulse 1.4s ease-in-out infinite;
+}
+
+/* Every animation above is decoration. Reduced motion turns all of it off,
+   including the idle bobs, and leaves the interface fully usable. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-bob,
+  .animate-bob-slow,
+  .animate-sway,
+  .animate-pulse-soft {
+    transform: none !important;
+  }
+
+  .hover-lift:hover {
+    translate: none !important;
+  }
+
+  .press-pop:active {
+    scale: none !important;
+  }
+}

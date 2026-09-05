@@ -1,0 +1,706 @@
+/**
+ * @frontier/llm — compose/chiefOfStaff.ts
+ *
+ * The Chief of Staff dossier.
+ *
+ * This is the conversational surface of the game, and it does three things
+ * rather than one. The founder may **ask** ("how are we doing?", "what is
+ * killing our margin?"), may ask for **advice** ("what should I do here?"), or
+ * may give an **instruction** ("cut consumer marketing to six million"). The
+ * three are the `mode` on the interpretation: `answer`, `plan`, `act`. Only the
+ * last two carry typed `ActionIntent`s, and none of the three submits anything.
+ *
+ * A fourth mode, `research`, is not an answer at all: it is the role saying it
+ * needs to go and look. "Can I buy a small data centre" is not in the dossier —
+ * the dossier is one company, and that question is about the market. So the role
+ * may answer once with a list of `lookups`, the caller runs them against
+ * canonical state through `runLookups`, and the same message comes back with
+ * `findings` attached. A turn that arrives carrying findings has research mode
+ * closed to it, stated in the prompt and enforced in `enforceResearchPolicy`, so
+ * the loop is two turns and cannot become three.
+ *
+ * What changed when it stopped being an interpreter: it is handed a **typed
+ * dossier** rather than two prose paragraphs, and the dossier carries an
+ * `availableActions` list derived by probing the engine's own validator. That
+ * list is why the role can now say "we cannot, we have $4m and that needs
+ * $40m" instead of proposing something the engine will refuse a second later.
+ *
+ * It sees the player's own company **in full** and nothing private about anyone
+ * else — that asymmetry is the whole point of the role.
+ *
+ * Confirmation is belt and braces. The interpretation carries an advisory
+ * `requiresConfirmation`, and the system prompt tells the model when to set it,
+ * but the binding rule is the fourteen types in `CONFIRMATION_REQUIRED_ACTIONS`
+ * enforced by `enforceConfirmationPolicy` below and again by the engine. A
+ * model that forgets cannot cause an unconfirmed layoff.
+ */
+
+import {
+  CONFIRMATION_REQUIRED_ACTIONS,
+  LOOKUP_KINDS,
+  MAX_LOOKUPS_PER_TURN,
+  type ChiefOfStaffDossier,
+  type ChiefOfStaffInput,
+  type ChiefOfStaffInterpretation,
+  type CosAvailableAction,
+  type CosBound,
+  type LookupResult,
+  requiresExplicitConfirmation,
+} from '@frontier/contracts';
+import { AUTHORITY_PREAMBLE, type ComposedPrompt, OUTPUT_DISCIPLINE, bullets, joinBlocks, numbered, section, truncate, usd } from './render';
+
+/* -------------------------------------------------------------------------- */
+/*  System prompt                                                              */
+/* -------------------------------------------------------------------------- */
+
+export const CHIEF_OF_STAFF_SYSTEM = [
+  'You are the Chief of Staff to the founder of one company in Frontier Capital, a simulated AI-industry economy.',
+  '',
+  AUTHORITY_PREAMBLE,
+  '',
+  'You do three things, and `mode` says which one this reply is:',
+  '- `answer` — they asked a question. Answer it from the dossier, in `reply`. `interpretedInstructions` MUST be empty.',
+  '- `plan` — they asked what to do, or you are proposing a course of action for discussion. `reply` carries the reasoning; the actions are attached for them to approve one at a time.',
+  '- `act` — they gave an instruction. `reply` states what you understood; the actions carry it out.',
+  '',
+  'Rules:',
+  '- You interpret and advise. You never submit. Nothing is binding until the founder approves it in the interface.',
+  '- **Cite only the dossier.** Every number you state must appear in it. If it is not there, say you do not have it rather than estimating.',
+  '- **State numbers as whole figures.** "$4m", "31 engineers", "7 quarters", "62%". Never a decimal, never a range you did not compute.',
+  '- **Check the available-actions list before proposing anything.** It says, for every action type, whether this company could do it right now, why not when it cannot, the bounds on every number, and the legal targets. An action listed as unavailable must NOT appear in `interpretedInstructions`: say plainly that it is not possible for this company, and quote the reason.',
+  '- Never exceed a stated bound. If the founder asks for more than the maximum, propose the maximum and say in `reply` that it was reduced, with both figures.',
+  '- An action flagged `becomesBoardMatter` will be tabled for the board rather than executed. Say so before proposing it.',
+  '- Preserve arithmetic constraints they stated. "Keep total burn roughly unchanged" means the new budget lines must sum to roughly the old total; do the arithmetic and show it.',
+  '- Never invent a commitment they did not ask for. If they said nothing about hiring, propose nothing about hiring.',
+  '- When a figure is ambiguous, ask. A question in `questions` is always better than a guess in `interpretedInstructions`.',
+  '- Anything the game has no action for, or that this company cannot do today, goes in `unsupportedRequests`, said plainly. Never drop it silently.',
+  '- Actions carry no companyId and no actionId: the acting company comes from context and the engine assigns ids.',
+  '- Honour the founder\'s standing preferences in the memory block. They said those things once and expect them remembered.',
+  '',
+  'Sourcing — when you cannot answer from the dossier alone:',
+  `- The dossier is your own company. It does not contain the market: who sells compute and at what price, which companies could be bought and for how much, what could be borrowed, what is open at the agencies, what hiring costs. For those you may ask, once, by answering with mode \`research\` and a \`lookups\` array of at most ${MAX_LOOKUPS_PER_TURN} requests from this catalogue: ${LOOKUP_KINDS.join(', ')}.`,
+  `- Three of those need something the founder named: \`unit_cost\` takes a \`nodeId\` from the node table (the dossier's own lines carry theirs as \`categoryId\`), \`entry_path\` takes either a \`sector\` or a \`nodeId\`, and \`slot_candidates\` takes a \`nodeId\`, a \`slotId\` and our own \`productId\` on that node (or null). Ask \`unit_cost\` when the question is what something costs us to build or whether a price leaves a margin; ask \`entry_path\` when it is what we would have to research, licence or buy to make something we cannot make today; ask \`slot_candidates\` when it is which model, harness, battery or supplier could go into one slot of a line, at what price and quality.`,
+  '- In the node economy a line is COMPOSED: each slot of its node holds one node from one source (our own line, a named seller\'s published line, or the open market), and the line is aimed at one customer type in one industry. Every line in the dossier carries this as `composition` and `targetIndustry`; quote them when asked what a line is built on. `fill_slot` changes the node in one slot and who supplies it; `set_target_market` changes who the line is aimed at; `set_supply_terms` publishes one of our lines so other companies can build on it. A `slot_candidates` row carries the exact `fill_slot`; use it verbatim.',
+  '- In `research` mode `reply` is one line saying what you are going off to check ("Checking the compute market and what it does to cash"), and `interpretedInstructions` MUST be empty. The lookups are run against canonical state and handed straight back to you.',
+  '- **Ask for research only when the answer genuinely is not in the dossier.** "How much cash have we got" is in it; "can I buy a small data centre" is not.',
+  '- When a turn arrives carrying findings, research mode is CLOSED and asking again is refused. Answer it: is there any, can we buy, from whom, at what price, how much capacity, where the cash balance lands afterwards, and what a raise or a debt issue would change. Then attach the actions ready to approve, each naming the seller from the row you took it from.',
+  '- Findings rows carry ids and usually the exact action. Use a row\'s `intent` verbatim rather than composing your own: it is already in the form the engine accepts.',
+  '- Cash is never a reason to refuse. Every row says where the balance lands and what the solvency clock reads; state both plainly and let the founder decide.',
+  '',
+  `- Set requiresConfirmation to true whenever any interpreted action is one of: ${CONFIRMATION_REQUIRED_ACTIONS.join(', ')}. Also set it true whenever your confidence is low. When in doubt, true.`,
+  '- `summary` is a plain-language restatement of what would be submitted: one line per change, old value then new value. In answer mode it says that nothing was interpreted and why. Always state plainly that nothing has been submitted yet.',
+  '- `confidence` below 0.7 causes the interface to present this as a draft rather than a ready submission. Be honest about it.',
+  '',
+  OUTPUT_DISCIPLINE,
+].join('\n');
+
+/* -------------------------------------------------------------------------- */
+/*  Dossier rendering                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Whole dollars, the way the founder reads them. */
+const money = (value: number): string => usd(Math.round(value));
+
+/** A 0..1 fraction as whole percent. */
+const wholePct = (value: number): string => `${Math.round(value * 100)}%`;
+
+/** One bound as one clause: "budgetUsd 0 to $4m". */
+function renderBound(bound: CosBound): string {
+  const format = (value: number): string => {
+    switch (bound.unit) {
+      case 'usd':
+        return money(value);
+      case 'fraction':
+        return wholePct(value);
+      case 'percent':
+        return `${Math.round(value)}%`;
+      case 'quarters':
+        return `${Math.round(value)}q`;
+      default:
+        return String(Math.round(value));
+    }
+  };
+  const low = bound.min === null ? 'any' : format(bound.min);
+  const high = bound.max === null ? 'no ceiling' : format(bound.max);
+  return `${bound.field} (${bound.label}): ${low} to ${high}`;
+}
+
+/** One available action, as one line the model can act on without inference. */
+export function renderAvailableAction(action: CosAvailableAction): string {
+  if (!action.available) return `${action.type} — NOT POSSIBLE: ${action.reason ?? 'refused by the validator.'}`;
+  const parts: string[] = [action.type];
+  if (action.becomesBoardMatter) parts.push('goes to the board rather than executing');
+  if (action.requiresConfirmation) parts.push('always needs explicit confirmation');
+  if (action.maxCashUsd !== null) parts.push(`commits up to ${money(action.maxCashUsd)}`);
+  if (action.bounds.length > 0) parts.push(`bounds — ${action.bounds.map(renderBound).join('; ')}`);
+  if (action.targets.length > 0) {
+    const shown = action.targets.slice(0, 8).map((target) => `${target.id} (${target.label})`);
+    const rest = action.targets.length - shown.length;
+    parts.push(`targets — ${shown.join('; ')}${rest > 0 ? `; and ${rest} more` : ''}`);
+  }
+  return parts.join(' · ');
+}
+
+/** The whole dossier as the markdown the model reads. Pure: same input, same text. */
+export function renderDossier(dossier: ChiefOfStaffDossier): string {
+  const f = dossier.finances;
+  const grp = dossier.group;
+  const p = dossier.products;
+  const people = dossier.people;
+  const g = dossier.governance;
+  const m = dossier.markets;
+  const c = dossier.capital;
+
+  const finances = [
+    `Cash ${money(f.cashUsd)}; debt ${money(f.debtUsd)}; revenue ${money(f.revenueQuarterlyUsd)} last quarter; net cash movement ${money(f.quarterlyBurnUsd)} a quarter.`,
+    `Runway ${Math.round(f.runwayQuarters)} quarters. Gross margin ${wholePct(f.grossMarginPct)}; operating margin ${wholePct(f.operatingMarginPct)}.`,
+    f.history.length === 0
+      ? 'No closed quarters have been filed yet.'
+      : `Filed quarters (oldest first): ${f.history
+          .map(
+            (entry) =>
+              `Q${entry.quarter} revenue ${money(entry.income.revenueUsd)}, net ${money(entry.income.netIncomeUsd)}, cash ${money(
+                entry.balance.cashUsd,
+              )}, headcount ${entry.kpis.headcount}`,
+          )
+          .join('; ')}.`,
+  ].join('\n');
+
+  // STAGE 5: the group this seat directs, consolidated — companyCount 1 means
+  // there is nothing beyond the company this dossier is otherwise built for.
+  const group =
+    grp.companyCount <= 1
+      ? `You direct one company. There is no group to consolidate.`
+      : `${grp.companyCount} companies. Consolidated: revenue ${money(grp.revenueUsd)}, net income ${money(grp.netIncomeUsd)}, cash ${money(
+          grp.cashUsd,
+        )}, debt ${money(grp.debtUsd)}, headcount ${grp.headcount}, market value ${money(grp.marketValueUsd)}.`;
+
+  // A line is quoted in its own unit — "per wafer", "per MWh" — because that is
+  // what it sells, and its unit cost beside its price, because in the node
+  // economy the two are the whole conversation. Outside it both extra figures
+  // are zero and the sentence falls back to the world-2 shape. The composition
+  // — which node sits in each slot, from whom, aimed at whom — closes the
+  // line, because "what is this built on" is the question fill_slot answers.
+  const products = [
+    p.lines.length === 0
+      ? 'No product lines.'
+      : bullets(
+          p.lines.map(
+            (line) =>
+              `${line.name} (${line.productId}, ${line.segment}${line.isActive ? '' : ', sunset'}) — ${money(line.pricePerSeatUsd)} per ${
+                line.unitLabel
+              }${line.unitCostUsd > 0 ? ` against ${money(line.unitCostUsd)} to make` : ''}${
+                line.marketPriceUsd > 0 ? `, market ${money(line.marketPriceUsd)}` : ''
+              }, ${line.activeCustomers} customers, ${money(line.revenueQuarterlyUsd)} a quarter, margin ${wholePct(
+                line.grossMarginPct,
+              )}, churn ${wholePct(line.churnQuarterly)}${line.backlogUnits > 0 ? `, ${line.backlogUnits} on backlog` : ''}${
+                line.installedBase > 0 ? `, ${line.installedBase} in service` : ''
+              }${line.ownsNode ? '' : line.unitCostUsd > 0 ? ' — we do not own this node outright' : ''}${
+                line.composition === '' ? '' : `. Built as: ${line.composition}`
+              }`,
+          ),
+        ),
+    p.ownedNodeCount === 0
+      ? ''
+      : `We own or licence ${p.ownedNodeCount} node${p.ownedNodeCount === 1 ? '' : 's'} — everything we are entitled to produce. Anything else has to be researched, licensed, or bought as finished output.`,
+    p.dataPetabytes === 0 && p.ownedNodeCount === 0
+      ? ''
+      : `Customer data: ${p.dataPetabytes} petabytes held, collected at the ${p.dataPolicy} level.`,
+    `Compute: ${p.computeOwned} owned and ${p.computeReserved} reserved accelerators, ${wholePct(p.computeUtilisationPct)} utilised, ${wholePct(
+      p.trainingAllocationPct,
+    )} on training, cloud ${money(p.cloudSpendQuarterlyUsd)} a quarter${
+      p.reservationExpiryQuarter === null ? '' : `, reservation lapses in quarter ${p.reservationExpiryQuarter}`
+    }.`,
+  ]
+    .filter((block) => block !== '')
+    .join('\n\n');
+
+  const peopleBlock = [
+    `Headcount ${people.total} — ${people.engineers} engineers, ${people.researchers} researchers, ${people.sales} sales, ${people.ops} ops, ${people.execs} executives. ${people.openRoles} open roles.`,
+    `Morale ${Math.round(people.moralePct)} of 100; ${wholePct(people.attritionPct)} expected to leave next quarter; payroll ${money(
+      people.payrollQuarterlyUsd,
+    )} a quarter.`,
+    people.keyCharacters.length === 0 ? '' : bullets(people.keyCharacters.map((person) => `${person.name} (${person.characterId}) — ${person.title || person.role}${person.isCeo ? ', chief executive' : ''}`)),
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
+
+  const governance = [
+    g.hasBoard ? `Board: ${g.seatsFilled} of ${g.seatsAuthorised} seats filled, ${g.founderSeats} held by the founder side.` : 'No board: financing, listing and acquisitions are unavailable until there is one.',
+    `The founder holds ${wholePct(g.founderOwnershipPct)} and ${g.isCeo ? 'is' : 'is NOT'} chief executive.`,
+    g.thresholds.length === 0 ? '' : `Thresholds: ${g.thresholds.map((entry) => `${entry.label} at ${wholePct(entry.fraction)}${entry.reached ? ' (reached)' : ''}`).join('; ')}.`,
+    g.openProposals.length === 0
+      ? 'Nothing is before the board.'
+      : bullets(g.openProposals.map((entry) => `${entry.title} (${entry.proposalId}, ${entry.kind}, ${entry.status}, decides quarter ${entry.decisionQuarter})${entry.amountUsd === null ? '' : ` — ${money(entry.amountUsd)}`}`)),
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
+
+  const markets = [
+    m.isPublic
+      ? `Listed as ${m.ticker ?? '—'} at ${m.sharePriceUsd === null ? 'no quote yet' : money(m.sharePriceUsd)} a share, market capitalisation ${
+          m.marketCapUsd === null ? 'unpriced' : money(m.marketCapUsd)
+        }.`
+      : 'Private: no quote, no market capitalisation, no public guidance.',
+    `Sector ${m.sectorId}: sentiment ${m.sectorSentiment.toFixed(2)}, multiple ${m.sectorMultiple.toFixed(2)}, demand ${m.sectorDemand.toFixed(2)}${
+      m.sectorPriceIndex === null ? '' : `, goods price index ${Math.round(m.sectorPriceIndex)}, shortage ${Math.round(m.sectorShortage ?? 0)}`
+    }.`,
+    m.rivals.length === 0
+      ? 'No rivals visible.'
+      : bullets(
+          m.rivals.map(
+            (rival) =>
+              `${rival.name} (${rival.companyId}${rival.ticker === null ? ', private' : `, ${rival.ticker}`}) — ${
+                rival.revenueQuarterlyUsd === null ? 'financials undisclosed' : `revenue ${money(rival.revenueQuarterlyUsd)}`
+              }${rival.marketCapUsd === null ? '' : `, capitalisation ${money(rival.marketCapUsd)}`}, enterprise standing ${Math.round(rival.enterpriseReputation)}`,
+          ),
+        ),
+    // New since last quarter. A company founded into a failure's gap is a
+    // competitor the founder did not have and has not been told about anywhere
+    // else in this dossier.
+    (m.newEntrants ?? []).length === 0
+      ? 'No new companies were founded since last quarter.'
+      : bullets(
+          (m.newEntrants ?? []).map(
+            (entrant) =>
+              `NEW: ${entrant.name} (${entrant.companyId}) founded quarter ${entrant.foundedQuarter} in ${entrant.sectorId}, ${entrant.region.replace(/_/g, ' ')}, on ${money(
+                entrant.seedCapitalUsd,
+              )}${entrant.inYourRegion ? ' — same sector and region as us' : ''}`,
+          ),
+        ),
+  ].join('\n');
+
+  const capital = [
+    `Debt headroom ${money(c.debtHeadroomUsd)}; dividend policy ${c.dividendPayoutPct}% of net income; ${Math.round(c.sharesOutstanding)} shares outstanding.`,
+    `Windows: IPO ${wholePct(c.ipoWindow)}, venture liquidity ${wholePct(c.ventureLiquidity)}, debt availability ${wholePct(c.debtAvailability)}.`,
+    c.funds.length === 0 ? 'No capital desks are visible.' : bullets(c.funds.map((fund) => `${fund.name} (${fund.entityId}, ${fund.kind}) — ${money(fund.dryPowderUsd)} dry powder, holds ${wholePct(fund.holdsStakePct)} of us. "${fund.thesis}"`)),
+    c.approaches.length === 0 ? 'Nobody is circling.' : bullets(c.approaches.map((entry) => `${entry.kind.replace(/_/g, ' ')} from ${entry.fromName} (${entry.id}, quarter ${entry.quarter}): ${entry.summary}`)),
+  ].join('\n');
+
+  const research = [
+    `Research budget ${money(dossier.research.budgetQuarterlyUsd)} a quarter.`,
+    dossier.research.projects.length === 0
+      ? 'No programme is running.'
+      : bullets(
+          dossier.research.projects.map(
+            (project) =>
+              `${project.title} (${project.projectId} → ${project.nodeId}) — ${wholePct(project.progressPct)} done, internal confidence ${wholePct(
+                project.internalConfidencePct,
+              )}, ${project.researchers} researchers, ${project.computeUnits} accelerators, ${money(project.budgetQuarterlyUsd)} a quarter, about ${
+                project.quartersRemaining
+              } quarters left${project.isSecret ? ', secret' : ''}`,
+          ),
+        ),
+    dossier.research.availableNodes.length === 0 ? '' : `Could start: ${dossier.research.availableNodes.map((node) => `${node.title} (${node.nodeId})`).join('; ')}.`,
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
+
+  const government = [
+    `Past performance ${Math.round(dossier.government.pastPerformance)} of 100.`,
+    dossier.government.openProgrammes.length === 0
+      ? 'Nothing open to bid on.'
+      : bullets(
+          dossier.government.openProgrammes.map(
+            (entry) =>
+              `${entry.programme} (${entry.opportunityId}${entry.agencyName === '' ? '' : `, ${entry.agencyName}`}) — ceiling ${money(
+                entry.maxValueUsd,
+              )}, closes quarter ${entry.closeQuarter}${entry.invited ? ', invited' : ''}${entry.alreadyBid ? ', already bid' : ''}`,
+          ),
+        ),
+    dossier.government.liveContracts.length === 0 ? '' : `Held: ${dossier.government.liveContracts.map((entry) => `${entry.programme} ${money(entry.valueUsd)}`).join('; ')}.`,
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
+
+  return joinBlocks([
+    `# ${dossier.companyName} — ${dossier.quarterLabel}, founder ${dossier.founderName}, posture ${dossier.posture.replace(/_/g, ' ')}`,
+    section('Finances', finances),
+    section('Group', group),
+    section('Products and capacity', products),
+    section('People', peopleBlock),
+    section('Board and ownership', governance),
+    section('Markets', markets),
+    section('Capital', capital),
+    section('Research', research),
+    section('Government', government),
+    section('What the public record says about us', bullets(dossier.feed.map((item) => `Q${item.quarter} ${item.kind}: ${item.headline}${item.whyItMatters === null ? '' : ` — ${item.whyItMatters}`}`))),
+    section('Awaiting the founder', bullets([...dossier.openDecisions])),
+    section('World conditions that bear on us', bullets([...dossier.worldNotes])),
+    section(
+      'Actions available to this company right now',
+      [
+        'Derived by probing the engine\'s own validator against the state above. An entry marked NOT POSSIBLE is refused today; do not propose it.',
+        bullets(dossier.availableActions.map(renderAvailableAction)),
+      ].join('\n\n'),
+    ),
+  ]);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Findings rendering                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** One lookup result as the markdown the model reads. Pure. */
+export function renderFinding(finding: LookupResult): string {
+  switch (finding.kind) {
+    case 'compute_market': {
+      const held = `We hold ${finding.heldUnits} accelerator-equivalents — ${finding.ownedUnits} owned, ${finding.reservedUnits} reserved, ${finding.cloudUnits} on cloud.`;
+      const three = `For ${finding.units} units: owning costs ${money(finding.ownedQuarterlyCostUsd)} a quarter after ${money(
+        finding.purchaseCostUsd,
+      )} of capital; reserving costs ${money(finding.reservedQuarterlyCostUsd)} a quarter; cloud costs ${money(finding.cloudQuarterlyCostUsd)} a quarter.`;
+      const cash = `Cash is ${money(finding.cashUsd)} and would be ${money(finding.cashAfterPurchaseUsd)} after buying them outright.${
+        finding.solvencyLine === '' ? '' : ` ${finding.solvencyLine}`
+      }`;
+      const rows = finding.sellers.map(
+        (seller) =>
+          `${seller.name} (${seller.companyId}) sells ${seller.offering} — ${money(seller.unitPriceUsd)} a unit, ${seller.sellableUnits} available, ${money(
+            seller.quarterlyCostPerUnitUsd,
+          )} a quarter to hold, ${seller.region}, energy index ${seller.energyFactorPct}, ${seller.utilisationPct}% utilised`,
+      );
+      return section('Finding — the compute market', [finding.summary, held, three, cash, bullets(rows)].join('\n\n'));
+    }
+
+    case 'acquisition_targets':
+      return section(
+        'Finding — companies that could be bought',
+        [
+          finding.summary,
+          `Cash on hand ${money(finding.cashUsd)}.`,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.name} (${row.companyId}) — ${row.sectorId}, ${row.region}, ${row.listed ? `listed as ${row.ticker}` : 'private'}, ${
+                  row.headcountBand
+                } people, ${row.ownedAccelerators} accelerators${
+                  row.lastPublicRevenueUsd === 0 ? ', revenue undisclosed' : `, last disclosed revenue ${money(row.lastPublicRevenueUsd)}`
+                }. Indicative price ${money(row.indicativePriceUsd)}; cash after ${money(row.cashAfterUsd)}${
+                  row.solvencyLine === '' ? '' : ` — ${row.solvencyLine}`
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'debt_headroom':
+      return section(
+        'Finding — what we could borrow',
+        [
+          finding.summary,
+          finding.available
+            ? `Headroom ${money(finding.headroomUsd)} at an indicative ${finding.indicativeCouponPct}% coupon. Last quarter's operating income was ${money(
+                finding.lastOperatingIncomeUsd,
+              )}, which would service about ${money(finding.servisableUsd)} of principal.`
+            : `Nothing available: ${finding.reason}`,
+          finding.desks.length === 0
+            ? 'No capital desk is visible.'
+            : bullets(
+                finding.desks.map(
+                  (desk) => `${desk.name} (${desk.entityId}, ${desk.kind}) — ${money(desk.dryPowderUsd)} of dry powder. "${desk.thesis}"`,
+                ),
+              ),
+        ].join('\n\n'),
+      );
+
+    case 'government_programmes':
+      return section(
+        'Finding — procurement open to us',
+        [
+          finding.summary,
+          `Our past-performance score is ${finding.pastPerformance} of 100.`,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.programme} (${row.opportunityId}${row.agencyName === '' ? '' : `, ${row.agencyName}`}) — ceiling ${money(
+                  row.maxValueUsd,
+                )}, closes quarter ${row.closeQuarter}. Met: ${row.requirementsMet.join('; ') || 'nothing'}. Not met: ${
+                  row.requirementsUnmet.join('; ') || 'nothing'
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'hiring_market':
+      return section(
+        'Finding — the hiring market',
+        [
+          finding.summary,
+          `${finding.openRoles} roles are already open and the market fills about ${finding.fillRatePct}% of a new one a quarter.`,
+          bullets(finding.rows.map((row) => `${row.role} at ${row.band} — ${money(row.quarterlyCostUsd)} a quarter, ${money(row.annualCostUsd)} a year`)),
+        ].join('\n\n'),
+      );
+
+    case 'own_position':
+      return section(
+        'Finding — our own position',
+        [
+          finding.summary,
+          `Cash ${money(finding.cashUsd)}, net cash movement ${money(finding.quarterlyBurnUsd)} a quarter, ${finding.runwayQuarters} quarters of runway. ${
+            finding.negativeCashQuarters
+          } of the ${finding.solvencyQuartersAllowed} quarters that end the company have already closed below zero.`,
+          finding.statements.length === 0
+            ? 'No quarters have been filed yet.'
+            : bullets(
+                finding.statements.map(
+                  (row) => `Q${row.quarter} — revenue ${money(row.revenueUsd)}, net ${money(row.netIncomeUsd)}, cash ${money(row.cashUsd)}, ${row.headcount} people`,
+                ),
+              ),
+        ].join('\n\n'),
+      );
+
+    case 'launchable_lines':
+      return section(
+        'Finding — product lines in our industry',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map((row) =>
+              row.locked
+                ? `${row.label} (${row.categoryId}) — locked until we have ${row.missingNodeTitles.join(', ') || 'the required research'}`
+                : `${row.label} (${row.categoryId}) — open now, ${money(row.referencePriceUsd)} a ${row.unitLabel}`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'suppliers':
+      return section(
+        'Finding — who could supply this',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.name} (${row.companyId}) via ${row.productName} — ${money(row.pricePerUnitUsd)} a unit, quality ${row.qualityScorePct} of 100${
+                  row.isDirectRival ? ', a direct rival in this line' : ''
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'customers':
+      return section(
+        'Finding — who builds on us',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) => `${row.buyerName} (${row.buyerCompanyId}) — ${row.buyerProductName}, ${row.unitsFilled} units, ${money(row.revenueUsd)} this quarter`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'unit_cost':
+      return section(
+        'Finding — what this costs us to build',
+        [
+          finding.summary,
+          bullets([
+            `${finding.label} (${finding.nodeId}) — ${money(finding.unitCostUsd)} a ${finding.unitLabel} to make, ${money(finding.marketPriceUsd)} on the market, a ${finding.grossMarginPct}% gross margin at that price`,
+            `${finding.madeInHouseSharePct}% of the input bill is made in house`,
+            ...(finding.blockedInputs.length === 0 ? [] : [`Blocked on ${finding.blockedInputs.join(', ')} — nobody in the world owns it, so the line ships nothing`]),
+          ]),
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.slotId === '' ? '' : `${row.slotId} slot: `}${row.label} — ${money(row.amountUsd)}, ${row.sharePct}% of the unit cost${
+                  row.sourceName === '' ? '' : `, from ${row.sourceName}`
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'slot_candidates':
+      return section(
+        'Finding — what could fill this slot',
+        [
+          finding.summary,
+          `${finding.slotLabel} slot (${finding.slotId}) of ${finding.nodeId}${finding.productId === '' ? ', browsing without a line of ours' : ` on our line ${finding.productId}`}.`,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.label} (${row.nodeId}, tier ${row.tier}) — ${
+                  row.sourceKind === 'make' ? 'make it ourselves' : row.sourceKind === 'buy' ? `from ${row.sellerName} (${row.sellerCompanyId})` : 'from the open market'
+                } at ${money(row.unitPriceUsd)} a unit, quality ${row.qualityScorePct} of 100${row.blocked ? ' — BLOCKED: nobody in the world owns this node, so the line would ship nothing' : ''}${
+                  row.intent === null ? '' : ' — fill_slot ready'
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    case 'entry_path':
+      return section(
+        'Finding — the way into this',
+        [
+          finding.summary,
+          bullets(
+            finding.rows.map(
+              (row) =>
+                `${row.label} (${row.nodeId}), tier ${row.tier} — ${
+                  row.researchable ? `research it for ${money(row.researchLowUsd)} to ${money(row.researchHighUsd)}` : 'not reachable by research'
+                }${row.licensorName === '' ? '' : `; ${row.licensorName} licenses it at ${row.licensorRoyaltyPct}% of revenue`}${
+                  row.sellerName === '' ? '' : `; ${row.sellerName} would sell the finished output at ${money(row.sellerAskUsd)}`
+                }`,
+            ),
+          ),
+        ].join('\n\n'),
+      );
+
+    default: {
+      const exhaustive: never = finding;
+      return String((exhaustive as { kind?: string }).kind ?? '');
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The prompt                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export function composeChiefOfStaff(input: ChiefOfStaffInput): ComposedPrompt {
+  const budgets = input.currentBudgets.map((line) => `${line.label}: ${money(line.amountUsd)}`);
+  const total = input.currentBudgets.reduce((sum, line) => sum + line.amountUsd, 0);
+  const history = input.conversationHistory.map((turn) => `${turn.role === 'player' ? 'Founder' : 'You'}: ${truncate(turn.text, 800)}`);
+
+  const memory = input.memory ?? null;
+  const memoryBlock =
+    memory === null || (memory.exchanges.length === 0 && memory.preferences.length === 0)
+      ? null
+      : section(
+          'What you remember of this thread',
+          [
+            memory.preferences.length === 0
+              ? null
+              : `Standing preferences the founder stated:\n${bullets(memory.preferences.map((entry) => `(quarter ${entry.quarter}) ${entry.text}`))}`,
+            memory.exchanges.length === 0
+              ? null
+              : `Earlier exchanges:\n${bullets(memory.exchanges.map((entry) => `(quarter ${entry.quarter}) Founder: ${entry.founderSaid} — You: ${entry.chiefReplied}`))}`,
+          ]
+            .filter((block): block is string => block !== null)
+            .join('\n\n'),
+        );
+
+  const findings = input.findings === undefined || input.findings.length === 0 ? null : input.findings;
+
+  const prompt = joinBlocks([
+    `# Quarter ${input.quarter} — session ${input.sessionId}, company ${input.companyId}, founder ${input.playerId}`,
+    // The typed dossier is the whole state. The prose briefings below it stay
+    // because an older caller may send only those, and because a sentence of
+    // context is cheap next to the table it summarises.
+    input.dossier === undefined ? null : renderDossier(input.dossier),
+    input.dossier === undefined ? section('Your company', input.companyBriefing) : null,
+    section('World conditions', input.worldBriefing),
+    section('Current spend lines', `${bullets(budgets)}\n\nTotal committed spend: ${money(total)}`),
+    input.dossier === undefined ? section('Awaiting the founder', bullets([...input.openDecisions])) : null,
+    memoryBlock,
+    findings === null
+      ? null
+      : joinBlocks([
+          section(
+            'What you went and looked up',
+            'These were run against canonical state and are the answer to your own request. Research mode is closed for this turn: answer the founder from these, name the counterparties, and attach the actions.',
+          ),
+          ...findings.map(renderFinding),
+        ]),
+    section('This conversation so far', numbered(history)),
+    input.screen === undefined || input.screen.length === 0
+      ? null
+      : section('Where they are asking from', `The founder is on the ${input.screen} screen. "This screen" and "these numbers" mean that one.`),
+    section(
+      'Execution mode',
+      input.autoExecuteEnabled
+        ? 'The founder has enabled automatic execution of routine instructions. It does not extend to financing, mergers, layoffs, share issuance, major contracts or large spending commitments — those always require an explicit confirmation.'
+        : 'Automatic execution is off. Every interpreted action will be presented for explicit approval.',
+    ),
+    section('What the founder just said', truncate(input.playerMessage, 4000)),
+    section(
+      'Your task',
+      [
+        findings === null
+          ? 'Decide the mode. A question gets `answer` and no actions. A request for advice gets `plan`. An instruction gets `act`. A question about the market that the dossier cannot answer gets `research` and a list of lookups, and nothing else.'
+          : 'You already asked and the findings are above. `research` is not available on this turn: answer, plan or act.',
+        'Write `reply` for the founder to read, in whole figures, citing only the dossier and the findings.',
+        'Then return interpretedInstructions, a summary they can check at a glance, any questions, requiresConfirmation, your confidence and anything this company cannot do.',
+      ].join('\n'),
+    ),
+  ]);
+
+  return { system: CHIEF_OF_STAFF_SYSTEM, prompt };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Post-processing                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Force `requiresConfirmation` true when any interpreted action is in the
+ * always-confirm set, regardless of what the model said.
+ *
+ * The model's flag is advisory; this is not. Applied to every interpretation
+ * before it leaves the gateway, so a forgetful or adversarial reply still
+ * cannot produce a layoff, a raise or an acquisition the founder did not
+ * explicitly approve. The engine rejects those a second time with
+ * `confirmation_required`.
+ */
+export function enforceConfirmationPolicy(interpretation: ChiefOfStaffInterpretation): ChiefOfStaffInterpretation {
+  const mustConfirm = interpretation.interpretedInstructions.some((intent) => requiresExplicitConfirmation(intent.type));
+  if (!mustConfirm || interpretation.requiresConfirmation) return interpretation;
+  return { ...interpretation, requiresConfirmation: true };
+}
+
+/**
+ * Make the mode agree with what was actually produced.
+ *
+ * A reply labelled `answer` that carries actions is a contradiction, and there
+ * are two ways to resolve it: drop the actions, or correct the label. Dropping
+ * them would silently discard work the founder can see the model did, so the
+ * label is corrected to `plan` instead — the honest reading of "here are some
+ * actions I did not describe as an instruction". Nothing else moves.
+ */
+export function enforceModePolicy(interpretation: ChiefOfStaffInterpretation): ChiefOfStaffInterpretation {
+  if (interpretation.mode !== 'answer' || interpretation.interpretedInstructions.length === 0) return interpretation;
+  return { ...interpretation, mode: 'plan' };
+}
+
+/**
+ * Close the sourcing loop after one round.
+ *
+ * `hadFindings` is whether this turn arrived carrying the answers to a previous
+ * request. If it did, a second `research` reply would be the model asking to go
+ * round again, and a loop that can spin will: each turn is a Claude subprocess
+ * on the operator's own machine. So the mode is corrected to `answer` and the
+ * lookups are dropped, which leaves the founder with the words the model wrote
+ * rather than with a spinner.
+ *
+ * A `research` reply is also stripped of any actions it carried, in both
+ * directions: research is a request to look, not a proposal, and an action
+ * attached to one has not been checked against anything.
+ */
+export function enforceResearchPolicy(interpretation: ChiefOfStaffInterpretation, hadFindings: boolean): ChiefOfStaffInterpretation {
+  if (interpretation.mode !== 'research') {
+    return interpretation.lookups === undefined ? interpretation : { ...interpretation, lookups: [] };
+  }
+  if (hadFindings) {
+    return { ...interpretation, mode: 'answer', lookups: [], interpretedInstructions: [] };
+  }
+  return interpretation.interpretedInstructions.length === 0 ? interpretation : { ...interpretation, interpretedInstructions: [] };
+}
+
+/**
+ * Every post-processing rule, in the order the gateway applies them.
+ *
+ * `hadFindings` defaults to false so a caller that predates sourcing behaves
+ * exactly as it did: without findings, a research reply is legal and is passed
+ * through for the caller to run.
+ */
+export function enforceInterpretationPolicy(
+  interpretation: ChiefOfStaffInterpretation,
+  hadFindings = false,
+): ChiefOfStaffInterpretation {
+  return enforceConfirmationPolicy(enforceModePolicy(enforceResearchPolicy(interpretation, hadFindings)));
+}

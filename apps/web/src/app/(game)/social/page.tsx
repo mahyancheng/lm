@@ -21,12 +21,12 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { NetworkArchetype, PublicRecordItem, Sector, SimEvent } from '@frontier/contracts';
+import type { NetworkArchetype, PublicRecordItem, Sector } from '@frontier/contracts';
 import { NETWORK_ARCHETYPES, quarterLabel } from '@frontier/contracts';
 import { projectPublicRecord } from '@frontier/simulation';
 import { formatPct } from '@frontier/shared';
 import { AiLabel, Icon, PageHeader, Tag, cx, sectorOf, sectorsPresent } from '@/components/ui';
-import { PLAYER_ID, useGame, useLlm, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { PLAYER_ID, useLedger, useLlm, usePlayerCharacter, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 import { allVisibleCompanies } from '@/components/screens/reporting/util';
 import { ComposeModal } from '@/components/screens/social/ComposeModal';
 import { countLabel, networkIcon, networkLabel } from '@/components/screens/social/audiences';
@@ -55,13 +55,13 @@ export default function SocialPage(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const llm = useLlm();
-  const { lastOutcome } = useGame();
+  // The committed rows behind the last quarter, from the store — rebuilt by the
+  // replay on a reload, so the "Why" button is there after a refresh too.
+  const ledger = useLedger();
 
   const [network, setNetwork] = useState<NetworkArchetype | null>(null);
   const [composing, setComposing] = useState(false);
 
-  // Memoised so an empty ledger is the same empty array between renders.
-  const ledger = useMemo<readonly SimEvent[]>(() => lastOutcome?.events ?? [], [lastOutcome]);
   const record = useMemo<PublicRecordItem[]>(() => projectPublicRecord(session, PLAYER_ID, { ledger }), [session, ledger]);
 
   /** Posts and replies only. Everything else on the record lives on News. */

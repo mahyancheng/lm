@@ -77,3 +77,38 @@ BASE_URL=http://localhost:3100 OUT_DIR=/tmp/stage3-none node apps/web/e2e/stage3
 
 It prints a `PASS`/`FAIL` line for each of the two checks in addition to
 writing `results.json` and before/after screenshots to `OUT_DIR`.
+
+# The newspaper harness
+
+`news-paper.js` reads the News screen the way a reader would, after the front
+page became a newspaper (masthead, section strip, lead, second tier, briefs,
+earlier editions): new game → three quarters → News by the bottom tab, then at
+each viewport (390×844 and 360×780 by default) it screenshots the front page
+above the fold, the second tier and the briefs, the lead opened in full, The
+Street, World and its map, Mine toggled on, and a real reload — asserting the
+lead headline is above the fold, masthead + strip are under 120px, the page
+never scrolls horizontally, the section and the Mine toggle persist in the URL
+across the reload, and the opened story's "Sources" still lists committed
+ledger rows afterwards (the ledger is rebuilt by the replay, not held over from
+`lastOutcome`). It also checks that no headline is printed twice under one
+byline (a post the market heard as a disclosure is one item), that the lead and
+the tier are not all earnings filings, that a Sources row prints no raw id and
+opens the ledger row on a tap, that the story body is one column on a phone,
+and that the section survives a trip through the Social sub-tab and back by
+the app's own News tab. Any `pageerror` fails the run. Waits are on the DOM, not
+`networkidle`: with `LLM_TRANSPORT=none` the client's health polling never goes
+idle. Note that `/news` is client-rendered: `useSearchParams` bails the static
+prerender out, so `curl /news` returns the shell and a bail-out marker, and the
+paper is laid out in the browser behind the shell's replay overlay.
+
+```
+BASE_URL=http://localhost:3100 OUT_DIR=apps/web/e2e/shots node apps/web/e2e/news-paper.js
+```
+
+Screenshots land in `apps/web/e2e/shots/` (gitignored) with a `results.json`.
+`social-check.js` runs against the same server and confirms Social — which
+kept its own feed components — still renders cards, prints a post's own text
+rather than a byline restated as a headline, and still offers the "Why"
+ledger button after a real reload.
+`stage3-repro.js` predates the newspaper and still looks for the "Quarter in
+review" card, which no longer exists; it is kept as the record of that stage.

@@ -77,6 +77,7 @@ export const ICON_NAMES = [
   'check',
   'warning',
   'search',
+  'filter',
   'plus',
   'save',
   'export',
@@ -499,6 +500,14 @@ const SHAPES: Readonly<Record<IconName, React.JSX.Element>> = {
         fill={B}
       />
       <rect x="14.4" y="16.2" width="7.6" height="2.8" rx="1.4" fill={B} transform="rotate(45 18.2 17.6)" />
+    </>
+  ),
+
+  /** Filter: a funnel, the mouth wide and the spout narrow, with the accent as what comes through. */
+  filter: (
+    <>
+      <path d="M3 4.2A1.2 1.2 0 0 1 4.2 3h15.6A1.2 1.2 0 0 1 21 4.2v1.3a1.2 1.2 0 0 1-.3.8L14.5 13v4.6a1.2 1.2 0 0 1-.6 1l-3.2 1.9a1.2 1.2 0 0 1-1.8-1V13L3.3 6.3a1.2 1.2 0 0 1-.3-.8Z" fill={B} />
+      <rect x="10.4" y="14" width="3.2" height="4.2" rx="1" fill={A} />
     </>
   ),
 

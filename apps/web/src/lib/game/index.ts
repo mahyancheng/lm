@@ -26,6 +26,7 @@ export {
   useLeaderboards,
   useQueuedActions,
   useOutcome,
+  useLedger,
   useConnection,
   useMarketCap,
   useFounderNetWorth,
@@ -171,4 +172,16 @@ export {
 } from './saveDisplay';
 export type { SavePosition } from './saveDisplay';
 
-export { setPendingLaunchCategory, setPendingResearchNode, takePendingLaunchCategory, takePendingResearchNode } from './deepLink';
+export {
+  newsHref,
+  readNewsSearch,
+  rememberNewsSearch,
+  setPendingLaunchCategory,
+  setPendingNetworkCharacter,
+  setPendingResearchNode,
+  setPendingSectorFocus,
+  takePendingLaunchCategory,
+  takePendingNetworkCharacter,
+  takePendingResearchNode,
+  takePendingSectorFocus,
+} from './deepLink';

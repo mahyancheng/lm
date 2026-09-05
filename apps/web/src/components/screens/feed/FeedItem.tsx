@@ -147,6 +147,7 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
   const kindTone = KIND_TONE[item.kind];
   const sentimentTone = toneOfSentiment(item.tone);
   const collapsible = item.body.length > COLLAPSE_ABOVE;
+  const isPost = item.kind === 'post' || item.kind === 'reply';
   const parentHeadline = item.links.causalParentId === null ? null : (context.headlines.get(item.links.causalParentId) ?? null);
   const mapEventId =
     item.kind === 'event' && context.mappedEventIds.has(item.id)
@@ -196,7 +197,7 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Tag tone={kindTone}>
           <Icon name={fromFund ? 'briefcase' : KIND_ICON[item.kind]} size={12} accent="current" />
-          {KIND_LABEL[item.kind]}
+          {item.kicker.word}
         </Tag>
         {!fromFund ? null : (
           <Tag tone="brand">
@@ -206,6 +207,14 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
         )}
         {item.network === null ? null : <Tag tone="neutral">{networkLabel(item.network)}</Tag>}
         {item.intent === null ? null : <Tag tone="neutral">{humanise(item.intent)}</Tag>}
+        {/* A post the market took as a disclosure is one card, not two: the
+            kind the market heard and how far it believed it ride on the post. */}
+        {item.heard === null ? null : (
+          <Tag tone="info">
+            <Icon name="stamp" size={11} accent="current" />
+            Heard as {humanise(item.heard.kind).toLowerCase()} · {formatPct(item.heard.credibility)}
+          </Tag>
+        )}
         {item.tone === 0 ? null : (
           <Tag tone={sentimentTone} dot>
             {item.tone < 0 ? 'hostile' : 'favourable'}
@@ -213,7 +222,15 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
         )}
       </div>
 
-      <p className={cx('mt-2 text-[14px] leading-snug font-semibold', `tone-${sentimentTone}`)}>{item.headline}</p>
+      {/* A post's headline is its own first sentence, so printing it above the
+          body would print the same words twice: the body is the post. Every
+          other kind has a title of its own, and a deck under it. */}
+      {isPost ? null : (
+        <p className={cx('mt-2 text-[14px] leading-snug font-semibold', sentimentTone === 'neutral' ? 'text-ink' : `tone-${sentimentTone}`)}>
+          {item.headline}
+        </p>
+      )}
+      {isPost || item.deck === null ? null : <p className="mt-0.5 text-[12px] leading-snug text-ink-dim">{item.deck}</p>}
 
       {item.body.length === 0 ? null : collapsible ? (
         <button
@@ -222,14 +239,14 @@ export function FeedItem({ item, context, indented = false }: FeedItemProps): Re
           className="mt-1 block w-full text-left"
           onClick={() => setExpanded((open) => !open)}
         >
-          <span className={cx('block text-[13px] leading-relaxed text-ink-dim', expanded ? '' : 'line-clamp-3')}>{item.body}</span>
+          <span className={cx('block leading-relaxed', isPost ? 'text-[14px] text-ink' : 'text-[13px] text-ink-dim', expanded ? '' : 'line-clamp-3')}>{item.body}</span>
           <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-brand">
             {expanded ? 'Less' : 'More'}
             <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} accent="current" />
           </span>
         </button>
       ) : (
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">{item.body}</p>
+        <p className={cx('mt-1 leading-relaxed', isPost ? 'text-[14px] text-ink' : 'text-[13px] text-ink-dim')}>{item.body}</p>
       )}
 
       {item.whyItMatters === null ? null : (

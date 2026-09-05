@@ -18,10 +18,10 @@
  * statement of that fact rather than six empty tiles.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { SimEvent, Sector } from '@frontier/contracts';
-import { SECTOR_META, quarterLabel } from '@frontier/contracts';
+import { SECTOR_META, SECTORS, quarterLabel } from '@frontier/contracts';
 import { ultimateControllerId } from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
 import {
@@ -40,7 +40,7 @@ import {
 import { LedgerDrawer } from '@/components/screens/reporting/LedgerDrawer';
 import { RegionStrip, SectorFlow, SectorLadder, TollTicket } from '@/components/screens/sector';
 import { laddersPresent, sectorLadderRows, visibleAccordMembers } from '@/components/screens/sector/model';
-import { useGame, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
+import { takePendingSectorFocus, useGame, usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
 
 type TabId = 'flow' | 'ladder' | 'regions';
 
@@ -53,6 +53,13 @@ export default function SectorPage(): React.JSX.Element {
   const [tab, setTab] = useState<TabId>('flow');
   const [cause, setCause] = useState<string | null>(null);
   const [focus, setFocus] = useState<Sector | null>(null);
+
+  // Arriving from a News kicker: the sector it named is focused on mount. The
+  // mailbox is consumed on read, so a later visit opens unfocused as before.
+  useEffect(() => {
+    const pending = takePendingSectorFocus();
+    if (pending !== null && (SECTORS as readonly string[]).includes(pending)) setFocus(pending as Sector);
+  }, []);
 
   const report = view.economyReport;
   const everyone = useMemo(() => [company, ...view.visibleCompanies], [company, view.visibleCompanies]);

@@ -105,8 +105,28 @@ export * from './disclosure';
 export * from './leaderboards';
 export { audienceFor, isEventVisibleTo, projectEconomyReportForPlayer, projectResolutionOutcomeForPlayer } from './projection';
 export type { PlayerAudience, ProjectableOutcome, ProjectedOutcome } from './projection';
-export { projectPublicRecord, worldEventVisibleTo, PUBLIC_RECORD_DEFAULT_LIMIT } from './publicRecord';
-export type { PublicRecordOptions } from './publicRecord';
+export {
+  DISCLOSURE_ATTENTION,
+  DISCLOSURE_KICKER,
+  EVENT_KICKER,
+  LEDGER_SUBJECT_KEYS,
+  POST_HEADLINE_MAX,
+  POST_KICKER,
+  PUBLIC_RECORD_DEFAULT_LIMIT,
+  STORY_KICKER,
+  buildLedgerIndex,
+  clipHeadline,
+  headlineFromText,
+  ledgerIdsFor,
+  peopleLabel,
+  planFolds,
+  projectEditionIndex,
+  projectPublicRecord,
+  quartersToRun,
+  severityLabel,
+  worldEventVisibleTo,
+} from './publicRecord';
+export type { EditionSummary, FoldPlan, LedgerIndex, LedgerSubjectKey, PublicRecordOptions } from './publicRecord';
 export { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 export type { InvariantGateInput } from './invariants';
 

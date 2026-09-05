@@ -694,7 +694,9 @@ describe('the public record', () => {
     sectorIds: ['ai'],
     companyIds: ['cmp_nexus'],
     headline: 'Nexus defends itself as pressure builds',
+    deck: 'Hostile coverage the market believes at 62%, read by 4M',
     body: 'The company answered in public within the day.',
+    kicker: { word: 'Competition', sector: 'ai', company: 'Nexus Intelligence' },
     tone: -0.2,
     weight: 0.55,
     links: { causalParentId: null, sourceEventId: null, sourcePostIds: ['pst_1'], replyToPostId: null },
@@ -703,6 +705,7 @@ describe('the public record', () => {
     network: null,
     intent: null,
     reach: 4_000_000,
+    pressPickup: null,
   };
 
   it('accepts one feed item and rejects an out-of-range tone or weight', () => {

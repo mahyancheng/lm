@@ -29,7 +29,7 @@
  */
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CONNECTION_GAP_RULE, quarterLabel } from '@frontier/contracts';
 import { formatDelta, formatScore } from '@frontier/shared';
 import { connectionInputs } from '@frontier/simulation';
@@ -55,7 +55,7 @@ import { CONNECTION_LEVERS } from '@/components/screens/network/actions';
 import { buildDirectory, characterName, overridesFor, type DirectoryEntry } from '@/components/screens/network/directory';
 import { CAPITAL_KIND_LABEL, STANCE_LABEL, STANCE_TONE, streetCards, type StanceContext } from '@/components/screens/street';
 import { IconTabs } from '@/components/screens/world/IconTabs';
-import { useLeaderboards, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
+import { takePendingNetworkCharacter, useLeaderboards, usePlayerCharacter, usePlayerView, useSession } from '@/lib/game';
 
 const ROLE_FILTERS: readonly { readonly id: string; readonly label: string }[] = [
   { id: 'all', label: 'Everyone' },
@@ -78,6 +78,15 @@ export default function NetworkPage(): React.JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
 
   const directory = useMemo(() => buildDirectory(session, view, founder.id), [session, view, founder.id]);
+
+  // Arriving from a News byline: that person's card opens on mount, if the
+  // directory has them. Consumed on read, so the next visit opens plain.
+  useEffect(() => {
+    const pending = takePendingNetworkCharacter();
+    if (pending !== null && directory.some((entry) => entry.character.id === pending)) setSelected(pending);
+    // Mount only: the directory identity changes every render of a live session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const inputs = useMemo(() => connectionInputs(session).find((entry) => entry.characterId === founder.id) ?? null, [session, founder.id]);
   const overrides = useMemo(() => overridesFor(session, founder.id), [session, founder.id]);
 

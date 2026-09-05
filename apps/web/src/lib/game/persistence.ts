@@ -51,7 +51,14 @@
  * needs the engine. The format is unchanged and still v5.
  */
 
-import type { NewGameSetup, SessionDifficulty, SessionState, SubmittedAction, WorldVersion } from '@frontier/contracts';
+import type {
+  NewGameSetup,
+  SessionDifficulty,
+  SessionState,
+  SimEvent,
+  SubmittedAction,
+  WorldVersion,
+} from '@frontier/contracts';
 import { applySocialTextOverrides } from '@frontier/simulation';
 import { getEngine, createSession, DEMO_SEED } from './engine';
 import {
@@ -117,6 +124,14 @@ export interface LoadedGame {
    * against the replayed session before queuing it; nothing here is trusted.
    */
   readonly queue: readonly SubmittedAction[];
+  /**
+   * The committed ledger rows of the last quarter the replay resolved — the
+   * whole quarter, **not yet projected to a seat**. The store projects them
+   * before any screen sees them, exactly as it projects a live outcome. Empty
+   * when nothing was replayed (a checkpoint with no records after it, or an
+   * empty log): the ledger is derived from the save, never stored in it.
+   */
+  readonly ledger: readonly SimEvent[];
 }
 
 function storage(): Storage | null {
@@ -419,6 +434,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
   const rejectedQuarters: number[] = [];
   let replayedCount = 0;
   let complete = pending.length === outstanding.length;
+  let ledger: readonly SimEvent[] = [];
 
   for (const record of pending) {
     yield { completed: replayedCount, total: pending.length, quarter: record.quarter };
@@ -445,6 +461,10 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     // exactly where they were applied live: after the commit, touching nothing
     // but the text of posts the engine itself authored.
     session = applySocialTextOverrides(outcome.nextState, record.socialTexts, record.quarter);
+    // The rows behind the quarter that just replayed. Only the newest quarter's
+    // are kept: a screen cites the rows behind the current edition, and holding
+    // forty quarters of hashes in memory on a phone would buy nothing.
+    ledger = outcome.events;
     replayedCount += 1;
   }
 
@@ -461,6 +481,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     replayedFrom,
     replayedCount,
     queue: file.queue,
+    ledger,
   };
 }
 

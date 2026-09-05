@@ -415,8 +415,31 @@ describe('public record', () => {
 
   it('merges all four tables into one list', () => {
     const state = recorded();
-    // Give the quarter a story and a disclosure to merge alongside the rest.
+    // Give the quarter a disclosure of its own to merge alongside the rest. The
+    // attack post also became a rumour, but the record folds that rumour into
+    // the post — one utterance, printed once — so the disclosure table needs a
+    // row a company wrote itself for the kind to show.
+    state.disclosures = [
+      ...state.disclosures,
+      {
+        id: 'dsc_orbit_results',
+        companyId: 'cmp_orbit',
+        quarter: 1,
+        kind: 'earnings',
+        headline: 'Orbit Dynamics reports $2.8B of quarterly revenue',
+        body: 'Orbit Dynamics reported revenue of $2.8B at a 61.0% gross margin.',
+        metrics: { revenue: 2_800_000_000, grossMargin: 0.61 },
+        credibility: 0.8,
+        sourceCharacterId: null,
+        isTruthful: true,
+        beliefTopic: null,
+      },
+    ];
     const record = projectPublicRecord(state, PLAYER_ID);
+    // The post and its rumour are one item: the rumour's id is gone and the
+    // post carries how the market heard it.
+    expect(record.some((item) => item.id.startsWith('dsc_') && item.body === ATTACK_ON_ORBIT.text)).toBe(false);
+    expect(record.find((item) => item.kind === 'post' && item.body === ATTACK_ON_ORBIT.text)?.heard?.kind).toBe('rumour');
     const kinds = new Set(record.map((item) => item.kind));
     expect(kinds.has('event')).toBe(true);
     expect(kinds.has('post')).toBe(true);

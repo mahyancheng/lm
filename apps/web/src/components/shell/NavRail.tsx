@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { NAV_GROUPS } from '@/lib/nav';
-import { useQueuedActions } from '@/lib/game';
+import { newsHref, useQueuedActions } from '@/lib/game';
 import { Icon, cx } from '@/components/ui';
+import { useNewsSearch } from './useNewsSearch';
 
 export interface NavRailProps {
   /** `rail` is the persistent desktop column; `sheet` is the mobile overlay. */
@@ -28,6 +29,7 @@ export function NavRail({ variant = 'rail', onNavigate }: NavRailProps): React.J
   const pathname = usePathname();
   const queued = useQueuedActions();
   const blocked = queued.filter((entry) => entry.blocked).length;
+  const newsSearch = useNewsSearch(pathname);
 
   return (
     <nav
@@ -50,7 +52,7 @@ export function NavRail({ variant = 'rail', onNavigate }: NavRailProps): React.J
               return (
                 <li key={item.href}>
                   <Link
-                    href={item.href}
+                    href={newsHref(item.href, newsSearch)}
                     onClick={onNavigate}
                     title={item.blurb}
                     aria-current={active ? 'page' : undefined}

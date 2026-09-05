@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { NAV_GROUPS, isGamePath, navGroupFor, navItemFor, navSiblingsFor, primaryHrefOf } from '@/lib/nav';
-import { PLAYER_ID, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
+import { PLAYER_ID, newsHref, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
 import { ActionQueueTray, Icon, cx } from '@/components/ui';
 import { ChiefOfStaffDock } from './ChiefOfStaffDock';
 import { NavRail } from './NavRail';
 import { StatusBar } from './StatusBar';
 import { ResolvingOverlay } from './ResolvingOverlay';
+import { useNewsSearch } from './useNewsSearch';
 import { VerdictScreen, verdictOf } from '@/components/screens/verdict';
 
 /**
@@ -37,6 +38,11 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
   const session = useSession();
   const outcome = useOutcome();
   const founderNetWorthUsd = useFounderNetWorth();
+  // The News links carry the section the paper was last open on. A hook, so it
+  // sits with the other hooks, above the early returns: the shell renders the
+  // setup route without them and the game with them, and the count must not
+  // change between the two.
+  const newsSearch = useNewsSearch(pathname);
 
   useEffect(() => {
     setNavOpen(false);
@@ -100,7 +106,7 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
                   return (
                     <Link
                       key={item.href}
-                      href={item.href}
+                      href={newsHref(item.href, newsSearch)}
                       aria-current={active ? 'page' : undefined}
                       className={cx(
                         'press-pop flex shrink-0 items-center gap-1.5 rounded-chip px-2.5 text-[11.5px] font-semibold whitespace-nowrap transition-colors',
@@ -161,7 +167,7 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
           return (
             <Link
               key={navGroup.id}
-              href={primaryHrefOf(navGroup)}
+              href={newsHref(primaryHrefOf(navGroup), newsSearch)}
               aria-current={active ? 'page' : undefined}
               className={cx(
                 'press-pop tap-target relative flex flex-col items-center justify-center gap-1 px-0.5 text-[10px] font-semibold',

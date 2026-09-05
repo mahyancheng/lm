@@ -161,8 +161,11 @@ function Site({
 
 export interface WorldMapProps {
   /**
-   * An event to select and centre on. The host screen sets this from a
-   * "show on map" control; the map clears it through `onFocusHandled`.
+   * An event to centre on and light up. The host screen sets this from a
+   * "show on map" control; the map clears it through `onFocusHandled`. The pin
+   * is highlighted, not opened: the reader asked to see it on the map, and has
+   * just closed a card about it — a second card over the map would cover the
+   * pin they came for. A tap on the pin opens the detail as always.
    */
   readonly focusEventId?: string | null;
   readonly onFocusHandled?: () => void;
@@ -185,6 +188,8 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
   );
 
   const [target, setTarget] = useState<MapTarget | null>(null);
+  /** The event a host screen asked to see: its pin is lit until the reader taps anything. */
+  const [focused, setFocused] = useState<string | null>(null);
   const [zoomStop, setZoomStop] = useState<number>(DEFAULT_ZOOM);
   const scroller = useRef<HTMLDivElement | null>(null);
   const centred = useRef(false);
@@ -218,11 +223,17 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
     if (focusEventId === null) return;
     const marker = model.markers.find((entry) => entry.eventId === focusEventId);
     if (marker !== undefined) {
-      setTarget({ kind: 'event', eventId: focusEventId });
+      setFocused(focusEventId);
       centreOn(marker.x, marker.y, true);
     }
     onFocusHandled?.();
   }, [focusEventId, model.markers, centreOn, onFocusHandled]);
+
+  // Any tap on the map is the reader taking over: the lit pin goes back to normal.
+  const select = useCallback((next: MapTarget | null) => {
+    setFocused(null);
+    setTarget(next);
+  }, []);
 
   const overlays = model.overlays;
   const heat = DISTRICT_BY_ID.get('datacentre');
@@ -306,11 +317,11 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
                 stroke="var(--color-brand-strong)"
                 strokeWidth={2}
                 pointerEvents="all"
-                onClick={() => setTarget({ kind: 'district', districtId: district.id })}
+                onClick={() => select({ kind: 'district', districtId: district.id })}
                 onKeyDown={(event) => {
                   if (!isActivation(event.key)) return;
                   event.preventDefault();
-                  setTarget({ kind: 'district', districtId: district.id });
+                  select({ kind: 'district', districtId: district.id });
                 }}
               />
             </g>
@@ -398,7 +409,7 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
               key={building.key}
               building={building}
               selected={selectedKey === building.key}
-              onActivate={() => setTarget(building.target)}
+              onActivate={() => select(building.target)}
             />
           ))}
 
@@ -458,7 +469,7 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
             <Hit
               key={marker.eventId}
               label={marker.ariaLabel}
-              onActivate={() => setTarget({ kind: 'event', eventId: marker.eventId })}
+              onActivate={() => select({ kind: 'event', eventId: marker.eventId })}
             >
               <circle cx={marker.x} cy={marker.y} r={23} fill="none" pointerEvents="all" />
               <circle
@@ -469,14 +480,14 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
                 fill="none"
                 stroke="var(--color-brand-strong)"
                 strokeWidth={2}
-                style={target !== null && target.kind === 'event' && target.eventId === marker.eventId ? { opacity: 1 } : undefined}
+                style={(target !== null && target.kind === 'event' && target.eventId === marker.eventId) || focused === marker.eventId ? { opacity: 1 } : undefined}
               />
               <EventPin
                 x={marker.x}
                 y={marker.y}
                 tone={marker.tone}
                 delayMs={index * 320}
-                selected={target !== null && target.kind === 'event' && target.eventId === marker.eventId}
+                selected={(target !== null && target.kind === 'event' && target.eventId === marker.eventId) || focused === marker.eventId}
               />
             </Hit>
           ))}
@@ -487,7 +498,7 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
       <button
         type="button"
         className="panel-surface animate-pop-in hover-lift press-pop absolute left-3 top-3 max-w-[min(320px,calc(100%-1.5rem))] rounded-card px-3 py-2 text-left"
-        onClick={() => setTarget({ kind: 'district', districtId: 'media' })}
+        onClick={() => select({ kind: 'district', districtId: 'media' })}
       >
         <span className="label-caps">The story this quarter</span>
         <span className="mt-0.5 flex items-center gap-1.5">
@@ -516,13 +527,13 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
           tone={overlays.computeTone}
           label="Compute"
           value={overlays.computeBand}
-          onClick={() => setTarget({ kind: 'district', districtId: 'datacentre' })}
+          onClick={() => select({ kind: 'district', districtId: 'datacentre' })}
         />
         <LegendChip
           tone={overlays.tensionTone}
           label="Borders"
           value={overlays.tensionBand}
-          onClick={() => setTarget({ kind: 'district', districtId: 'frontier' })}
+          onClick={() => select({ kind: 'district', districtId: 'frontier' })}
         />
         {model.markers.length === 0 ? null : (
           <span className={cx('inline-flex items-center rounded-pill border px-2 py-px text-[10px] font-semibold', TONE_CHIP.neutral)}>
@@ -561,7 +572,7 @@ export function WorldMap({ focusEventId = null, onFocusHandled, className }: Wor
         </button>
       </div>
 
-      <MapDetail target={target} model={model} onClose={() => setTarget(null)} onSelect={setTarget} />
+      <MapDetail target={target} model={model} onClose={() => select(null)} onSelect={select} />
     </div>
   );
 }

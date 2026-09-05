@@ -16,6 +16,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: 0.122.0
         version: 0.122.0(zod@3.25.76)
+      '@chenglou/pretext':
+        specifier: 0.0.8
+        version: 0.0.8
       '@frontier/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -209,6 +212,9 @@ packages:
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
+
+  '@chenglou/pretext@0.0.8':
+    resolution: {integrity: sha512-yqm2GMxnPI7VHcHwe84P8ZF0JK/2d2DMKPqMN+s95jQhwDMYYXKVFVJUMEaVWckQStdsjdLav/0Vu+d9YbtGxA==}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -1614,6 +1620,8 @@ snapshots:
       zod: 3.25.76
 
   '@babel/runtime@7.29.7': {}
+
+  '@chenglou/pretext@0.0.8': {}
 
   '@emnapi/runtime@1.11.3':
     dependencies:

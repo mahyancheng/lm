@@ -148,7 +148,8 @@ export function buildFeed(
       text: event.title,
       meta: `severity ${Math.round(event.severity * 100)}`,
       tone: event.severity >= 0.6 ? 'warn' : 'info',
-      href: '/news',
+      // The paper's World section, where the event and the map are.
+      href: '/news?section=world',
       group: 'world',
     });
   }
@@ -160,7 +161,8 @@ export function buildFeed(
       text: `The press is running ${humanise(media.dominantNarrative).toLowerCase()}.`,
       meta: `attention ${Math.round(media.attentionLevel * 100)}`,
       tone: media.controversyIntensity >= 0.5 ? 'warn' : 'info',
-      href: '/news',
+      // The paper's Press section: the coverage the narrative is made of.
+      href: '/news?section=press',
       group: 'world',
     });
   }

@@ -33,6 +33,7 @@ import {
 } from '@/components/ui';
 import {
   useCompanyMetrics,
+  newsHref,
   useConnection,
   useGame,
   useMarketCap,
@@ -44,6 +45,7 @@ import {
   useSession,
 } from '@/lib/game';
 import { OfficeSceneCompact } from '@/components/scenes/office';
+import { useNewsSearch } from '@/components/shell/useNewsSearch';
 import { AlertFeed } from '@/components/screens/command-centre/AlertFeed';
 import { TapeStrip } from '@/components/screens/command-centre/TapeStrip';
 import { WorldStrip } from '@/components/screens/command-centre/WorldStrip';
@@ -78,6 +80,8 @@ export default function CommandCentrePage(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const metrics = useCompanyMetrics();
+  // The News card carries the section the paper was last open on.
+  const newsSearch = useNewsSearch('/command-centre');
   const marketCap = useMarketCap();
   const connection = useConnection();
   const queued = useQueuedActions();
@@ -425,7 +429,7 @@ export default function CommandCentrePage(): React.JSX.Element {
           {QUICK_LINKS.map((link) => (
             <Link
               key={link.href}
-              href={link.href}
+              href={newsHref(link.href, newsSearch)}
               className="raised-surface icon-knockout-raised press-pop tap-target flex items-center gap-2.5 px-3 py-2 transition-colors hover:border-hair-strong"
             >
               <span className="flex size-8 shrink-0 items-center justify-center rounded-chip bg-panel text-ink-dim shadow-card">

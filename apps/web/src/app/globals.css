@@ -109,6 +109,24 @@
     "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono",
     "Roboto Mono", Menlo, Consolas, monospace;
+  /* The newspaper's face: a system serif stack, so the Pi image fetches
+     nothing at runtime. iOS resolves to New York / Iowan, Android to Noto
+     Serif, desktops to Palatino or Georgia. `lib/text/measure.ts` measures
+     with this same stack. */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+    "Noto Serif", Georgia, "Times New Roman", serif;
+
+  /* --- newspaper -----------------------------------------------------------
+     The News screen is one paper surface with hairline rules, not a stack of
+     white cards. Headlines are set in `ink`, bodies in `ink-dim`, so a neutral
+     headline never shares the body's colour. Rules are two weights: the
+     hairline between briefs, and the heavy rule under the masthead.          */
+  --color-paper: #fbfbf8;
+  --color-rule: #cfd6df;
+  --color-rule-heavy: #1e293b;
+  --color-kicker: #4b5a70;
+  --color-headline: #1e293b;
+  --color-body: #4b5a70;
 
   /* --- geometry ----------------------------------------------------------- */
   --radius-panel: 14px;
@@ -651,6 +669,111 @@
     .main-scroll-pad {
       padding-bottom: 2rem;
     }
+  }
+
+  /* --- newspaper ---------------------------------------------------------
+     The News screen's vocabulary. Every colour is a token above; every size is
+     a phone size. Nothing here is a card: the paper is the surface and rules
+     divide it. */
+
+  .np-paper {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+  }
+
+  /* Small caps above a headline: "LOGISTICS · HARBOURLINE". */
+  .np-kicker {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-kicker);
+  }
+
+  /* A headline: serif, ink, tight, balanced when the browser can. The size is
+     set inline by the fitted headline; this is the face. */
+  .np-headline {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: -0.012em;
+    color: var(--color-headline);
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+
+  /* One sentence under the headline, in a lighter serif. */
+  .np-deck {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    color: var(--color-body);
+    text-wrap: pretty;
+  }
+
+  /* Reading text: the serif at a size a thumb-length away can read. */
+  .np-body {
+    font-family: var(--font-serif);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--color-body);
+    overflow-wrap: anywhere;
+  }
+
+  /* The lead's opening paragraph: a dropped initial three lines tall. */
+  .np-dropcap::first-letter {
+    float: left;
+    font-family: var(--font-serif);
+    font-weight: 700;
+    font-size: 3.05em;
+    line-height: 0.82;
+    padding: 0.06em 0.08em 0 0;
+    color: var(--color-headline);
+  }
+
+  .np-rule {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .np-rule-heavy {
+    border-top: 2px solid var(--color-rule-heavy);
+  }
+
+  /* The masthead's double rule: heavy over hairline. */
+  .np-rule-double {
+    border-top: 3px double var(--color-rule-heavy);
+  }
+
+  /* A section tab in small caps. The active one is underlined in ink. */
+  .np-tab {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-kicker);
+    border-bottom: 2px solid transparent;
+  }
+
+  .np-tab[aria-selected="true"] {
+    color: var(--color-headline);
+    border-bottom-color: var(--color-rule-heavy);
+  }
+
+  /* The nameplate. Letter-spaced small caps would be a magazine; a newspaper
+     nameplate is the serif at display weight, tight. */
+  .np-nameplate {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-headline);
+  }
+
+  /* Two columns of body text when the measurer says both fill. */
+  .np-columns-2 {
+    column-count: 2;
+    column-gap: 16px;
+    column-rule: 1px solid var(--color-rule);
   }
 
   /* The grab affordance at the top of a bottom sheet. Purely visual: the sheet

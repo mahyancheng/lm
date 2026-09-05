@@ -53,13 +53,16 @@ import type {
   SubmittedAction,
   WorldState,
   WorldVersion,
+  SimEvent,
 } from '@frontier/contracts';
 import { LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import {
-  MAX_LIVE_STRATEGISTS,
   applySocialTextOverrides,
+  audienceFor,
   controlledCompaniesOf,
+  isEventVisibleTo,
+  MAX_LIVE_STRATEGISTS,
   projectResolutionOutcomeForPlayer,
   selectPostsForAuthoring,
   strategistPriority,
@@ -180,6 +183,16 @@ export interface GameStoreState {
    * screen that reads a report or a ledger row.
    */
   readonly lastOutcome: FrontierResolutionOutcome | null;
+  /**
+   * The committed ledger rows behind the most recently resolved quarter,
+   * **projected to this seat** — the rows a News item cites as its sources.
+   *
+   * Unlike `lastOutcome`, this survives a reload: the replay that rebuilds the
+   * session from the save rebuilds these rows too (`LoadedGame.ledger`), so the
+   * same quarter cites the same rows whether it resolved a moment ago or the tab
+   * was just reopened. Derived from committed state, never stored.
+   */
+  readonly ledger: readonly SimEvent[];
   /** The world as it stood before the last resolve, for quarter-over-quarter deltas. */
   readonly previousWorld: WorldState | null;
   readonly resolving: boolean;
@@ -354,6 +367,7 @@ function initialState(): GameStoreState {
     validations: {},
     actionLog: [],
     lastOutcome: null,
+    ledger: [],
     previousWorld: null,
     resolving: false,
     resolveStatus: '',
@@ -388,6 +402,22 @@ function projectForPlayer(outcome: FrontierResolutionOutcome, session: SessionSt
   }
 }
 
+/**
+ * The ledger rows of a replayed quarter, as this seat may read them.
+ *
+ * The same visibility rule `projectForPlayer` applies to a live outcome's rows,
+ * applied to the rows the replay handed back — so a reload cites exactly the
+ * rows a resolve would have.
+ */
+function projectLedger(events: readonly SimEvent[], session: SessionState): readonly SimEvent[] {
+  try {
+    const audience = audienceFor(session, PLAYER_ID);
+    return events.filter((event) => isEventVisibleTo(event, session, audience));
+  } catch {
+    return [];
+  }
+}
+
 function reducer(state: GameStoreState, action: Action): GameStoreState {
   switch (action.type) {
     case 'new_game':
@@ -402,6 +432,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         validations: {},
         actionLog: [],
         lastOutcome: null,
+        ledger: [],
         previousWorld: null,
         resolving: false,
         resolveStatus: '',
@@ -453,6 +484,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         queuedActions: action.queue,
         validations: action.validations,
         lastOutcome: null,
+        ledger: projectLedger(action.loaded.ledger, action.loaded.session),
         previousWorld: null,
         notice,
         hydrated: true,
@@ -522,6 +554,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
           notice: 'The quarter did not commit: an engine invariant refused it. Nothing changed — the report explains what failed.',
         };
       }
+      const projected = projectForPlayer(outcome, outcome.nextState);
       return {
         ...state,
         session: outcome.nextState,
@@ -534,7 +567,8 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
         queuedActions: [],
         validations: {},
         actionLog: [...state.actionLog, action.record],
-        lastOutcome: projectForPlayer(outcome, outcome.nextState),
+        lastOutcome: projected,
+        ledger: projected.events,
         resolving: false,
         resolveStatus: '',
         nextSequence: 0,
@@ -1723,6 +1757,15 @@ export function useQueuedActions(): QueuedActionEntry[] {
 /** The last resolution outcome, or null before a quarter has been resolved in this tab. */
 export function useOutcome(): FrontierResolutionOutcome | null {
   return useStore().lastOutcome;
+}
+
+/**
+ * The committed rows behind the most recently resolved quarter, projected to
+ * this seat. Unlike `useOutcome`, non-empty after a reload: the replay rebuilds
+ * it from the save.
+ */
+export function useLedger(): readonly SimEvent[] {
+  return useStore().ledger;
 }
 
 /** The founder's connection level: the number the whole social layer turns on. */

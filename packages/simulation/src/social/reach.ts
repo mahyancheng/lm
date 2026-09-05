@@ -41,6 +41,7 @@ import { rememberEvent, ceoOf } from '../relationships/relations';
 import { NETWORK_PROFILES, ensureAccount } from './accounts';
 import { generateNpcPosts, generateNpcReplies } from './npcPosts';
 import { characterById, clamp, companyById, emitEvent, line, ratio, reachLabel, round, score100, unit } from './util';
+import { headlineFromText } from './headline';
 
 /* -------------------------------------------------------------------------- */
 /*  Intents                                                                    */
@@ -387,7 +388,9 @@ export function publishDisclosure(
     companyId: subjectCompanyId,
     quarter: ctx.quarter,
     kind,
-    headline: `${author?.name ?? 'An account'} on ${post.network.replace(/_/g, ' ')}: ${post.intent}`.slice(0, 160),
+    // The post's own first sentence, never "so-and-so on the fast feed: announce"
+    // — a byline restated as a title, with a raw intent token in it.
+    headline: headlineFromText(post.text).slice(0, 160),
     body: post.text.slice(0, 1500),
     metrics: { reach: round(reach, 0), engagementCredibility: round(credibility, 4) },
     credibility: round(credibility, 4),

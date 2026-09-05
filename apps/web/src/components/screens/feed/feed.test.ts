@@ -53,7 +53,9 @@ function makeItem(overrides: Partial<PublicRecordItem> = {}): PublicRecordItem {
     sectorIds: [],
     companyIds: [],
     headline: 'A thing that happened',
+    deck: null,
     body: '',
+    kicker: { word: 'Announcement', sector: null, company: null },
     tone: 0,
     weight: 0.5,
     links: { causalParentId: null, sourceEventId: null, sourcePostIds: [], replyToPostId: null },
@@ -62,6 +64,7 @@ function makeItem(overrides: Partial<PublicRecordItem> = {}): PublicRecordItem {
     network: 'fast_feed',
     intent: 'announce',
     reach: 1000,
+    pressPickup: false,
     ...overrides,
   });
 }

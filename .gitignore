@@ -13,3 +13,4 @@ coverage/
 supabase/.temp/
 supabase/.branches/
 *.log
+apps/web/e2e/shots/

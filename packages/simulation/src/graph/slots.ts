@@ -193,6 +193,11 @@ export function slotForInput(node: EconomicNode, fills: readonly ProductSlotFill
  * `product` is null while a line is still being launched; `override` carries
  * the preview's fills and is never memoised. With a cache the line index and
  * the owned-node set come from it and the company list is never walked.
+ *
+ * `depth` is the roll-up's own recursion depth, and only the roll-up passes a
+ * non-zero one: `lineOf` costs the siblings when a company runs several lines
+ * on the slot's node, and threading the depth keeps that from restarting the
+ * roll-up's guard. Every other caller resolves a slot from the top.
  */
 export function resolveFill(
   state: SessionState,
@@ -202,6 +207,7 @@ export function resolveFill(
   slot: NodeSlot,
   cache?: NodeCostCache,
   override?: FillOverride,
+  depth = 0,
 ): ResolvedFill {
   const fills = override === undefined ? fillsOf(product) : override.fills;
   const fill = fillFor(fills, slot.id);
@@ -224,7 +230,10 @@ export function resolveFill(
   if (nodeId === null) return empty();
 
   /* --- 4: make ------------------------------------------------------------- */
-  const ownLine = lineOf(state, company.id, nodeId, cache);
+  // The cheapest of this company's lines on the input when it runs more than
+  // one, which is the line the roll-up transfers from: the wire and the row
+  // name the same product.
+  const ownLine = lineOf(state, company.id, nodeId, cache, depth);
   const namesSelf = fill !== null && fill.supplierCompanyId === company.id;
   const namesNobody = fill === null || fill.supplierCompanyId === null;
   if (ownLine !== undefined && (namesSelf || fill === null)) {
@@ -281,8 +290,9 @@ export function resolveFills(
   node: EconomicNode,
   cache?: NodeCostCache,
   override?: FillOverride,
+  depth = 0,
 ): readonly ResolvedFill[] {
-  return node.slots.map((slot) => resolveFill(state, company, product, node, slot, cache, override));
+  return node.slots.map((slot) => resolveFill(state, company, product, node, slot, cache, override, depth));
 }
 
 /* -------------------------------------------------------------------------- */

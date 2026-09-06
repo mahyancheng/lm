@@ -81,7 +81,7 @@ import { sectorBalances } from '../../economy/prices';
 import { supplyBySector } from '../../economy/sectors';
 import { createNodeCostCache } from '../../graph/lines';
 import { bucketShare, nodeBalances, producibleUnits } from '../../graph/market';
-import { unitCostOf } from '../../graph/cost';
+import { unitCostOf, unitCostOfProduct } from '../../graph/cost';
 import { SEGMENT_DATA_WEIGHT, petabytesPerUnit } from '../../graph/data';
 import { effectiveQuality } from '../../graph/production';
 import { nodeTechGraph } from '../../graph/techGraph';
@@ -862,7 +862,7 @@ export function w3LineAsks(state: SessionState, prices?: W3OpeningPrices): Reado
 
   const out: Record<string, number> = {};
   for (const ref of refs) {
-    const unitCostUsd = unitCostOf(working, ref.company, ref.node.id, cache).unitCostUsd;
+    const unitCostUsd = (unitCostOfProduct(working, ref.company, ref.product, cache) ?? unitCostOf(working, ref.company, ref.node.id, cache)).unitCostUsd;
     const margin = Math.min(W3_SEED_MARGIN_BOUNDS.max, Math.max(W3_SEED_MARGIN_BOUNDS.min, ref.product.grossMarginPct));
     // The market floor is the tracking rule's, and applies exactly where that
     // rule does: a line nobody is directing is walked to its node's price a
@@ -976,7 +976,7 @@ export function w3LineRunRates(
       const revenueUsd = lineRevenueUsd?.[product.id] ?? unpricedUnits * product.pricePerSeat;
       const seedUnits = revenueUsd / priceUsd;
       if (!(seedUnits > 0)) continue;
-      const unitCostUsd = unitCostOf(working, priced, nodeId, cache).unitCostUsd;
+      const unitCostUsd = (unitCostOfProduct(working, priced, product, cache) ?? unitCostOf(working, priced, nodeId, cache)).unitCostUsd;
       // What one unit leaves behind once the goods and the archetype's marketing
       // and research have been paid for. The same share `policy.ts` bounds
       // discretionary spend by, so the seed and the spending policy agree.
@@ -1076,7 +1076,7 @@ export function w3RunwayTopUps(state: SessionState): Readonly<Record<string, num
       const capacityUnits = line === undefined ? 0 : producibleUnits(state, line, cache.linesByCompany);
       const units = Math.min(Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers) || capacityUnits, capacityUnits);
       if (!(units > 0)) continue;
-      const unitCostUsd = unitCostOf(state, company, nodeId, cache).unitCostUsd;
+      const unitCostUsd = (unitCostOfProduct(state, company, product, cache) ?? unitCostOf(state, company, nodeId, cache)).unitCostUsd;
       contributionUsd += units * (product.pricePerSeat - unitCostUsd) * (1 - NODE_DISCRETIONARY_GROSS_PROFIT_SHARE);
     }
 
@@ -1239,7 +1239,7 @@ export function w3SeedQualities(state: SessionState): Readonly<Record<string, nu
 
   const out: Record<string, number> = {};
   for (const ref of refs) {
-    const cost = unitCostOf(working, ref.company, ref.node.id, cache);
+    const cost = unitCostOfProduct(working, ref.company, ref.product, cache) ?? unitCostOf(working, ref.company, ref.node.id, cache);
     const quality = effectiveQuality(working, ref.company, ref.product, ref.node, cost, cache);
     out[ref.product.id] = quality;
     ref.product.qualityScore = quality;

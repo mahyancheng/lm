@@ -42,7 +42,7 @@ import {
   type Column,
 } from '@/components/ui';
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
-import { NodeMapPanel } from '@/components/screens/research/NodeMapPanel';
+import { ResearchConnectionsScreen } from '@/components/screens/research/ResearchConnectionsScreen';
 import { InnovationPanel } from '@/components/screens/research/InnovationPanel';
 import { NodeDrawer } from '@/components/screens/research/NodeDrawer';
 import { EDGE_STYLE } from '@/components/screens/research/graphLayout';
@@ -131,6 +131,10 @@ export default function ResearchPage(): React.JSX.Element {
   }, [view.visibleCompanies]);
 
   const nodeTitles = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node.title])), [graph.nodes]);
+  // Only a node the reader's own graph carries can be opened in the drawer, so
+  // the Connections picture is told which ones those are rather than offering a
+  // tap that lands on nothing.
+  const openableNodeIds = useMemo(() => new Set(graph.nodes.map((node) => node.id)), [graph.nodes]);
   const nodeSectors = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node.sector])), [graph.nodes]);
 
   /* --- what moved when the last quarter resolved -------------------------- */
@@ -394,9 +398,13 @@ export default function ResearchPage(): React.JSX.Element {
   return (
     <>
       <PageHeader
-        title="Frontier Map"
+        title={nodeEconomy ? 'Research' : 'Frontier Map'}
         eyebrow={`${quarterLabel(session.startYear, session.quarter)} · graph v${graph.version}`}
-        subtitle="What this world currently believes the technological future might look like. Every node carries an epistemic state and a confidence, not a boolean."
+        subtitle={
+          nodeEconomy
+            ? 'What you hold, what is one programme away, and what it would let you sell.'
+            : 'What this world currently believes the technological future might look like. Every node carries an epistemic state and a confidence, not a boolean.'
+        }
         actions={
           <>
             <Tag tone="brand">{graph.nodes.length} technologies</Tag>
@@ -408,6 +416,12 @@ export default function ResearchPage(): React.JSX.Element {
           </>
         }
       />
+
+      {/* World 3 leads with the picture. The stat cards are four rows of
+          context; the three-column diagram is the screen, and putting 500
+          points of cards above it means a founder scrolls to reach the thing
+          they came for. Worlds 1 and 2 keep the order the Frontier Map had. */}
+      {nodeEconomy ? <ResearchConnectionsScreen onOpenNode={setSelectedId} openableNodeIds={openableNodeIds} /> : null}
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         <StatCard iconName="flask" label="Programmes" value={ownProjects.filter((p) => p.status === 'active').length} unit="active" hint={`${ownProjects.length} of yours on the books`} />
@@ -435,9 +449,8 @@ export default function ResearchPage(): React.JSX.Element {
         />
       </div>
 
-      {nodeEconomy ? (
-        <NodeMapPanel session={session} companyId={company.id} selectedNodeId={selectedId} onSelect={setSelectedId} />
-      ) : (
+      {nodeEconomy ? null : (
+
       <Panel
         iconName="network"
         iconTone="brand"
@@ -589,8 +602,10 @@ export default function ResearchPage(): React.JSX.Element {
       {/* --- what each sector is reaching for ---------------------------------
           One lane per sector, with the count of nodes on it and how many the
           world already believes in. Absent in a single-track world, where the
-          lane and the map are the same thing. */}
-      {!multiTrack ? null : (
+          lane and the map are the same thing — and absent in world 3, where a
+          sector is a column of the Connections picture rather than a lane on a
+          map nobody draws any more. */}
+      {!multiTrack || nodeEconomy ? null : (
         <Panel
           iconName="compass"
           iconTone="info"

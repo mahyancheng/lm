@@ -47,7 +47,7 @@ import {
 import { createDefaultEngine } from '../src/engine';
 import { createWorld3Session, W3_DEFAULT_SETUP } from '../src/scenario/world3';
 import { W2_COMPANIES } from '../src/scenario/world2';
-import { cellEndDemandUnits, cellOf, describeLine, launchCapacityPreview, resolveFills, slotOptions } from '../src/graph';
+import { cellEndDemandUnits, cellOf, describeLine, launchCapacityPreview, lineNodeIdOf, resolveFills, slotOptions, unitCostOfProduct } from '../src/graph';
 import { validateAction } from '../src/validator/index';
 import { BatchBudget } from '../src/validator/context';
 
@@ -360,5 +360,145 @@ describe('aiming the opening line elsewhere', () => {
     const poolAfter = cellEndDemandUnits(state, node, after.industry, after.customer);
     expect(poolAfter).not.toBe(poolBefore);
     expect(outcome.events.some((event) => event.type === 'target_market_set' && event.actorId === W2_COMPANIES.player && event.payload.productId === line.id)).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  4. Two lines on one node                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** Every live line this company runs on one node, in product order. */
+function linesOn(company: Company, nodeId: string): readonly Product[] {
+  return company.products.filter((product) => product.isActive && product.nodeId === nodeId);
+}
+
+/** The vertical app launched twice, on two sellers' APIs, aimed at two industries. */
+function twoVerticals(state: SessionState): readonly [ActionIntent, ActionIntent] {
+  const sable = companyOf(state, W2_COMPANIES.sable);
+  const basalt = companyOf(state, W2_COMPANIES.basalt);
+  const onLogistics = launchOf(state, VERTICAL, 'Vertical for logistics', [
+    { slotId: 'model', nodeId: API, supplierCompanyId: sable.id, supplierProductId: lineOn(sable, API).id },
+    { slotId: 'harness', nodeId: HARNESS, supplierCompanyId: null, supplierProductId: null },
+  ]);
+  const onManufacturing: ActionIntent = {
+    ...(launchOf(state, VERTICAL, 'Vertical for manufacturing', [
+      { slotId: 'model', nodeId: API, supplierCompanyId: basalt.id, supplierProductId: lineOn(basalt, API).id },
+      { slotId: 'harness', nodeId: HARNESS, supplierCompanyId: null, supplierProductId: null },
+    ]) as Extract<ActionIntent, { type: 'launch_product' }>),
+    targetIndustry: 'manufacturing',
+  };
+  return [onLogistics, onManufacturing];
+}
+
+describe('the same node sold into two industries', () => {
+  it('launches both, sells them into different pools, and costs each on its own inputs', { timeout: 120_000 }, () => {
+    let state = session();
+    const [onLogistics, onManufacturing] = twoVerticals(state);
+
+    // The real validator, twice, on the same node. The second used to be
+    // refused with "change its slots instead of launching a second line on it".
+    for (const intent of [onLogistics, onManufacturing]) {
+      const verdict = verdictFor(state, intent);
+      expect(verdict.status, verdict.reasons.join(' | ')).toBe('accepted');
+    }
+
+    state = resolve(state, [asPlayer(state, onLogistics), asPlayer(state, onManufacturing)]).nextState;
+    const settled = resolve(state, []);
+    state = settled.nextState;
+
+    const player = playerOf(state);
+    const lines = linesOn(player, VERTICAL);
+    expect(lines.length, 'the second line on the node was not kept').toBe(2);
+    const [logistics, manufacturing] = lines as [Product, Product];
+    const node = nodeOf(VERTICAL);
+
+    // Two cells, two pools, two different order books.
+    expect(cellOf(logistics, node)).toEqual({ industry: 'logistics', customer: 'enterprise' });
+    expect(cellOf(manufacturing, node)).toEqual({ industry: 'manufacturing', customer: 'enterprise' });
+    expect(cellEndDemandUnits(state, node, 'logistics', 'enterprise')).not.toBe(cellEndDemandUnits(state, node, 'manufacturing', 'enterprise'));
+    expect(logistics.unitsSoldQuarterly ?? 0, 'the logistics line sold nothing').toBeGreaterThan(0);
+    expect(manufacturing.unitsSoldQuarterly ?? 0, 'the manufacturing line sold nothing').toBeGreaterThan(0);
+    expect(logistics.unitsSoldQuarterly).not.toBe(manufacturing.unitsSoldQuarterly);
+
+    // Two compositions, two unit costs: the memo is keyed on the line, so the
+    // second line is not the first one's cost under another name.
+    expect(logistics.unitCostUsd ?? 0).toBeGreaterThan(0);
+    expect(logistics.unitCostUsd).not.toBe(manufacturing.unitCostUsd);
+    // The stamped figure is the roll-up rounded to the cent, so the two agree
+    // to the cent and not by luck.
+    expect(unitCostOfProduct(state, player, logistics)?.unitCostUsd ?? 0).toBeCloseTo(logistics.unitCostUsd ?? 0, 2);
+    expect(unitCostOfProduct(state, player, manufacturing)?.unitCostUsd ?? 0).toBeCloseTo(manufacturing.unitCostUsd ?? 0, 2);
+
+    // Each is described by the market it is aimed at, which is the only thing
+    // that tells two lines on one node apart in a list.
+    expect(describeLine(state, player, logistics, player.id)).toContain('aimed at logistics enterprises');
+    expect(describeLine(state, player, manufacturing, player.id)).toContain('aimed at manufacturing enterprises');
+    expect(describeLine(state, player, logistics, player.id)).toContain(`${companyOf(state, W2_COMPANIES.sable).name}'s inference API`);
+    expect(describeLine(state, player, manufacturing, player.id)).toContain(`${companyOf(state, W2_COMPANIES.basalt).name}'s inference API`);
+
+    // THE IDENTITY, with two lines on one node: what every line stamped is
+    // what the row books as the roll-up, to the cent.
+    let rollUpUsd = 0;
+    for (const product of player.products) {
+      if (!product.isActive || lineNodeIdOf(product) === null) continue;
+      rollUpUsd += Math.max(0, product.unitsSoldQuarterly ?? 0) * (product.unitCostUsd ?? 0);
+    }
+    const row = settled.events.find(
+      (event) => event.type === 'cost_recognised' && event.actorId === player.id && typeof event.payload.nodeCogsUsd === 'number',
+    );
+    expect(row, 'the player booked no cost row').toBeDefined();
+    expect(Math.abs((row?.payload.nodeCogsUsd as number) - rollUpUsd)).toBeLessThan(0.01 * (player.products.length + 1));
+  });
+
+  it('costs two lines the same when their inputs are the same, and the aim alone differs', { timeout: 120_000 }, () => {
+    let state = session();
+    const sable = companyOf(state, W2_COMPANIES.sable);
+    const model = { slotId: 'model', nodeId: API, supplierCompanyId: sable.id, supplierProductId: lineOn(sable, API).id };
+    const harness = { slotId: 'harness', nodeId: HARNESS, supplierCompanyId: null, supplierProductId: null };
+    const first = launchOf(state, VERTICAL, 'Same inputs, logistics', [model, harness]);
+    const second: ActionIntent = {
+      ...(launchOf(state, VERTICAL, 'Same inputs, manufacturing', [model, harness]) as Extract<ActionIntent, { type: 'launch_product' }>),
+      targetIndustry: 'manufacturing',
+    };
+    state = resolve(state, [asPlayer(state, first), asPlayer(state, second)]).nextState;
+    state = resolve(state, []).nextState;
+
+    const player = playerOf(state);
+    const lines = linesOn(player, VERTICAL);
+    expect(lines.length).toBe(2);
+    const [a, b] = lines as [Product, Product];
+    expect(cellOf(a, nodeOf(VERTICAL))).not.toEqual(cellOf(b, nodeOf(VERTICAL)));
+    // Same bill of materials, same tier: the same unit cost, to the cent. The
+    // target is not an input.
+    expect(a.unitCostUsd).toBe(b.unitCostUsd);
+    expect(unitCostOfProduct(state, player, a)?.unitCostUsd).toBe(unitCostOfProduct(state, player, b)?.unitCostUsd);
+  });
+
+  it('warns rather than refuses when the second line is aimed where the first already sells', { timeout: 120_000 }, () => {
+    let state = session();
+    const node = nodeOf(SUITE);
+    const opening = lineOn(playerOf(state), SUITE);
+    expect(cellOf(opening, node)).toEqual({ industry: 'logistics', customer: 'enterprise' });
+
+    const sameCell: ActionIntent = {
+      ...(launchOf(state, SUITE, 'Suite for logistics again', []) as Extract<ActionIntent, { type: 'launch_product' }>),
+      targetIndustry: 'logistics',
+    };
+    const verdict = verdictFor(state, sameCell);
+    expect(verdict.status, verdict.reasons.join(' | ')).not.toBe('rejected');
+    expect(verdict.reasons.join(' ')).toContain('both lines will draw on the one order pool');
+    expect(verdict.reasons.join(' ')).toContain(opening.name);
+
+    // Aimed anywhere else, nothing is said about a shared pool at all.
+    const elsewhere: ActionIntent = {
+      ...(launchOf(state, SUITE, 'Suite for energy', []) as Extract<ActionIntent, { type: 'launch_product' }>),
+      targetIndustry: 'energy',
+    };
+    const quiet = verdictFor(state, elsewhere);
+    expect(quiet.status, quiet.reasons.join(' | ')).toBe('accepted');
+    expect(quiet.reasons.join(' ')).not.toContain('one order pool');
+
+    state = resolve(state, [asPlayer(state, sameCell)]).nextState;
+    expect(linesOn(playerOf(state), SUITE).length, 'the second line into the same cell was refused after all').toBe(2);
   });
 });

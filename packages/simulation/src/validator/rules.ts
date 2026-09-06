@@ -54,9 +54,10 @@ import { dependencySatisfied } from '../research/nodes';
 import { unheldRequirements } from '../research/ownership';
 import { launchNodeIdFor } from '../companies/products';
 import { LICENCE_ROYALTY_BOUNDS, boundedRoyaltyPct, licenceUpfrontUsd, licenceFrom, ownsNodeOutright } from '../graph/licensing';
-import { cloudRentUsd, lineNodeIdOf, lineNodeOf, lineOf, reservedRentUsd } from '../graph/lines';
-import { defaultIndustryFor, slotAdmits } from '../graph/slots';
+import { cloudRentUsd, lineNodeIdOf, lineNodeOf, lineOf, linesOf, reservedRentUsd } from '../graph/lines';
+import { cellOf, defaultIndustryFor, slotAdmits } from '../graph/slots';
 import { marketCellWeight } from '../graph/market';
+import { targetPhrase } from '../graph/describe';
 import { expectedFill, isShortFill, realisesAvailability, reservableUnits, shortFillLine } from '../fills';
 import {
   COMP_BAND_MULTIPLIER,
@@ -583,15 +584,22 @@ function checkSlotChoice(ctx: RuleContext, node: EconomicNode, slot: NodeSlot, c
   const nodeLabel = ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId;
 
   if (supplierCompanyId === ctx.company.id) {
-    const own = lineOf(ctx.draft, ctx.company.id, nodeId);
-    if (own === undefined || own.productId === ownProductId) {
+    // A company may run several lines on one node, and the roll-up transfers
+    // from the cheapest of them — `lineOf`'s own answer, so the fill is
+    // repaired to the line the engine will actually make it on rather than to
+    // whichever the ticket named. A line can never be its own input, which is
+    // why the line being filled is dropped first.
+    const own = linesOf(ctx.draft, ctx.company.id, nodeId).filter((line) => line.productId !== ownProductId);
+    const transfer = lineOf(ctx.draft, ctx.company.id, nodeId);
+    const chosen = transfer !== undefined && transfer.productId !== ownProductId ? transfer : own[0];
+    if (chosen === undefined) {
       reasons.push(`${ctx.company.name} runs no line on ${nodeLabel} to make it from; buying ${nodeLabel} on the open market instead.`);
       return market;
     }
-    if (choice.supplierProductId !== own.productId) {
-      reasons.push(`${ctx.company.name}'s own line on ${nodeLabel} is "${own.productId}", not "${choice.supplierProductId ?? ''}"; making it there.`);
+    if (choice.supplierProductId !== chosen.productId) {
+      reasons.push(`${ctx.company.name}'s own line on ${nodeLabel} is "${chosen.productId}", not "${choice.supplierProductId ?? ''}"; making it there.`);
     }
-    return { slotId: slot.id, nodeId, supplierCompanyId, supplierProductId: own.productId };
+    return { slotId: slot.id, nodeId, supplierCompanyId, supplierProductId: chosen.productId };
   }
 
   const supplier = ctx.draft.companies.find((candidate) => candidate.id === supplierCompanyId);
@@ -657,6 +665,37 @@ function validateSlotChoices(
   return { slots: kept, changed, reasons };
 }
 
+/**
+ * A second line aimed where one of this company's lines already sells is
+ * allowed and told so: the two share one order pool.
+ *
+ * The advisory names the line already there, because "you already sell this"
+ * is only useful when it says *where*. Silent when the cells differ, which is
+ * the whole point of running more than one line on a node.
+ */
+function noteSharedCell<T extends ActionIntent>(
+  verdict: Verdict<T>,
+  ctx: RuleContext,
+  node: EconomicNode,
+  targetIndustry: Sector | null,
+  segment: ProductSegment,
+  exceptProductId: string | null = null,
+): void {
+  const aimed: Sector = segment === 'consumer' ? 'consumer' : (targetIndustry ?? defaultIndustryFor(node));
+  for (const line of linesOf(ctx.draft, ctx.company.id, node.id)) {
+    if (line.productId === exceptProductId) continue;
+    const product = ctx.company.products.find((candidate) => candidate.id === line.productId);
+    if (product === undefined) continue;
+    const cell = cellOf(product, node);
+    if (cell.customer !== segment || cell.industry !== aimed) continue;
+    verdict.note(
+      'duplicate_action',
+      `${ctx.company.name} already sells ${node.label} to ${targetPhrase(aimed, segment)} through ${product.name}: both lines will draw on the one order pool. Aim this one somewhere else to open a second market.`,
+    );
+    return;
+  }
+}
+
 /** A line aimed at a cell nobody buys in is allowed and told so: the pool is zero, not the launch. */
 function noteEmptyCell<T extends ActionIntent>(verdict: Verdict<T>, companyName: string, node: EconomicNode, industry: Sector, segment: ProductSegment): void {
   const collapsed: Sector = segment === 'consumer' ? 'consumer' : industry;
@@ -712,16 +751,6 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
       );
     }
     const node = ECONOMIC_NODES_BY_ID[resolved];
-    // One line per node per company: the roll-up keys a company's cost on the
-    // node, so a second line on it would be the first one's cost under another
-    // name. The composition is the thing to change.
-    if (lineOf(ctx.draft, ctx.company.id, resolved) !== undefined) {
-      verdict.reject(
-        'duplicate_action',
-        `${ctx.company.name} already sells ${node?.label ?? resolved}; change its slots instead of launching a second line on it.`,
-      );
-      return;
-    }
     // World 2's supplier-per-category list means nothing against a node's
     // slots: dropped, and said so, rather than silently ignored.
     if (intent.supply.length > 0) {
@@ -748,6 +777,13 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
         );
       }
       noteEmptyCell(verdict, ctx.company.name, node, intent.targetIndustry ?? defaultIndustryFor(node), intent.segment);
+      // Several lines on one node are allowed, and refused on no ground at
+      // all: the same thing sold into two industries is two businesses with
+      // two compositions, two prices and two order pools, and the roll-up
+      // keys a cost on the LINE so they cost separately. What a founder is
+      // owed is a warning when the second line lands in a cell one of theirs
+      // already serves — they share one order pool then.
+      noteSharedCell(verdict, ctx, node, intent.targetIndustry, intent.segment);
     }
     return;
   }
@@ -1481,6 +1517,9 @@ const setTargetMarket: Rule<'set_target_market'> = (intent, verdict, ctx) => {
     verdict.note('requirement_not_met', 'Selling to the public has no industry: a consumer line lands in the consumer cell whatever industry it names.');
   }
   noteEmptyCell(verdict, ctx.company.name, node, intent.targetIndustry, intent.segment);
+  // Re-aiming a line onto a cell a sibling already sells into is the same trap
+  // a second launch there is, and gets the same advisory rather than silence.
+  noteSharedCell(verdict, ctx, node, intent.targetIndustry, intent.segment, product.id);
 };
 
 /* -------------------------------------------------------------------------- */

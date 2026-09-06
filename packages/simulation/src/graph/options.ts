@@ -31,7 +31,7 @@
 import type { Company, EconomicNode, NodeCostCache, NodeSlot, NodeSlotKind, NodeRole, SessionState, UnitCostResult } from '@frontier/contracts';
 import { ECONOMIC_NODES_BY_ID, admissibleNodesFor, canProduce, economicNodeById, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
 import { OPEN_MARKET_PREMIUM, namedSupplierPriceUsd, openMarketPriceUsd, unitCostOf } from './cost';
-import { lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf } from './lines';
+import { lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf, unitsSoldLastQuarterOf } from './lines';
 import { dataSelfSupplyShare } from './data';
 import { licenceOfferOf, licenceUpfrontUsd, ownsNodeOutright } from './licensing';
 import { resolveFill, type ResolvedFill } from './slots';
@@ -184,8 +184,11 @@ export function slotOptions(
   if (node === undefined) return [];
 
   const product = productId === null ? null : (company.products.find((candidate) => candidate.id === productId) ?? null);
-  const line = lineOf(state, company.id, nodeId, cache);
-  const unitsPerQuarter = Math.max(1, line?.unitsSoldLastQuarter ?? 0);
+  // The run rate the dataset self-supply share is struck on is the NAMED
+  // line's own, because a company may run two lines on one node and they sell
+  // different numbers of units. With no line named it is the line a transfer
+  // would take, which is what a launch preview costs against.
+  const unitsPerQuarter = Math.max(1, product === null ? (lineOf(state, company.id, nodeId, cache)?.unitsSoldLastQuarter ?? 0) : unitsSoldLastQuarterOf(product));
   const owned = cache?.ownedNodeIds ?? ownedNodeIdsOf(state);
 
   return node.slots.map((slot) => {

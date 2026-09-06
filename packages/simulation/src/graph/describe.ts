@@ -34,7 +34,7 @@
 
 import type { Company, EconomicNode, NodeCostCache, Product, ProductSegment, SessionState, UnitCostLine } from '@frontier/contracts';
 import { SECTOR_META, economicNodeById, type Sector } from '@frontier/contracts';
-import { unitCostOf } from './cost';
+import { unitCostOf, unitCostOfProduct } from './cost';
 import { lineNodeIdOf } from './lines';
 import { targetOf } from './slots';
 
@@ -174,7 +174,7 @@ export function describeLine(state: SessionState, company: Company, product: Pro
   if (node === undefined) return '';
 
   const voice = voiceFor(company, viewerCompanyId);
-  const cost = unitCostOf(state, company, node.id, cache);
+  const cost = unitCostOfProduct(state, company, product, cache) ?? unitCostOf(state, company, node.id, cache);
   const blocked = new Set(cost.blockedInputNodeIds);
   const rows = describedRows(node, cost.lines);
 

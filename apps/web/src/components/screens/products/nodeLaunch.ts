@@ -30,9 +30,11 @@ import type {
 } from '@frontier/contracts';
 import { NODE_ROLE_LABELS, PRODUCT_SEGMENTS, SECTORS, SECTOR_META, economicNodeById, primaryCustomerOf } from '@frontier/contracts';
 import {
+  cellOf,
   defaultIndustryFor,
   launchableNodes,
   marketCellWeight,
+  targetPhrase,
   type InputRoute,
   type LaunchCapacityPreview,
   type LaunchableNode,
@@ -59,11 +61,18 @@ export const DEFAULT_QUALITY_TIER = 0.5;
 /*  Which node                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/** A market one of this company's lines on a node already sells into, and the line selling there. */
+export interface ServedCell extends TargetChoice {
+  readonly lineName: string;
+}
+
 /** A launchable node with its own name resolved, ready to list. */
 export interface LaunchOption extends LaunchableNode {
   readonly label: string;
   readonly unitLabel: string;
   readonly tier: number;
+  /** The cells this company's existing lines on the node already sell into, in product order. */
+  readonly servedCells: readonly ServedCell[];
 }
 
 /**
@@ -72,9 +81,9 @@ export interface LaunchOption extends LaunchableNode {
  * most want to see, and a tier-0 commodity is the fallback rather than the
  * headline.
  *
- * A node already sold is kept in the list and marked, because "you already sell
- * this" is a useful answer to "can I sell this", and removing the row would
- * make the list change shape as the company grows.
+ * A node already sold is an ordinary row, not a locked one: a second line on
+ * it, aimed at another industry, is a launch the validator accepts, and the
+ * markets already served are carried on the row so the caption can name them.
  */
 export function launchOptions(state: SessionState, company: Company): readonly LaunchOption[] {
   return [...launchableNodes(state, company)]
@@ -83,13 +92,38 @@ export function launchOptions(state: SessionState, company: Company): readonly L
       label: entry.node.label,
       unitLabel: entry.node.unitLabel,
       tier: entry.node.tier,
+      servedCells: servedCellsOf(company, entry.node),
     }))
     .sort((a, b) => {
       if (a.locked !== b.locked) return a.locked ? 1 : -1;
-      if (a.alreadySold !== b.alreadySold) return a.alreadySold ? 1 : -1;
       if (b.tier !== a.tier) return b.tier - a.tier;
       return a.label.localeCompare(b.label);
     });
+}
+
+/** The cells this company's live lines on one node sell into, through the engine's own `cellOf`. */
+function servedCellsOf(company: Company, node: EconomicNode): readonly ServedCell[] {
+  const out: ServedCell[] = [];
+  for (const product of company.products) {
+    if (!product.isActive || product.nodeId !== node.id) continue;
+    const cell = cellOf(product, node);
+    out.push({ customer: cell.customer, industry: cell.industry, lineName: product.name });
+  }
+  return out;
+}
+
+/**
+ * The caption under a node this company already sells: where it already sells
+ * it, and what a second line on it would be for.
+ *
+ * Empty for a node it does not sell, so a row renders it or not without a
+ * second condition.
+ */
+export function servedCaption(option: Pick<LaunchOption, 'servedCells'>): string {
+  if (option.servedCells.length === 0) return '';
+  const markets = option.servedCells.map((cell) => targetPhrase(cell.industry, cell.customer));
+  const listed = markets.length === 1 ? markets[0] : `${markets.slice(0, -1).join(', ')} and ${markets[markets.length - 1]}`;
+  return `You sell this into ${listed}; add a line for another market.`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -388,6 +422,56 @@ export function defaultTarget(node: EconomicNode): TargetChoice {
   return { customer: primaryCustomerOf(node), industry: defaultIndustryFor(node) };
 }
 
+/** Two cells are the same cell when the customer type matches and, for anyone but the public, the industry too. */
+export function sameCell(a: TargetChoice, b: TargetChoice): boolean {
+  if (a.customer !== b.customer) return false;
+  return a.customer === 'consumer' || a.industry === b.industry;
+}
+
+/**
+ * The target a launch opens on when the company already runs lines on this
+ * node: the heaviest cell **it does not already serve**.
+ *
+ * A second line aimed where the first already sells shares the first's order
+ * pool and wins nothing, so the form opens on the largest market still going
+ * spare. With nothing served this is `defaultTarget` exactly, which is what
+ * every first launch on a node gets; with everything served it falls back to
+ * it, because a founder is allowed to double up and is told what that means.
+ */
+export function defaultTargetFor(node: EconomicNode, served: readonly TargetChoice[]): TargetChoice {
+  const opening = defaultTarget(node);
+  if (!served.some((cell) => sameCell(cell, opening))) return opening;
+  let best: TargetChoice | null = null;
+  let bestWeight = -1;
+  for (const customer of PRODUCT_SEGMENTS) {
+    for (const industry of SECTORS) {
+      const cell: TargetChoice = { customer, industry: customer === 'consumer' ? 'consumer' : industry };
+      if (served.some((entry) => sameCell(entry, cell))) continue;
+      const weight = marketCellWeight(node, cell.industry, customer);
+      if (weight > bestWeight) {
+        best = cell;
+        bestWeight = weight;
+      }
+      if (customer === 'consumer') break;
+    }
+  }
+  return best ?? opening;
+}
+
+/**
+ * What a new line is called before the founder renames it: the node and the
+ * market it is aimed at.
+ *
+ * Two lines on one node have to be told apart in every list, in the ledger and
+ * in `describeLine`, and the market is the thing that differs — "AI software
+ * suite for logistics enterprises" beside "AI software suite for manufacturing
+ * enterprises". It is also what keeps the validator's duplicate-name rule from
+ * refusing the second launch.
+ */
+export function defaultLineName(node: EconomicNode, target: TargetChoice): string {
+  return `${node.label} for ${targetPhrase(target.industry, target.customer)}`;
+}
+
 /** Every customer type with its share of the node's end demand, in `PRODUCT_SEGMENTS` order. Zero-weight types stay: a founder may aim there and be told. */
 export function customerChoices(node: EconomicNode): readonly { readonly customer: ProductSegment; readonly weight: number }[] {
   return PRODUCT_SEGMENTS.map((customer) => ({ customer, weight: node.market.customers[customer] ?? 0 }));
@@ -410,16 +494,23 @@ export function targetIndustryOf(target: TargetChoice): Sector | null {
  * rather than showing 0%, because a line aimed there sells nothing and the
  * founder should read that before the validator's advisory says it.
  */
-export function targetSentence(node: EconomicNode, target: TargetChoice): string {
+export function targetSentence(node: EconomicNode, target: TargetChoice, served: readonly ServedCell[] = []): string {
+  const taken = served.find((cell) => sameCell(cell, target));
+  // A founder aiming a second line where one of their own already sells is
+  // told which line is there and that the two share one order pool — the same
+  // advisory the validator attaches, said before the ticket is written.
+  const clash = taken === undefined ? '' : ` ${taken.lineName} already sells there: both lines would draw on the one order pool.`;
   if (target.customer === 'consumer') {
     const share = Math.round(marketCellWeight(node, 'consumer', 'consumer') * 100);
     return share === 0
-      ? `Nobody in the public buys ${node.label.toLowerCase()}: a line aimed there sells nothing.`
-      : `The public is ${share}% of who buys this.`;
+      ? `Nobody in the public buys ${node.label.toLowerCase()}: a line aimed there sells nothing.${clash}`
+      : `The public is ${share}% of who buys this.${clash}`;
   }
   const who = `${SECTOR_META[target.industry].label} ${CUSTOMER_PLURAL[target.customer]}`;
   const share = Math.round(marketCellWeight(node, target.industry, target.customer) * 100);
-  return share === 0 ? `${who} do not buy ${node.label.toLowerCase()}: a line aimed there sells nothing.` : `${who} are ${share}% of who buys this.`;
+  return share === 0
+    ? `${who} do not buy ${node.label.toLowerCase()}: a line aimed there sells nothing.${clash}`
+    : `${who} are ${share}% of who buys this.${clash}`;
 }
 
 /* -------------------------------------------------------------------------- */

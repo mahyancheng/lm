@@ -80,7 +80,7 @@ import {
   reputationFactorOf,
 } from '../companies/products';
 import { activeCompanies, activeProducts, clamp, count, emitEvent, money, pctLabel, ratio, segmentReputation, unit } from '../companies/util';
-import { unitCostOf } from './cost';
+import { unitCostOf, unitCostOfProduct } from './cost';
 import { dataPolicyOf, dataQualityUplift, resolveNodeData, sellableDataUnits, DATA_POLICY_CHURN } from './data';
 import { createNodeCostCache, drawPerUnitOf, lineNodeOf, productOf, qualityTierFactor } from './lines';
 import { cellDemandLevel, industrySizeFactors, marketCellWeight, nodeBalances, producibleUnits, type NodeBalance } from './market';
@@ -383,7 +383,9 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
       // The roll-up is needed before quality, because quality blends what this
       // line's suppliers ship by bill-of-materials value share, and the value
       // shares come out of the roll-up.
-      const cost = unitCostOf(draft, company, node.id, cache);
+      // This LINE's roll-up: a company may run two lines on one node with
+      // different compositions, and each is costed on its own.
+      const cost = unitCostOfProduct(draft, company, product, cache) ?? unitCostOf(draft, company, node.id, cache);
       const fills = resolveFills(draft, company, product, node, cache);
       const quality = effectiveQuality(draft, company, product, node, cost, cache, fills);
       const best = frontierByNode.get(node.id) ?? 0;

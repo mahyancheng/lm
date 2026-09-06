@@ -321,6 +321,21 @@ included. The screens are what keep it in. Three rules:
    at 0.68.
 3. **A rival's secret research programme is absent, not redacted.** Use
    `visibleResearchProjects(session)`, never `session.researchProjects`.
+4. **On the Connections picture: public relationships, my numbers.** Following
+   a supplier or a buyer opens *their* Connections, and what a rival's picture
+   may carry is fixed by the engine, not by the screen: who they buy from, who
+   buys from them, which node each wire is, their target market and their
+   awards — the relationships trade press would report. Never their unit cost,
+   list price, published ask, gross margin, quality score or the alternatives
+   they could have picked; `connectionsOf(state, viewerId, subjectId, …)` hands
+   those back as `null` for anyone but the viewer, so the screen renders what
+   it is given and never redacts. The one figure that crosses is **the viewer's
+   own order book** — units a named buyer draws from my line, and units I draw
+   from theirs (`NodeSupplyWire.unitsDrawnLastQuarter`, present only when the
+   viewer is one of the two parties). A wire between two other companies
+   carries no units at all. A rival's picture also offers no ticket: no aim
+   button, no slot sheet — re-aiming somebody else's line is not a thing this
+   seat can do.
 
 Also: `PublicDisclosure.isTruthful` is internal. Never render it, never branch
 a visible affordance on it.
@@ -519,6 +534,52 @@ AccessBadge  { state: 'open'|'override'|'blocked', gap? }
 `PersonLike` and `CompanyLike` are structural: a full `Character` or a
 redacted `Partial<Company>` both satisfy them. Avatarless by design — initials
 only.
+
+### `ConnectionPill` / `ConnectionsDiagram`
+```ts
+layoutConnections  ({ width, left, right, hub }) => ConnectionsLayout
+pillWidth          (width) => number      // min(180, floor((W - 40 - 56) / 2))
+ConnectionsDiagram { model: ConnectionsModel, layout: ConnectionsLayout, onAct? }
+ConnectionPill     { pill: PillModel, box: LaidPill, onAct? }
+nameSizePx         (name, pillWidth, nested) => number
+rowSizePx          (figure, detail, pillWidth) => number
+```
+`screens/connections/` draws the three-column picture Products and Research
+both use: what feeds this line on the left, the line itself on the hub, who
+takes it on the right. Import the geometry from `./layout` — never lay a pill
+out by hand, or the SVG wire behind it and the button in front of it disagree.
+
+`layout.ts` is pure and integer-valued: both stacks run top-down and are
+centred on the hub, `height = max(sides, 150)`, and a wire is a cubic from a
+pill's wire-edge midpoint to the input anchor or to the output junction at
+`hub.right + GAP/2`. `dashed` is true for exactly `possible` and `empty`; a
+`blocked` wire is solid in the loss tone, because dashing it would say "you
+could have this".
+
+A pill is a 48-point absolutely positioned button — a `<div>` when it has no
+action, a `<Link>` when it has an `href` — carrying a 20px glyph
+(`CompanyGlyph` for a company, a `SECTOR_TINT` disc with `sectorIcon` for a
+market cell), a name clamped to two lines and **one** data line whose figure
+sits as a tag on the wire edge. There is no (i) button: at 130 points the
+whole pill is the target, and its `aria-label` states what tapping it does.
+
+**Words are budgeted, then sized.** `model.ts` writes every figure to
+`FIGURE_MAX_CH` (6) and every detail to `DETAIL_MAX_CH` (12), with the pair
+inside `ROW_MAX_CH` (15), and anything longer — the node a route buys, the
+exact unit count, the full word behind an abbreviation — lives in the
+`aria-label`, which has no width. `nameSizePx` and `rowSizePx` then pick the
+largest size at which the strings this pill was *actually* handed fit the box
+it *actually* has, by greedily wrapping them; both are pure, so the server and
+the browser agree. A group header is two lines when the group has a recipe
+("MODEL" over "40 1M tokens per unit") because the two do not fit one row at
+any legible size. `apps/web/e2e/connections.js` fails the run on any
+`scrollWidth > clientWidth` or clamped third line, which is the only check that
+catches a truncation the layout tests cannot see.
+
+`ConnectionsDiagram` is hook-free so a whole picture renders to static markup
+in a test; container width comes from `useContainerWidth` (fallback 356 — the
+panel's *measured* content box on a 390-point phone), and its ref must sit on a
+nearly unpadded box or the picture is drawn wider than the column it lands in.
 
 ### `ActionQueueTray`
 Rendered by the shell. Do not mount it yourself.

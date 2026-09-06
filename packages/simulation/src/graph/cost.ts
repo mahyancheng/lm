@@ -72,11 +72,11 @@
  * another's and break replay.
  */
 
-import type { Company, NodeCostCache, NodeSlot, SessionState, UnitCostLine, UnitCostResult } from '@frontier/contracts';
+import type { Company, EconomicNode, NodeCostCache, NodeSlot, SessionState, UnitCostLine, UnitCostResult } from '@frontier/contracts';
 import { GRID_POWER_NODE_ID, NODE_TIERS, economicNodeById, nodeMarketPriceUsd, requiresClosure, type Product } from '@frontier/contracts';
 import { companyEnergyCostFactor } from '../economy/regions';
 import { sellerPriceFactor } from '../companies/sellers';
-import { capacityRateUsd, drawPerUnitAtTier, drawPerUnitOf, lineNodeIdOf, lineOf, productOf } from './lines';
+import { capacityRateUsd, drawPerUnitAtTier, drawPerUnitOf, lineNodeOf, lineOf, productOf, unitsSoldLastQuarterOf } from './lines';
 import { dataSelfSupplyShare } from './data';
 import { resolveFill, type FillOverride, type ResolvedFill } from './slots';
 
@@ -157,14 +157,20 @@ function labelOf(nodeId: string): string {
 /**
  * What one unit of `nodeId` costs `company` this quarter, itemised.
  *
+ * The node question, not the line question: it answers on the composition an
+ * internal transfer would take — `lineOf`'s cheapest line when the company
+ * runs any, the table's own defaults when it runs none. A caller holding a
+ * particular line asks `unitCostOfProduct` instead, because a company may run
+ * two lines on one node and they are two different bills of materials.
+ *
  * `cache` is optional: absent means every call recomputes, which is correct and
  * merely slower — a screen explaining one cost does not need a memo table.
  * `override` is the launch preview's composition for a line that does not
  * exist yet; a result built on it is never memoised, because the memo is keyed
- * on the company's real line and a preview is not that.
+ * on a real line or on the node's default recipe and a preview is neither.
  */
 export function unitCostOf(state: SessionState, company: Company, nodeId: string, cache?: NodeCostCache, override?: FillOverride): UnitCostResult {
-  return rollUp(state, company, nodeId, cache, 0, override);
+  return costForNode(state, company, nodeId, cache, 0, override);
 }
 
 function emptyResult(nodeId: string): UnitCostResult {
@@ -186,7 +192,11 @@ function zeroLine(slot: NodeSlot, fill: ResolvedFill): UnitCostLine {
   };
 }
 
-function rollUp(
+/**
+ * The roll-up for a node, on whichever of this company's lines a transfer
+ * would take — or, when it runs none, on the node's own default recipe.
+ */
+function costForNode(
   state: SessionState,
   company: Company,
   nodeId: string,
@@ -196,13 +206,30 @@ function rollUp(
 ): UnitCostResult {
   const node = economicNodeById(nodeId);
   if (node === undefined) return emptyResult(nodeId);
+  const line = lineOf(state, company.id, nodeId, cache, depth);
+  const product = line === undefined ? null : (productOf(state, company.id, line.productId) ?? null);
+  return rollUp(state, company, node, product, cache, depth, override);
+}
 
-  const key = `${company.id}|${nodeId}`;
+function rollUp(
+  state: SessionState,
+  company: Company,
+  node: EconomicNode,
+  product: Product | null,
+  cache: NodeCostCache | undefined,
+  depth: number,
+  override?: FillOverride,
+): UnitCostResult {
+  const nodeId = node.id;
+  // The memo is keyed on the LINE, because two lines on one node are two
+  // compositions, two quality tiers and two costs; a company that runs no line
+  // on the node keeps one node-level entry for the table's default recipe,
+  // which is what an NPC probing "what would this cost me" and a launch
+  // preview both roll up against.
+  const key = product === null ? `${company.id}|node:${nodeId}` : `${company.id}|line:${product.id}`;
   const memo = override === undefined ? cache?.units.get(key) : undefined;
   if (memo !== undefined) return memo;
 
-  const line = lineOf(state, company.id, nodeId, cache);
-  const product = line === undefined ? null : (productOf(state, company.id, line.productId) ?? null);
   const lines: UnitCostLine[] = [];
   const blocked: string[] = [];
   let inputTotal = 0;
@@ -211,10 +238,12 @@ function rollUp(
   // How many units this line makes in a quarter, floored at one. Only the data
   // self-supply share reads it, and it reads LAST quarter's output — the same
   // reading the node market takes, so there is no fixed point here either.
-  const unitsPerQuarter = Math.max(1, line?.unitsSoldLastQuarter ?? 0);
+  const unitsPerQuarter = Math.max(1, product === null ? 0 : unitsSoldLastQuarterOf(product));
 
   for (const slot of node.slots) {
-    const fill = resolveFill(state, company, product, node, slot, cache, override);
+    // A slot's node is a tier below this one, so the line index the fill
+    // resolves against is read one step further down the roll-up's ladder.
+    const fill = resolveFill(state, company, product, node, slot, cache, override, depth + 1);
     if (fill.nodeId === null) {
       // An optional slot left empty: a zero row, so the port is still on the
       // screen and a founder can see there is something they could put there.
@@ -391,8 +420,11 @@ function priceResolved(state: SessionState, company: Company, fill: ResolvedFill
   }
 
   // (1) Make. Transferred at this company's own cost, with no internal margin.
+  // Which of its lines, when it runs several on the input, is `lineOf`'s
+  // answer — the cheapest — and `resolveFill` named that same line, so the
+  // supplier on the wire and the cost on the row are one line.
   if (fill.route === 'make') {
-    const upstream = rollUp(state, company, inputNodeId, cache, depth + 1);
+    const upstream = costForNode(state, company, inputNodeId, cache, depth + 1);
     return { unitPriceUsd: upstream.unitCostUsd, sourceCompanyId: company.id, sourceKind: 'make' };
   }
 
@@ -427,10 +459,30 @@ export function lineIsBlocked(result: UnitCostResult): boolean {
   return result.blockedInputNodeIds.length > 0;
 }
 
-/** The unit cost of a stored line, for callers that hold the product rather than the node id. */
+/**
+ * What one unit of ONE stored line costs: the roll-up on that line's own
+ * composition and its own quality tier.
+ *
+ * The question every caller holding a product should ask. `unitCostOf` answers
+ * about a node, and a node can carry two of this company's lines — the same
+ * thing aimed at two markets, composed differently — of which it returns the
+ * one a transfer would take. Null for a product that is not a node line.
+ */
 export function unitCostOfProduct(state: SessionState, company: Company, product: Product, cache?: NodeCostCache): UnitCostResult | null {
-  const nodeId = lineNodeIdOf(product);
-  return nodeId === null ? null : unitCostOf(state, company, nodeId, cache);
+  const node = lineNodeOf(product);
+  return node === undefined ? null : rollUp(state, company, node, product, cache, 0);
+}
+
+/**
+ * The same figure alone, at the roll-up depth the caller has already reached.
+ *
+ * Exported for `lineOf`, which is the only caller: choosing which of several
+ * lines a transfer takes needs each line's cost, and starting those at depth
+ * zero would let a corrupt table restart `MAX_COST_DEPTH` on every hop.
+ */
+export function lineUnitCostUsd(state: SessionState, company: Company, product: Product, cache: NodeCostCache | undefined, depth: number): number {
+  const node = lineNodeOf(product);
+  return node === undefined ? 0 : rollUp(state, company, node, product, cache, depth).unitCostUsd;
 }
 
 /** The lines of a roll-up that are real inputs rather than conversion. */

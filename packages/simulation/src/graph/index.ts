@@ -27,10 +27,12 @@ export {
   lineNodeIdOf,
   lineNodeOf,
   lineOf,
+  linesOf,
   nodeLinesOf,
   producersOf,
   productOf,
   qualityTierFactor,
+  unitsSoldLastQuarterOf,
 } from './lines';
 export type { LaunchableNode, NodeLineIndex } from './lines';
 
@@ -126,8 +128,27 @@ export {
 } from './options';
 export type { CostBreakdownRow, InputRoute, InputRouteKind, MissingNodeRoute, NodeEntryRoutes, NodeSlotOptions, PriceVerdict, SlotCandidate } from './options';
 
-export { chainNodeIds, neighbourhoodNodeIds, nodeMapFor, structuralWires } from './projection';
-export type { NodeMapEntry, NodeMapView, NodeMapWire, NodeSupplyWire } from './projection';
+export { MAX_ALTERNATIVES_PER_SLOT, connectionsOf, customersOf, lineMarketShare, marketsForNode } from './connections';
+export type {
+  ConnectionsAgency,
+  ConnectionsCell,
+  ConnectionsCompute,
+  ConnectionsHub,
+  ConnectionsLine,
+  ConnectionsSupplier,
+  ConnectionsSupplyOption,
+  ConnectionsView,
+  LineCustomer,
+  LineMarketShare,
+  NodeMarketCellDemand,
+  SupplyOptionKind,
+} from './connections';
+
+export { researchMapFor } from './researchMap';
+export type { HeldGroup, HeldNode, LockedOption, ResearchMapView, ResearchOption, ResearchUnlock, RunningProgramme } from './researchMap';
+
+export { nodeMapFor } from './projection';
+export type { NodeMapEntry, NodeMapView, NodeSupplyWire } from './projection';
 
 export {
   BACKLOG_CARRY,

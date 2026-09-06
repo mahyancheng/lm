@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Company, Product, SessionState } from '@frontier/contracts';
 import { economicNodeById, primaryCustomerOf } from '@frontier/contracts';
-import { createWorld3Session, defaultIndustryFor, launchCapacityPreview, nodeEntryRoutes, slotOptions, unitCostOf } from '@frontier/simulation';
+import { createWorld3Session, defaultIndustryFor, launchCapacityPreview, nodeEntryRoutes, slotOptions, targetOf, targetPhrase, unitCostOf } from '@frontier/simulation';
 import { playerCompanyOf, validateIntentForCompany } from '../../../lib/game/engine';
 import {
   bestRouteOf,
@@ -28,7 +28,9 @@ import {
   costRowsBySlot,
   customerChoices,
   defaultFills,
+  defaultLineName,
   defaultTarget,
+  defaultTargetFor,
   EMPTY_CHOICE,
   entryRoutes,
   fillSummary,
@@ -41,10 +43,13 @@ import {
   previewFills,
   priceSentence,
   roleCaption,
+  sameCell,
+  servedCaption,
   targetIndustryOf,
   targetSentence,
   tierCaption,
   type FillMap,
+  type LaunchOption,
   withChoice,
 } from './nodeLaunch';
 
@@ -463,5 +468,67 @@ describe('launchIntent', () => {
     const verdict = validateIntentForCompany(state, intent!, company.id);
     expect(verdict.status).toBe('rejected');
     expect(verdict.reasons.some((reason) => reason.includes(locked.node.label))).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  More than one line on one node                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A company may run several lines on one node, one per market. What the form
+ * owes a founder is therefore not a lock but a caption saying where they
+ * already sell it, a target that opens somewhere else, and a name that tells
+ * the two lines apart afterwards.
+ */
+describe('a node the company already sells', () => {
+  /** The company's own opening line, and the launch row for the node it runs on. */
+  function ownRow(): { state: SessionState; company: Company; line: Product; option: LaunchOption } {
+    const { state, company } = world();
+    const line = company.products.find((product) => product.isActive && product.nodeId !== undefined && product.nodeId !== null);
+    if (line === undefined) throw new Error('the seed gave the player no node line');
+    const option = launchOptions(state, company).find((entry) => entry.node.id === line.nodeId);
+    if (option === undefined) throw new Error('the node the player sells is not on its own launch list');
+    return { state, company, line, option };
+  }
+
+  it('offers it as an open row rather than locking it, and says which market it already serves', () => {
+    const { option, line } = ownRow();
+    expect(option.alreadySold).toBe(true);
+    expect(option.locked).toBe(false);
+    expect(option.servedCells).toEqual([{ customer: line.segment, industry: targetOf(line, option.node), lineName: line.name }]);
+    expect(servedCaption(option)).toBe(`You sell this into ${targetPhrase(targetOf(line, option.node), line.segment)}; add a line for another market.`);
+    // A node it does not sell says nothing at all.
+    const fresh = launchOptions(ownRow().state, ownRow().company).find((entry) => entry.servedCells.length === 0);
+    expect(fresh).toBeDefined();
+    expect(servedCaption(fresh!)).toBe('');
+  });
+
+  it('opens the target on a market the company does not already serve', () => {
+    const { option } = ownRow();
+    const aim = defaultTargetFor(option.node, option.servedCells);
+    expect(option.servedCells.some((cell) => sameCell(cell, aim))).toBe(false);
+    // With nothing served it is the plain default, so a first launch is unchanged.
+    expect(defaultTargetFor(option.node, [])).toEqual(defaultTarget(option.node));
+  });
+
+  it('names a new line for the market it is aimed at, so two lines on one node are told apart', () => {
+    const node = economicNodeById('app_ai_software_suite')!;
+    expect(defaultLineName(node, { customer: 'enterprise', industry: 'logistics' })).toBe('AI software suite for logistics enterprises');
+    expect(defaultLineName(node, { customer: 'enterprise', industry: 'manufacturing' })).toBe('AI software suite for manufacturing enterprises');
+    expect(defaultLineName(node, { customer: 'consumer', industry: 'consumer' })).toBe('AI software suite for consumers');
+  });
+
+  it('says which line is already there when the founder aims at a market they already serve', () => {
+    const { option, line } = ownRow();
+    const taken = { customer: line.segment, industry: targetOf(line, option.node) };
+    const sentence = targetSentence(option.node, taken, option.servedCells);
+    expect(sentence).toContain(line.name);
+    expect(sentence).toContain('both lines would draw on the one order pool');
+    // Any other cell says nothing about a shared pool.
+    const free = defaultTargetFor(option.node, option.servedCells);
+    expect(targetSentence(option.node, free, option.servedCells)).not.toContain('one order pool');
+    // And with no served cells the sentence is exactly what it always was.
+    expect(targetSentence(option.node, taken)).toBe(targetSentence(option.node, taken, []));
   });
 });

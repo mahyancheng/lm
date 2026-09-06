@@ -1,6 +1,6 @@
 /**
  * @frontier/simulation — the launch flow's engine surface, and the boundary
- * the canvas is drawn behind.
+ * the Connections screen is drawn behind.
  *
  * Two things are proved here and neither can be eyeballed on a screen:
  *
@@ -14,15 +14,16 @@
  *    together.
  * 2. **A rival's economics are not in the projection.** In demo mode the whole
  *    aggregate sits in the browser tab, so `nodeMapFor` is the entire
- *    information boundary for the canvas. The test walks the serialised
+ *    information boundary for the ownership picture. The test walks the serialised
  *    projection and asserts that no rival list price, ask, unit cost, margin
  *    or quality score appears anywhere in it — by value, so a field renamed
  *    into innocence still fails.
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Company, Product, SessionState } from '@frontier/contracts';
+import type { Company, EconomicNode, Product, SessionState } from '@frontier/contracts';
 import { defaultInputsOf, economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
+import { hashState } from '@frontier/shared';
 import { createWorld3Session } from '../src/scenario/world3';
 import { createDemoSession } from '../src/scenario';
 import {
@@ -35,9 +36,11 @@ import {
   slotOptions,
   type NodeSlotOptions,
 } from '../src/graph/options';
-import { OPEN_MARKET_PREMIUM, unitCostOf } from '../src/graph/cost';
-import { chainNodeIds, neighbourhoodNodeIds, nodeMapFor } from '../src/graph/projection';
-import { createNodeCostCache } from '../src/graph/lines';
+import { OPEN_MARKET_PREMIUM, unitCostOf, unitCostOfProduct } from '../src/graph/cost';
+import { nodeMapFor } from '../src/graph/projection';
+import { createNodeCostCache, lineOf, linesOf } from '../src/graph/lines';
+import { resolveFills } from '../src/graph/slots';
+import { createDefaultEngine } from '../src/engine';
 
 /* -------------------------------------------------------------------------- */
 /*  Fixtures                                                                   */
@@ -366,13 +369,9 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
     const named = view.nodes.flatMap((node) => [...node.ownerCompanyIds, ...node.producerCompanyIds]);
     expect(named.length).toBeGreaterThan(0);
     for (const companyId of named) expect(view.companyNames[companyId]).toBeTypeOf('string');
-    // Structure is the table's, both edge kinds present, and a slot draws one
-    // wire per admissible node with exactly one default among them.
-    expect(view.wires.some((wire) => wire.kind === 'slot')).toBe(true);
-    expect(view.wires.some((wire) => wire.kind === 'requires')).toBe(true);
-    const modelWires = view.wires.filter((wire) => wire.kind === 'slot' && wire.toNodeId === 'svc_inference_api' && wire.slotId === 'model');
-    expect(modelWires.length).toBeGreaterThanOrEqual(3);
-    expect(modelWires.filter((wire) => wire.isDefault).map((wire) => wire.fromNodeId)).toEqual(['sys_frontier_model']);
+    // The viewer's own lines are marked, and nobody else's are.
+    const viewerLines = view.nodes.filter((node) => node.yourProductId !== null).map((node) => node.nodeId);
+    for (const nodeId of viewerLines) expect(view.nodes.find((node) => node.nodeId === nodeId)?.producerCompanyIds).toContain(viewer.id);
   });
 
   it('never carries a rival\'s list price, ask, unit cost, margin or quality', () => {
@@ -396,48 +395,12 @@ describe('nodeMapFor — relationships are public, economics are not', () => {
     }
 
     // And a supply wire carries the relationship — which slot, which node, from
-    // whom — without a price on it.
+    // whom — plus the viewer's own order book, without a price on it.
     for (const wire of nodeMapFor(state, viewer.id).supplyWires) {
       expect(Object.keys(wire).sort()).toEqual(
-        ['buyerCompanyId', 'buyerNodeId', 'buyerProductId', 'inputNodeId', 'slotId', 'supplierCompanyId'],
+        ['buyerCompanyId', 'buyerNodeId', 'buyerProductId', 'inputNodeId', 'slotId', 'supplierCompanyId', 'unitsDrawnLastQuarter'],
       );
     }
-  });
-
-  it('fits the opening view to the viewer\'s own chain, and focuses one node with its neighbours', () => {
-    const state = createWorld3Session();
-    const viewer = state.companies.find((company) => company.products.some((product) => product.nodeId !== undefined)) as Company;
-    const view = nodeMapFor(state, viewer.id);
-
-    const chain = chainNodeIds(view);
-    const mine = view.nodes.filter((node) => node.yourProductId !== null).map((node) => node.nodeId);
-    expect(mine.length).toBeGreaterThan(0);
-    for (const nodeId of mine) expect(chain).toContain(nodeId);
-    // The chain is a proper subset of the map: fitting to it is the point.
-    expect(chain.length).toBeLessThan(view.nodes.length);
-
-    const focus = mine[0] as string;
-    const around = neighbourhoodNodeIds(view, focus);
-    expect(around).toContain(focus);
-    const focusNode = economicNodeById(focus);
-    for (const input of focusNode === undefined ? [] : defaultInputsOf(focusNode)) expect(around).toContain(input.nodeId);
-  });
-
-  it('fits the chain to what the viewer\'s line actually runs on, not the table\'s default', () => {
-    const state = bareWorld();
-    const viewer = state.companies[0] as Company;
-    const api = lineOn('svc_inference_api', 1_000, 10);
-    api.slots = [{ slotId: 'model', nodeId: 'sys_efficient_small_model', supplierCompanyId: null, supplierProductId: null, cutOffNoticeQuarter: null, changedQuarter: null }];
-    viewer.products = [api];
-
-    const view = nodeMapFor(state, viewer.id);
-    const entry = view.nodes.find((node) => node.nodeId === 'svc_inference_api');
-    expect(entry?.yourInputNodeIds).toEqual(['sys_efficient_small_model']);
-    const chain = chainNodeIds(view);
-    expect(chain).toContain('sys_efficient_small_model');
-    expect(chain).not.toContain('sys_frontier_model');
-    // A rival's fills are not on the viewer's entries.
-    expect(view.nodes.filter((node) => node.yourProductId === null).every((node) => node.yourInputNodeIds.length === 0)).toBe(true);
   });
 
   it('is empty of world-3 lines in a world-2 session, and does not throw', () => {
@@ -463,5 +426,120 @@ describe('slotOptions with a cost cache', () => {
     const summarise = (slots: readonly NodeSlotOptions[]) =>
       slots.map((slot) => [slot.slotId, slot.fill?.nodeId, slot.fill?.route, inSlot(slot)?.routes.find((route) => route.chosen)?.unitPriceUsd]);
     expect(summarise(slotOptions(state, company, DIE, null, cache))).toEqual(summarise(slotOptions(state, company, DIE)));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  7. The memo is keyed on the line                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A company may run two lines on one node — the same thing aimed at two
+ * markets — so the roll-up cannot key a cost on the node alone. What is proved
+ * here is the pair of claims that follow from that: two lines with two
+ * compositions cost two different amounts through the same cache, and a
+ * company with no line on the node still gets exactly one node-level entry for
+ * the table's default recipe, which is what every NPC probe and every launch
+ * preview costs against.
+ */
+describe('the cost roll-up with more than one line on a node', () => {
+  /** Two lines on the die, one buying its wafer from a named seller and one on the open market. */
+  function twoDieLines(state: SessionState, company: Company, seller: Company): readonly [Product, Product] {
+    const bought: Product = {
+      ...lineOn(DIE, 400, 5_000),
+      id: 'prd_die_bought',
+      name: 'Die on a contract',
+      slots: [{ slotId: 'wafer', nodeId: WAFER, supplierCompanyId: seller.id, supplierProductId: seller.products[0]?.id ?? '', cutOffNoticeQuarter: null, changedQuarter: null }],
+    };
+    const spot: Product = { ...lineOn(DIE, 400, 5_000), id: 'prd_die_spot', name: 'Die on the spot market', slots: [] };
+    company.products = [bought, spot];
+    return [bought, spot];
+  }
+
+  it('costs each line on its own composition, and answers the node question with the cheaper of them', () => {
+    const state = bareWorld();
+    const seller = state.companies[0] as Company;
+    const buyer = state.companies[1] as Company;
+    buyer.ownedNodes = [...(buyer.ownedNodes ?? []), DIE];
+    // Half the market price, so the named route is unambiguously the cheaper
+    // one after `namedSupplierPriceUsd`'s bounds have had their say.
+    publishLine(seller, WAFER, nodeMarketPriceUsd(state, WAFER) * 0.5);
+    const [bought, spot] = twoDieLines(state, buyer, seller);
+
+    const cache = createNodeCostCache(state);
+    const boughtCost = unitCostOfProduct(state, buyer, bought, cache);
+    const spotCost = unitCostOfProduct(state, buyer, spot, cache);
+    expect(boughtCost?.unitCostUsd ?? 0).toBeGreaterThan(0);
+    expect(boughtCost?.unitCostUsd).toBeLessThan(spotCost?.unitCostUsd ?? 0);
+    // The wafer row names the seller on one line and nobody on the other: two
+    // bills of materials, not one under two names.
+    expect(boughtCost?.lines.find((line) => line.slotId === 'wafer')?.sourceCompanyId).toBe(seller.id);
+    expect(spotCost?.lines.find((line) => line.slotId === 'wafer')?.sourceCompanyId).toBeNull();
+
+    // The node question — what an internal transfer costs — is the cheapest
+    // line, and `lineOf` names that same line.
+    expect(unitCostOf(state, buyer, DIE, cache).unitCostUsd).toBe(boughtCost?.unitCostUsd);
+    expect(lineOf(state, buyer.id, DIE, cache)?.productId).toBe(bought.id);
+    // And the same answers without a cache at all.
+    expect(unitCostOf(state, buyer, DIE).unitCostUsd).toBe(boughtCost?.unitCostUsd);
+    expect(lineOf(state, buyer.id, DIE)?.productId).toBe(bought.id);
+    expect(linesOf(state, buyer.id, DIE).map((line) => line.productId)).toEqual([bought.id, spot.id]);
+  });
+
+  it('transfers the cheaper line downstream, so a second dear line never raises what the group pays itself', () => {
+    const state = bareWorld();
+    const company = state.companies[0] as Company;
+    company.ownedNodes = [...(company.ownedNodes ?? []), WAFER, DIE];
+    // Two wafer lines that differ only in the one lever: a higher tier draws
+    // more of the fab per wafer and costs more, which is the whole point of it.
+    const lean: Product = { ...lineOn(WAFER, 5_000, 14_000), id: 'prd_wafer_lean', name: 'Wafer, lean', qualityTier: 0 };
+    const dear: Product = { ...lineOn(WAFER, 5_000, 14_000), id: 'prd_wafer_dear', name: 'Wafer, dear', qualityTier: 1 };
+    const die: Product = { ...lineOn(DIE, 400, 5_000), id: 'prd_die', name: 'Die', slots: [] };
+    // Product order puts the dear line first, so a transfer that took "the
+    // first line found" would take the wrong one.
+    company.products = [dear, lean, die];
+
+    const cache = createNodeCostCache(state);
+    const leanCost = unitCostOfProduct(state, company, lean, cache)?.unitCostUsd ?? 0;
+    const dearCost = unitCostOfProduct(state, company, dear, cache)?.unitCostUsd ?? 0;
+    expect(leanCost).toBeGreaterThan(0);
+    expect(leanCost).toBeLessThan(dearCost);
+
+    const wafer = unitCostOfProduct(state, company, die, cache)?.lines.find((line) => line.slotId === 'wafer');
+    expect(wafer?.sourceKind).toBe('make');
+    expect(wafer?.unitPriceUsd).toBe(leanCost);
+    // And the wire names the line the row was priced at, not a sibling.
+    const fill = resolveFills(state, company, die, economicNodeById(DIE) as EconomicNode, cache).find((entry) => entry.slotId === 'wafer');
+    expect(fill).toMatchObject({ route: 'make', supplierCompanyId: company.id, supplierProductId: lean.id });
+  });
+
+  it('keeps one node-level entry for a company that runs no line on the node: the default recipe', () => {
+    const state = bareWorld();
+    const company = state.companies[0] as Company;
+    const cache = createNodeCostCache(state);
+
+    const first = unitCostOf(state, company, DIE, cache);
+    const again = unitCostOf(state, company, DIE, cache);
+    // The same object back: memoised once, under the node, exactly as it was
+    // before a line could be keyed separately.
+    expect(again).toBe(first);
+    expect(cache.units.get(`${company.id}|node:${DIE}`)).toBe(first);
+    expect(cache.units.get(`${company.id}|line:${DIE}`)).toBeUndefined();
+    // And the memo agrees with the same roll-up computed with no cache at all.
+    expect(unitCostOf(state, company, DIE).unitCostUsd).toBe(first.unitCostUsd);
+  });
+
+  it('leaves a resolved quarter identical for a world where nobody runs two lines on a node', () => {
+    const runs = [0, 1].map(() => {
+      const state = createWorld3Session(424242);
+      // The seeded world: every company on one line per node, which is the
+      // shape the memo answered under the node before this change.
+      for (const company of state.companies) {
+        const nodeIds = company.products.filter((product) => product.isActive).map((product) => product.nodeId ?? '');
+        expect(new Set(nodeIds).size).toBe(nodeIds.length);
+      }
+      return hashState(createDefaultEngine().resolver.resolveQuarter(state, [], null, []).nextState);
+    });
+    expect(runs[0]).toBe(runs[1]);
   });
 });

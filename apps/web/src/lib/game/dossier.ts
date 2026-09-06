@@ -43,7 +43,7 @@ import {
   lineNodeIdOf,
   targetOf,
   totalDataPetabytes,
-  unitCostOf,
+  unitCostOfProduct,
   consolidatedEnterpriseValueOf,
   controlledCompaniesOf,
   groupStatementOf,
@@ -81,7 +81,7 @@ function productLinesOf(session: SessionState, company: Company): CosProductLine
   return company.products.slice(0, 24).map((product) => {
     const nodeId = nodeEconomy ? lineNodeIdOf(product) : null;
     const node = nodeId === null ? undefined : economicNodeById(nodeId);
-    const cost = nodeId === null ? null : unitCostOf(session, company, nodeId);
+    const cost = nodeId === null ? null : unitCostOfProduct(session, company, product);
     return {
       productId: product.id,
       name: product.name,

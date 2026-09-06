@@ -132,3 +132,44 @@ describe('ProductDrawer / LaunchModal read the active company', () => {
     expect(lineLock(session, founding, category).locked).toBe(true);
   });
 });
+
+/**
+ * The world-3 Research screen is under the same rule, and for the same reason:
+ * `researchMapFor` is asked what *this* company holds, what it could research
+ * and which of its nodes it already runs a line on. Read the founding company
+ * there and a seat directing a subsidiary is shown somebody else's holdings.
+ *
+ * Appended as its own block rather than folded into the check above so that
+ * the two Connections screens, written in parallel, do not edit one assertion
+ * between them.
+ */
+describe('ResearchConnectionsScreen reads the active company', () => {
+  it('derives `company` from useActiveCompany, never usePlayerCompany', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url));
+    const source = readFileSync(`${dir}../research/ResearchConnectionsScreen.tsx`, 'utf8');
+    expect(source, 'ResearchConnectionsScreen must derive company via useActiveCompany()').toMatch(/const company = useActiveCompany\(\);/);
+    expect(source, 'ResearchConnectionsScreen must not fall back to usePlayerCompany').not.toMatch(/\busePlayerCompany\b/);
+    // And it must ask the engine about that company, not about the seat.
+    expect(source).toMatch(/researchMapFor\(session, company,/);
+  });
+});
+
+/**
+ * The world-3 Products screen is under the same rule. `connectionsOf` is asked
+ * for one company's suppliers, buyers, markets and awards; hand it the founding
+ * company while the seat is directing a subsidiary and the founder is shown
+ * somebody else's picture and offered somebody else's tickets.
+ *
+ * Its own block, for the same reason as the one above: the two Connections
+ * screens are written in parallel and must not edit one assertion between them.
+ */
+describe('ConnectionsScreen reads the active company', () => {
+  it('derives `company` from useActiveCompany, never usePlayerCompany', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url));
+    const source = readFileSync(`${dir}../connections/ConnectionsScreen.tsx`, 'utf8');
+    expect(source, 'ConnectionsScreen must derive company via useActiveCompany()').toMatch(/const company = useActiveCompany\(\);/);
+    expect(source, 'ConnectionsScreen must not fall back to usePlayerCompany').not.toMatch(/\busePlayerCompany\b/);
+    // And the viewer it hands the engine is that company, not the seat.
+    expect(source).toMatch(/connectionsOf\(session, company\.id, subjectId, productId\)/);
+  });
+});

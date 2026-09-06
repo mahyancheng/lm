@@ -3,12 +3,12 @@
  *
  * The node economy as one seat is entitled to see it.
  *
- * The canvas draws two views out of one model — *my chain* and *the map* — and
- * both are built from this projection rather than from `SessionState`. That is
- * not decoration. In demo mode the aggregate is in the browser tab, so the only
- * thing standing between a rival's unit cost and the screen is a projection the
- * screens are required to read instead, and a test that proves nothing private
- * is in it.
+ * The Connections screen draws who owns a node, who runs a line on it and who
+ * buys from whom out of this projection rather than out of `SessionState`. That
+ * is not decoration. In demo mode the aggregate is in the browser tab, so the
+ * only thing standing between a rival's unit cost and the screen is a
+ * projection the screens are required to read instead, and a test that proves
+ * nothing private is in it.
  *
  * ## What is public, and why
  *
@@ -22,10 +22,10 @@
  * **Relationships** are public: who owns a node, who runs a line on it, and who
  * fills which slot from whom — a rival's API running on another rival's model
  * included. A supply relationship between two companies is the kind of thing
- * trade press reports and competitors notice; it is also what makes the map
- * worth looking at, because a chain with names on it is a map of where the
- * leverage sits. What is *not* public is the composition's economics: the
- * relationship is a wire, never a price.
+ * trade press reports and competitors notice; it is also what makes the
+ * Connections screen worth looking at, because a chain with names on it shows
+ * where the leverage sits. What is *not* public is the composition's
+ * economics: the relationship is a wire, never a price.
  *
  * **Prices, unit costs and margins that belong to a rival are not.** A rival's
  * list price, its published ask, its roll-up, its gross margin and its quality
@@ -37,15 +37,15 @@
  */
 
 import type { SessionState, NodeSaleKind, Sector } from '@frontier/contracts';
-import { ECONOMIC_NODES, ECONOMIC_NODES_BY_ID, admissibleNodesFor, canProduce, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
-import { createNodeCostCache, lineNodeIdOf, lineNodeOf } from './lines';
+import { ECONOMIC_NODES, canProduce, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
+import { createNodeCostCache, lineNodeIdOf, lineNodeOf, unitsSoldLastQuarterOf } from './lines';
 import { resolveFills } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Shapes                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** One node on the canvas, with every public fact about it and none of a rival's private ones. */
+/** One node, with every public fact about it and none of a rival's private ones. */
 export interface NodeMapEntry {
   readonly nodeId: string;
   readonly label: string;
@@ -69,43 +69,20 @@ export interface NodeMapEntry {
   readonly producerCompanyIds: readonly string[];
   /** Whether a research programme can reach it at all. */
   readonly researchable: boolean;
-  /**
-   * The nodes the viewer's own line on this node actually runs on, slot by
-   * slot, in slot order; an empty slot is skipped. Empty when the viewer has
-   * no line here. What "my chain" is fitted to, and the viewer's own facts.
-   */
-  readonly yourInputNodeIds: readonly string[];
-}
-
-/**
- * A structural wire, straight off the table: one node may fill one slot of
- * another (`slot`), or must be owned before another may be produced
- * (`requires`). A slot draws one wire per admissible node, so the map shows
- * every harness an app could run on, and `isDefault` marks the one the table
- * runs on until a founder chooses.
- */
-export interface NodeMapWire {
-  readonly fromNodeId: string;
-  readonly toNodeId: string;
-  readonly kind: 'slot' | 'requires';
-  /** The slot this wire fills, or null on a `requires` edge. */
-  readonly slotId: string | null;
-  /** How many of the input one unit of the target takes. Zero for a `requires` edge. */
-  readonly qtyPerUnit: number;
-  /** True when a slot nobody can fill stops the line; the canvas marks these with an asterisk. False on a `requires` edge. */
-  readonly blocking: boolean;
-  /** True when this is the slot's default node. False on a `requires` edge. */
-  readonly isDefault: boolean;
 }
 
 /**
  * A commercial wire: one company's line runs one slot on a node from a named
  * source — a rival's published line, or a line of its own.
  *
- * The relationship and nothing else. There is deliberately no price on this
- * shape — a supplier's ask is that supplier's business, and the only ask the
- * viewer is entitled to is one published to *them*, which `slotOptions`
- * answers on the viewer's own lines.
+ * The relationship, plus — when the viewer is one of the two parties on it —
+ * their own order book: how many units actually crossed the wire. An order
+ * book is the two parties' own, so a wire between two other companies carries
+ * no units at all.
+ *
+ * There is still deliberately no price on this shape. A supplier's ask is that
+ * supplier's business, and the only ask the viewer is entitled to is one
+ * published to *them*, which `slotOptions` answers on the viewer's own lines.
  */
 export interface NodeSupplyWire {
   readonly buyerCompanyId: string;
@@ -115,14 +92,23 @@ export interface NodeSupplyWire {
   readonly inputNodeId: string;
   /** The seller for a bought slot; the buyer itself for one it makes. */
   readonly supplierCompanyId: string;
+  /**
+   * Units this wire carried in the quarter that has closed: the buyer line's
+   * `unitsSoldLastQuarter` times the slot's `qtyPerUnit` — the same arithmetic
+   * `nodeBalances` lands as derived demand, so the figure on the wire and the
+   * figure in the market are one number.
+   *
+   * Present only when the viewer is the buyer or the supplier. Null on a wire
+   * between two other companies.
+   */
+  readonly unitsDrawnLastQuarter: number | null;
 }
 
-/** The whole projection: nodes, structure, commerce and the names to render them with. */
+/** The whole projection: nodes, commerce and the names to render them with. */
 export interface NodeMapView {
   readonly viewerCompanyId: string;
   readonly quarter: number;
   readonly nodes: readonly NodeMapEntry[];
-  readonly wires: readonly NodeMapWire[];
   readonly supplyWires: readonly NodeSupplyWire[];
   /** Company id to name, for every company named anywhere above. */
   readonly companyNames: Readonly<Record<string, string>>;
@@ -147,7 +133,6 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
   const producers = new Map<string, string[]>();
   const names: Record<string, string> = {};
   const supplyWires: NodeSupplyWire[] = [];
-  const yourInputs = new Map<string, readonly string[]>();
 
   for (const company of state.companies) {
     if (!company.isActive) continue;
@@ -170,12 +155,13 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
       const node = lineNodeOf(product);
       if (node === undefined) continue;
       const fills = resolveFills(state, company, product, node, cache);
-      if (company.id === viewerCompanyId) {
-        yourInputs.set(nodeId, fills.filter((fill) => fill.nodeId !== null).map((fill) => fill.nodeId ?? ''));
-      }
       for (const fill of fills) {
         if (fill.nodeId === null || fill.supplierCompanyId === null) continue;
         if (fill.route !== 'buy' && fill.route !== 'make') continue;
+        // The order book is the two parties' own: units only for a wire the
+        // viewer is standing on, either end of it.
+        const onIt = company.id === viewerCompanyId || fill.supplierCompanyId === viewerCompanyId;
+        const slot = node.slots.find((candidate) => candidate.id === fill.slotId);
         supplyWires.push({
           buyerCompanyId: company.id,
           buyerProductId: product.id,
@@ -183,6 +169,7 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
           slotId: fill.slotId,
           inputNodeId: fill.nodeId,
           supplierCompanyId: fill.supplierCompanyId,
+          unitsDrawnLastQuarter: onIt ? unitsSoldLastQuarterOf(product) * (slot?.qtyPerUnit ?? 0) : null,
         });
       }
     }
@@ -210,49 +197,15 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
     ownerCompanyIds: owners.get(node.id) ?? [],
     producerCompanyIds: producers.get(node.id) ?? [],
     researchable: node.researchable,
-    yourInputNodeIds: yourLines.has(node.id) ? (yourInputs.get(node.id) ?? []) : [],
   }));
 
   return {
     viewerCompanyId,
     quarter: state.quarter,
     nodes,
-    wires: structuralWires(),
     supplyWires,
     companyNames: names,
   };
-}
-
-/**
- * Every structural edge in the table: one `slot` wire per (slot, admissible
- * node) in slot order, then `requires`.
- *
- * A pure function of the table, so it is the same list in every save and could
- * be hoisted — it deliberately is not, because a module-level cache of anything
- * graph-shaped is how a save's state leaks into another's, and this walk is
- * ninety rows.
- */
-export function structuralWires(): readonly NodeMapWire[] {
-  const wires: NodeMapWire[] = [];
-  for (const node of ECONOMIC_NODES) {
-    for (const slot of node.slots) {
-      for (const candidate of admissibleNodesFor(node.id, slot.id)) {
-        wires.push({
-          fromNodeId: candidate.id,
-          toNodeId: node.id,
-          kind: 'slot',
-          slotId: slot.id,
-          qtyPerUnit: slot.qtyPerUnit,
-          blocking: slot.blocking,
-          isDefault: candidate.id === slot.defaultNodeId,
-        });
-      }
-    }
-    for (const required of node.requires) {
-      wires.push({ fromNodeId: required, toNodeId: node.id, kind: 'requires', slotId: null, qtyPerUnit: 0, blocking: false, isDefault: false });
-    }
-  }
-  return wires;
 }
 
 /** Push `value` onto the bucket at `key`, creating it if needed. */
@@ -260,69 +213,4 @@ function push(map: Map<string, string[]>, key: string, value: string): void {
   const bucket = map.get(key);
   if (bucket === undefined) map.set(key, [value]);
   else bucket.push(value);
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Readers                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The nodes the viewer's own chain touches: every line they run, everything
- * those lines actually run on, transitively, and everything their lines feed
- * by default.
- *
- * This is what "open fitted to the player's own chain" means — a founder with
- * four lines in a ninety-node world should land on their four lines and what
- * feeds them, not on the whole economy at 12% zoom. Upstream follows the
- * viewer's **resolved fills** where they run the line and the table's defaults
- * beneath that, so a suite composed on a rival's API shows that API and not
- * the default one. Downstream is one step along default wires only: every
- * app a harness *could* run on is the map's business, not the chain's.
- */
-export function chainNodeIds(view: NodeMapView): readonly string[] {
-  const byId = new Map(view.nodes.map((entry) => [entry.nodeId, entry] as const));
-  const seed = view.nodes.filter((entry) => entry.yourProductId !== null).map((entry) => entry.nodeId);
-  const keep = new Set<string>(seed);
-
-  const defaultInputs = new Map<string, string[]>();
-  for (const wire of view.wires) {
-    if (wire.kind !== 'slot' || !wire.isDefault) continue;
-    const bucket = defaultInputs.get(wire.toNodeId);
-    if (bucket === undefined) defaultInputs.set(wire.toNodeId, [wire.fromNodeId]);
-    else bucket.push(wire.fromNodeId);
-  }
-
-  // Upstream: what the seeds run on, to the bottom of the chain. The tier
-  // invariant makes this terminate — every slot points strictly downward.
-  const frontier = [...seed];
-  while (frontier.length > 0) {
-    const current = frontier.pop();
-    if (current === undefined) continue;
-    const entry = byId.get(current);
-    const inputs = entry !== undefined && entry.yourProductId !== null ? entry.yourInputNodeIds : (defaultInputs.get(current) ?? []);
-    for (const inputId of inputs) {
-      if (keep.has(inputId)) continue;
-      keep.add(inputId);
-      frontier.push(inputId);
-    }
-  }
-
-  // Downstream: one step only. A founder cares who could buy from them; they do
-  // not need the whole demand side of the economy on the same screen.
-  for (const wire of view.wires) {
-    if (wire.kind !== 'slot' || !wire.isDefault) continue;
-    if (seed.includes(wire.fromNodeId)) keep.add(wire.toNodeId);
-  }
-
-  return view.nodes.filter((entry) => keep.has(entry.nodeId)).map((entry) => entry.nodeId);
-}
-
-/** One node and everything one wire away from it, for the focus control. */
-export function neighbourhoodNodeIds(view: NodeMapView, nodeId: string): readonly string[] {
-  const keep = new Set<string>([nodeId]);
-  for (const wire of view.wires) {
-    if (wire.toNodeId === nodeId) keep.add(wire.fromNodeId);
-    if (wire.fromNodeId === nodeId) keep.add(wire.toNodeId);
-  }
-  return view.nodes.filter((entry) => keep.has(entry.nodeId)).map((entry) => entry.nodeId);
 }

@@ -108,7 +108,7 @@ import { negativeCashQuarters, overdraftChargeUsd } from './solvency';
 import { appendFinancialQuarter } from './history';
 import { cloudRentUsd, createNodeCostCache, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
 import { totalDataPetabytes } from '../graph/data';
-import { unitCostOf } from '../graph/cost';
+import { unitCostOf, unitCostOfProduct } from '../graph/cost';
 import { executiveDialsFor, policyMarketingUsd, researchEnvelopeUsd } from './policy';
 import { sectorEconomy, sectorOf, sustainingCapitalUsd } from '../economy/sectors';
 import { companyEnergyCostFactor } from '../economy/regions';
@@ -308,7 +308,7 @@ function royaltyRevenueByCompany(draft: SessionState, cache: NodeCostCache | und
       if (nodeId === null) continue;
       const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
       if (units <= 0) continue;
-      for (const line of unitCostOf(draft, company, nodeId, cache).lines) {
+      for (const line of (unitCostOfProduct(draft, company, product, cache) ?? unitCostOf(draft, company, nodeId, cache)).lines) {
         if (!line.key.startsWith('licence:') || line.sourceCompanyId === null) continue;
         out.set(line.sourceCompanyId, money((out.get(line.sourceCompanyId) ?? 0) + units * line.amountUsd));
       }
@@ -563,7 +563,7 @@ export function resolveFinancials(
           supportCost += revenue * SEGMENT_SUPPORT_COST_SHARE[product.segment];
           continue;
         }
-        const cost = unitCostOf(draft, company, nodeId, costCache);
+        const cost = unitCostOfProduct(draft, company, product, costCache) ?? unitCostOf(draft, company, nodeId, costCache);
         // The number the Products screen shows is the number the profit and
         // loss books: stamped by the demand phase, read here, never recomputed
         // into a second opinion.

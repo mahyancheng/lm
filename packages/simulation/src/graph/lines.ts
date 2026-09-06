@@ -41,6 +41,9 @@ import {
 } from '../companies/balance';
 import { heldComputeUnits, servingComputeUnits } from '../companies/products';
 import { isNodeEconomyWorld } from '../economy/sectors';
+// `lineOf` picks the cheapest of several lines on one node, so it needs the
+// roll-up. The cycle is resolved at call time, never at module evaluation.
+import { lineUnitCostUsd } from './cost';
 
 /* -------------------------------------------------------------------------- */
 /*  Which node a line sells                                                    */
@@ -57,6 +60,18 @@ export function lineNodeIdOf(product: Product): string | null {
   const nodeId = product.nodeId;
   if (nodeId === undefined || nodeId === null) return null;
   return ECONOMIC_NODES_BY_ID[nodeId] === undefined ? null : nodeId;
+}
+
+/**
+ * Units a line sold in the quarter that has already closed.
+ *
+ * One expression, four readers: `nodeLinesOf` and `lineOf` build the line index
+ * from it, the market lands derived demand on it, and the projection's order
+ * book counts the units that crossed a wire with it. A second reading of
+ * "how many did this line sell" is how a wire and the market come to disagree.
+ */
+export function unitsSoldLastQuarterOf(product: Product): number {
+  return Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
 }
 
 /**
@@ -120,7 +135,7 @@ export function nodeLinesOf(state: SessionState): readonly NodeLineRef[] {
         companyId: company.id,
         productId: product.id,
         nodeId,
-        unitsSoldLastQuarter: Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers),
+        unitsSoldLastQuarter: unitsSoldLastQuarterOf(product),
         listPriceUsd: Math.max(0, product.pricePerSeat),
         installedBase: Math.max(0, product.installedBase ?? 0),
       });
@@ -188,30 +203,75 @@ export function ownedNodeIdsOf(state: SessionState): ReadonlySet<string> {
 }
 
 /**
- * This company's line on this node, or undefined.
+ * Every line this company runs on this node, in product order.
+ *
+ * A company may run more than one: the same node aimed at two different
+ * markets is two lines, with their own compositions, their own quality tiers
+ * and their own order pools. The roll-up keys a cost on the LINE for exactly
+ * that reason.
  *
  * With a cache the answer comes from its index and the company list is never
  * walked — including for a company with no lines at all, which is the common
  * case and would otherwise pay for a full scan on every input of every
  * roll-up.
  */
-export function lineOf(state: SessionState, companyId: string, nodeId: string, cache?: NodeCostCache): NodeLineRef | undefined {
-  if (cache !== undefined) return (cache.linesByCompany.get(companyId) ?? []).find((line) => line.nodeId === nodeId);
+export function linesOf(state: SessionState, companyId: string, nodeId: string, cache?: NodeCostCache): readonly NodeLineRef[] {
+  if (cache !== undefined) return (cache.linesByCompany.get(companyId) ?? []).filter((line) => line.nodeId === nodeId);
   const company = state.companies.find((candidate) => candidate.id === companyId);
-  if (company === undefined || !company.isActive) return undefined;
+  if (company === undefined || !company.isActive) return [];
+  const out: NodeLineRef[] = [];
   for (const product of company.products) {
     if (!product.isActive) continue;
     if (lineNodeIdOf(product) !== nodeId) continue;
-    return {
+    out.push({
       companyId,
       productId: product.id,
       nodeId,
-      unitsSoldLastQuarter: Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers),
+      unitsSoldLastQuarter: unitsSoldLastQuarterOf(product),
       listPriceUsd: Math.max(0, product.pricePerSeat),
       installedBase: Math.max(0, product.installedBase ?? 0),
-    };
+    });
   }
-  return undefined;
+  return out;
+}
+
+/**
+ * The line an internal transfer takes when this company makes `nodeId` itself,
+ * or undefined when it runs none.
+ *
+ * With one line — every line in the seeded world, and every line any company
+ * had before a node could carry two — this is that line and nothing is
+ * computed. With several, **the cheapest wins**: the lowest `unitCostUsd` its
+ * own composition rolls up to, ties broken by product id ascending so the
+ * answer never depends on the order products happen to sit in. A group does
+ * not pay itself a margin, so the honest price of an internal transfer is the
+ * least it costs the group to make the thing — and picking by anything else
+ * would let a founder make their downstream line dearer by opening a second
+ * upstream one.
+ *
+ * `depth` is the roll-up's own recursion depth, threaded through so that
+ * costing the siblings cannot restart `MAX_COST_DEPTH`. It is the guard, not
+ * the termination argument: a slot's role sits strictly below its owner, so
+ * the recursion descends the tier ladder either way.
+ */
+export function lineOf(state: SessionState, companyId: string, nodeId: string, cache?: NodeCostCache, depth = 0): NodeLineRef | undefined {
+  const lines = linesOf(state, companyId, nodeId, cache);
+  if (lines.length <= 1) return lines[0];
+  const company = state.companies.find((candidate) => candidate.id === companyId);
+  if (company === undefined) return lines[0];
+
+  let best: NodeLineRef | undefined;
+  let bestCostUsd = 0;
+  for (const line of lines) {
+    const product = productOf(state, companyId, line.productId);
+    if (product === undefined) continue;
+    const costUsd = lineUnitCostUsd(state, company, product, cache, depth);
+    if (best === undefined || costUsd < bestCostUsd || (costUsd === bestCostUsd && line.productId < best.productId)) {
+      best = line;
+      bestCostUsd = costUsd;
+    }
+  }
+  return best ?? lines[0];
 }
 
 /** Every live line on one node, in company order. Uses the cache's index when there is one. */

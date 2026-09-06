@@ -81,7 +81,7 @@ export type { CashAfterProps } from './CashAfter';
 export { chipStops, openCeiling, roundStep, snapToStep } from './sliderMath';
 export type { ChipStop } from './sliderMath';
 
-export { AccessBadge, CompanyChip, PersonChip, initialsOf } from './Chips';
+export { AccessBadge, CompanyChip, CompanyGlyph, PersonChip, companyTint, initialsOf } from './Chips';
 export type { AccessBadgeProps, CompanyChipProps, CompanyLike, PersonChipProps, PersonLike } from './Chips';
 
 export {

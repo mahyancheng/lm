@@ -36,7 +36,8 @@ import {
   costingBlockers,
   customerChoices,
   defaultFills,
-  defaultTarget,
+  defaultLineName,
+  defaultTargetFor,
   entryRoutes,
   fillSummary,
   industryChoices,
@@ -46,6 +47,7 @@ import {
   previewFills,
   priceSentence,
   roleCaption,
+  servedCaption,
   targetSentence,
   tierCaption,
   withChoice,
@@ -71,7 +73,10 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
 
   const options = useMemo(() => launchOptions(session, company), [session, company]);
   const [step, setStep] = useState<NodeLaunchStep>(0);
-  const [nodeId, setNodeId] = useState<string>(() => options.find((entry) => !entry.locked && !entry.alreadySold)?.node.id ?? options[0]?.node.id ?? '');
+  const [nodeId, setNodeId] = useState<string>(() => options.find((entry) => !entry.locked)?.node.id ?? options[0]?.node.id ?? '');
+  // Empty means "follow the default": the name tracks the node and the target
+  // until the founder types one, so two lines on a node are never both called
+  // the same thing by accident.
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [marketing, setMarketing] = useState('250000');
@@ -87,7 +92,9 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   const slots = useMemo(() => (node === undefined ? [] : slotOptions(session, company, node.id, null)), [session, company, node]);
   const routes = useMemo(() => (node === undefined ? null : nodeEntryRoutes(session, company, node.id)), [session, company, node]);
   const marketPriceUsd = node === undefined ? 0 : nodeMarketPriceUsd(session, node.id);
-  const aim = target ?? (node === undefined ? null : defaultTarget(node));
+  const served = useMemo(() => options.find((entry) => entry.node.id === nodeId)?.servedCells ?? [], [options, nodeId]);
+  const aim = target ?? (node === undefined ? null : defaultTargetFor(node, served));
+  const lineName = node === undefined || aim === null ? '' : defaultLineName(node, aim);
 
   // The preview costs the composition the founder is drafting at the tier they
   // are drafting it at — never the memoised line, because there is no line yet.
@@ -105,11 +112,13 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
 
   /* --- opening on a node ---------------------------------------------------- */
   function startOn(next: EconomicNode): void {
+    const cells = options.find((entry) => entry.node.id === next.id)?.servedCells ?? [];
     setNodeId(next.id);
-    setName((current) => (current.trim().length > 0 ? current : `${next.label} line`));
     setPrice(String(Math.round(nodeMarketPriceUsd(session, next.id))));
     setFills(defaultFills(slotOptions(session, company, next.id, null)));
-    setTarget(defaultTarget(next));
+    // The heaviest market this company does not already sell this node into:
+    // a second line aimed where the first sells shares its order pool.
+    setTarget(defaultTargetFor(next, cells));
     setSheetSlotId(null);
     setStep(1);
   }
@@ -131,8 +140,11 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   const priceUsd = Math.max(0, Number.parseFloat(price) || 0);
   const marketingUsd = Math.max(0, Number.parseFloat(marketing) || 0);
   const intent = useMemo(
-    () => (node === undefined || aim === null ? null : launchIntent({ node, name, priceUsd, marketingUsd, qualityTier: tier, target: aim, fills })),
-    [node, name, priceUsd, marketingUsd, tier, aim, fills],
+    () =>
+      node === undefined || aim === null
+        ? null
+        : launchIntent({ node, name: name.trim().length > 0 ? name : lineName, priceUsd, marketingUsd, qualityTier: tier, target: aim, fills }),
+    [node, name, lineName, priceUsd, marketingUsd, tier, aim, fills],
   );
   const preview = intent === null || step !== LAST_STEP ? null : validateIntent(intent);
 
@@ -242,8 +254,8 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
                       <div className="truncate text-[10.5px] text-ink-faint">
                         {option.unitLabel} · {formatMoney(nodeMarketPriceUsd(session, option.node.id))} on the market
                       </div>
+                      {servedCaption(option) === '' ? null : <div className="text-[10.5px] leading-snug text-brand">{servedCaption(option)}</div>}
                     </div>
-                    {option.alreadySold ? <Tag tone="info">Already yours</Tag> : null}
                     {option.locked ? <Tag tone="warn">Locked</Tag> : null}
                   </button>
                 </li>
@@ -356,7 +368,7 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
                 </div>
               )}
 
-              <p className="rounded-card bg-brand-wash px-3 py-2 text-[12px] leading-snug text-ink">{targetSentence(node, aim)}</p>
+              <p className="rounded-card bg-brand-wash px-3 py-2 text-[12px] leading-snug text-ink">{targetSentence(node, aim, served)}</p>
               <p className="text-[10.5px] leading-snug text-ink-faint">
                 Demand is modelled per industry and customer type: a line aimed at logistics enterprises grows with the logistics sector. You can re-aim a live line later.
               </p>
@@ -427,8 +439,11 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   className="mt-1 min-h-11 w-full rounded-card border border-hairline bg-surface px-3 text-[13px] text-ink"
-                  placeholder={`${node.label} line`}
+                  placeholder={lineName}
                 />
+                <span className="mt-1 block text-[10.5px] leading-snug text-ink-faint">
+                  Left blank it launches as “{lineName}”, which is how two lines on one node are told apart.
+                </span>
               </label>
 
               <SliderField

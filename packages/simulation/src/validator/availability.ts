@@ -268,12 +268,11 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
       // World 3: a launch names a NODE this company may produce, and the probe
       // offers exactly those — the same `launchableNodes` list the screen and
       // the `launchable_lines` lookup read, so an option the Chief of Staff
-      // offers is an option the validator accepts. World 1 and 2 keep the
-      // segment-shaped probe with no targets, which is all their catalogue
-      // could answer.
-      const openNodes = isNodeEconomyWorld(draft)
-        ? launchableNodes(draft, company).filter((entry) => !entry.locked && !entry.alreadySold)
-        : [];
+      // offers is an option the validator accepts. A node already sold is
+      // offered again: a second line on it, aimed at another market, is a
+      // launch the validator accepts. World 1 and 2 keep the segment-shaped
+      // probe with no targets, which is all their catalogue could answer.
+      const openNodes = isNodeEconomyWorld(draft) ? launchableNodes(draft, company).filter((entry) => !entry.locked) : [];
       const first = openNodes[0] ?? null;
       return {
         intent: {

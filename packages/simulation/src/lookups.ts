@@ -81,7 +81,7 @@ import { companyEnergyCostFactor } from './economy/regions';
 import { launchableLines } from './companies/categories';
 import { launchableNodes, lineNodeOf } from './graph/lines';
 import { defaultIndustryFor, fillsOf, slotForInput } from './graph/slots';
-import { describeSource, possessiveOf, proseLabel, withArticle } from './graph/describe';
+import { describeSource, possessiveOf, proseLabel, targetPhrase, withArticle } from './graph/describe';
 import { customersFor, suppliersFor } from './companies/supply';
 import { isMultiSectorWorld, isNodeEconomyWorld } from './economy/sectors';
 import { acceleratorListUsd, cloudRentUsd, reservedRentUsd } from './graph/lines';
@@ -475,7 +475,7 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
   // global achievement test off every world-3 path.
   if (isNodeEconomyWorld(draft)) {
     const nodes = launchableNodes(draft, company).slice(0, MAX_LOOKUP_ROWS);
-    const nodeRows: LaunchableLineRow[] = nodes.map(({ node, locked, missingNodeIds, alreadySold }) => ({
+    const nodeRows: LaunchableLineRow[] = nodes.map(({ node, locked, missingNodeIds }) => ({
       categoryId: node.id,
       label: clip(node.label),
       sectorId: clip(node.sector),
@@ -483,12 +483,17 @@ function launchableLinesLookup(draft: SessionState, company: Company): LookupRes
       referencePriceUsd: positive(nodeMarketPriceUsd(draft, node.id)),
       locked,
       missingNodeTitles: missingNodeIds.slice(0, 4).map((nodeId) => clip(ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId)),
+      // A node already sold still carries an intent: a second line on it,
+      // aimed at another market, is a launch the validator accepts.
       intent:
-        locked || alreadySold
+        locked
           ? null
           : {
               type: 'launch_product',
-              name: `${node.label} line`,
+              // Named for the cell it is aimed at, because a company may run
+              // more than one line on a node and two lines called "X line"
+              // are one duplicate name the validator would refuse.
+              name: `${node.label} for ${targetPhrase(defaultIndustryFor(node), primaryCustomerOf(node))}`,
               segment: primaryCustomerOf(node),
               categoryId: node.id,
               pricePerSeatUsd: positive(nodeMarketPriceUsd(draft, node.id)),

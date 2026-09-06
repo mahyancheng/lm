@@ -61,7 +61,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       // right after Company because it answers the same question one level
       // up: not "how is this company doing" but "how is the group doing".
       { href: '/group', label: 'Group', icon: 'boardTable', glyph: 'GR', blurb: 'Consolidated revenue, cash, debt and market value across every company you direct.' },
-      { href: '/products', label: 'Products', icon: 'box', glyph: 'PR', blurb: 'Products, pricing, customers, unit economics.' },
+      { href: '/products', label: 'Products', icon: 'box', glyph: 'PR', blurb: 'Who supplies each input, who buys the output, what each side pays.' },
       // The whole-economy overlay: the six-sector chain and its prices, the
       // market-share ladder, the regional freight tolls. One tap from home,
       // because every price on Financials is now a consequence of it.
@@ -76,7 +76,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     icon: 'compass',
     short: 'Frontier',
     items: [
-      { href: '/research', label: 'Research', icon: 'flask', glyph: 'RE', blurb: 'The generative technology graph and research programmes.' },
+      { href: '/research', label: 'Research', icon: 'flask', glyph: 'RE', blurb: 'What you can make, what you could research next, and what that would let you sell.' },
       { href: '/government', label: 'Government', icon: 'capitol', glyph: 'GO', blurb: 'Opportunities, bids, active contracts, compliance.' },
       { href: '/deal-room', label: 'Deal Room', icon: 'handshake', glyph: 'DR', blurb: 'M&A, licensing, partnerships, negotiations.' },
     ],

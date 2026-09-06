@@ -236,7 +236,7 @@ and what it may read.
 `graph/slots.ts` turns a fill into a route — `make`, `buy`, `market`, `empty`
 or `blocked` — and is the *only* place that happens. The roll-up, the market's
 derived demand, the production pass, the data pass, the launch preview, the
-canvas and the Chief of Staff all go through it, so the number a founder sees
+Connections screen and the Chief of Staff all go through it, so the number a founder sees
 before launching is the number the profit and loss books after
 (`world3Repair.test.ts` holds the roll-up to booked cost of goods to the
 cent). A fill is bounds-checked at every read, never trusted: a node the slot

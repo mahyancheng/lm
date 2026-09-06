@@ -112,3 +112,57 @@ rather than a byline restated as a headline, and still offers the "Why"
 ledger button after a real reload.
 `stage3-repro.js` predates the newspaper and still looks for the "Quarter in
 review" card, which no longer exists; it is kept as the record of that stage.
+
+# The Connections harness
+
+`connections.js` drives the world-3 Products and Research screens — the
+three-column Connections picture — the way a thumb does. New game → resolve
+`QUARTERS` quarters → Products by the bottom tab, then at each viewport
+(390×844 and 360×780 by default): the picture (a hub, a margin disc, at least
+one supplier, no horizontal scroll, every pill ≥ 44px tall, inside the viewport
+*and* inside the picture's own box); a live supplier tapped, which opens the
+line drawer on that slot's candidate sheet, where "Open market" is picked and
+the validator answers; "Open a line" walked end to end — What to sell (a node
+the company already sells, offered again with its caption and not locked) →
+Target (which must open on a market the company does not already serve) → Cost
+to make → Price (whose placeholder is the name a blank field would launch as) →
+Queue launch; and Research, where the same picture is asked of technology and
+the first option pill opens the node drawer for Standard → Start the programme.
+Any `pageerror` fails the run.
+
+Both screens draw the same `[data-testid="connections"]` element — one renderer
+asked two questions — so the harness tells them apart by the panel they sit in
+("Your line" on Products, "Your research" on Research), not by a second id.
+
+**Following the chain** needs a named buyer of the player's own line, and the
+seeded *Enterprise AI* opening has none at any quarter tried (1–10): rivals
+source from each other, not from a new entrant. Rather than skip the read-only
+rival view — the one place the privacy boundary is drawn in a browser — the
+script founds a second game on `WALK_BACKGROUND` (default *AI Infrastructure*,
+which opens with three buyers), taps a customer pill and asserts the rival's
+Connections: a Back row, their name in the header, and **no money figure on
+their hub** (`[data-testid="conn-hub-figures"]`). `results.json` records which
+game each check ran on.
+
+**Words, not only boxes.** A critic pass found every geometry check here
+passing while the screen printed "MODEL · 40 1…", "67,32…" and a market pill
+whose qualifying word "wanted" was allotted zero points, so truncation is now
+measured per element and **failed**, not noted: `scrollWidth > clientWidth` on a
+group header, on a slot's recipe line or on a pill's data row, and
+`scrollHeight > clientHeight` on a two-line clamped name. `results.json` records
+`clippedHeaders`, `clippedNames` and `clippedDetails` per screen alongside the
+picture's own height and the page's.
+
+The drive also checks three things the walk used to get wrong: a market pill
+opens the line drawer with its Target section on screen rather than 800 points
+below the fold; "Open a line" is not offered over somebody else's picture; and
+tapping the player's own company among a rival's suppliers keeps a Back row that
+returns to the rival rather than stranding the walk.
+
+```
+BASE_URL=http://localhost:3100 node apps/web/e2e/connections.js
+```
+
+Screenshots land in `apps/web/e2e/shots/connections/` (gitignored) with a
+`results.json`. Optional: `OUT_DIR`, `QUARTERS` (default 2), `VIEWPORTS`,
+`BACKGROUND` (default "Enterprise AI"), `WALK_BACKGROUND`.

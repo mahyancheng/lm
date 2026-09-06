@@ -401,8 +401,8 @@ cutOffNoticeQuarter | null, changedQuarter | null }` — and
 `Product.segment`. Both are optional on the schema so a world-1 or world-2
 save reads unchanged. `resolveFill` in `graph/slots.ts` is the one place a
 fill becomes a route, and every reader — the roll-up, the market's derived
-demand, the production and data passes, the launch preview, the canvas, the
-Chief of Staff — goes through it: the fill (or the launch preview's
+demand, the production and data passes, the launch preview, the Connections
+screen, the Chief of Staff — goes through it: the fill (or the launch preview's
 override), then the node (the fill's, else the slot's default; a node the
 slot does not admit falls back to the default rather than being trusted),
 then `make` when the company runs a line on it and the fill names itself or
@@ -514,9 +514,13 @@ not a promise.
 price, quality, producer count — and under the picked node every route,
 make yourself, each named seller, open market, all tappable and none
 disabled. The line drawer carries the same rows, the target, the cost by
-slot and "Sell this to other companies". The canvas draws slot ports under
-each of the founder's cards, the filled node with its supplier beneath, the
-delivery device one column right, and the target under the card. The Chief
+slot and "Sell this to other companies". The Connections screen draws the
+line as three columns — per slot on the left, the route it runs on with the
+price it pays and one dashed alternative behind it
+(`MAX_ALTERNATIVES_PER_SLOT`, with a "+N more" on the header and every
+admissible route still in the slot's own candidate sheet), the line itself on
+the hub with its cost, price and margin, and its buyers and target market on
+the right. The Chief
 of Staff describes a line with `describeLine` — *"your AI software suite on
 Basalt Compute's inference API with an agent harness from the open market,
 aimed at logistics enterprises"* — answers `unit_cost` by slot and

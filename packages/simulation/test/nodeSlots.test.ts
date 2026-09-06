@@ -36,7 +36,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ActionIntent, ActionValidationResult, Company, Product, ResolverContext, SessionState, SubmittedAction } from '@frontier/contracts';
-import { economicNodeById, type EconomicNode } from '@frontier/contracts';
+import { SECTORS, economicNodeById, type EconomicNode, type Sector } from '@frontier/contracts';
 import { createRng } from '@frontier/shared';
 import { createWorld3Session } from '../src/scenario/world3';
 import { resolveProducts } from '../src/companies/products';
@@ -46,7 +46,7 @@ import { priceNodes, cellEndDemandUnits, industrySizeFactors, marketCellWeight, 
 import { effectiveQuality, resolveNodeProduction } from '../src/graph/production';
 import { OPEN_MARKET_PREMIUM, unitCostOf } from '../src/graph/cost';
 import { createNodeCostCache } from '../src/graph/lines';
-import { SWITCH_QUALITY_FACTOR, cellKey, cellOf, resolveFill, resolveFills, slotForInput, targetOf, withFill } from '../src/graph/slots';
+import { SWITCH_QUALITY_FACTOR, cellKey, cellOf, defaultIndustryFor, resolveFill, resolveFills, slotForInput, targetOf, withFill } from '../src/graph/slots';
 import { nodeSellersFor, slotOptions } from '../src/graph/options';
 import { validateAction } from '../src/validator/index';
 import { BatchBudget } from '../src/validator/context';
@@ -647,14 +647,40 @@ describe('publishing in world 3', () => {
 });
 
 describe('the composition actions', () => {
-  it('refuses a second launch on a node the company already sells, and says to change its slots', () => {
+  it('accepts a second launch on a node the company already sells, and warns only when it is aimed at the same market', () => {
     const state = bareWorld();
     const company = state.companies.find((entry) => entry.sector === 'consumer') as Company;
     company.ownedNodes = [...(company.ownedNodes ?? []), APP];
-    company.products = [lineOn(APP, 1_000, 30)];
-    const verdict = verdictFor(state, company, launchOf(APP, []));
-    expect(verdict.status).toBe('rejected');
-    expect(verdict.reasons.join(' ')).toContain('change its slots');
+    const opening = lineOn(APP, 1_000, 30);
+    company.products = [opening];
+
+    // The same node, aimed where the opening line already sells: allowed, and
+    // told that the two will draw on the one order pool. It used to be refused
+    // outright with "change its slots".
+    const node = economicNodeById(APP) as EconomicNode;
+    const served = defaultIndustryFor(node);
+    const same = verdictFor(state, company, launchOf(APP, [], served));
+    expect(same.status, same.reasons.join(' | ')).not.toBe('rejected');
+    expect(same.reasons.join(' ')).toContain('one order pool');
+    expect(same.reasons.join(' ')).toContain(opening.name);
+
+    // Aimed at another industry it is an ordinary launch: nothing is said
+    // about a shared pool, because there is not one.
+    const elsewhere = SECTORS.find((sector) => sector !== served) as Sector;
+    const other = verdictFor(state, company, launchOf(APP, [], elsewhere));
+    expect(other.status, other.reasons.join(' | ')).not.toBe('rejected');
+    expect(other.reasons.join(' ')).not.toContain('one order pool');
+
+    // Re-aiming a live line onto a sibling's cell is the same trap and carries
+    // the same advisory; re-aiming it where it already sells says nothing,
+    // because a line is not its own clash.
+    const second = { ...lineOn(APP, 500, 30), id: 'prd_second', name: 'Second app line', targetIndustry: elsewhere };
+    company.products = [opening, second];
+    const onto = verdictFor(state, company, { type: 'set_target_market', productId: second.id, targetIndustry: served, segment: 'enterprise' });
+    expect(onto.status, onto.reasons.join(' | ')).not.toBe('rejected');
+    expect(onto.reasons.join(' ')).toContain('one order pool');
+    const stay = verdictFor(state, company, { type: 'set_target_market', productId: second.id, targetIndustry: elsewhere, segment: 'enterprise' });
+    expect(stay.reasons.join(' ')).not.toContain('one order pool');
   });
 
   it('drops an off-table slot with a clamp, refuses an emptied required slot, and clamps a source that cannot supply to the open market', () => {

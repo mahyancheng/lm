@@ -78,7 +78,7 @@ import { chooseSupplierDefault, defaultSupplyTerms, resolveSupplyLine } from './
 import { isNodePublic } from '../research/projection';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { CAPACITY_UNIT_USD, createNodeCostCache, drawPerUnitOf, lineNodeIdOf, lineNodeOf } from '../graph/lines';
-import { unitCostOf } from '../graph/cost';
+import { unitCostOf, unitCostOfProduct } from '../graph/cost';
 import { npcFillsFor, npcSupplyTermsFor } from './npcSlots';
 import { activeCompanies, activeProducts, capabilityIndex, clamp, emitEvent, money, ratio, roleHeadcount, totalHeadcount, unit } from './util';
 
@@ -737,7 +737,7 @@ export function applyNodeDefaults(draft: SessionState, ctx: ResolverContext, sta
     for (const product of activeProducts(company)) {
       const nodeId = lineNodeIdOf(product);
       if (nodeId === null || told('set_product_price', product.id)) continue;
-      const unitCostUsd = unitCostOf(draft, company, nodeId, cache).unitCostUsd;
+      const unitCostUsd = (unitCostOfProduct(draft, company, product, cache) ?? unitCostOf(draft, company, nodeId, cache)).unitCostUsd;
       if (!(unitCostUsd > 0)) continue;
       const floorUsd = Math.round((unitCostUsd / (1 - NPC_MIN_GROSS_MARGIN)) * 100) / 100;
       // Where the line wants to be: at the price its own node settled at, and

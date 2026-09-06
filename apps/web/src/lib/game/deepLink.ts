@@ -10,6 +10,7 @@
  */
 
 const LAUNCH_CATEGORY_KEY = 'frontier:launchCategoryId';
+const LINE_KEY = 'frontier:openLineId';
 const RESEARCH_NODE_KEY = 'frontier:openNodeId';
 const SECTOR_FOCUS_KEY = 'frontier:focusSector';
 const NETWORK_CHARACTER_KEY = 'frontier:openCharacterId';
@@ -37,6 +38,11 @@ function takeKey(key: string): string | null {
 export const setPendingLaunchCategory = (categoryId: string): void => setKey(LAUNCH_CATEGORY_KEY, categoryId);
 /** Read once on the Products screen's mount. Consumes the pending value. */
 export const takePendingLaunchCategory = (): string | null => takeKey(LAUNCH_CATEGORY_KEY);
+
+/** Call right before navigating to Products, to have Connections open on this line. */
+export const setPendingLine = (productId: string): void => setKey(LINE_KEY, productId);
+/** Read once on the Connections screen's mount. Consumes the pending value. */
+export const takePendingLine = (): string | null => takeKey(LINE_KEY);
 
 /** Call right before navigating to Research, to have that node's drawer open. */
 export const setPendingResearchNode = (nodeId: string): void => setKey(RESEARCH_NODE_KEY, nodeId);

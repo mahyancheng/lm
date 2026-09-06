@@ -28,11 +28,11 @@
  *    policy with its trade stated in the engine's own constants.
  *
  * The unit economics and every route come from the engine — `unitCostOf`,
- * `slotOptions`, `nodeMapFor` — so the margin here is the margin the profit
- * and loss books and the relationships shown are the ones the projection holds.
+ * `slotOptions`, `customersOf` — so the margin here is the margin the profit
+ * and loss books and the buyers shown are the ones the engine resolves.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionValidationResult, DataCollectionLevel, EconomyReport, Product, SessionState, SupplyTerms } from '@frontier/contracts';
 import { DATA_COLLECTION_LEVELS, economicNodeById, nodeMarketPriceUsd, quarterLabel, rivalPressureFor } from '@frontier/contracts';
 import {
@@ -40,12 +40,12 @@ import {
   DATA_POLICY_REPUTATION,
   biggestCostSentence,
   costBreakdown,
+  customersOf,
   dataPetabytesOf,
   dataPolicyOf,
   defaultIndustryFor,
   describeLine,
   lineNodeIdOf,
-  nodeMapFor,
   repriceForecast,
   sellerPriceFactor,
   slotOptions,
@@ -80,8 +80,14 @@ export interface NodeLineDrawerProps {
   readonly report?: EconomyReport | null;
   readonly companyId?: string;
   readonly companyNames?: ReadonlyMap<string, string>;
-  /** Open straight onto this slot's candidates — from a hanging node on the canvas. */
+  /** Open straight onto this slot's candidates — from a supplier pill on the picture. */
   readonly initialSlotId?: string | null;
+  /**
+   * Open with the Target section already showing this cell — from a market
+   * pill on the picture. A preselection, not a commitment: the re-aim is still
+   * queued by the button under it.
+   */
+  readonly initialAim?: TargetChoice | null;
 }
 
 /** What each collection level buys and costs, in the engine's own numbers. */
@@ -104,9 +110,14 @@ export function NodeLineDrawer({
   companyId = '',
   companyNames,
   initialSlotId = null,
+  initialAim = null,
 }: NodeLineDrawerProps): React.JSX.Element {
   const { queueAction, unqueueAction } = useGameActions();
   const company = useActiveCompany();
+  // Where "Change the target market" actually has to land. The Connections
+  // picture opens this drawer from a market pill with the section preselected,
+  // and preselected 800 points below nine other sections is not reachable.
+  const targetRef = useRef<HTMLDivElement | null>(null);
   const [priceText, setPriceText] = useState('');
   const [windDown, setWindDown] = useState(2);
   const [priceResult, setPriceResult] = useState<ActionValidationResult | null>(null);
@@ -147,26 +158,21 @@ export function NodeLineDrawer({
   const names = useMemo(() => companyNames ?? new Map(session.companies.map((entry) => [entry.id, entry.name])), [companyNames, session.companies]);
   const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, names, company.id)), [node, cost, names, company.id]);
 
-  // Who builds on this line: the projection's own relationships, which resolve
-  // every buyer's fills the way the engine does rather than reading them raw.
+  // Who builds on this line: `customersOf` resolves every buyer's fills the way
+  // the engine does, and carries the order book — the units each of them drew
+  // from this line last quarter, which is half mine to see because it is my
+  // own line they drew it from.
   const buyers = useMemo(() => {
     if (product === null || nodeId === null || !isOwnCompany) return [];
-    const view = nodeMapFor(session, company.id);
-    const seen = new Set<string>();
-    const out: { readonly companyId: string; readonly name: string; readonly nodeLabel: string }[] = [];
-    for (const wire of view.supplyWires) {
-      if (wire.supplierCompanyId !== company.id || wire.inputNodeId !== nodeId || wire.buyerCompanyId === company.id) continue;
-      const key = `${wire.buyerCompanyId}|${wire.buyerNodeId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        companyId: wire.buyerCompanyId,
-        name: view.companyNames[wire.buyerCompanyId] ?? wire.buyerCompanyId,
-        nodeLabel: economicNodeById(wire.buyerNodeId)?.label ?? wire.buyerNodeId,
-      });
-    }
-    return out;
-  }, [session, company.id, product, nodeId, isOwnCompany]);
+    return customersOf(session, company.id, product.id)
+      .filter((row) => !row.internal)
+      .map((row) => ({
+        companyId: row.buyerCompanyId,
+        name: names.get(row.buyerCompanyId) ?? row.buyerCompanyId,
+        nodeLabel: economicNodeById(row.buyerNodeId)?.label ?? row.buyerNodeId,
+        units: row.unitsDrawnLastQuarter,
+      }));
+  }, [session, company.id, product, nodeId, isOwnCompany, names]);
 
   const marketPriceUsd = nodeId === null ? 0 : nodeMarketPriceUsd(session, nodeId);
   const unitLabel = node?.unitLabel ?? 'unit';
@@ -199,7 +205,7 @@ export function NodeLineDrawer({
     setPolicyResult(null);
     setSlotResults({});
     setDrafts({});
-    setAim(null);
+    setAim(initialAim);
     setAimResult(null);
     setPublishOpenToAll(product?.supplyTerms?.openToAll ?? true);
     setPublishPrice(String(Math.round(product?.supplyTerms?.pricePerUnitUsd ?? product?.pricePerSeat ?? 0)));
@@ -209,7 +215,16 @@ export function NodeLineDrawer({
     setPendingAimId(null);
     setPendingTermsId(null);
     setSheetSlotId(initialSlotId);
-  }, [product?.id, initialSlotId]);
+  }, [product?.id, initialSlotId, initialAim]);
+
+  // Opened on a market pill: scroll the Target section to the top of the
+  // drawer, after the layout that renders it. A slot opens its candidate sheet
+  // over everything, so it needs no scroll.
+  useEffect(() => {
+    if (product === null || initialAim === null) return;
+    const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: 'start' }));
+    return () => cancelAnimationFrame(frame);
+  }, [product?.id, initialAim]);
 
   const target: TargetChoice | null =
     product === null || node === undefined
@@ -391,7 +406,7 @@ export function NodeLineDrawer({
 
           {/* --- the target: who it is aimed at ----------------------------- */}
           {!isOwnCompany || target === null ? null : (
-            <div>
+            <div ref={targetRef} data-testid="line-target-section" className="scroll-mt-2">
               <SectionHeading rule>Target market</SectionHeading>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {customerChoices(node).map((entry) => (
@@ -640,7 +655,14 @@ export function NodeLineDrawer({
                       <span className="min-w-0 truncate text-ink-dim">
                         {buyer.name} — {buyer.nodeLabel}
                       </span>
-                      {blocked.includes(buyer.companyId) ? <Tag tone="loss">cut off</Tag> : null}
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        {buyer.units === null ? null : (
+                          <span className="figure text-[10.5px] text-ink-faint">
+                            {formatCount(buyer.units)} {unitLabel}
+                          </span>
+                        )}
+                        {blocked.includes(buyer.companyId) ? <Tag tone="loss">cut off</Tag> : null}
+                      </span>
                     </div>
                   ))}
                 </div>

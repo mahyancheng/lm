@@ -50,7 +50,7 @@ import { customersPerUnit, servingComputeUnits } from './products';
 import { categoryOf, capacityUsd } from './categories';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { lineNodeIdOf } from '../graph/lines';
-import { unitCostOf } from '../graph/cost';
+import { unitCostOf, unitCostOfProduct } from '../graph/cost';
 import { nodeSellersFor } from '../graph/options';
 import { SWITCH_QUALITY_FACTOR, fillsOf, withFill } from '../graph/slots';
 import { activeCompanies, activeProducts, clamp, companyActions, emitEvent, intentsOfType, money, ratio, unit, usdLabel } from './util';
@@ -382,7 +382,7 @@ function nodeDependenceOn(draft: SessionState, company: Company, supplierCompany
     if (revenue <= 0) continue;
     const nodeId = lineNodeIdOf(product);
     if (nodeId === null) continue;
-    const cost = unitCostOf(draft, company, nodeId);
+    const cost = unitCostOfProduct(draft, company, product) ?? unitCostOf(draft, company, nodeId);
     if (!(cost.unitCostUsd > 0)) continue;
     let fromSupplier = 0;
     for (const line of cost.lines) if (line.sourceCompanyId === supplierCompanyId && line.sourceKind === 'buy') fromSupplier += line.amountUsd;

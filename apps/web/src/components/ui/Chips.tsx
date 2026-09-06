@@ -155,14 +155,29 @@ const ARCHETYPE_TINT: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The tint one company glyph draws in: its archetype's pastel, the brand when
+ * it is the seat's own, the neutral roof when the archetype is redacted.
+ *
+ * Exported because the Connections picture draws a company glyph without a
+ * whole `CompanyChip` around it, and a second copy of this map is exactly how
+ * one screen's Basalt ends up a different colour from another's.
+ */
+export function companyTint(archetype: string | null | undefined, own: boolean): string {
+  if (own) return 'var(--color-brand)';
+  return ARCHETYPE_TINT[archetype ?? ''] ?? 'var(--color-build-roof)';
+}
+
+/**
  * A company, as a flat isometric-lite building.
  *
  * Two volumes, two tones, glass rectangles for windows — the same drawing
  * language as the world map and the office, at 24px. The tint carries the
  * archetype; the player's own company gets the brand.
  */
-function CompanyGlyph({ tint, size }: { readonly tint: string; readonly size: 'sm' | 'md' }): React.JSX.Element {
-  const px = size === 'sm' ? 22 : 28;
+export function CompanyGlyph({ tint, size }: { readonly tint: string; readonly size: 'xs' | 'sm' | 'md' }): React.JSX.Element {
+  // `xs` is the Connections pill's 20-point mark: the same glyph, two points
+  // narrower, because every point off it is a point onto the pill's name.
+  const px = size === 'xs' ? 20 : size === 'sm' ? 22 : 28;
   return (
     <svg
       viewBox="0 0 32 32"
@@ -202,7 +217,7 @@ export function CompanyChip({
   badges = 'none',
   className,
 }: CompanyChipProps): React.JSX.Element {
-  const tint = own ? 'var(--color-brand)' : (ARCHETYPE_TINT[company.archetype ?? ''] ?? 'var(--color-build-roof)');
+  const tint = companyTint(company.archetype, own);
   const line = subtitle ?? (company.sectorId ?? company.archetype)?.replace(/_/g, ' ') ?? null;
 
   const inner = (

@@ -64,27 +64,36 @@ export function Panel({
         // The header WRAPS. A phone-width panel with two buttons in the actions
         // slot used to push them past the card's right edge and widen the
         // document; now the row breaks and the buttons sit under the title.
-        <header className="flex min-h-[44px] shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-hair px-4 py-2.5">
-          <div className="flex min-w-0 flex-1 basis-40 items-center gap-2.5">
-            {mark !== undefined ? (
-              <IconChip name={mark} tone={iconTone} />
-            ) : icon !== undefined ? (
-              <span
-                aria-hidden="true"
-                className={cx(
-                  'flex size-7 shrink-0 items-center justify-center rounded-chip border text-[13px] leading-none',
-                  TONE_CHIP[iconTone],
-                )}
-              >
-                {icon}
-              </span>
-            ) : null}
-            <div className="min-w-0">
-              {title !== undefined ? <h2 className="label-caps truncate">{title}</h2> : null}
-              {subtitle !== undefined ? <p className="mt-0.5 truncate text-[11px] text-ink-faint">{subtitle}</p> : null}
+        //
+        // The subtitle gets its **own** full-width line under that row. Sharing
+        // the row with a tag and an "Open ›" left it about 155 of the 435 points
+        // its sentence needed, so every card on the five tabs described itself
+        // in a sentence that stopped mid-word. Two lines of the card's whole
+        // width fit the descriptions the tabs actually carry; anything longer
+        // clamps, and the sheet's own header repeats it in full.
+        <header className="flex min-h-[44px] shrink-0 flex-col justify-center gap-y-1 border-b border-hair px-4 py-2.5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <div className="flex min-w-0 flex-1 basis-40 items-center gap-2.5">
+              {mark !== undefined ? (
+                <IconChip name={mark} tone={iconTone} />
+              ) : icon !== undefined ? (
+                <span
+                  aria-hidden="true"
+                  className={cx(
+                    'flex size-7 shrink-0 items-center justify-center rounded-chip border text-[13px] leading-none',
+                    TONE_CHIP[iconTone],
+                  )}
+                >
+                  {icon}
+                </span>
+              ) : null}
+              {/* Wraps rather than truncates: a card whose actions carry words
+                  left "HARBOUR 390 · YOU…" as the card's own identity. */}
+              {title !== undefined ? <h2 className="label-caps min-w-0">{title}</h2> : null}
             </div>
+            {actions !== undefined ? <div className="flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
           </div>
-          {actions !== undefined ? <div className="flex min-w-0 flex-wrap items-center gap-1.5">{actions}</div> : null}
+          {subtitle !== undefined ? <p className="line-clamp-2 text-[11px] leading-snug text-ink-faint">{subtitle}</p> : null}
         </header>
       ) : null}
       <div

@@ -70,7 +70,8 @@ export function TabBar({ tabs, value, onChange, variant = 'underline', className
             disabled={tab.disabled}
             onClick={() => onChange(tab.id)}
             className={cx(
-              '-mb-px flex items-center gap-1.5 border-b-[3px] px-0.5 pt-1 pb-2.5 text-[12px] font-semibold whitespace-nowrap transition-colors',
+              // `min-h-11`: a thumb owes 44 points here as everywhere else.
+              '-mb-px flex min-h-11 items-center gap-1.5 border-b-[3px] px-0.5 pt-1 pb-2.5 text-[12px] font-semibold whitespace-nowrap transition-colors',
               active ? 'border-brand text-brand' : 'border-transparent text-ink-faint hover:text-ink-dim',
               tab.disabled === true ? 'cursor-not-allowed opacity-40' : '',
             )}

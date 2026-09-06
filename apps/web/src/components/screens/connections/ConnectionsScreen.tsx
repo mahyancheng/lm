@@ -310,6 +310,7 @@ export function ConnectionsScreen({ initialLineId = null }: ConnectionsScreenPro
       {!isOwn ? null : (
         <LineTables
           session={session}
+          company={company}
           active={activeLines}
           sunset={closedLines}
           onOpenLine={openFromTable}

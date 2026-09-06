@@ -17,7 +17,7 @@ import { formatMoney, formatPct, formatQuarterCount, formatScore } from '@fronti
 import { SOLVENCY_NEGATIVE_QUARTERS, negativeCashQuarters } from '@frontier/simulation';
 import { StatCard } from '@/components/ui';
 import { sheetHref } from '@/lib/sheets';
-import { headcountOf } from '../reporting/util';
+import { headcountOf, incomeStatementOf } from '../reporting/util';
 
 /**
  * `formatQuarterCount` writes "6 quarters"; a 2-up card wants the figure big
@@ -53,6 +53,15 @@ export function FiguresGrid({ company, metrics, marketCap, quotes }: FiguresGrid
   const runwayFigure = runway === null ? null : runwayParts(runway);
   const headcount = headcountOf(company);
 
+  // Margins come off the filed statement, not off `companyMetrics`. The metrics
+  // row is a projection of exactly this arithmetic (`recomputeMetrics`: revenue
+  // − cogs − payroll − marketing − R&D, over revenue), so after a resolution the
+  // two are the same figure — but before the first one the seeded row has never
+  // been computed, and Home printed "Operating margin -201%" one tap from the
+  // Company tab's "+$1,646,466" off the same accounts. One source.
+  const pnl = incomeStatementOf(company.financials);
+  const booked = company.financials.revenueQuarterly > 0;
+
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <StatCard
@@ -69,14 +78,14 @@ export function FiguresGrid({ company, metrics, marketCap, quotes }: FiguresGrid
         iconName="coins"
         value={formatMoney(company.financials.revenueQuarterly)}
         delta={metrics === null ? undefined : metrics.revenueGrowthYoY}
-        hint={metrics === null ? 'This quarter' : `Year on year · ${formatMoney(metrics.revenueTtm)} trailing`}
+        hint={metrics === null ? 'This quarter' : `${formatMoney(metrics.revenueTtm)} trailing`}
         href={sheetHref('financials')}
       />
       <StatCard
         label="Gross margin"
         iconName="ledger"
-        value={metrics === null ? '—' : formatPct(metrics.grossMarginPct)}
-        hint={metrics === null ? 'Computed at the first resolution' : `Operating margin ${formatPct(metrics.operatingMarginPct)}`}
+        value={booked ? formatPct(pnl.grossMarginPct) : '—'}
+        hint={booked ? `Operating margin ${formatPct(pnl.operatingMarginPct)}` : 'No revenue booked yet'}
         href={sheetHref('financials')}
       />
       <StatCard
@@ -94,7 +103,7 @@ export function FiguresGrid({ company, metrics, marketCap, quotes }: FiguresGrid
         value={formatMoney(marketCap)}
         delta={listed && lastQuote !== null ? lastQuote.return : undefined}
         spark={listed ? quotes.map((quote) => quote.price) : undefined}
-        hint={listed ? 'Last traded close' : 'Private — fundamental anchor'}
+        hint={listed ? 'Last traded close' : 'Private · anchor value'}
         href={sheetHref('exchange')}
       />
       <StatCard

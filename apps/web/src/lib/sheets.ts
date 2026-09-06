@@ -300,7 +300,10 @@ export interface LegacyRoute {
  */
 export const LEGACY_ROUTES: Readonly<Record<string, LegacyRoute>> = {
   '/command-centre': { tab: 'home', sheet: null },
-  '/company': { tab: 'company', sheet: 'company' },
+  // The one old address that is also a tab path: `/company` never reaches the
+  // `[...legacy]` catch-all, so the registry says what the runtime does — the
+  // tab, whose first card opens the sheet in one tap.
+  '/company': { tab: 'company', sheet: null },
   '/group': { tab: 'company', sheet: 'group' },
   '/products': { tab: 'company', sheet: 'products' },
   '/sector': { tab: 'world', sheet: 'sector' },
@@ -431,7 +434,10 @@ export const SHEET_OF_ACTION: Readonly<Record<ActionType, SheetId | null>> = {
   bid_government: 'government',
   decline_opportunity: 'government',
   form_consortium: 'government',
-  meet_regulator: 'government',
+  // Asking for a meeting is a call to a person: the Network sheet's own
+  // `PersonDrawer` offers it on any regulator or official. The Government sheet
+  // carries competitions and compliance, and no such control.
+  meet_regulator: 'network',
   social_post: 'social',
   give_guidance: null,
   respond_crisis: null,

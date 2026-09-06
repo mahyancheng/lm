@@ -193,6 +193,7 @@ const restOfPage = [
     <EconomyCard
       sectorLabel="Consumer AI"
       regionLabel="North America"
+      multiSector
       priceIndex={104}
       shortage={12}
       supplyUsd={4_200_000_000}
@@ -243,9 +244,43 @@ describe('the rest of the World page', () => {
 
   it('says a single-sector session is one, rather than printing a zero', () => {
     const single = renderToStaticMarkup(
-      <EconomyCard sectorLabel="Frontier AI" regionLabel="North America" priceIndex={null} shortage={null} supplyUsd={null} tollPct={null} tollCaption={null} />,
+      <EconomyCard
+        sectorLabel="Frontier AI"
+        regionLabel="North America"
+        multiSector={false}
+        priceIndex={null}
+        shortage={null}
+        supplyUsd={null}
+        tollPct={null}
+        tollCaption={null}
+      />,
     );
     expect(single).toContain('This session runs a single sector');
+  });
+
+  it('does not call a six-sector world single-sector because no quarter has resolved', () => {
+    // `priceIndex` is null until the first resolution files a sector row. Reading
+    // that as "one industry, one price" told a six-sector session the opposite of
+    // what its own Sector sheet says one tap later.
+    const unresolved = renderToStaticMarkup(
+      <EconomyCard
+        sectorLabel="Consumer AI"
+        regionLabel="North America"
+        multiSector
+        priceIndex={null}
+        shortage={null}
+        supplyUsd={null}
+        tollPct={null}
+        tollCaption={null}
+      />,
+    );
+    expect(unresolved).not.toContain('This session runs a single sector');
+    expect(unresolved).toContain('Your sector price');
+    // The Sector sheet's own words for the same missing row.
+    expect(unresolved).toContain('Set when the first quarter resolves');
+    expect(readFileSync(`${DIR}../sector/SectorScreen.tsx`, 'utf8')).toContain('Set when the first quarter resolves');
+    // The tab asks the sheet's question, not the price row's.
+    expect(SOURCE).toContain('sectorsPresent([company, ...view.visibleCompanies]).length > 1');
   });
 
   it('never writes an old route into an address', () => {

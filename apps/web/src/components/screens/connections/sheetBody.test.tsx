@@ -25,7 +25,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { Company, Product, SessionState } from '@frontier/contracts';
 import { createWorld3Session, slotOptions } from '@frontier/simulation';
 import { formatCount, formatMoney } from '@frontier/shared';
-import { LineStatCards, lineColumns, lineFigures, unitsOf } from '../products/lineStats';
+import { LineStatCards, lineColumns, lineFigures, lineUnitCostUsd, unitsOf } from '../products/lineStats';
 import { SlotCandidateSheet, namedSellerOf } from '../products/SlotCandidateSheet';
 import { choiceOfRoute } from '../products/nodeLaunch';
 import type { Column } from '@/components/ui';
@@ -71,7 +71,7 @@ describe('the Products sheet states what the lines booked', () => {
     const figures = lineFigures(state, company, active);
     // The roll-up, exactly: price × units and unit cost × units, per line.
     expect(figures.revenueUsd).toBe(active.reduce((total, line) => total + line.pricePerSeat * unitsOf(line), 0));
-    expect(figures.cogsUsd).toBe(active.reduce((total, line) => total + (line.unitCostUsd ?? 0) * unitsOf(line), 0));
+    expect(figures.cogsUsd).toBe(active.reduce((total, line) => total + lineUnitCostUsd(state, company, line) * unitsOf(line), 0));
     expect(figures.grossProfitUsd).toBe(figures.revenueUsd - figures.cogsUsd);
     expect(figures.activeCount).toBe(active.length);
 
@@ -85,6 +85,43 @@ describe('the Products sheet states what the lines booked', () => {
     for (const href of hrefs) expect(firstSegmentOf(href)).toBe('/company');
   });
 
+  it('costs the opening quarter off the live roll-up, not off an unstamped zero', () => {
+    // The production phase stamps `unitCostUsd`; before the first resolution it
+    // is zero on every line. Summing those zeros printed "Cost of goods $0" and
+    // "Blended margin 100%" directly under a picture whose hub said "Cost $868"
+    // and whose disc said 65%, and one tap from a Company card reading a gross
+    // profit computed at the engine's own margin.
+    const { state, company } = world();
+    const active = company.products.filter((product) => product.isActive);
+    expect(active.every((line) => (line.unitCostUsd ?? 0) === 0)).toBe(true);
+
+    const figures = lineFigures(state, company, active);
+    expect(figures.cogsUsd).toBeGreaterThan(0);
+    expect(figures.grossProfitUsd).toBeLessThan(figures.revenueUsd);
+    // The picture's own margin, to the whole percent the disc draws.
+    const engineMargin = active[0]?.grossMarginPct ?? 0;
+    expect(Math.round(figures.blendedMarginPct * 100)).toBe(Math.round(engineMargin * 100));
+    // …and the same figure reaches the Lines table's Unit cost column.
+    const costColumn = lineColumns(state, company).find((column) => column.key === 'cost');
+    const firstLine = active[0];
+    if (costColumn?.render === undefined || firstLine === undefined) throw new Error('no unit-cost column');
+    expect(renderToStaticMarkup(<span>{costColumn.render(firstLine, 0)}</span>)).toContain(
+      formatMoney(lineUnitCostUsd(state, company, firstLine), 'full'),
+    );
+    expect(lineUnitCostUsd(state, company, firstLine)).toBeGreaterThan(0);
+  });
+
+  it('keeps the stamped cost once the engine has written one', () => {
+    // After a resolution the filed cost is the one the ledger booked, and the
+    // sheet reads it rather than recomputing a roll-up the quarter did not use.
+    const { state, company } = world();
+    const line = company.products.find((product) => product.isActive);
+    if (line === undefined) throw new Error('the seeded company has no line');
+    const stamped: Product = { ...line, unitCostUsd: 1234 };
+    expect(lineUnitCostUsd(state, company, stamped)).toBe(1234);
+    expect(lineFigures(state, company, [stamped]).cogsUsd).toBe(1234 * unitsOf(stamped));
+  });
+
   it('lists one row per active line, and keeps the closed ones for comparatives', () => {
     const { state, company } = world();
     const active = company.products.filter((product) => product.isActive);
@@ -94,7 +131,7 @@ describe('the Products sheet states what the lines booked', () => {
     // `DataTable` reaches for the app router, which no server render has, so
     // the rows are drawn through the column definitions the table is handed —
     // which is where every figure on a row actually comes from.
-    const columns = lineColumns(state);
+    const columns = lineColumns(state, company);
     expect(columns.map((column) => column.header)).toEqual(['Line', 'Price', 'Unit cost', 'Units', 'Margin', 'Market']);
 
     const rows = active.map((line) => renderToStaticMarkup(<Row columns={columns} line={line} />));

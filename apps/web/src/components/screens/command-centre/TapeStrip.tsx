@@ -26,11 +26,17 @@ export interface TapeStripProps {
   readonly view: PlayerView;
   /** How many listed names to show alongside your own. */
   readonly limit?: number;
+  /**
+   * The closing line under the rows. Off where the same anchor is already on
+   * the page — Home states it on its own Market cap figure — so the strip does
+   * not spend forty points repeating a card two thumb-flicks above it.
+   */
+  readonly footnote?: boolean;
 }
 
 const ROW = 'press-pop tap-target flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-raised';
 
-export function TapeStrip({ session, view, limit = 5 }: TapeStripProps): React.JSX.Element {
+export function TapeStrip({ session, view, limit = 5, footnote = true }: TapeStripProps): React.JSX.Element {
   const own = view.ownCompany;
   const rows = instrumentRows(session, view).filter((row) => row.instrument.kind === 'in_world_equity');
   const ownRow = rows.find((row) => row.instrument.companyId === own.id) ?? null;
@@ -95,10 +101,12 @@ export function TapeStrip({ session, view, limit = 5 }: TapeStripProps): React.J
         );
       })}
 
-      <p className="border-t border-hair px-3 py-2.5 text-[11px] text-ink-faint">
-        Quarterly closes on the in-world exchange.
-        {anchor === null ? null : ` Your anchor is ${formatMoney(anchor.anchorValueUsd)} at ${formatPct(anchor.confidence)} confidence.`}
-      </p>
+      {!footnote ? null : (
+        <p className="border-t border-hair px-3 py-2.5 text-[11px] text-ink-faint">
+          Quarterly closes on the in-world exchange.
+          {anchor === null ? null : ` Your anchor is ${formatMoney(anchor.anchorValueUsd)} at ${formatPct(anchor.confidence)} confidence.`}
+        </p>
+      )}
     </div>
   );
 }

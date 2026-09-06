@@ -42,7 +42,7 @@ import { OfficeSceneCompact } from '@/components/scenes/office';
 import { debtServiceView } from '@/components/screens/financials/headroom';
 import { ROLE_LABEL, blendedMarketCompUsd, headcountOf } from '@/components/screens/people/labels';
 import { productServingUnits } from '@/components/screens/products/labels';
-import { humanise, incomeStatementOf } from '@/components/screens/reporting/util';
+import { archetypeLabel, incomeStatementOf } from '@/components/screens/reporting/util';
 import { PLAYER_ID, controlledCompanyRows, hasGroup, useActiveCompany, useCompanyMetrics, usePlayerView, useSession } from '@/lib/game';
 import { sheetHref } from '@/lib/sheets';
 import {
@@ -133,7 +133,7 @@ export function CompanyTab(): React.JSX.Element {
     <div className="flex flex-col gap-4">
       <FloorCard
         companyName={company.name}
-        summary={`${humanise(company.archetype)} · ${company.headquartersCity}`}
+        summary={`${archetypeLabel(company.archetype)} · ${company.headquartersCity}`}
         scene={<OfficeSceneCompact href={sheetHref('company')} />}
         headcount={headcount}
         morale={employees.morale}

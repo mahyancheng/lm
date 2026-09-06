@@ -142,7 +142,7 @@ export function StreetScreen(): React.JSX.Element {
         <EmptyState
           icon="vault"
           title="This world has no institutional layer"
-          message="Funds in this session are blocs on a register that vote and sell blocks — they have no cash, no clock and no agency. The Street exists in the multi-sector world, where eleven institutions allocate capital every quarter."
+          message="Funds in this session are blocs on a register that vote and sell blocks — they have no cash, no clock and no agency, so there is no roster, no short book and no offer inbox to open. The register card on the Market tab is the whole answer here: your stake, who else holds you, disclosed shorts and any campaign against you are all stated on it. The Street fills in in the multi-sector world, where eleven institutions allocate capital every quarter."
         />
       </>
     );

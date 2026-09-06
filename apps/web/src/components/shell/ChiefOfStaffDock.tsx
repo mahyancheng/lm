@@ -163,7 +163,13 @@ function Dock(): React.JSX.Element | null {
           Bottom-left on a phone: the right corner belongs to a screen's own
           floating action (Social's compose), and two floating controls a thumb
           needs must not overlap. Lifted clear of the tab bar and its safe-area
-          inset, so it sits in the reach zone rather than under the home bar. */}
+          inset, so it sits in the reach zone rather than under the home bar.
+
+          This corner is claimed on every tab, and a fixed element never scrolls
+          clear of another: anything a page pins to the bottom leaves the gutter
+          in `shell/dockMetrics.ts` free (Play's Resolve bar is the one such
+          control). Keep the pill inside `DOCK_RESERVE_PX` — a wider dock would
+          cover the control it was measured against. */}
       {open ? null : (
         <button
           type="button"

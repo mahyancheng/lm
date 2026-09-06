@@ -39,8 +39,12 @@ import { NeedsDeciding } from '@/components/screens/home/NeedsDeciding';
 import { ObjectivesCard } from '@/components/screens/home/ObjectivesCard';
 import { OffersCard } from '@/components/screens/home/OffersCard';
 
-/** Listed names beside your own on Home. The full tape is one tap away. */
-const TAPE_LIMIT = 3;
+/**
+ * Listed names beside your own on Home. The full tape is one tap away on the
+ * Market tab, which carries the same strip at its own length — Home is a
+ * glance, and four rows of somebody else's prices is not a glance.
+ */
+const TAPE_LIMIT = 2;
 
 export function HomeTab(): React.JSX.Element {
   const session = useSession();
@@ -99,7 +103,9 @@ export function HomeTab(): React.JSX.Element {
         }
         flush
       >
-        <TapeStrip session={session} view={view} limit={TAPE_LIMIT} />
+        {/* No closing line: the anchor it states is already the hint on Home's
+            own Market cap figure, three cards above. */}
+        <TapeStrip session={session} view={view} limit={TAPE_LIMIT} footnote={false} />
       </Panel>
     </>
   );

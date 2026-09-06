@@ -108,7 +108,8 @@ export function StatCard({
         </div>
         {spark !== undefined && spark.length > 1 ? <Sparkline values={spark} width={72} height={24} /> : null}
       </div>
-      {hint !== undefined ? <p className="mt-1.5 truncate text-[10px] text-ink-faint">{hint}</p> : null}
+      {/* Two lines, not a cut: the hint is where the figure's working goes. */}
+      {hint !== undefined ? <p className="mt-1.5 line-clamp-2 text-[10px] leading-snug text-ink-faint">{hint}</p> : null}
     </>
   );
 

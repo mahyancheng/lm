@@ -84,7 +84,7 @@ export function PaperCard({ masthead, lead, briefs, narrative, controversy }: Pa
                     href={sheetHref('news')}
                     className="tap-target flex items-center gap-2 rounded-chip px-1 transition-colors hover:bg-raised"
                   >
-                    <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{item.headline}</span>
+                    <span className="line-clamp-2 min-w-0 flex-1 text-[12px] leading-snug text-ink">{item.headline}</span>
                     <span className="figure shrink-0 text-[10px] text-ink-faint">{item.who.name}</span>
                   </Link>
                 </li>
@@ -94,9 +94,12 @@ export function PaperCard({ masthead, lead, briefs, narrative, controversy }: Pa
         </>
       )}
 
-      {/* The five sections, each opening the paper already turned to it. */}
-      <div className="scroll-x no-scrollbar -mx-1 mt-3 border-t border-hair px-1 pt-2.5">
-        <div className="flex w-max items-center gap-1.5">
+      {/* The five sections, each opening the paper already turned to it. They
+          WRAP rather than scroll sideways: the fifth chip is the living map,
+          the one thing reviewers said was buried, and a sideways drag inside a
+          card is exactly how it stayed buried. */}
+      <div className="-mx-1 mt-3 border-t border-hair px-1 pt-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {NEWS_SECTIONS.map((section: NewsSection) => (
             <Link
               key={section}
@@ -287,7 +290,14 @@ export function StandingCard({ founderIndex, companyValue, wealth, network }: St
 
 export interface EconomyCardProps {
   readonly sectorLabel: string;
-  /** The committed sector row, or null in a world that never priced its sectors. */
+  /**
+   * Whether this session has more than one sector, on the same test the Sector
+   * sheet uses (`sectorsPresent(everyone).length > 1`). A null price index means
+   * only that no quarter has resolved yet, so the two questions are asked
+   * separately: the card once told a six-sector world it ran a single sector.
+   */
+  readonly multiSector: boolean;
+  /** The committed sector row, or null before the first quarter resolves. */
   readonly priceIndex: number | null;
   readonly shortage: number | null;
   readonly supplyUsd: number | null;
@@ -299,6 +309,7 @@ export interface EconomyCardProps {
 
 export function EconomyCard({
   sectorLabel,
+  multiSector,
   priceIndex,
   shortage,
   supplyUsd,
@@ -306,9 +317,9 @@ export function EconomyCard({
   tollCaption,
   regionLabel,
 }: EconomyCardProps): React.JSX.Element {
-  if (priceIndex === null) {
+  if (!multiSector) {
     return (
-      <TabCard sheet="sector" title="The economy" subtitle="The six-sector chain and what each link costs.">
+      <TabCard sheet="sector" title="The economy" subtitle="What your own link of the chain costs.">
         <EmptyState
           compact
           icon="globe"
@@ -329,7 +340,13 @@ export function EconomyCard({
       <KeyValueGrid
         columns={2}
         items={[
-          { label: 'Your sector price', value: formatCount(priceIndex), hint: '100 is the anchor you learn once', tone: priceIndex > 100 ? 'warn' : priceIndex < 100 ? 'info' : undefined },
+          {
+            label: 'Your sector price',
+            value: priceIndex === null ? '—' : formatCount(priceIndex),
+            // The sheet's own words for the same null, so a tap cannot contradict the card.
+            hint: priceIndex === null ? 'Set when the first quarter resolves' : '100 is the anchor you learn once',
+            tone: priceIndex !== null && priceIndex > 100 ? 'warn' : priceIndex !== null && priceIndex < 100 ? 'info' : undefined,
+          },
           { label: 'Shortage', value: shortage === null ? '—' : `${shortage}%`, tone: shortage !== null && shortage > 0 ? 'loss' : undefined },
           { label: 'Sector supply', value: supplyUsd === null ? '—' : formatMoney(supplyUsd), hint: 'Annualised revenue of everyone in it' },
           { label: `Freight toll · ${regionLabel}`, value: tollPct === null ? '—' : `${tollPct}%`, tone: tollPct !== null && tollPct > 0 ? 'loss' : undefined },

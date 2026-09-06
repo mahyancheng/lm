@@ -4,9 +4,9 @@
  * Objectives — explicit goals, with no fixed victory screen.
  *
  * Each row is the label, the standing in the metric's own units
- * (`objectiveReading`) and the bar. The one-line description keeps the "why"
- * on the page; it is clipped rather than wrapped so that three objectives stay
- * three rows on a phone, and the full sentence is on the row's title.
+ * (`objectiveReading`) and the bar. The description keeps the "why" on the page
+ * and wraps to two lines: an objective is a sentence a founder has to read, and
+ * clipping it at one line stopped every one of them mid-word.
  */
 
 import type { PlayerView } from '@frontier/contracts';
@@ -32,7 +32,9 @@ export function ObjectivesCard({ objectives }: ObjectivesCardProps): React.JSX.E
                   {objectiveReading(objective.metric, objective.currentValue, objective.targetValue)}
                 </span>
               </div>
-              <p className="mt-0.5 truncate text-[11.5px] text-ink-faint">{objective.description}</p>
+              {/* Two lines, whole sentence: these are the goals of the game, and
+                  a phone cut every one of them off mid-word at one line. */}
+              <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-ink-faint">{objective.description}</p>
               {/* No value label: the reading above already states the standing
                   in the metric's own units, and a second figure over every bar
                   is a row of noise on a phone. */}

@@ -147,3 +147,54 @@ describe('text tokens meet WCAG AA on every surface', () => {
     expect(declarations).not.toContain('#566573');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/*  Sentences finish                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A phone is 390 points wide and the primitives were cutting their own prose.
+ *
+ * The critic counted 7 clipped elements on Home, 5 on Company, 7 on Market, 7 on
+ * World and 4 on Play at 390: every card's one-line description, every objective
+ * of the game, and the Market tab's first card *title* — "HARBOUR 390 · YOU…",
+ * the card's own identity. All three came from the same habit of putting
+ * `truncate` on a line of prose that shares its row with a tag and an "Open ›".
+ *
+ * The rule these pin: a **figure** may be clipped (it is beside its own label),
+ * an **identity or a sentence** may not — it wraps, and clamps at two lines.
+ */
+describe('the primitives let a sentence finish', () => {
+  const read = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('gives a panel’s subtitle its own full-width line, clamped at two', () => {
+    const panel = read('./Panel.tsx');
+    // The subtitle is outside the row that carries the title and the actions.
+    expect(panel.indexOf('{subtitle !== undefined')).toBeGreaterThan(panel.indexOf('{actions !== undefined'));
+    expect(panel).toContain('<p className="line-clamp-2 text-[11px] leading-snug text-ink-faint">{subtitle}</p>');
+    expect(panel).not.toContain('truncate text-[11px]');
+  });
+
+  it('lets a panel’s title wrap rather than stop mid-word', () => {
+    expect(read('./Panel.tsx')).toContain('<h2 className="label-caps min-w-0">{title}</h2>');
+  });
+
+  it('clamps a stat card’s hint instead of cutting it', () => {
+    expect(read('./StatCard.tsx')).toContain('className="mt-1.5 line-clamp-2 text-[10px] leading-snug text-ink-faint"');
+  });
+
+  it('prints a whole objective, which is the goal of the game', () => {
+    expect(read('../screens/home/ObjectivesCard.tsx')).toContain(
+      '<p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-ink-faint">{objective.description}</p>',
+    );
+  });
+
+  it('gives a sheet the same gutter as the page it replaced', () => {
+    // `main` is `px-3 sm:px-5` (AppShell); a `px-5` drawer made every one of the
+    // twenty moved bodies lay out 16 points narrower than it did as a route.
+    const drawer = read('./Drawer.tsx');
+    expect(drawer).toContain('overflow-y-auto px-3 py-4 sm:px-5');
+    expect(read('../shell/AppShell.tsx')).toContain('px-3 pt-4 sm:px-5');
+    expect(drawer.match(/(?<!sm:)px-5/g)).toBeNull();
+  });
+});

@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import type { Company } from '@frontier/contracts';
 import { Icon, IconChip, Tag, sectorLabel, sectorOf } from '@/components/ui';
 import { sheetHref } from '@/lib/sheets';
-import { humanise } from '../reporting/util';
+import { archetypeLabel } from '../reporting/util';
 
 export interface FloorCardProps {
   readonly company: Company;
@@ -37,9 +37,11 @@ export function FloorCard({ company, quarter, scene }: FloorCardProps): React.JS
       >
         <IconChip name="building" tone="brand" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[14px] leading-tight font-semibold text-ink">{company.name}</span>
-          <span className="block truncate text-[11.5px] text-ink-faint">
-            {humanise(company.archetype)} · {sectorLabel(sectorOf(company))} · {company.headquartersCity}
+          {/* The company's own name and what it is: wrapped, never cut. This is
+              the identity card, and at 360 the second line lost its last word. */}
+          <span className="line-clamp-2 block text-[14px] leading-tight font-semibold text-ink">{company.name}</span>
+          <span className="line-clamp-2 block text-[11.5px] leading-snug text-ink-faint">
+            {archetypeLabel(company.archetype)} · {sectorLabel(sectorOf(company))} · {company.headquartersCity}
           </span>
         </span>
         <Tag tone="neutral">{quarter}</Tag>

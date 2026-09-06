@@ -37,10 +37,12 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Company, DealProposal, PlayerView, SessionState } from '@frontier/contracts';
 import { DealProposalSchema, NewGameSetupSchema, quarterLabel } from '@frontier/contracts';
+import { formatPct } from '@frontier/shared';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import { createSession, getEngine } from '../../../lib/game/engine';
 import { marketCapOf, metricsFor, projectPlayerView, quotesFor } from '../../../lib/game/playerView';
 import { LEGACY_ROUTES, SHEETS, firstSegmentOf, sheetFrom, sheetHref, tabPath } from '../../../lib/sheets';
+import { incomeStatementOf } from '../reporting/util';
 import { buildFeed, type FeedItem } from '../command-centre/feed';
 import { offerInbox } from '../street/model';
 import { FiguresGrid } from './FiguresGrid';
@@ -166,6 +168,38 @@ describe('the six figures', () => {
       sheetHref('exchange'),
       sheetHref('people'),
     ]);
+  });
+
+  it('reads its margins off the filed statement, so Home and the Company tab agree', () => {
+    // Before the first resolution `companyMetrics` is a seeded row the engine
+    // has never computed: on the opening world-3 board it says the operating
+    // margin is -201% while the accounts it projects say +43%, and the Company
+    // tab's Financials card prints the accounts. Home now prints them too.
+    const opening = createSession({ setup: SETUP });
+    const openingView = projectPlayerView(opening);
+    const openingCompany = openingView.ownCompany;
+    const seeded = metricsFor(opening, openingCompany.id);
+    const pnl = incomeStatementOf(openingCompany.financials);
+    expect(seeded).not.toBeNull();
+    // The hazard is real in this world, or the assertion below proves nothing.
+    expect(seeded?.operatingMarginPct).not.toBeCloseTo(pnl.operatingMarginPct, 3);
+
+    const markup = renderToStaticMarkup(
+      <FiguresGrid
+        company={openingCompany}
+        metrics={seeded}
+        marketCap={marketCapOf(opening, openingCompany.id)}
+        quotes={[]}
+      />,
+    );
+    expect(markup).toContain(`Operating margin ${formatPct(pnl.operatingMarginPct)}`);
+    expect(markup).not.toContain(formatPct(seeded?.operatingMarginPct ?? 0));
+    expect(markup).toContain(formatPct(pnl.grossMarginPct));
+
+    // …and after a resolution the projection and the statement are the same
+    // arithmetic, so nothing moved for a played game.
+    const played = metricsFor(session, company.id);
+    expect(played?.operatingMarginPct ?? 0).toBeCloseTo(incomeStatementOf(company.financials).operatingMarginPct, 6);
   });
 
   it('carries the solvency reading on cash and the open roles on headcount', () => {

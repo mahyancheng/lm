@@ -23,7 +23,7 @@ import { useMemo } from 'react';
 import type { LeaderboardBoard } from '@frontier/contracts';
 import { quarterLabel, regionTollRowFor, sectorRowFor } from '@frontier/contracts';
 import { projectEditionIndex, projectPublicRecord } from '@frontier/simulation';
-import { regionLabel, regionOf, sectorLabel, sectorOf } from '@/components/ui';
+import { regionLabel, regionOf, sectorLabel, sectorOf, sectorsPresent } from '@/components/ui';
 import { PAPER_NAME } from '@/components/screens/news/Masthead';
 import { filterFeed, topByReach } from '@/components/screens/feed/filters';
 import { buildDirectory } from '@/components/screens/network/directory';
@@ -160,6 +160,10 @@ export function WorldTab(): React.JSX.Element {
   const region = regionOf(company);
   const sectorRow = sectorRowFor(report, sector);
   const tollRow = regionTollRowFor(report, region);
+  // The Sector sheet's own test for "is this a multi-sector world", so the card
+  // and the sheet a tap away answer that question the same way. A missing price
+  // row is a quarter that has not resolved, which is a different question.
+  const multiSector = useMemo(() => sectorsPresent([company, ...view.visibleCompanies]).length > 1, [company, view.visibleCompanies]);
   const controllerName =
     tollRow === null || tollRow.dominantControllerId === null ? null : companyNameOf(view, tollRow.dominantControllerId);
 
@@ -194,6 +198,7 @@ export function WorldTab(): React.JSX.Element {
       <EconomyCard
         sectorLabel={sectorLabel(sector)}
         regionLabel={regionLabel(region)}
+        multiSector={multiSector}
         priceIndex={sectorRow?.priceIndex ?? null}
         shortage={sectorRow?.shortage ?? null}
         supplyUsd={sectorRow?.supplyUsd ?? null}

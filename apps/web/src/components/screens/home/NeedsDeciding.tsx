@@ -21,7 +21,7 @@ import { AlertFeed } from '../command-centre/AlertFeed';
 import type { FeedItem } from '../command-centre/feed';
 
 /** Lines shown on Home. The rest are counted, not listed. */
-export const FEED_LIMIT = 5;
+export const FEED_LIMIT = 4;
 
 export interface NeedsDecidingProps {
   readonly items: readonly FeedItem[];
@@ -40,7 +40,7 @@ export function NeedsDeciding({ items, queued, unconfirmed }: NeedsDecidingProps
       title="Needs deciding"
       iconName="bell"
       iconTone={unconfirmed > 0 ? 'warn' : 'neutral'}
-      subtitle="Everything in committed state that is currently asking for an answer."
+      subtitle="Everything in committed state asking for an answer."
       actions={<Tag tone={unconfirmed > 0 ? 'warn' : 'neutral'}>{items.length === 1 ? '1 line' : `${items.length} lines`}</Tag>}
     >
       <Link
@@ -57,7 +57,9 @@ export function NeedsDeciding({ items, queued, unconfirmed }: NeedsDecidingProps
         </span>
       </Link>
 
-      <AlertFeed items={shown} />
+      {/* Flat on Home: three headings over four rows is a filing system, and
+          every row already carries its tone and the sheet that resolves it. */}
+      <AlertFeed items={shown} grouped={false} />
 
       {hidden > 0 ? (
         <Link href={tabPath('play')} className="tap-target mt-2 flex items-center gap-1 text-[11px] text-ink-faint hover:text-ink-dim">

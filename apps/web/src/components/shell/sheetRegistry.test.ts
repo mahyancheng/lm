@@ -117,13 +117,29 @@ describe('every old address', () => {
       if (entry === undefined) continue;
       expect(TAB_IDS).toContain(entry.tab);
       if (entry.sheet === null) {
-        // Only the two screens that became tabs in their own right.
-        expect(['/command-centre', '/end-quarter']).toContain(route);
+        // The screens that became tabs in their own right.
+        expect(['/command-centre', '/end-quarter', '/company']).toContain(route);
       } else {
         expect(SHEETS[entry.sheet]).toBeDefined();
         expect(SHEETS[entry.sheet].tab).toBe(entry.tab);
       }
     }
+  });
+
+  it('never claims a sheet for an address the catch-all can never see', () => {
+    // `[...legacy]` only runs for paths with no page of their own, so an old
+    // address that is *also* a tab path — `/company` — is served by the tab and
+    // never redirected. A registry entry naming a sheet there would be a
+    // promise the runtime does not keep, and typing the old address by hand
+    // would land somewhere the map says it does not.
+    const tabPaths = new Set(TAB_IDS.map((tab) => tabPath(tab)));
+    for (const [route, entry] of Object.entries(LEGACY_ROUTES)) {
+      if (!tabPaths.has(route)) continue;
+      expect(entry.sheet, `${route} is a tab path and cannot open a sheet on arrival`).toBeNull();
+      expect(legacyHref(route)).toBe(route);
+    }
+    // …and that case really exists, or the loop above proves nothing.
+    expect(Object.keys(LEGACY_ROUTES).some((route) => tabPaths.has(route))).toBe(true);
   });
 
   it('rewrites to the new one, keeping the query and the fragment', () => {
@@ -151,6 +167,20 @@ describe('every instruction', () => {
       if (sheet === null) expect(hrefOfAction(type)).toBeNull();
       else expect(hrefOfAction(type)).toBe(sheetHref(sheet));
     }
+  });
+
+  it('sends a founder to the sheet that really carries the control', () => {
+    // Three the audit found pointing at the wrong screen, plus the fourth found
+    // by walking all fifty-two afterwards: asking a regulator for a meeting is
+    // a call to a person, and the Government sheet has no such control — the
+    // Network sheet's own person drawer is where the instruction is queued.
+    const dir = fileURLToPath(new URL('../screens/', import.meta.url));
+    expect(SHEET_OF_ACTION.meet_regulator).toBe('network');
+    expect(readFileSync(`${dir}network/actions.ts`, 'utf8')).toContain('meet_regulator');
+    expect(readFileSync(`${dir}government/GovernmentScreen.tsx`, 'utf8')).not.toContain('meet_regulator');
+    expect(SHEET_OF_ACTION.allocate_compute).toBe('research');
+    expect(SHEET_OF_ACTION.set_logistics_toll).toBe('sector');
+    expect(SHEET_OF_ACTION.transfer_between_group).toBe('group');
   });
 
   // Eleven of fifty-two have no panel anywhere. They are named on the Play tab

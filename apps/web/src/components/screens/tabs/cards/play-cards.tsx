@@ -22,6 +22,7 @@ import type { Company, EnginePhaseTiming } from '@frontier/contracts';
 import { RESOLUTION_PHASES } from '@frontier/contracts';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { CashAfter, EmptyState, Icon, KeyValueGrid, Panel, ProgressBar, StatCard, Tag, cx } from '@/components/ui';
+import { DOCK_RESERVE_CLASS } from '@/components/shell/dockMetrics';
 import { DeskScene, SealStamp, StickyNote } from '@/components/screens/end-quarter/desk';
 import { titleise } from '@/components/screens/end-quarter/intents';
 import { sheetHref } from '@/lib/sheets';
@@ -186,7 +187,7 @@ export function SealCard({
 
       <div className="mt-4 flex flex-col gap-3">
         <ProgressBar
-          label="Committed against cash on hand"
+          label="Committed against cash"
           value={Math.min(outflowUsd, availableUsd)}
           max={Math.max(availableUsd, 1)}
           tone={overCommitted ? 'loss' : share > 0.6 ? 'warn' : 'brand'}
@@ -228,8 +229,15 @@ export interface SealBarProps {
  *
  * Wired to exactly the same gate as the seal: it opens `ConfirmDialog`, the
  * dialog still requires the typed word, and a blocked action still refuses the
- * submission. Nothing floats over it — the action-queue tray is gone, and the
- * queue it used to carry is the card above.
+ * submission. The action-queue tray is gone, and the queue it used to carry is
+ * the card above.
+ *
+ * The Chief of Staff dock is `fixed` over the bottom-left corner of every tab,
+ * and two fixed elements never scroll clear of each other — so the caption goes
+ * **above** the button (clear of the dock's 44px band) and the button row keeps
+ * `DOCK_RESERVE_CLASS` to its left. Without that reserve the dock is drawn on
+ * top of the left quarter of the one control the tab exists for, and a tap
+ * there opens the Chief of Staff instead of the confirmation.
  */
 export function SealBar({ quarter, canSubmit, resolving, queued, blocked, onArm }: SealBarProps): React.JSX.Element {
   return (
@@ -238,21 +246,24 @@ export function SealBar({ quarter, canSubmit, resolving, queued, blocked, onArm 
         className="sticky z-10 -mx-3 border-t border-hair bg-base/95 px-3 pt-2.5 pb-3 backdrop-blur sm:hidden"
         style={{ bottom: 'calc(var(--bottombar-height) + env(safe-area-inset-bottom, 0px))' }}
       >
-        <button
-          type="button"
-          className="icon-knockout-brand btn btn-primary btn-lg press-pop w-full"
-          disabled={!canSubmit}
-          onClick={onArm}
-          aria-label={`Resolve ${quarter} — opens a confirmation you must complete`}
-        >
-          <Icon name="stamp" size={19} accent="inherit" />
-          {resolving ? 'Resolving…' : `Resolve ${quarter}`}
-        </button>
-        <p className="mt-1.5 text-center text-[10.5px] leading-relaxed text-ink-faint">
+        <p className="mb-1.5 text-center text-[10.5px] leading-relaxed text-ink-faint">
           {canSubmit
             ? `${queued} instruction${queued === 1 ? '' : 's'} · you type the word to confirm`
             : `${blocked} action${blocked === 1 ? '' : 's'} still need your confirmation`}
         </p>
+        <div className="flex items-center gap-2">
+          <span className={DOCK_RESERVE_CLASS} aria-hidden="true" />
+          <button
+            type="button"
+            className="icon-knockout-brand btn btn-primary btn-lg press-pop min-w-0 flex-1"
+            disabled={!canSubmit}
+            onClick={onArm}
+            aria-label={`Resolve ${quarter} — opens a confirmation you must complete`}
+          >
+            <Icon name="stamp" size={19} accent="inherit" />
+            {resolving ? 'Resolving…' : `Resolve ${quarter}`}
+          </button>
+        </div>
       </div>
       {/* The scroll region's foot padding exceeds the bar's offset by this much,
           so the bar comes to rest exactly on the tab bar rather than above it. */}

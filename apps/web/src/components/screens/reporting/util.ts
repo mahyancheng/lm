@@ -17,6 +17,7 @@ import type {
   BalanceSheet,
   CapTable,
   Company,
+  CompanyArchetype,
   CompanyFundamentals,
   DominantNarrative,
   Financials,
@@ -74,6 +75,28 @@ export function humanise(value: string): string {
   const spaced = value.replace(/_/g, ' ').trim();
   if (spaced.length === 0) return value;
   return `${spaced.charAt(0).toUpperCase()}${spaced.slice(1)}`;
+}
+
+/**
+ * What kind of company this is, in the words a founder chose it with.
+ *
+ * `humanise` renders an id and cannot know that "ai" is an acronym, so it wrote
+ * "Enterprise ai" on the first line of the first card on Home while the setup
+ * chat two screens earlier said "Enterprise AI". Eight archetypes, named once.
+ */
+const ARCHETYPE_LABEL: Readonly<Record<CompanyArchetype, string>> = {
+  frontier_lab: 'Frontier lab',
+  enterprise_ai: 'Enterprise AI',
+  consumer_ai: 'Consumer AI',
+  infrastructure: 'Infrastructure',
+  chip_maker: 'Chip maker',
+  cloud: 'Cloud',
+  data: 'Data',
+  defence_ai: 'Defence AI',
+};
+
+export function archetypeLabel(archetype: CompanyArchetype): string {
+  return ARCHETYPE_LABEL[archetype] ?? humanise(archetype);
 }
 
 /** Title-cases every word: `fund_al_bahr` → `Al Bahr` once the prefix is dropped. */

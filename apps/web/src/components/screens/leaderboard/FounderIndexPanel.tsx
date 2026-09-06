@@ -31,12 +31,12 @@ const COMPONENT_LABEL: Readonly<Record<FounderIndexComponent, string>> = {
 };
 
 const COMPONENT_SOURCE: Readonly<Record<FounderIndexComponent, string>> = {
-  wealth: 'founder_wealth board',
-  enterprise: 'company_value board',
-  innovation: 'innovation board',
-  reputation: 'reputation board',
-  network: 'network board',
-  government: 'government board',
+  wealth: 'the founder wealth board',
+  enterprise: 'the company value board',
+  innovation: 'the innovation board',
+  reputation: 'the reputation board',
+  network: 'the network board',
+  government: 'the government board',
   financialResilience: 'recomputed from runway',
   sessionObjectives: 'recomputed from objectives',
 };

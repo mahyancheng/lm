@@ -32,6 +32,7 @@ import { buildSubmittedAction, createSession, needsConfirmation, playerCompanyOf
 import type { QueuedActionEntry } from '../../../lib/game/provider';
 import { CHIEF_ONLY_ACTIONS, LEGACY_ROUTES, SHEETS, firstSegmentOf, sheetFrom, sheetHref } from '../../../lib/sheets';
 import { TABS } from '../../../lib/nav';
+import { DOCK_RESERVE_CLASS, DOCK_RESERVE_PX } from '../../shell/dockMetrics';
 import { quickPromptsFor } from '../chief-of-staff/quickPrompts';
 import { titleise } from '../end-quarter/intents';
 import { BeforeYouSubmitCard, LastQuarterCard, PipelineCard, QuarterCard, SealBar, SealCard } from './cards/play-cards';
@@ -40,6 +41,7 @@ import { ChiefCard, chiefOnlyRows } from './cards/play-chief';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 const SOURCE = readFileSync(`${DIR}PlayTab.tsx`, 'utf8');
+const DOCK_SOURCE = readFileSync(`${DIR}../../shell/ChiefOfStaffDock.tsx`, 'utf8');
 
 const TAB_PATHS = new Set(TABS.map((tab) => tab.href));
 
@@ -267,6 +269,23 @@ describe('the rest of the desk', () => {
   it('offers Resolve on the phone bar as well as the seal', () => {
     expect(restOfDesk.split('Resolve Q3 2027').length - 1).toBeGreaterThanOrEqual(1);
     expect(restOfDesk).toContain('you type the word to confirm');
+  });
+
+  it('keeps the phone bar clear of the Chief of Staff dock', () => {
+    // The dock is `fixed` over the bottom-left corner of every tab, and two
+    // fixed elements never scroll clear of one another: a full-width Resolve
+    // button had its left quarter and the whole of its caption drawn over
+    // permanently, and a tap there opened the Chief of Staff instead of the
+    // confirmation. The bar reserves the dock's gutter and puts the caption
+    // above the button, out of the dock's 44-point band.
+    const bar = renderToStaticMarkup(<SealBar quarter="Q3 2027" canSubmit resolving={false} queued={2} blocked={0} onArm={() => undefined} />);
+    expect(bar).toContain(DOCK_RESERVE_CLASS);
+    expect(bar.indexOf('you type the word to confirm')).toBeLessThan(bar.indexOf('Resolve Q3 2027'));
+    expect(bar).not.toContain('btn-lg press-pop w-full');
+    // The reserve is wider than the pill the dock draws, count and all.
+    expect(DOCK_RESERVE_PX).toBeGreaterThan(94);
+    // …and the dock is still the fixed element the reserve was measured against.
+    expect(DOCK_SOURCE).toContain("fixed left-3 z-30");
   });
 
   it('reads last quarter off the report and opens the full one', () => {

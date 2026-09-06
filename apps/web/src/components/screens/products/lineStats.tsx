@@ -10,16 +10,18 @@
  * engine readings, sit around the picture rather than instead of it.
  *
  * Everything here is the engine's own arithmetic on the company's own lines:
- * `pricePerSeat` and `unitCostUsd` as the engine holds them, `unitCostOf` for
- * whether an input is blocked, `nodeMarketPriceUsd` for the market column.
+ * `pricePerSeat` as the engine holds it, the filed `unitCostUsd` or — before the
+ * production phase has stamped one — the same live roll-up the picture draws
+ * (`lineUnitCostUsd`), `unitCostOf` for whether an input is blocked, and
+ * `nodeMarketPriceUsd` for the market column.
  * Nothing computes an economic figure of its own, and nothing is drawn for a
  * company that is not the reader's — a rival's picture is public relationships
  * only, and their revenue is not public.
  */
 
-import type { Company, Product, SessionState } from '@frontier/contracts';
+import type { Company, NodeCostCache, Product, SessionState } from '@frontier/contracts';
 import { economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
-import { lineNodeIdOf, unitCostOf } from '@frontier/simulation';
+import { createNodeCostCache, lineNodeIdOf, unitCostOf, unitCostOfProduct } from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { DataTable, EmptyState, Icon, Panel, StatCard, type Column } from '@/components/ui';
 import { sheetHref } from '@/lib/sheets';
@@ -38,14 +40,35 @@ export interface LineFigures {
   readonly blockedLines: number;
 }
 
+/**
+ * What one unit of a line costs to make, right now.
+ *
+ * `unitCostUsd` is stamped on the product by the production phase, so before a
+ * company's first resolution it is zero on every line — and a roll-up of zeros
+ * is what printed "Cost of goods $0 · Blended margin 100%" over a picture whose
+ * own hub said "Cost $868" and whose margin disc said 65%. The engine's live
+ * roll-up is the same arithmetic the production phase will stamp, and it is
+ * exactly what the Connections picture already draws, so the sheet reads the
+ * roll-up whenever the stamp is not there yet. Nothing is invented here: both
+ * numbers come from `cost.ts`.
+ */
+export function lineUnitCostUsd(session: SessionState, company: Company, product: Product, cache?: NodeCostCache): number {
+  const stamped = product.unitCostUsd ?? 0;
+  if (stamped > 0) return stamped;
+  const nodeId = lineNodeIdOf(product);
+  const rolled = unitCostOfProduct(session, company, product, cache) ?? (nodeId === null ? null : unitCostOf(session, company, nodeId, cache));
+  return rolled?.unitCostUsd ?? 0;
+}
+
 /** The four figures, worked out the way the chain screen worked them out. */
 export function lineFigures(session: SessionState, company: Company, active: readonly Product[]): LineFigures {
+  const cache = createNodeCostCache(session);
   const revenueUsd = active.reduce((total, product) => total + product.pricePerSeat * unitsOf(product), 0);
-  const cogsUsd = active.reduce((total, product) => total + (product.unitCostUsd ?? 0) * unitsOf(product), 0);
+  const cogsUsd = active.reduce((total, product) => total + lineUnitCostUsd(session, company, product, cache) * unitsOf(product), 0);
   const grossProfitUsd = revenueUsd - cogsUsd;
   const blockedLines = active.filter((product) => {
     const nodeId = lineNodeIdOf(product);
-    return nodeId !== null && unitCostOf(session, company, nodeId).blockedInputNodeIds.length > 0;
+    return nodeId !== null && unitCostOf(session, company, nodeId, cache).blockedInputNodeIds.length > 0;
   }).length;
   return {
     revenueUsd,
@@ -96,7 +119,9 @@ export function LineStatCards({ figures }: { readonly figures: LineFigures }): R
  * 390-point phone is in card mode, and the closed table's own heading already
  * says what its rows are.
  */
-export function lineColumns(session: SessionState): readonly Column<Product>[] {
+export function lineColumns(session: SessionState, company: Company): readonly Column<Product>[] {
+  // One roll-up cache for the whole table: the unit-cost column asks per row.
+  const cache = createNodeCostCache(session);
   return [
     {
       key: 'name',
@@ -125,9 +150,9 @@ export function lineColumns(session: SessionState): readonly Column<Product>[] {
       key: 'cost',
       header: 'Unit cost',
       align: 'right',
-      render: (row) => formatMoney(row.unitCostUsd ?? 0, 'full'),
+      render: (row) => formatMoney(lineUnitCostUsd(session, company, row, cache), 'full'),
       sortable: true,
-      sortValue: (row) => row.unitCostUsd ?? 0,
+      sortValue: (row) => lineUnitCostUsd(session, company, row, cache),
     },
     {
       key: 'units',
@@ -159,6 +184,8 @@ export function lineColumns(session: SessionState): readonly Column<Product>[] {
 
 export interface LineTablesProps {
   readonly session: SessionState;
+  /** Whose lines these are: the unit-cost column rolls up on this company. */
+  readonly company: Company;
   readonly active: readonly Product[];
   readonly sunset: readonly Product[];
   /** Selects the row's line in the switcher above and opens its drawer. */
@@ -167,8 +194,8 @@ export interface LineTablesProps {
   readonly onLaunch?: () => void;
 }
 
-export function LineTables({ session, active, sunset, onOpenLine, onLaunch }: LineTablesProps): React.JSX.Element {
-  const columns = lineColumns(session);
+export function LineTables({ session, company, active, sunset, onOpenLine, onLaunch }: LineTablesProps): React.JSX.Element {
+  const columns = lineColumns(session, company);
   return (
     <>
       <Panel title="Lines" iconName="box" subtitle="Priced, costed and counted exactly as the engine holds them" flush>

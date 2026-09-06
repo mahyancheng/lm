@@ -84,7 +84,10 @@ export function Drawer({
         <div className={cx('flex shrink-0 justify-center pt-2', side === 'right' ? 'sm:hidden' : '')} aria-hidden="true">
           <span className="sheet-grip" />
         </div>
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-5 py-3">
+        {/* `px-3 sm:px-5` matches `main` in `AppShell`: a sheet is the page's own
+            body moved over the tab, and a narrower gutter than the page it
+            replaced cost every one of the twenty bodies 16 points of line. */}
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-3 py-3 sm:px-5">
           {leading === undefined ? null : <div className="flex shrink-0 items-center self-center">{leading}</div>}
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-[14px] font-bold text-ink">
@@ -96,9 +99,9 @@ export function Drawer({
             <Icon name="close" size={15} accent="current" />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">{children}</div>
         {footer !== undefined ? (
-          <footer className="safe-pb-4 flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-hair bg-raised/60 px-5 pt-3.5">
+          <footer className="safe-pb-4 flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-hair bg-raised/60 px-3 pt-3.5 sm:px-5">
             {footer}
           </footer>
         ) : null}

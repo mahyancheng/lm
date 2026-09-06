@@ -22,6 +22,7 @@
 import type { Character, DealProposalDraft, SessionState } from '@frontier/contracts';
 import type { IconName } from '@/components/ui';
 import type { DirectoryEntry } from './directory';
+import { sheetHref, tabPath } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  The route in                                                               */
@@ -205,70 +206,70 @@ export const CONNECTION_LEVERS: readonly ConnectionLever[] = [
   {
     label: 'Company significance',
     icon: 'building',
-    href: '/command-centre',
+    href: tabPath('home'),
     weightPct: 16,
     how: 'The enterprise value of what you run. Growing the company is the largest single input.',
   },
   {
     label: 'Founder reputation',
     icon: 'gauge',
-    href: '/company',
+    href: sheetHref('company'),
     weightPct: 12,
     how: 'Public, investor and enterprise reputation, blended. Shipping and keeping guidance moves it.',
   },
   {
     label: 'Mutual relationships',
     icon: 'network',
-    href: '/network',
+    href: sheetHref('network'),
     weightPct: 12,
     how: 'Your best five two-way relationships, weighted by how powerful the other person is. Three people known well beats thirty known slightly.',
   },
   {
     label: 'Personal wealth',
     icon: 'coins',
-    href: '/capital',
+    href: sheetHref('capital'),
     weightPct: 12,
     how: 'What your own stake is worth. It follows the company rather than leading it.',
   },
   {
     label: 'Board positions',
     icon: 'boardTable',
-    href: '/boardroom',
+    href: sheetHref('boardroom'),
     weightPct: 10,
     how: 'Seats you actually hold. A seat is also a standing override: two directors of one board can always speak.',
   },
   {
     label: 'Investor relationships',
     icon: 'briefcase',
-    href: '/street',
+    href: sheetHref('street'),
     weightPct: 10,
     how: 'Depth and quality of ties to investors, in both directions. A shared investor is also a route to everyone else on their book.',
   },
   {
     label: 'Government credibility',
     icon: 'capitol',
-    href: '/government',
+    href: sheetHref('government'),
     weightPct: 9,
     how: 'Past performance on contracts and standing with agencies. Winning work is what moves it.',
   },
   {
     label: 'Media influence',
     icon: 'newspaper',
-    href: '/news',
+    href: sheetHref('news'),
     weightPct: 8,
     how: 'How often the press names you, and how prominently. A live story is also a temporary channel to the journalist writing it.',
   },
   {
     label: 'Prior exits',
     icon: 'ledger',
-    href: '/financials',
+    href: sheetHref('financials'),
     weightPct: 6,
     how: 'Wealth your current company does not explain. It accrues over a career, not over a quarter.',
   },
   {
     label: 'Public following',
     icon: 'chat',
-    href: '/social',
+    href: sheetHref('social'),
     weightPct: 5,
     how: 'Account credibility across networks. The smallest of the ten inputs: this game is emphatically not follower count.',
   },

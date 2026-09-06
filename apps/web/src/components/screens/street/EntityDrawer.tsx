@@ -44,6 +44,7 @@ import {
   shortInterestLine,
   type StreetCardRow,
 } from './model';
+import { sheetHref } from '@/lib/sheets';
 
 export interface EntityDrawerProps {
   readonly card: StreetCardRow | null;
@@ -176,7 +177,7 @@ export function EntityDrawer({
           <div>
             <SectionHeading rule>The partner</SectionHeading>
             <Link
-              href="/network"
+              href={sheetHref('network')}
               className="btn tap-target mt-2 w-full justify-between gap-2 sm:w-auto"
             >
               <span className="flex items-center gap-1.5">

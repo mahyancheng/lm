@@ -12,8 +12,8 @@
  * Two things make it a *contextual* assistant rather than a chat window that
  * follows you around:
  *
- * - the quick prompts are the current screen's own ("explain these numbers",
- *   "should we raise?"), and
+ * - the quick prompts are the current subject's own ("explain these numbers",
+ *   "should we raise?") — the open sheet when there is one, else the tab, and
  * - the route the founder asked from is sent with the message, so "this screen"
  *   resolves to something.
  *
@@ -24,22 +24,24 @@
  * asks, not to what a model may do.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { formatMoney } from '@frontier/shared';
 import { AiLabel, Drawer, Icon, Tag, cx, type Tone } from '@/components/ui';
 import { CHIEF_OF_STAFF, Portrait, SpeechCard } from '@/components/scenes/people';
 import { Exchange } from '@/components/screens/chief-of-staff/Exchange';
+import { onComposeToChief } from '@/components/screens/chief-of-staff/composerBus';
 import { quickPromptsFor, screenLabelFor } from '@/components/screens/chief-of-staff/quickPrompts';
 import { sourcingLabel } from '@/components/screens/chief-of-staff/findings';
 import { useChiefOfStaff } from '@/components/screens/chief-of-staff/useChiefOfStaff';
 import { llmHealth, type LlmHealth } from '@/lib/llm/client';
 import { describeLlmStatus, type LlmStatusKind } from '@/lib/llm/status';
 import { openSettings } from './settingsBus';
+import { sheetFrom } from '@/lib/sheets';
 import { useActiveCompany, useLlm, usePlayerCharacter, useQueuedActions, useResolving, useSession } from '@/lib/game';
 
-/** The dedicated screen owns the thread already; the dock would be a second copy of it. */
-const OWN_SCREEN = '/chief-of-staff';
+/** The dedicated sheet owns the thread already; the dock would be a second copy of it. */
+const OWN_SHEET = 'chief-of-staff';
 
 /** How often the drawer re-polls health while it is open, to keep the queue estimate honest while a quarter resolves. */
 const LIVE_HEALTH_POLL_MS = 4_000;
@@ -54,8 +56,22 @@ const STATUS_TONE: Readonly<Record<LlmStatusKind, Tone>> = {
   aborted: 'neutral',
 };
 
+/**
+ * `useSearchParams` bails the static prerender out to the client, and the dock
+ * is mounted on every game route — so it carries its own boundary rather than
+ * de-opting all five tabs.
+ */
 export function ChiefOfStaffDock(): React.JSX.Element | null {
+  return (
+    <Suspense fallback={null}>
+      <Dock />
+    </Suspense>
+  );
+}
+
+function Dock(): React.JSX.Element | null {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const session = useSession();
   const company = useActiveCompany();
   const founder = usePlayerCharacter();
@@ -69,8 +85,39 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
   const [liveHealth, setLiveHealth] = useState<LlmHealth>(llm);
   const bottom = useRef<HTMLDivElement | null>(null);
 
-  const prompts = useMemo(() => quickPromptsFor(pathname), [pathname]);
-  const screenLabel = screenLabelFor(pathname);
+  // What the founder is actually looking at: the open sheet, else the tab.
+  const sheet = sheetFrom(searchParams?.toString() ?? '');
+  const prompts = useMemo(() => quickPromptsFor(pathname, sheet), [pathname, sheet]);
+  const screenLabel = screenLabelFor(pathname, sheet);
+
+  const send = useCallback(
+    (text: string) => {
+      setMessage('');
+      void thread.send(text, pathname);
+    },
+    [thread, pathname],
+  );
+
+  // A card elsewhere in the app asking on the founder's behalf. "Ask" puts the
+  // question at once; "fill" opens the composer with it, so the founder can
+  // change the words before anything is put to a model.
+  //
+  // The subscription is made once and reads the latest `send` through a ref:
+  // `thread` is a fresh object on every render, so depending on it directly
+  // would add and remove a window listener on each one.
+  const sendRef = useRef(send);
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
+  useEffect(
+    () =>
+      onComposeToChief((request) => {
+        setOpen(true);
+        if (request.send) sendRef.current(request.text);
+        else setMessage(request.text);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (open) bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -106,21 +153,16 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
   const lastFailure = thread.sending ? undefined : latestEntry?.failureReason;
   const status = describeLlmStatus({ health: liveHealth, lastFailure });
 
-  // Its own screen has the full-height thread; a second one over the top of it
+  // Its own sheet has the full-height thread; a second one over the top of it
   // would be the same conversation twice. Resolving owns the whole viewport.
-  if (pathname.startsWith(OWN_SCREEN) || resolving) return null;
-
-  async function ask(text: string): Promise<void> {
-    setMessage('');
-    await thread.send(text, pathname);
-  }
+  if (sheet === OWN_SHEET || resolving) return null;
 
   return (
     <>
       {/* --- the button --------------------------------------------------
-          Bottom-left on a phone: the action-queue tray owns the right corner
-          whenever anything is queued, and two floating controls a thumb needs
-          must not overlap. Lifted clear of the tab bar and its safe-area
+          Bottom-left on a phone: the right corner belongs to a screen's own
+          floating action (Social's compose), and two floating controls a thumb
+          needs must not overlap. Lifted clear of the tab bar and its safe-area
           inset, so it sits in the reach zone rather than under the home bar. */}
       {open ? null : (
         <button
@@ -242,7 +284,7 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
                     'hover:border-hair-strong hover:text-ink',
                   )}
                   disabled={thread.sending}
-                  onClick={() => void ask(prompt.send)}
+                  onClick={() => send(prompt.send)}
                 >
                   <Icon name="chat" size={16} accent="inherit" className="text-ink-faint" />
                   <span className="min-w-0 flex-1">{prompt.label}</span>
@@ -263,14 +305,14 @@ export function ChiefOfStaffDock(): React.JSX.Element | null {
               aria-label="Your question"
               onChange={(event) => setMessage(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void ask(message);
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) send(message);
               }}
             />
             <button
               type="button"
               className="btn btn-primary tap-target press-pop shrink-0"
               disabled={thread.sending || message.trim().length === 0}
-              onClick={() => void ask(message)}
+              onClick={() => send(message)}
             >
               <Icon name="chevronRight" size={16} accent="current" />
               Ask

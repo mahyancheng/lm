@@ -11,9 +11,11 @@ import {
   useLlm,
   useMarketCap,
   usePlayerView,
+  useQueuedActions,
   useSession,
 } from '@/lib/game';
 import { Icon, cx } from '@/components/ui';
+import { sheetHref, tabPath } from '@/lib/sheets';
 import { CompanySwitcher } from './CompanySwitcher';
 import { SettingsDrawer } from './SettingsDrawer';
 import { type SettingsSection, onOpenSettings } from './settingsBus';
@@ -47,26 +49,25 @@ function Reading({ label, value, tone = 'neutral', href, title, secondary = fals
   );
 }
 
-export interface StatusBarProps {
-  /** Opens the mobile navigation sheet. Rendered only below `lg`. */
-  readonly onOpenNav: () => void;
-  readonly navOpen: boolean;
-}
-
 /**
  * The permanent header: where you are in session time, and the figures a
  * founder checks before doing anything else.
  *
- * On a phone the bar is deliberately six things and no more — who you are, the
- * quarter, the cash, the alerts, whether a model is live, and the way into
- * settings — because a row of small text links in a 56px bar is unusable with
- * a thumb. The rest of the readouts appear from `sm` up, where there is room
- * for them.
+ * On a phone the bar is deliberately five things and no more — who you are,
+ * the quarter-and-cash block, the alerts, whether a model is live, and the way
+ * into settings — because a row of small text links in a 56px bar is unusable
+ * with a thumb. The rest of the readouts appear from `sm` up, where there is
+ * room for them.
+ *
+ * The quarter-and-cash block is a link to the desk. That is the always-visible
+ * way to advance time, at zero new pixels: the two figures a founder checks
+ * before doing anything are also the control that ends the quarter, and the
+ * brand dot says how many instructions are waiting there.
  *
  * Every value comes from committed state through the store. Nothing here is
  * computed by the interface.
  */
-export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Element {
+export function StatusBar(): React.JSX.Element {
   const session = useSession();
   // Follows the switcher: the bar's "Cash" and "Market cap" readings answer
   // for whichever company its name and sector are currently showing, not
@@ -78,6 +79,7 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
   const netWorth = useFounderNetWorth();
   const connection = useConnection();
   const llm = useLlm();
+  const queued = useQueuedActions();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFocus, setSettingsFocus] = useState<SettingsSection | null>(null);
 
@@ -101,16 +103,6 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
         className="sticky top-0 z-20 flex items-center gap-0.5 border-b border-hair bg-panel/92 px-0.5 backdrop-blur sm:gap-1 sm:px-1"
         style={{ height: 'var(--statusbar-height)' }}
       >
-        <button
-          type="button"
-          onClick={onOpenNav}
-          className="btn btn-ghost tap-target shrink-0 px-0 lg:hidden"
-          aria-expanded={navOpen}
-          aria-label="All screens"
-        >
-          <Icon name={navOpen ? 'close' : 'menu'} size={18} accent="current" />
-        </button>
-
         {/* The identity, and STAGE 5's switcher: it is the one shrinkable thing
             in the bar — everything else is a fixed-width control, so the
             company name truncates rather than pushing the settings button off
@@ -120,13 +112,20 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
             a tap target that opens the switcher sheet otherwise. */}
         <CompanySwitcher />
 
-        {/* Phone: quarter over cash, one compact block instead of a link row. */}
-        <div className="ml-auto shrink-0 border-l border-hair px-2 text-right sm:hidden">
+        {/* Phone: quarter over cash, one compact block — and the way to the
+            desk. Tapping the date is how a quarter ends from anywhere. */}
+        <Link
+          href={tabPath('play')}
+          className="press-pop tap-target relative ml-auto flex shrink-0 flex-col justify-center border-l border-hair px-2 text-right sm:hidden"
+          aria-label={queued.length === 0 ? 'Open the desk' : `Open the desk · ${queued.length} queued`}
+          title="The desk: queued instructions and the seal that ends the quarter."
+        >
           <span className="figure block text-[10px] leading-none font-semibold text-ink-faint">{quarter}</span>
           <span className={cx('figure block text-[12px] leading-tight font-semibold', cash < 0 ? 'tone-loss' : 'text-ink')}>
             {formatMoney(cash)}
           </span>
-        </div>
+          {queued.length === 0 ? null : <span className="absolute top-1.5 right-1 size-1.5 rounded-pill bg-brand" aria-hidden="true" />}
+        </Link>
 
         <div className="figure hidden shrink-0 border-l border-hair px-3 text-[12px] font-semibold text-ink sm:block">
           <span className="label-caps-faint block leading-none">Quarter</span>
@@ -134,19 +133,19 @@ export function StatusBar({ onOpenNav, navOpen }: StatusBarProps): React.JSX.Ele
         </div>
 
         <div className="hidden min-w-0 flex-1 items-center overflow-hidden sm:flex">
-          <Reading label="Cash" value={formatMoney(cash)} tone={cash < 0 ? 'loss' : 'neutral'} href="/financials" />
+          <Reading label="Cash" value={formatMoney(cash)} tone={cash < 0 ? 'loss' : 'neutral'} href={sheetHref('financials')} />
           <Reading
             label="Market cap"
             value={formatMoney(marketCap)}
-            href="/markets"
+            href={sheetHref('exchange')}
             title="Last quote when listed; the fundamental anchor when private."
           />
-          <Reading label="Net worth" value={formatMoney(netWorth)} href="/leaderboard" secondary />
-          <Reading label="Connection" value={String(connection)} tone="brand" href="/network" secondary />
+          <Reading label="Net worth" value={formatMoney(netWorth)} href={sheetHref('leaderboard')} secondary />
+          <Reading label="Connection" value={String(connection)} tone="brand" href={sheetHref('network')} secondary />
         </div>
 
         <Link
-          href="/command-centre"
+          href={tabPath('home')}
           className={cx(
             'press-pop tap-target relative flex shrink-0 items-center justify-center gap-1.5 rounded-chip px-0 text-[11px] font-semibold sm:px-2',
             alerts > 0 ? 'text-warn' : 'text-ink-faint hover:bg-raised',

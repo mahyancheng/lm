@@ -31,6 +31,7 @@ import {
   type MapTarget,
   type WorldMapModel,
 } from './model';
+import { sheetHref } from '@/lib/sheets';
 
 export interface MapDetailProps {
   readonly target: MapTarget | null;
@@ -458,11 +459,11 @@ export function MapDetail({ target, model, onClose, onSelect }: MapDetailProps):
       subtitle={subtitle}
       footer={
         target.kind === 'agency' ? (
-          <Link className="btn btn-primary" href="/government">
+          <Link className="btn btn-primary" href={sheetHref('government')}>
             Open the Government screen
           </Link>
         ) : target.kind === 'company' ? (
-          <Link className="btn" href="/markets">
+          <Link className="btn" href={sheetHref('exchange')}>
             Open the market tape
           </Link>
         ) : null

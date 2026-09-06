@@ -21,6 +21,7 @@ import type {
 } from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
 import type { IconName, Tone } from '@/components/ui';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Tabs                                                                       */
@@ -191,9 +192,9 @@ export function actionHref(action: PortfolioAction, companyId: string): string |
   void companyId;
   switch (action) {
     case 'propose_deal':
-      return '/deal-room';
+      return sheetHref('deals');
     case 'submit_board_proposal':
-      return '/boardroom';
+      return sheetHref('boardroom');
     default:
       return null;
   }

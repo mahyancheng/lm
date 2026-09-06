@@ -74,12 +74,17 @@ export const takePendingNetworkCharacter = (): string | null => takeKey(NETWORK_
  * of a link and cleared only when the reader returns to the front page with
  * nothing on. An edition is deliberately not remembered — an earlier edition
  * is a one-off read, and coming back to the paper should mean today's.
+ *
+ * `sheet` is not remembered either, and for a stronger reason: it is the
+ * *address the paper is open at*, not a thing the reader chose. A link that
+ * carried it back would push `?sheet=news` onto whatever tab it was drawn on.
  */
 
-/** The current search (without a leading `?`), or empty to forget. Excludes `edition`. */
+/** The current search (without a leading `?`), or empty to forget. Excludes `edition` and `sheet`. */
 export function rememberNewsSearch(search: string): void {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
   params.delete('edition');
+  params.delete('sheet');
   const kept = params.toString();
   try {
     if (kept.length === 0) sessionStorage.removeItem(NEWS_SEARCH_KEY);

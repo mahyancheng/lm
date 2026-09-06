@@ -106,8 +106,6 @@ export type { RegionBadgeProps, RegionReading, SectorBadgeProps } from './sector
 export { ADVISORY_CODES, ValidationBanner, hasAdvisory, hasExpectedShortfall, labelOfStatus, toneOfStatus } from './ValidationBanner';
 export type { ValidationBannerProps } from './ValidationBanner';
 
-export { ActionQueueTray } from './ActionQueueTray';
-
 export {
   TONE_CHIP,
   TONE_FILL,

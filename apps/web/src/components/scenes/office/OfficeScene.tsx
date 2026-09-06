@@ -57,6 +57,7 @@ import {
 } from './model';
 import { allocate, seatLook } from './seats';
 import { OFFICE_STYLES, OFFICE_STYLE_ID } from './styles';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Stage geometry                                                             */
@@ -243,12 +244,12 @@ function zoneBadge(zone: OfficeWorkZone): React.JSX.Element {
   );
 }
 
-/** Screen names for the aria label. A screen reader should not read a URL. */
+/** Sheet names for the aria label. A screen reader should not read a URL. */
 const DESTINATION: Readonly<Record<string, string>> = {
-  '/people': 'the People screen',
-  '/research': 'the Research screen',
-  '/products': 'the Products screen',
-  '/company': 'the Company screen',
+  [sheetHref('people')]: 'the People sheet',
+  [sheetHref('research')]: 'the Research sheet',
+  [sheetHref('products')]: 'the Products sheet',
+  [sheetHref('company')]: 'the Company sheet',
 };
 
 function zoneAria(zone: OfficeWorkZone, perFigureNote: string): string {
@@ -257,7 +258,7 @@ function zoneAria(zone: OfficeWorkZone, perFigureNote: string): string {
   return `${zone.label}: ${zone.headcount} people${perFigureNote}${vacancies}. Opens ${where}.`;
 }
 
-export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/company', className }: OfficeSceneProps): React.JSX.Element {
+export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = sheetHref('company'), className }: OfficeSceneProps): React.JSX.Element {
   const model = useOfficeModel();
 
   const byId = new Map(model.zones.map((zone) => [zone.id, zone] as const));
@@ -362,7 +363,7 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = '/co
               const classes =
                 'fc-office-desk pointer-events-auto flex flex-col items-center rounded-chip border border-transparent px-0.5 pb-1 pt-0';
               return onOpenCharacter === undefined ? (
-                <Link key={executive.characterId} href="/network" className={classes} style={{ width: EXEC_CELL.width }} aria-label={label}>
+                <Link key={executive.characterId} href={sheetHref('network')} className={classes} style={{ width: EXEC_CELL.width }} aria-label={label}>
                   {content}
                 </Link>
               ) : (
@@ -486,7 +487,7 @@ export interface OfficeSceneCompactProps {
 }
 
 /**
- * The office at a glance, for the Command Centre hero.
+ * The office at a glance, for the Home tab's floor card.
  *
  * One room rather than seven: the six drawn figures are split across the four
  * functions in proportion to real headcount, the faces are the same faces the
@@ -494,7 +495,7 @@ export interface OfficeSceneCompactProps {
  * band, and the racks glow at the same utilisation. It is the same state,
  * smaller.
  */
-export function OfficeSceneCompact({ href = '/company', className }: OfficeSceneCompactProps): React.JSX.Element {
+export function OfficeSceneCompact({ href = sheetHref('company'), className }: OfficeSceneCompactProps): React.JSX.Element {
   const model = useOfficeModel();
 
   const figures = useMemo(() => {

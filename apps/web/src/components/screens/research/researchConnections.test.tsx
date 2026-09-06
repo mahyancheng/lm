@@ -34,15 +34,25 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Company, ResearchProject, SessionState } from '@frontier/contracts';
 import { SECTORS, SECTOR_META } from '@frontier/contracts';
-import { MAX_FORECAST_QUARTERS, createWorld3Session, researchMapFor, researchProjectsForCompany, type ResearchMapView } from '@frontier/simulation';
+import {
+  MAX_FORECAST_QUARTERS,
+  createWorld3Session,
+  researchMapFor,
+  researchProjectsForCompany,
+  type ResearchMapView,
+  type ResearchOption,
+  type ResearchUnlock,
+} from '@frontier/simulation';
 import { formatMoney } from '@frontier/shared';
 import { layoutConnections, NESTED_H, NESTED_INDENT, PILL_H, type ConnectionsLayout } from '../connections/layout';
 import { ConnectionsDiagram } from '../connections/ConnectionsDiagram';
 import { tagMoney } from '../connections/model';
 import { ariaLabelOf, connectionsModelOf, layoutGroupsOf } from './ResearchConnectionsScreen';
+import { SHEETS } from '../../../lib/sheets';
 import {
   HELD_PER_SECTOR,
   OPTIONS_SHOWN,
+  SELL_HINT,
   UNLOCKS_PER_OPTION,
   lockedRow,
   researchDiagram,
@@ -52,6 +62,11 @@ import {
 
 /** The body width inside the phone shell at 390 points. Nothing may cross it. */
 const PHONE = 356;
+
+/** The unlocks a programme buys other than the node it is a programme for. */
+function othersOf(option: ResearchOption): readonly ResearchUnlock[] {
+  return option.unlocks.filter((unlock) => unlock.nodeId !== option.nodeId);
+}
 
 /* -------------------------------------------------------------------------- */
 /*  The world                                                                  */
@@ -282,15 +297,16 @@ describe('the research picture is the engine\'s answer, arranged', () => {
     const company = playerOf(state);
     const { view, model } = pictureOf(state, company);
 
-    const option = view.options.find((entry) => entry.unlocks.length >= 2);
+    const option = view.options.find((entry) => othersOf(entry).length >= 2);
     expect(option).toBeDefined();
+    const others = othersOf(option as ResearchOption);
     const pill = model.right.flatMap((group) => group.pills).find((entry) => entry.key === `option_${option?.nodeId}`);
     expect(pill?.children.length).toBeGreaterThan(0);
 
     for (const [index, child] of (pill?.children ?? []).entries()) {
       // Two unlocks are drawn; a third child is the "+N" that opens the
       // programme's own drawer, where every unlock is listed.
-      const unlock = index < UNLOCKS_PER_OPTION ? option?.unlocks[index] : undefined;
+      const unlock = index < UNLOCKS_PER_OPTION ? others[index] : undefined;
       if (unlock === undefined) {
         expect(child.label.startsWith('+')).toBe(true);
         expect(child.action).toEqual({ kind: 'node', nodeId: option?.nodeId, fallbackNodeId: option?.nodeId });
@@ -303,6 +319,43 @@ describe('the research picture is the engine\'s answer, arranged', () => {
       // An unlock the reader's own graph may not carry falls back to the
       // programme that would reach it, so no pill is a dead tap.
       expect(child.action).toEqual({ kind: 'node', nodeId: unlock.nodeId, fallbackNodeId: option?.nodeId });
+    }
+  });
+
+  /**
+   * `unlocksOf` lists the programme's own node first — holding a node is what
+   * lets you sell it — so every option drew a nested pill repeating its own
+   * name: "Training run → Training run · sell it next". The owner read that as
+   * a bug, and it was: it said nothing and it ate one of the two drawn slots.
+   */
+  it('never repeats the option under itself, and says the payoff on the option when nothing else is left', () => {
+    const state = createWorld3Session();
+    const company = playerOf(state);
+    const { view, model } = pictureOf(state, company);
+
+    const options = model.right.flatMap((group) => group.pills).filter((pill) => pill.key.startsWith('option_'));
+    expect(options.length).toBeGreaterThan(0);
+    for (const pill of options) {
+      const option = view.options.find((entry) => `option_${entry.nodeId}` === pill.key);
+      if (option === undefined) continue;
+      // The engine always lists the node itself as now-producible…
+      expect(option.unlocks.some((unlock) => unlock.nodeId === option.nodeId)).toBe(true);
+      // …and it is never drawn under the option that would reach it.
+      for (const child of pill.children) expect(child.label).not.toBe(pill.label);
+      expect(pill.children.some((child) => child.key === `unlock_${option.nodeId}_${option.nodeId}`)).toBe(false);
+
+      const others = othersOf(option);
+      // The "+N" counts what is left after the two drawn, not after the three
+      // the engine handed over.
+      const more = pill.children.find((child) => child.label.startsWith('+'));
+      if (others.length > UNLOCKS_PER_OPTION) expect(more?.label).toBe(`+${others.length - UNLOCKS_PER_OPTION} more`);
+      else expect(more).toBeUndefined();
+
+      // With nothing else to draw, the option's own data line carries the
+      // payoff — unless it is saturated, where the bottleneck matters more.
+      const saturated = option.running === null && option.expectedQuarters >= MAX_FORECAST_QUARTERS;
+      if (others.length === 0 && !saturated && option.running === null) expect(pill.data).toBe(SELL_HINT);
+      if (others.length > 0) expect(pill.data).not.toBe(SELL_HINT);
     }
   });
 
@@ -582,7 +635,9 @@ describe('the locked panel names the one thing missing and the ways in', () => {
 
 describe('the world-3 research route', () => {
   const dir = fileURLToPath(new URL('.', import.meta.url));
-  const page = readFileSync(`${dir}../../../app/(game)/research/page.tsx`, 'utf8');
+  // The route became a sheet over the Company tab: the body moved here and the
+  // registry, not the body, now carries its title and its one line.
+  const page = readFileSync(`${dir}ResearchScreen.tsx`, 'utf8');
 
   it('draws the Connections picture instead of the node map, and hides the sector tracks', () => {
     // The world-3 branch draws exactly one picture and it is this one. The
@@ -599,8 +654,8 @@ describe('the world-3 research route', () => {
     expect(page.indexOf('<ResearchConnectionsScreen')).toBeLessThan(page.indexOf('<StatCard'));
     // The tracks panel is a world-1/2 surface: a sector is a column here.
     expect(page).toMatch(/\{!multiTrack \|\| nodeEconomy \? null : \(/);
-    expect(page).toContain("title={nodeEconomy ? 'Research' : 'Frontier Map'}");
-    expect(page).toContain('What you hold, what is one programme away, and what it would let you sell.');
+    expect(SHEETS.research.title).toBe('Research');
+    expect(SHEETS.research.blurb).toBe('What you hold, what is one programme away, and what it would let you sell.');
   });
 
   it('keeps the programmes table, the allocation panel, the rival list and the drawer', () => {

@@ -19,6 +19,7 @@ import type { PlayerView, SessionState } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { DeltaBadge, Icon, Sparkline, Tag, cx } from '@/components/ui';
 import { anchorOf, instrumentRows } from '../reporting/util';
+import { sheetHref } from '@/lib/sheets';
 
 export interface TapeStripProps {
   readonly session: SessionState;
@@ -39,7 +40,7 @@ export function TapeStrip({ session, view, limit = 5 }: TapeStripProps): React.J
   return (
     <div className="flex flex-col">
       {ownRow === null ? (
-        <Link href="/capital" className={cx(ROW, 'border-b border-hair bg-brand-wash/40')}>
+        <Link href={sheetHref('capital')} className={cx(ROW, 'border-b border-hair bg-brand-wash/40')}>
           <span className="icon-knockout-wash flex size-8 shrink-0 items-center justify-center rounded-chip border border-brand/40 bg-brand-wash text-brand">
             <Icon name="vault" size={16} accent="inherit" />
           </span>
@@ -62,7 +63,7 @@ export function TapeStrip({ session, view, limit = 5 }: TapeStripProps): React.J
         return (
           <Link
             key={row.instrument.id}
-            href="/markets"
+            href={sheetHref('exchange')}
             className={cx(ROW, 'border-b border-hair last:border-b-0', isOwn ? 'bg-brand-wash/40' : '')}
           >
             <span

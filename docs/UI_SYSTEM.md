@@ -30,7 +30,13 @@ What that means in practice:
 usable on a tablet and readable on a phone. Wide tables scroll inside their own
 container; the page body never scrolls horizontally.
 
-## 2. The eighteen screens
+## 2. The screens
+
+Each of these is a **sheet** over one of the five tabs (Home, Company, Market,
+World, Play) rather than a route of its own — see
+[GAME_DESIGN.md §9](./GAME_DESIGN.md) for which tab owns which. What each
+surface must show and must never show is unchanged by that; only the way in is.
+The Command Centre below is now the Home tab, and End Quarter is the Play tab.
 
 ### 1. Command Centre
 

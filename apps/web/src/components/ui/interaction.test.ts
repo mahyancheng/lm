@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { isTopDialog, pushDialog } from './focusTrap';
 import { isActivationKey, nextTrapIndex } from './tokens';
 
 /* -------------------------------------------------------------------------- */
@@ -24,6 +25,50 @@ describe('activation keys', () => {
   it('answers Enter and Space, and nothing else', () => {
     for (const key of ['Enter', ' ', 'Spacebar']) expect(isActivationKey(key)).toBe(true);
     for (const key of ['Tab', 'Escape', 'a', 'ArrowDown', 'Shift']) expect(isActivationKey(key)).toBe(false);
+  });
+});
+
+describe('only the topmost dialog owns the keyboard', () => {
+  it('gives the keyboard to a detail drawer opened over a sheet', () => {
+    const sheet = {};
+    const detail = {};
+    const closeSheet = pushDialog(sheet);
+    expect(isTopDialog(sheet)).toBe(true);
+
+    // A card's sheet, then that sheet's own detail drawer. One Escape must
+    // close the detail and leave the subject behind it open.
+    const closeDetail = pushDialog(detail);
+    expect(isTopDialog(detail)).toBe(true);
+    expect(isTopDialog(sheet)).toBe(false);
+
+    closeDetail();
+    expect(isTopDialog(sheet)).toBe(true);
+    closeSheet();
+  });
+
+  it('hands the keyboard back when dialogs close out of order', () => {
+    const outer = {};
+    const inner = {};
+    const closeOuter = pushDialog(outer);
+    const closeInner = pushDialog(inner);
+    closeOuter();
+    expect(isTopDialog(inner)).toBe(true);
+    closeInner();
+  });
+
+  it('is idempotent on release, so a double unmount cannot unseat the dialog above', () => {
+    const first = {};
+    const second = {};
+    const release = pushDialog(first);
+    const holdSecond = pushDialog(second);
+    release();
+    release();
+    expect(isTopDialog(second)).toBe(true);
+    holdSecond();
+  });
+
+  it('answers true with nothing registered, so a dialog is never made inert by an empty stack', () => {
+    expect(isTopDialog({})).toBe(true);
   });
 });
 

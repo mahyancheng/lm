@@ -55,6 +55,7 @@ import {
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { Drawer, Icon, KeyValueGrid, SectionHeading, SliderField, Tag, ValidationBanner, roundStep, sectorLabel } from '@/components/ui';
 import { useActiveCompany, useGameActions } from '@/lib/game';
+import { slotQty } from '@/components/screens/connections/model';
 import { predatorsInSegment } from '../sector/model';
 import { achievableCeilingUsd } from './ceiling';
 import { PriceLadder } from './PriceLadder';
@@ -88,6 +89,21 @@ export interface NodeLineDrawerProps {
    * queued by the button under it.
    */
   readonly initialAim?: TargetChoice | null;
+  /**
+   * Open scrolled to one section rather than at the top.
+   *
+   * `'price'` is what `?sheet=products&line=` asks for: the Company tab's line
+   * row promises the price control in the first screenful, and the Price
+   * section sits nine sections down. A preselection, not a commitment — the
+   * reprice is still queued by the button under the slider.
+   */
+  readonly initialFocus?: 'price' | null;
+  /**
+   * Walk the host screen to a slot's named seller — the Connections picture's
+   * own in-screen stack. Undefined everywhere there is no such stack, and the
+   * slot sheet then draws no row.
+   */
+  readonly onSeeConnections?: (companyId: string) => void;
 }
 
 /** What each collection level buys and costs, in the engine's own numbers. */
@@ -111,6 +127,8 @@ export function NodeLineDrawer({
   companyNames,
   initialSlotId = null,
   initialAim = null,
+  initialFocus = null,
+  onSeeConnections,
 }: NodeLineDrawerProps): React.JSX.Element {
   const { queueAction, unqueueAction } = useGameActions();
   const company = useActiveCompany();
@@ -118,6 +136,9 @@ export function NodeLineDrawer({
   // picture opens this drawer from a market pill with the section preselected,
   // and preselected 800 points below nine other sections is not reachable.
   const targetRef = useRef<HTMLDivElement | null>(null);
+  // Same reason, one section further down: a line opened by address promises
+  // the price control without a scroll, and it is nine sections from the top.
+  const priceRef = useRef<HTMLDivElement | null>(null);
   const [priceText, setPriceText] = useState('');
   const [windDown, setWindDown] = useState(2);
   const [priceResult, setPriceResult] = useState<ActionValidationResult | null>(null);
@@ -225,6 +246,14 @@ export function NodeLineDrawer({
     const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: 'start' }));
     return () => cancelAnimationFrame(frame);
   }, [product?.id, initialAim]);
+
+  // Opened by address on a line: scroll the Price section to the top of the
+  // drawer, after the layout that renders it.
+  useEffect(() => {
+    if (product === null || initialFocus !== 'price') return;
+    const frame = requestAnimationFrame(() => priceRef.current?.scrollIntoView({ block: 'start' }));
+    return () => cancelAnimationFrame(frame);
+  }, [product?.id, initialFocus]);
 
   const target: TargetChoice | null =
     product === null || node === undefined
@@ -334,6 +363,7 @@ export function NodeLineDrawer({
           onChoose={(choice) => fillSlot(sheetSlot.slotId, choice)}
           onBack={() => setSheetSlotId(null)}
           banner={slotResults[sheetSlot.slotId] == null ? null : <ValidationBanner result={slotResults[sheetSlot.slotId] ?? null} />}
+          onSeeConnections={onSeeConnections}
         />
       ) : (
         <div className="space-y-5">
@@ -478,7 +508,7 @@ export function NodeLineDrawer({
                             {slot.required ? <span className="font-bold text-loss">*</span> : null}
                             {roleCaption(slot) === '' ? null : <span className="shrink-0 text-[10.5px] text-ink-faint">· {roleCaption(slot)}</span>}
                             <span className="figure ml-auto shrink-0 text-[10.5px] text-ink-faint">
-                              {slot.qtyPerUnit} {slot.unitLabel}
+                              {slotQty(slot.qtyPerUnit, slot.unitLabel)}
                             </span>
                           </div>
                           <div className={`truncate text-[11px] ${slot.fill?.route === 'blocked' ? 'font-semibold text-loss' : 'text-ink-dim'}`}>
@@ -540,7 +570,7 @@ export function NodeLineDrawer({
           )}
 
           {/* --- price, against this node's market ------------------------- */}
-          <div>
+          <div ref={priceRef} data-testid="line-price-section" className="scroll-mt-2">
             <SectionHeading rule>Price</SectionHeading>
             {ladder === null ? null : (
               <div className="mt-2">

@@ -139,7 +139,7 @@ progress bar, a legend swatch — is a pill.
 |---|---|
 | `shadow-card` | A resting card. `.panel-surface` already applies it |
 | `shadow-pop` | A card under the pointer (`.hover-lift` applies it) |
-| `shadow-float` | A floating control: the action tray, the mobile nav sheet |
+| `shadow-float` | A floating control: the Chief of Staff dock, a sticky seal bar |
 | `shadow-sheet` | A modal or a drawer |
 
 Shadows are slate at 4–18% alpha. **Never black**, never `shadow-2xl
@@ -223,7 +223,7 @@ to that block.
   volume, no more.
 - **Flat icons beat letter monograms — always.** There are no two-letter
   monograms left in the interface, and there is a drawn mark for every screen,
-  every nav group and every common control. Do not invent one inline: use the
+  every tab, every sheet and every common control. Do not invent one inline: use the
   set, documented in **§10**. A bespoke illustration is still welcome; a
   bespoke *icon* is a fork.
 - Give every illustration `role="img"` and a real `aria-label` that says what is
@@ -257,11 +257,17 @@ const skin = SKINS[pickIndex(character.id, 'skin', SKINS.length)] ?? 'skin-1';
 
 ## 7. Touch, keyboard and containment
 
+- **Navigation is five bottom tabs and nothing else.** Home, Company, Market,
+  World, Play; no sub-tab strip, no hamburger, no floating queue tray. Every
+  drill-down is a sheet over the tab that owns it, so Back closes it. Chrome at
+  390 is 116 points — status bar 56, bottom bar 60 — and the phone's
+  quarter/cash block in the status bar is a link to Play, which makes advancing
+  time visible from every tab at no extra pixels.
 - **Every interactive zone is at least 44×44 CSS px.** `.tap-target` sets that
   floor and composes with `.btn` (whose `height` loses to a larger
-  `min-height`). Dialog closers, the nav toggle, the settings button and the
-  tray's remove buttons all use it. Dense in-table controls are the one
-  pragmatic exception, and they still get a visible focus ring.
+  `min-height`). Dialog closers, a card's whole row, the settings button and a
+  queued instruction's remove button all use it. Dense in-table controls are
+  the one pragmatic exception, and they still get a visible focus ring.
 - **Everything focusable shows it.** The global `:focus-visible` ring is a 2px
   `brand-strong` outline at 2px offset. A clickable `DataTable` row is a real
   control: `role`, `tabIndex`, Enter and Space, and an inset ring.
@@ -279,7 +285,7 @@ const skin = SKINS[pickIndex(character.id, 'skin', SKINS.length)] ?? 'skin-1';
 
 Use these before writing a surface of your own. Props are documented in
 `SCREEN_GUIDE.md`, which remains the contract; prop APIs are additive only,
-because eighteen screens depend on them.
+because every tab and every sheet body depends on them.
 
 | Class / component | Notes |
 |---|---|
@@ -313,7 +319,7 @@ because eighteen screens depend on them.
       no emoji, no one-off inline glyph.
 - [ ] On a filled or tinted surface the mark carries an `icon-knockout-*`
       class (or comes from `IconChip`, which does it for you).
-- [ ] The phone layout came first: bottom tabs and sub-tabs are not covered,
+- [ ] The phone layout came first: the five bottom tabs are not covered,
       tables that do not fit are `cardMode="auto"`, and a side drawer is a
       bottom sheet under `sm`.
 - [ ] No hex literal anywhere in the component.
@@ -399,7 +405,7 @@ floated outside the silhouette would simply disappear.
 | Size | Where |
 |---|---|
 | 13–14 | Beside a `label-caps` group heading |
-| 15–16 | Inside a nav row's chip, a status-bar button, a sub-tab |
+| 15–16 | Inside a rail row's chip, a status-bar button, a card's drill row |
 | 18–20 | The default: a bottom tab, a button, body text |
 | 20–24 | An empty state, a section heading, a landing card |
 
@@ -419,14 +425,18 @@ Never below 13: these are drawn to be simple, not to be micro-type.
 
 ### 10.5 The names
 
-Eighteen screens — `gauge` (Command Centre), `building` (Company), `box`
-(Products), `people`, `ledger` (Financials), `flask` (Research), `capitol`
-(Government), `handshake` (Deal Room), `chart` (Markets), `coins` (Capital),
-`boardTable` (Boardroom), `globe` (World), `chat` (Social), `network`,
-`trophy` (Leaderboard), `briefcase` (Chief of Staff), `stamp` (End Quarter),
-`newspaper` (Quarter Resolution).
+Five tabs — `gauge` (Home), `building` (Company), `chart` (Market), `globe`
+(World), `playMark` (Play). Pairwise distinct, and pinned by `nav.test.ts`.
 
-Five groups — `desk`, `compass`, `vault`, `globe`, `playMark`.
+Twenty sheets, each keeping the mark its screen was known by — `building`
+(Company), `boardTable` (Group, Boardroom), `box` (Products), `people`,
+`flask` (Research), `capitol` (Government), `ledger` (Financials), `chart`
+(Markets), `coins` (Capital), `portfolio`, `briefcase` (The Street, Chief of
+Staff), `handshake` (Deal Room), `newspaper` (News, Quarter Resolution),
+`chat` (Social), `network`, `trophy` (Leaderboard), `globe` (Sector).
+
+Still drawn, from the nav groups the five tabs replaced — `desk`, `compass`,
+`vault`, `stamp`.
 
 Utility — `settings`, `bell`, `live`, `close`, `chevronRight`, `chevronDown`,
 `check`, `warning`, `search`, `plus`, `save`, `export`, `import`, `back`,

@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { cx } from '@/components/ui';
 import { CountUp } from './CountUp';
+import { sheetHref } from '@/lib/sheets';
 
 export interface PriceRow {
   readonly instrumentId: string;
@@ -63,7 +64,7 @@ export function PriceTape({ rows, reveal = true }: PriceTapeProps): React.JSX.El
           return (
             <Link
               key={row.instrumentId}
-              href="/markets"
+              href={sheetHref('exchange')}
               className={cx(
                 'animate-pop-in hover-lift press-pop flex min-h-[76px] w-[168px] shrink-0 snap-start flex-col justify-center rounded-card border bg-panel px-3 py-2.5',
                 row.isOwn ? 'border-brand' : 'border-hair',

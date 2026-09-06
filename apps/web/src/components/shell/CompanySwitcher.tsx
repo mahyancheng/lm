@@ -22,6 +22,7 @@ import { SOLVENCY_NEGATIVE_QUARTERS } from '@frontier/simulation';
 import { PLAYER_ID, controlledCompanyRows, useActiveCompanyId, useGameActions, useSession } from '@/lib/game';
 import { ownershipLabel } from '@/components/screens/portfolio/rows';
 import { Drawer, Icon, SectorBadge, cx } from '@/components/ui';
+import { sheetHref } from '@/lib/sheets';
 
 /** "0/2" reads as healthy without a colour cue; only a run in progress gets one. */
 function solvencyChip(negativeCashQuarters: number): { label: string; tone: 'neutral' | 'warn' | 'loss' } {
@@ -43,7 +44,7 @@ export function CompanySwitcher(): React.JSX.Element {
   if (rows.length <= 1 || active === null) {
     return (
       <Link
-        href="/command-centre"
+        href="/home"
         className="tap-target flex min-w-0 items-center gap-2 rounded-chip px-1.5 hover:bg-raised sm:gap-2.5 sm:px-2"
       >
         <span className="flex size-7 shrink-0 items-center justify-center rounded-chip bg-brand-strong text-white shadow-card">
@@ -130,7 +131,7 @@ export function CompanySwitcher(): React.JSX.Element {
             type="button"
             onClick={() => {
               setOpen(false);
-              router.push('/group');
+              router.push(sheetHref('group'));
             }}
             className="press-pop tap-target mt-1 flex items-center gap-3 rounded-panel border border-dashed border-hair px-3 py-2.5 text-left hover:bg-raised"
           >

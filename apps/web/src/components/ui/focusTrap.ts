@@ -32,6 +32,32 @@ function lockScroll(): () => void {
   };
 }
 
+/**
+ * Which dialog owns the keyboard.
+ *
+ * A tab is a page of cards, a card opens a sheet, and a sheet may open one
+ * detail drawer over itself — so two dialogs are routinely up at once. Every
+ * open dialog listens on `window`, so without an order Escape closed the
+ * detail *and* the subject behind it in one press, and Tab wrapped against
+ * whichever trap happened to be registered last. Only the topmost dialog
+ * handles a key; the one beneath it is inert until it is topmost again.
+ */
+const dialogStack: object[] = [];
+
+/** Register a dialog as the topmost one. Exported for the ordering test. */
+export function pushDialog(token: object): () => void {
+  dialogStack.push(token);
+  return () => {
+    const at = dialogStack.lastIndexOf(token);
+    if (at >= 0) dialogStack.splice(at, 1);
+  };
+}
+
+/** True while nothing sits above this dialog. Empty is true: nothing is above it. */
+export function isTopDialog(token: object): boolean {
+  return dialogStack.length === 0 || dialogStack[dialogStack.length - 1] === token;
+}
+
 export interface DialogFocusOptions {
   /** Escape closes it. False for a flow that must be answered. */
   readonly dismissible?: boolean;
@@ -57,6 +83,9 @@ export interface DialogFocusOptions {
 export function useDialogFocus(open: boolean, options: DialogFocusOptions): RefObject<HTMLDivElement | null> {
   const { dismissible = true, onClose, initialFocus, lockScroll: shouldLock = true } = options;
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // One identity per mounted dialog, so its place in the stack survives every
+  // re-render — the registration below depends on `open` alone.
+  const token = useRef<object>({}).current;
 
   const focusable = useCallback((): HTMLElement[] => {
     const container = containerRef.current;
@@ -78,7 +107,13 @@ export function useDialogFocus(open: boolean, options: DialogFocusOptions): RefO
 
   useEffect(() => {
     if (!open) return;
+    return pushDialog(token);
+  }, [open, token]);
+
+  useEffect(() => {
+    if (!open) return;
     function onKey(event: KeyboardEvent): void {
+      if (!isTopDialog(token)) return;
       if (event.key === 'Escape') {
         if (dismissible) onClose();
         return;
@@ -100,7 +135,7 @@ export function useDialogFocus(open: boolean, options: DialogFocusOptions): RefO
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, dismissible, onClose, focusable]);
+  }, [open, dismissible, onClose, focusable, token]);
 
   useEffect(() => {
     if (!open || !shouldLock) return;

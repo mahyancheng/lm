@@ -3,26 +3,27 @@
 /**
  * The ticket for one position.
  *
- * Two instructions are carried out here rather than sending the founder to
- * another screen, because both are about *this row* and both already have a
- * ticket: `TradeTicket` from Markets buys and sells, and `AcquisitionDesk` from
- * the Deal Room bids for the whole company. Reusing them is the point — a third
- * copy of the share-count arithmetic is exactly the kind of second computation
- * this stage exists to remove — and both already carry their own validator
- * pre-check and Now/After preview.
+ * Buying and selling happen here, against the row you are looking at:
+ * `TradeTicket` is Markets' own ticket, reused rather than recopied, and it
+ * carries its own validator pre-check and Now/After preview.
  *
- * A deal and a board matter are not tickets, they are forms with their own
- * screens, and the card links there instead.
+ * **Bidding for the whole company does not.** `AcquisitionDesk` used to be
+ * mounted here as well as in the Deal Room, which meant two live copies of one
+ * form — two preselections, two consideration splits, two places to fix a bug.
+ * There is now exactly one desk, in the Deal Room, and this drawer links to it
+ * with the target already named: `?sheet=deals&target=<companyId>`. A deal and
+ * a board matter were already links for the same reason.
  */
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import type { PlayerView, SessionState } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import type { PortfolioAction, PortfolioStakeRow, PortfolioSubsidiaryRow } from '@frontier/simulation';
-import { Drawer, EmptyState, KeyValueGrid } from '@/components/ui';
-import { AcquisitionDesk } from '@/components/screens/deal-room/AcquisitionDesk';
+import { Drawer, EmptyState, Icon, KeyValueGrid } from '@/components/ui';
 import { TradeTicket } from '@/components/screens/markets/TradeTicket';
 import { formatCount, issuedSharesOf } from '@/components/screens/reporting/util';
+import { sheetHref } from '@/lib/sheets';
 import { ownershipLabel } from './rows';
 
 /** The row a ticket is open on: either kind carries everything the ticket needs. */
@@ -115,24 +116,34 @@ export function PositionDrawer({
             />
           )
         ) : (
-          <AcquisitionDesk
-            targets={
-              target === null
-                ? []
-                : [
-                    {
-                      id: target.id,
-                      name: target.name,
-                      marketCapUsd: row.kind === 'stake' && row.ownershipPct > 0 ? Math.round(row.valueUsd / row.ownershipPct) : row.valueUsd,
-                      isPublic: target.isPublic,
-                      sector: target.sector,
-                    },
-                  ]
-            }
-            preselectedId={row.companyId}
-            company={company}
-            hasBoard={hasBoard}
-          />
+          <div className="flex flex-col gap-2.5">
+            <KeyValueGrid
+              columns={2}
+              items={[
+                {
+                  label: 'Whole company',
+                  value: formatMoney(
+                    row.kind === 'stake' && row.ownershipPct > 0 ? Math.round(row.valueUsd / row.ownershipPct) : row.valueUsd,
+                  ),
+                  hint: target === null ? 'Not on the register' : target.isPublic ? 'Quoted capitalisation' : 'Fundamental anchor — private',
+                },
+                {
+                  label: 'Board approval',
+                  value: hasBoard ? 'Required' : 'Not required',
+                  mono: false,
+                  hint: hasBoard
+                    ? 'The validator tables it as an acquisition matter rather than executing it'
+                    : `${company.name} has no board, so the offer goes straight out`,
+                },
+              ]}
+            />
+            {/* The one acquisition desk lives in the Deal Room; this names the
+                target on the way in rather than carrying a second copy of it. */}
+            <Link href={sheetHref('deals', { target: row.companyId })} className="btn btn-primary tap-target justify-center gap-1.5">
+              <Icon name="handshake" size={16} accent="current" />
+              Bid for {row.name} in the Deal Room
+            </Link>
+          </div>
         )}
 
         {row.kind === 'stake' && row.thresholdLabel !== null ? (

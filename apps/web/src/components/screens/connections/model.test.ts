@@ -35,6 +35,7 @@ import {
   connectionsModel,
   layoutGroupsOf,
   qtyText,
+  slotQty,
   slotRecipe,
   tagCount,
   tagMoney,
@@ -42,6 +43,7 @@ import {
   type PillGroup,
   type PillModel,
 } from './model';
+import { sheetHref } from '@/lib/sheets';
 
 const PLAYER = 'cmp_player_ventures';
 const APP_NODE = 'app_ai_software_suite';
@@ -122,8 +124,25 @@ describe('the slot header', () => {
     // `formatCount` alone would have said "0" of a slot that is genuinely consumed.
     expect(formatCount(0.02)).toBe('0');
     // The recipe is its own header line, so it no longer repeats the slot name.
-    expect(slotRecipe('Model', 40, '1M tokens')).toBe('40 1M tokens per unit');
+    // The multiplication sign is what stops "40 1M tokens" reading as one
+    // mangled quantity; it goes with the unit when the unit itself is dropped.
+    expect(slotRecipe('Model', 40, '1M tokens')).toBe('40 \u00d7 1M tokens per unit');
     expect(slotRecipe('Device', 0.02, 'device')).toBe('0.02 per unit');
+    expect(slotQty(40, '1M tokens')).toBe('40 \u00d7 1M tokens');
+  });
+
+  it('carries the sign onto every slot of every node this world can draw', () => {
+    const state = createWorld3Session();
+    const company = companyOf(state, PLAYER);
+    const model = modelFor(state, PLAYER);
+    expect(company.products.length).toBeGreaterThan(0);
+    const recipes = model.left.map((group) => group.subheader).filter((text): text is string => text !== null);
+    expect(recipes.length).toBeGreaterThan(0);
+    for (const recipe of recipes) {
+      expect(recipe.endsWith('per unit'), recipe).toBe(true);
+      // Either the unit was dropped (bare quantity) or it is multiplied out.
+      expect(/^[\d.,]+ (\u00d7 .+ )?per unit$/.test(recipe), recipe).toBe(true);
+    }
   });
 });
 
@@ -356,7 +375,7 @@ describe('the customer column', () => {
     expect(government?.pills[0]?.name).toBe(agency.shortName);
     expect(government?.pills[0]?.figure).toBe('$4.0M');
     expect(government?.pills[0]?.detail).toBe('prime');
-    expect(government?.pills[0]?.action).toEqual({ kind: 'href', href: '/government' });
+    expect(government?.pills[0]?.action).toEqual({ kind: 'href', href: sheetHref('government') });
     expect(government?.pills[0]?.glyph).toEqual({ kind: 'icon', name: 'capitol' });
   });
 });

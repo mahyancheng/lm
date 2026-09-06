@@ -26,6 +26,7 @@ import type { Character, Company, CompanyTier, ResearchProject, Sector, SessionS
 import { STAFF_ROLES } from '@frontier/contracts';
 import { heldComputeUnits } from '@frontier/simulation';
 import { allocate, crowd, seatId, type Crowd } from './seats';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Vocabulary                                                                 */
@@ -180,10 +181,10 @@ interface ZoneDefinition {
 
 /** The four working rooms, in the order the floor plan lays them out. */
 export const WORK_ZONES: readonly ZoneDefinition[] = [
-  { id: 'engineering', role: 'engineers', label: 'Engineering', href: '/people', capacity: 18 },
-  { id: 'research', role: 'researchers', label: 'Research', href: '/research', capacity: 10 },
-  { id: 'sales', role: 'sales', label: 'Sales & marketing', href: '/products', capacity: 10 },
-  { id: 'operations', role: 'ops', label: 'Operations', href: '/people', capacity: 16 },
+  { id: 'engineering', role: 'engineers', label: 'Engineering', href: sheetHref('people'), capacity: 18 },
+  { id: 'research', role: 'researchers', label: 'Research', href: sheetHref('research'), capacity: 10 },
+  { id: 'sales', role: 'sales', label: 'Sales & marketing', href: sheetHref('products'), capacity: 10 },
+  { id: 'operations', role: 'ops', label: 'Operations', href: sheetHref('people'), capacity: 16 },
 ];
 
 /** Named executives with a desk on the floor. The badge carries the true count. */

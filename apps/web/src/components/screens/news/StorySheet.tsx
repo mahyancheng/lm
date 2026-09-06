@@ -28,6 +28,7 @@ import { followsId } from './layout';
 import { PAPER_NAME } from './Masthead';
 import { Byline, ForYou, Kicker, SectionRule, type NewsContext } from './pieces';
 import { useElementWidth } from './useTypeMeasure';
+import { sheetHref } from '@/lib/sheets';
 
 /** The body face in the sheet: sixteen over one and a half, as a paper's body copy on a phone. */
 const SHEET_BODY = { weight: 400, sizePx: 16, leading: 1.5 } as const;
@@ -226,14 +227,14 @@ function Article({
             return (
               <li key={companyId} className="np-rule">
                 {companyId === context.playerCompanyId ? (
-                  <Link href="/company" className="tap-target flex items-center gap-2 py-2 text-[13px] font-semibold text-ink">
+                  <Link href={sheetHref('company')} className="tap-target flex items-center gap-2 py-2 text-[13px] font-semibold text-ink">
                     <Icon name="building" size={15} />
                     {companyName}
                     <span className="np-kicker ml-auto">Company</span>
                   </Link>
                 ) : (
                   <Link
-                    href="/sector"
+                    href={sheetHref('sector')}
                     onClick={() => {
                       if (companySector !== null) setPendingSectorFocus(companySector);
                     }}
@@ -250,7 +251,7 @@ function Article({
           {person === null ? null : (
             <li className="np-rule">
               <Link
-                href="/network"
+                href={sheetHref('network')}
                 onClick={() => setPendingNetworkCharacter(person.id)}
                 className="tap-target flex items-center gap-2 py-2 text-[13px] font-semibold text-ink"
               >
@@ -262,7 +263,7 @@ function Article({
           )}
           {sector === null || !context.multiSector ? null : (
             <li className="np-rule">
-              <Link href="/sector" onClick={() => setPendingSectorFocus(sector)} className="tap-target flex items-center gap-2 py-2 text-[13px] font-semibold text-ink">
+              <Link href={sheetHref('sector')} onClick={() => setPendingSectorFocus(sector)} className="tap-target flex items-center gap-2 py-2 text-[13px] font-semibold text-ink">
                 <Icon name="globe" size={15} />
                 {sectorLabel(sector)}
                 <span className="np-kicker ml-auto">Sector</span>

@@ -43,6 +43,7 @@ import { ConnectionsDiagram } from '@/components/screens/connections/Connections
 import type { ConnectionsModel, PillAction, PillGroup, PillModel } from '@/components/screens/connections/model';
 import { useContainerWidth } from '@/components/screens/connections/useContainerWidth';
 import { lockedRow, researchDiagram, type ResearchDiagramModel, type ResearchGroup, type ResearchPill } from './researchModel';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Model → layout                                                             */
@@ -187,7 +188,7 @@ export function ResearchConnectionsScreen({ onOpenNode, openableNodeIds }: Resea
       // node I already sell opens Products on *that* line rather than on
       // whichever one it happened to be showing.
       setPendingLine(action.productId);
-      router.push('/products');
+      router.push(sheetHref('products'));
       return;
     }
     if (action.kind === 'expand') {

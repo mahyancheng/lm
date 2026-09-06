@@ -27,6 +27,7 @@ import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import { Drawer, Icon, KeyValueGrid, ProgressBar, SectionHeading, Tag } from '@/components/ui';
 import { BuyAccelerators } from './BuyAccelerators';
 import { inferenceComputeDemand, researchComputeDemand } from './ComputePosition';
+import { sheetHref } from '@/lib/sheets';
 
 /** Accelerator counts, grouped in threes. Same rendering as the panel. */
 const units = (value: number): string => String(Math.round(Math.max(0, value))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -65,11 +66,11 @@ export function ComputeDrawer({ open, onClose, session, company, projects }: Com
       subtitle={`${units(held)} accelerator-equivalents held · ${formatPct(holdings.computeUtilisation)} utilised`}
       footer={
         <>
-          <Link className="btn tap-target flex-1 gap-1.5 sm:flex-none" href="/research">
+          <Link className="btn tap-target flex-1 gap-1.5 sm:flex-none" href={sheetHref('research')}>
             <Icon name="flask" size={16} accent="current" />
             Research
           </Link>
-          <Link className="btn btn-primary tap-target flex-1 gap-1.5 sm:flex-none" href="/products">
+          <Link className="btn btn-primary tap-target flex-1 gap-1.5 sm:flex-none" href={sheetHref('products')}>
             <Icon name="box" size={16} accent="current" />
             Product demand
           </Link>

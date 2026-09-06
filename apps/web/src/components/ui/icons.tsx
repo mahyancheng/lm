@@ -37,12 +37,14 @@ import { TONE_CHIP, TONE_SOLID, TONE_VAR, cx, type Tone } from './tokens';
 /**
  * Every mark, in one list.
  *
- * The order is the order of the interface: the eighteen screens, then the five
- * nav groups, then the utility marks. `nav.ts` names icons from this list, and
- * `components/shell/nav.test.ts` checks that every id it names exists here.
+ * The order is the order of the interface: the sheets — whose marks the five
+ * tabs draw from too — then Play's own mark, then the utility marks. `nav.ts`
+ * names each tab's icon from this list and `lib/sheets.ts` names each sheet's;
+ * `components/shell/nav.test.ts` checks that every id either of them names
+ * exists here.
  */
 export const ICON_NAMES = [
-  // screens
+  // sheets
   'gauge',
   'building',
   'box',
@@ -62,7 +64,7 @@ export const ICON_NAMES = [
   'portfolio',
   'stamp',
   'newspaper',
-  // groups
+  // the Play tab's mark, and the three the old nav groups left behind
   'desk',
   'compass',
   'vault',
@@ -368,7 +370,7 @@ const SHAPES: Readonly<Record<IconName, React.JSX.Element>> = {
     </>
   ),
 
-  /* --- nav groups ------------------------------------------------------- */
+  /* --- the Play mark, and the three the old nav groups left behind ------- */
 
   /** Operate: the desk you run the company from. */
   desk: (

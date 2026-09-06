@@ -163,8 +163,6 @@
     --bottombar-height: 60px;
     /* The smallest a tap target may be. Scenes and controls both read it. */
     --tap: 44px;
-    /* The phone's sub-tab strip: the row of sibling screens under the header. */
-    --subtab-height: 46px;
     /* The one accent detail inside every flat icon. A filled surface overrides
        it with its own fill (see the .icon-knockout-* utilities) so the detail
        reads as a cut-out rather than as a second colour that would vanish. */
@@ -635,27 +633,6 @@
 
   .safe-pb-4 {
     padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
-  }
-
-  /* The horizontal strip of sibling screens under the header. It scrolls
-     inside itself — the page body never does. */
-  .subtab-strip {
-    display: flex;
-    align-items: stretch;
-    gap: 2px;
-    overflow-x: auto;
-    max-width: 100%;
-    scrollbar-width: none;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .subtab-strip::-webkit-scrollbar {
-    display: none;
-  }
-
-  .subtab-strip > * {
-    scroll-snap-align: center;
   }
 
   /* The scroll region's bottom padding on a phone: clear the fixed tab bar,

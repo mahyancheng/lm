@@ -116,36 +116,79 @@ async function foundCompany(page, background, companyName) {
   const foundBtn = page.locator('button:has-text("Found ")');
   await foundBtn.waitFor({ state: 'visible', timeout: 15000 });
   await foundBtn.click();
-  await page.waitForURL('**/command-centre', { timeout: 30000 }).catch(() => {});
+  await page.waitForURL('**/home', { timeout: 30000 }).catch(() => {});
   log('founded', companyName, 'on', background, '→', page.url());
 }
 
+/**
+ * The desk is the Play tab and the report a sheet over it: the sticky bar arms
+ * the confirmation, the typed word commits it, and the report is closed again
+ * so the tab bar beneath is tappable for the next step.
+ */
 async function resolveQuarter(page, quarter) {
-  await page.goto(`${BASE_URL}/end-quarter`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(600);
-  const resolveBtn = page.locator('button', { hasText: /Resolve \d{4} Q\d/ }).first();
+  await page.goto(`${BASE_URL}/play`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(700);
+  const resolveBtn = page.locator('button[aria-label^="Resolve "]').last();
   await resolveBtn.waitFor({ state: 'visible', timeout: 15000 });
   await resolveBtn.click();
-  const typedInput = page.locator('input').last();
+  const typedInput = page.locator('[role="dialog"] input').last();
   await typedInput.waitFor({ state: 'visible', timeout: 10000 });
   await typedInput.fill('RESOLVE');
-  await page.locator('button:has-text("Resolve")').last().click();
-  await page.waitForURL('**/quarter-resolution', { timeout: 180000 });
+  await page.locator('[role="dialog"] button:has-text("Resolve")').last().click();
+  await page.waitForURL((url) => url.pathname === '/play' && url.searchParams.get('sheet') === 'resolution', { timeout: 180000 });
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
   log('resolved quarter', quarter);
 }
 
-/** Reach a screen the way a thumb does: the bottom tab for its group, then the sub-tab. */
-async function openScreen(page, groupLabel, screenLabel, urlFragment) {
-  const tab = page.locator('nav[aria-label="Sections"] a', { hasText: groupLabel }).first();
+/**
+ * Reach a subject the way a thumb does: the bottom tab that owns it, then the
+ * card's own control. There is no sub-tab strip — Products and Research are two
+ * cards on Company, each opening a sheet addressed by `?sheet=`.
+ */
+async function openScreen(page, tabLabel, sheetTitle, sheetId) {
+  // A sheet stands over the whole tab, scrim and all, so the bar underneath it
+  // is not clickable until it is closed — Back, or the phone's back gesture,
+  // is the way out of a sheet, and Escape is that gesture here.
+  for (let attempt = 0; attempt < 4 && (await dialogCount(page)) > 0; attempt++) {
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+  }
+  const tab = page.locator('nav[aria-label="Sections"] a', { hasText: new RegExp(`^${tabLabel}\\d*$`) }).first();
   await tab.waitFor({ state: 'visible', timeout: 15000 });
   await tab.click();
-  await page.waitForTimeout(400);
-  const sub = page.locator(`nav[aria-label="${groupLabel} screens"] a`, { hasText: screenLabel }).first();
-  await sub.waitFor({ state: 'visible', timeout: 15000 });
-  await sub.click();
-  await page.waitForURL(`**${urlFragment}**`, { timeout: 15000 });
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(500);
+  const open = page.locator(`main a[aria-label="Open ${sheetTitle}"]`).first();
+  await open.waitFor({ state: 'visible', timeout: 15000 });
+  await open.click();
+  await page.waitForURL((url) => url.searchParams.get('sheet') === sheetId, { timeout: 15000 });
+  await page.waitForTimeout(500);
+}
+
+/**
+ * The drawer the thumb is actually in.
+ *
+ * Products and Research are themselves sheets now — `?sheet=products` over the
+ * Company tab — so `[role="dialog"]` always matches that sheet *under* any
+ * detail drawer opened on top of it. `.first()` therefore aims at the sheet's
+ * own header, whose controls sit behind the inner drawer's scrim and swallow
+ * every click. Two rules follow, and both are kept everywhere below: address
+ * the **innermost** dialog, and measure "the drawer closes" against the number
+ * standing open when the screen is at rest, never against zero.
+ */
+function innerDialog(page) {
+  return page.locator('[role="dialog"]').last();
+}
+function dialogCount(page) {
+  return page.locator('[role="dialog"]').count();
+}
+/** Wait until one more dialog stands open than `rest`, then return it. */
+async function waitForInnerDialog(page, rest) {
+  await page.waitForFunction((open) => document.querySelectorAll('[role="dialog"]').length > open, rest, {
+    timeout: 10000,
+  });
+  return innerDialog(page);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -250,7 +293,7 @@ async function checkPillGeometry(page, viewport, label, entry, screen) {
 }
 
 async function driveProducts(page, viewport, label, entry) {
-  await openScreen(page, 'Operate', 'Products', '/products');
+  await openScreen(page, 'Company', 'Products', 'products');
   const diagram = page.locator('[data-testid="connections"]');
   await diagram.waitFor({ state: 'visible', timeout: 20000 });
   await page.waitForTimeout(400);
@@ -278,9 +321,9 @@ async function driveProducts(page, viewport, label, entry) {
   check((await liveSupplier.count()) > 0, `${label}: there is a live supplier to tap`);
   if ((await liveSupplier.count()) > 0) {
     entry.tappedSupplier = (await liveSupplier.getAttribute('aria-label')) || '';
+    const rest = await dialogCount(page);
     await liveSupplier.click();
-    const dialog = page.locator('[role="dialog"]');
-    await dialog.first().waitFor({ state: 'visible', timeout: 10000 });
+    const dialog = await waitForInnerDialog(page, rest);
     await page.waitForTimeout(400);
     const sheetBack = dialog.locator('button:has-text("Back")').first();
     check((await sheetBack.count()) > 0, `${label}: the slot's candidate sheet opened on the tapped slot`);
@@ -298,7 +341,7 @@ async function driveProducts(page, viewport, label, entry) {
     }
     await dialog.locator('button[aria-label="Close"]').first().click();
     await page.waitForTimeout(400);
-    check((await page.locator('[role="dialog"]').count()) === 0, `${label}: the drawer closes`);
+    check((await dialogCount(page)) === rest, `${label}: the drawer closes back to the sheet (${await dialogCount(page)} of ${rest})`);
   }
 
   /* --- a market pill opens the drawer *at* the Target section -------------- */
@@ -306,9 +349,9 @@ async function driveProducts(page, viewport, label, entry) {
   // is preselected but not reachable, which is the same as not preselected.
   const marketPill = page.locator('[data-testid="conn-pill"][data-side="right"][data-key^="cell:"]').first();
   if ((await marketPill.count()) > 0) {
+    const rest = await dialogCount(page);
     await marketPill.click();
-    const dialog = page.locator('[role="dialog"]');
-    await dialog.first().waitFor({ state: 'visible', timeout: 10000 });
+    const dialog = await waitForInnerDialog(page, rest);
     await page.waitForTimeout(600);
     const target = dialog.locator('[data-testid="line-target-section"]').first();
     const placed = (await target.count()) > 0;
@@ -424,9 +467,9 @@ async function walkHomeFromRival(page, label, entry) {
  * again, and the Target step must open on a market it does not already serve.
  */
 async function driveLaunch(page, label, entry) {
+  const rest = await dialogCount(page);
   await page.locator('button:has-text("Open a line")').first().click();
-  const dialog = page.locator('[role="dialog"]');
-  await dialog.first().waitFor({ state: 'visible', timeout: 10000 });
+  const dialog = await waitForInnerDialog(page, rest);
   await page.waitForTimeout(400);
   const step0 = dialog.locator('button:has-text("What to sell")').first();
   check((await step0.count()) > 0, `${label}: the launch flow opens on "What to sell"`);
@@ -482,7 +525,7 @@ async function driveLaunch(page, label, entry) {
 /* -------------------------------------------------------------------------- */
 
 async function driveResearch(page, viewport, label, entry) {
-  await openScreen(page, 'Frontier', 'Research', '/research');
+  await openScreen(page, 'Company', 'Research', 'research');
   const diagram = page.locator('[data-testid="connections"]').first();
   await diagram.waitFor({ state: 'visible', timeout: 20000 });
   await page.waitForTimeout(500);
@@ -505,9 +548,9 @@ async function driveResearch(page, viewport, label, entry) {
   if (options.length === 0) return;
   const option = page.locator(`[data-testid="conn-pill"][data-key="${options[0].key}"]`).first();
   entry.tappedOption = options[0].text;
+  const rest = await dialogCount(page);
   await option.click();
-  const dialog = page.locator('[role="dialog"]');
-  await dialog.first().waitFor({ state: 'visible', timeout: 10000 });
+  const dialog = await waitForInnerDialog(page, rest);
   await page.waitForTimeout(500);
   entry.shots.nodeDrawer = await shot(page, `${label}-6-node-drawer`);
   const standard = dialog.locator('button[aria-pressed]', { hasText: 'Standard' }).first();
@@ -554,7 +597,7 @@ function watch(page) {
   const COMPANY_NAME = 'Harbourline Test Co';
   await foundCompany(page, BACKGROUND, COMPANY_NAME);
   for (let q = 1; q <= QUARTERS; q++) await resolveQuarter(page, q);
-  await page.goto(`${BASE_URL}/command-centre`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE_URL}/home`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(700);
 
   let sawCustomerCompany = false;
@@ -581,9 +624,9 @@ function watch(page) {
     const entry = { viewport: label, background: WALK_BACKGROUND, companyName: WALK_COMPANY, shots: {} };
     await foundCompany(walkPage, WALK_BACKGROUND, WALK_COMPANY);
     for (let q = 1; q <= QUARTERS; q++) await resolveQuarter(walkPage, q);
-    await walkPage.goto(`${BASE_URL}/command-centre`, { waitUntil: 'domcontentloaded' });
+    await walkPage.goto(`${BASE_URL}/home`, { waitUntil: 'domcontentloaded' });
     await walkPage.waitForTimeout(700);
-    await openScreen(walkPage, 'Operate', 'Products', '/products');
+    await openScreen(walkPage, 'Company', 'Products', 'products');
     await walkPage.locator('[data-testid="connections"]').waitFor({ state: 'visible', timeout: 20000 });
     await walkPage.waitForTimeout(500);
     const buyer = walkPage

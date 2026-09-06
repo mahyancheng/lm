@@ -166,3 +166,50 @@ BASE_URL=http://localhost:3100 node apps/web/e2e/connections.js
 Screenshots land in `apps/web/e2e/shots/connections/` (gitignored) with a
 `results.json`. Optional: `OUT_DIR`, `QUARTERS` (default 2), `VIEWPORTS`,
 `BACKGROUND` (default "Enterprise AI"), `WALK_BACKGROUND`.
+
+# The five-tabs harness
+
+`five-tabs.js` drives the game after it became five scrolling pages of cards —
+Home · Company · Market · World · Play — with every drill-down a sheet
+addressed by `?sheet=` over the tab that owns it. It founds its own game per
+viewport (390×844 and 360×780, each in its own context) and measures the claims
+that shape makes:
+
+- **The five tabs.** Each bar tab lands on its own path, the page never scrolls
+  sideways, and every bar target clears 44 × 44. A screenshot per tab.
+- **The four tap paths**, counting *every* click the script makes after landing
+  on Home — there is deliberately no uncounted click helper, so the figures in
+  `results.json` cannot drift from what the drive did. End a quarter (≤ 3 taps +
+  the typed `RESOLVE`), raise a price (≤ 3 + a slider drag), hire (≤ 3 + a
+  slider), and "who is attacking me" (≤ 2). Each asserts its effect, not just
+  its cost: the Play badge counts up, the address becomes
+  `/play?sheet=resolution`, the street sheet is on screen.
+- **Back closes a sheet**: opened in-app it was pushed, so the browser's own
+  Back leaves no `?sheet` and the tab is drawn again.
+- **The old addresses**: `/markets` → `/market?sheet=exchange`,
+  `/news?section=world` → `/world?sheet=news&section=world` with the map
+  section, and an address nobody knows → a real 404 rather than a swallowed
+  redirect.
+- **The status bar's quarter block** is a link to the desk, and **the dock's
+  Ask** opens on every tab naming the tab — or, over a sheet, naming the sheet.
+- **The Products sheet**: its four stat cards asked for *by name* above the
+  picture (`panel-surface` is worn by the line switcher too, so a count would
+  measure the wrong thing), and the Lines table with a row below it.
+
+Any `pageerror` fails the run. `results.json` records the measured tap counts,
+Home's six figures, the register card's rows, and the bundle reading.
+
+```
+BASE_URL=http://localhost:3131 node apps/web/e2e/five-tabs.js
+```
+
+Screenshots land in `apps/web/e2e/shots/five-tabs/` (gitignored). Optional:
+`OUT_DIR`, `VIEWPORTS`, `BACKGROUND`.
+
+**A sheet covers the bar.** A registry sheet is a full-height `Drawer` with its
+own scrim, so the bottom tabs underneath are not clickable until it is closed —
+Back, or the phone's back gesture, is the way out. `connections.js`'s
+`openScreen` presses Escape first for exactly this reason, and every drawer
+interaction there addresses the *innermost* `[role="dialog"]`: Products and
+Research are themselves sheets now, so `.first()` would aim at the sheet's own
+header rather than at the detail drawer standing over it.

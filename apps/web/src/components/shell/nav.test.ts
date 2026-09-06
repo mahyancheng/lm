@@ -1,23 +1,22 @@
 /**
  * The navigation data, and the one thing that can silently break it.
  *
- * Every screen and every group now names a *drawing* rather than two capital
- * letters, and the name is a string chosen in one file and drawn in another.
- * TypeScript catches a typo at build time; this catches the subtler case — a
- * mark that was renamed or removed from the set while `nav.ts` still asks for
- * it, which a `Record` lookup would answer with an empty `<svg>` rather than an
- * error.
+ * Every tab names a *drawing* rather than two capital letters, and the name is
+ * a string chosen in one file and drawn in another. TypeScript catches a typo
+ * at build time; this catches the subtler case — a mark that was renamed or
+ * removed from the set while `nav.ts` still asks for it, which a `Record`
+ * lookup would answer with an empty `<svg>` rather than an error.
  *
- * The icon module is a `.tsx`, and `apps/web` has no vitest config, so the file
- * is read as text (the same trick `interaction.test.ts` uses on `globals.css`)
- * rather than imported. Relative imports throughout: the `@/` alias is a
- * Next-only convenience and does not resolve here.
+ * The icon module is a `.tsx`, so the file is read as text (the same trick
+ * `interaction.test.ts` uses on `globals.css`) rather than imported. Relative
+ * imports throughout: the `@/` alias is a Next-only convenience and does not
+ * resolve here.
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { HOME_ROUTE, NAV_GROUPS, NAV_ITEMS, navGroupFor, navItemFor, navSiblingsFor, primaryHrefOf } from '../../lib/nav';
+import { HOME_ROUTE, TABS, isGamePath, tabFor } from '../../lib/nav';
 
 const iconSource = readFileSync(fileURLToPath(new URL('../ui/icons.tsx', import.meta.url)), 'utf8');
 
@@ -47,70 +46,50 @@ describe('the icon set', () => {
   });
 });
 
-describe('every navigation entry names a mark that exists', () => {
+describe('the tab bar', () => {
   const names = new Set(declaredNames());
 
-  // Twenty-two: The Street added the institutional layer in Wave 4, Portfolio
-  // added the other side of the player's own register — what the company owns
-  // outside itself — and STAGE 5's Group added the consolidated view across
-  // every company a seat directs, once it directs more than one.
-  it('covers all twenty-two screens', () => {
-    expect(NAV_ITEMS).toHaveLength(22);
-    for (const item of NAV_ITEMS) {
-      expect(names.has(item.icon), `${item.href} asks for the "${item.icon}" mark`).toBe(true);
+  // Five, and no more: the bar is the whole navigation now — no sub-tab strip
+  // and no hamburger — and a sixth 78px target on a 390px phone is the point
+  // at which a thumb starts missing.
+  it('is exactly five tabs, each naming a mark that exists', () => {
+    expect(TABS).toHaveLength(5);
+    for (const tab of TABS) {
+      expect(names.has(tab.icon), `${tab.href} asks for the "${tab.icon}" mark`).toBe(true);
     }
   });
 
-  it('covers all five groups', () => {
-    expect(NAV_GROUPS).toHaveLength(5);
-    for (const group of NAV_GROUPS) {
-      expect(names.has(group.icon), `the ${group.id} group asks for the "${group.icon}" mark`).toBe(true);
-    }
+  it('gives each tab a distinct mark, so the bar is never ambiguous', () => {
+    expect(new Set(TABS.map((tab) => tab.icon)).size).toBe(TABS.length);
   });
 
-  it('gives each screen a distinct mark, so a tab bar is never ambiguous', () => {
-    const perGroup = NAV_GROUPS.map((group) => new Set(group.items.map((item) => item.icon)));
-    perGroup.forEach((set, index) => {
-      expect(set.size).toBe(NAV_GROUPS[index]?.items.length);
-    });
+  it('starts the session on Home', () => {
+    expect(HOME_ROUTE).toBe('/home');
+    expect(tabFor(HOME_ROUTE)?.id).toBe('home');
+  });
+
+  it('is null off the five', () => {
+    expect(tabFor('/sign-in')).toBeNull();
+    expect(tabFor('/')).toBeNull();
   });
 });
 
-describe('the phone tab bar', () => {
-  it('lands every group on a real screen', () => {
-    for (const group of NAV_GROUPS) {
-      const href = primaryHrefOf(group);
-      expect(navItemFor(href)).not.toBeNull();
-      expect(navGroupFor(href)?.id).toBe(group.id);
-    }
+describe('the shell chrome', () => {
+  it('wraps the tabs', () => {
+    for (const tab of TABS) expect(isGamePath(tab.href)).toBe(true);
   });
 
-  it('starts the session inside a group', () => {
-    expect(navGroupFor(HOME_ROUTE)?.id).toBe('operate');
-    expect(primaryHrefOf(NAV_GROUPS[0] as (typeof NAV_GROUPS)[number])).toBe(HOME_ROUTE);
-  });
-});
-
-describe('the sub-tab strip', () => {
-  it('offers the siblings of the screen you are on', () => {
-    expect(navSiblingsFor('/markets').map((item) => item.href)).toEqual(['/markets', '/capital', '/portfolio', '/street', '/boardroom']);
-    expect(navSiblingsFor('/company').map((item) => item.href)).toEqual([
-      '/command-centre',
-      '/company',
-      '/group',
-      '/products',
-      '/sector',
-      '/people',
-      '/financials',
-    ]);
+  // An old address renders inside the shell for the one frame it takes the
+  // catch-all to replace onto the new one: a bare page flashing between the two
+  // would be worse than the redirect it is hiding.
+  it('still wraps a legacy address while it redirects', () => {
+    expect(isGamePath('/financials')).toBe(true);
+    expect(isGamePath('/news')).toBe(true);
+    expect(isGamePath('/markets/ABC')).toBe(true);
   });
 
-  it('follows a nested route back to its group', () => {
-    expect(navSiblingsFor('/markets/ABC').map((item) => item.href)).toContain('/boardroom');
-  });
-
-  it('is empty off a game route', () => {
-    expect(navSiblingsFor('/')).toEqual([]);
-    expect(navSiblingsFor('/sign-in')).toEqual([]);
+  it('leaves the landing and auth pages bare', () => {
+    expect(isGamePath('/')).toBe(false);
+    expect(isGamePath('/sign-in')).toBe(false);
   });
 });

@@ -29,6 +29,7 @@ import { CashAfter, Icon, Modal, SectorBadge, SliderField, Tag, ValidationBanner
 import { setPendingResearchNode, useActiveCompany, useGameActions, useSession } from '@/lib/game';
 import { CAPACITY_KIND_LABEL } from './labels';
 import { builtOnRows, industriesForCompany, lineLock, missingNodeTitles, supplyChoicesFrom, type SupplyChoiceMap } from './launchFlow';
+import { sheetHref } from '@/lib/sheets';
 
 export interface LaunchModalProps {
   readonly open: boolean;
@@ -266,7 +267,7 @@ export function LaunchModal({ open, onClose, initialCategoryId = null }: LaunchM
                       <Icon name="warning" size={12} accent="current" />
                       Locked until you have {missingNodeTitles(session, optionLock.missingNodeIds).join(', ')}.
                       <Link
-                        href="/research"
+                        href={sheetHref('research')}
                         onClick={(event) => {
                           event.stopPropagation();
                           const nodeId = optionLock.missingNodeIds[0];

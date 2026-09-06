@@ -10,10 +10,17 @@
  * A line is a **card row**, not a table row: on a phone it is the thing a thumb
  * has to hit, so it clears 44px, carries its own tone dot and says where it
  * goes with a chevron rather than leaving the player to guess.
+ *
+ * `feed.ts` writes each line's address as the old route that owned the subject
+ * (`/capital`, `/news?section=world`), because that is the vocabulary the
+ * builder and its test share. The rewrite to a tab plus a sheet happens here,
+ * once, through `legacyHref` — so no row ever renders an address the router
+ * would have to redirect.
  */
 
 import Link from 'next/link';
 import { EmptyState, Icon, TONE_VAR, cx } from '@/components/ui';
+import { legacyHref } from '@/lib/sheets';
 import type { FeedItem } from './feed';
 import type { IconName } from '@/components/ui';
 
@@ -62,7 +69,7 @@ export function AlertFeed({ items }: AlertFeedProps): React.JSX.Element {
               {rows.map((item) => (
                 <li key={item.id}>
                   <Link
-                    href={item.href}
+                    href={legacyHref(item.href)}
                     className="raised-surface press-pop tap-target flex items-center gap-2.5 px-3 py-2 transition-colors hover:border-hair-strong"
                   >
                     <span

@@ -20,7 +20,7 @@
 import Link from 'next/link';
 import type { LookupResult } from '@frontier/contracts';
 import { Icon, Tag, cx } from '@/components/ui';
-import { ROUTE_OF_ACTION } from './InterpretationCard';
+import { hrefOfAction } from '@/lib/sheets';
 import { cardFor } from './findings';
 
 export interface FindingsCardsProps {
@@ -50,7 +50,7 @@ export function FindingsCards({ findings, dense = false }: FindingsCardsProps): 
               <p className="text-[11px] leading-snug text-ink-faint">{card.caption}</p>
               <ul className="mt-2 flex flex-col gap-1">
                 {card.lines.map((line) => {
-                  const route = line.intent == null ? null : ROUTE_OF_ACTION[line.intent.type];
+                  const route = line.intent == null ? null : hrefOfAction(line.intent.type);
                   const body = (
                     <>
                       <span className="min-w-0 flex-1 truncate text-ink-soft">{line.label}</span>

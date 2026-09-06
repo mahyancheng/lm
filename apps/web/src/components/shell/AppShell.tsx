@@ -2,51 +2,40 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
-import { NAV_GROUPS, isGamePath, navGroupFor, navItemFor, navSiblingsFor, primaryHrefOf } from '@/lib/nav';
-import { PLAYER_ID, newsHref, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
-import { ActionQueueTray, Icon, cx } from '@/components/ui';
+import { Suspense, type ReactNode } from 'react';
+import { TABS, isGamePath, tabFor } from '@/lib/nav';
+import { PLAYER_ID, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
+import { Icon, cx } from '@/components/ui';
 import { ChiefOfStaffDock } from './ChiefOfStaffDock';
 import { NavRail } from './NavRail';
+import { SheetHost } from './SheetHost';
 import { StatusBar } from './StatusBar';
 import { ResolvingOverlay } from './ResolvingOverlay';
-import { useNewsSearch } from './useNewsSearch';
 import { VerdictScreen, verdictOf } from '@/components/screens/verdict';
 
 /**
  * The application shell.
  *
- * Game routes get the rail, the status bar, the action tray and the resolving
+ * Game routes get the rail, the status bar, the sheet host and the resolving
  * overlay. The landing page and the auth pages get the page and nothing else —
  * they are outside the session.
  *
- * **The phone is the primary layout.** Below `lg` navigation is two rows that
- * are always where a thumb expects them: a fixed bottom bar of the five
- * groups, and a scrollable strip of that group's screens under the header. A
- * tab takes you to its group's primary screen; the strip then moves you
- * sideways within the group. Eighteen screens never appear at once — the
- * hamburger sheet is the overflow path for jumping across groups.
+ * **The phone is the primary layout, and the bottom bar is the whole
+ * navigation.** Five tabs, each one scrolling page of cards; every drill-down
+ * is a sheet over its tab rather than a route of its own. There is no sub-tab
+ * strip and no hamburger: chrome is a 56px header and a 60px bar, and nothing
+ * in the game is more than a tab and a card away.
  *
  * From `lg` the same data draws the persistent rail and both bars disappear.
  */
 export function AppShell({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const pathname = usePathname();
-  const [navOpen, setNavOpen] = useState(false);
   const { notice } = useGame();
   const { dismissNotice } = useGameActions();
   const queued = useQueuedActions();
   const session = useSession();
   const outcome = useOutcome();
   const founderNetWorthUsd = useFounderNetWorth();
-  // The News links carry the section the paper was last open on. A hook, so it
-  // sits with the other hooks, above the early returns: the shell renders the
-  // setup route without them and the game with them, and the count must not
-  // change between the two.
-  const newsSearch = useNewsSearch(pathname);
-
-  useEffect(() => {
-    setNavOpen(false);
-  }, [pathname]);
 
   if (!isGamePath(pathname)) {
     return <>{children}</>;
@@ -65,9 +54,7 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
     return <VerdictScreen verdict={verdict} startYear={session.startYear} startHref="/" />;
   }
 
-  const screen = navItemFor(pathname);
-  const group = navGroupFor(pathname);
-  const siblings = navSiblingsFor(pathname);
+  const tab = tabFor(pathname);
 
   return (
     <div className="min-h-dvh bg-base">
@@ -83,45 +70,18 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
             </span>
             <span className="text-[13px] font-bold tracking-tight text-ink">Frontier Capital</span>
           </div>
+          {/* The rail marks the open sheet, so it reads the search params and
+              renders behind its own boundary like the host does. */}
           <div className="h-[calc(100dvh-3.5rem)]">
-            <NavRail />
+            <Suspense fallback={null}>
+              <NavRail />
+            </Suspense>
           </div>
         </aside>
 
         {/* Main column */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <StatusBar onOpenNav={() => setNavOpen((open) => !open)} navOpen={navOpen} />
-
-          {/* Sub-tabs: the sibling screens of the group you are in. Phone only —
-              the rail already shows all eighteen from `lg`. */}
-          {siblings.length > 0 ? (
-            <nav
-              aria-label={group === null ? 'Screens in this group' : `${group.label} screens`}
-              className="sticky z-10 border-b border-hair bg-panel/92 backdrop-blur lg:hidden"
-              style={{ top: 'var(--statusbar-height)' }}
-            >
-              <div className="subtab-strip px-1.5">
-                {siblings.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={newsHref(item.href, newsSearch)}
-                      aria-current={active ? 'page' : undefined}
-                      className={cx(
-                        'press-pop flex shrink-0 items-center gap-1.5 rounded-chip px-2.5 text-[11.5px] font-semibold whitespace-nowrap transition-colors',
-                        active ? 'icon-knockout-wash bg-brand-wash text-brand' : 'icon-knockout-panel text-ink-dim',
-                      )}
-                      style={{ minHeight: 'var(--subtab-height)' }}
-                    >
-                      <Icon name={item.icon} size={16} accent="inherit" />
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            </nav>
-          ) : null}
+          <StatusBar />
 
           {notice !== null ? (
             <div className="animate-rise flex items-start justify-between gap-3 border-b border-warn/25 bg-warn-wash px-4 py-2.5 text-[11.5px] font-medium text-warn">
@@ -143,31 +103,18 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
         </div>
       </div>
 
-      {/* Mobile sheet: the overflow path across groups. */}
-      {navOpen ? (
-        <div className="fixed inset-0 z-30 lg:hidden">
-          <div className="absolute inset-0 bg-ink/25" onClick={() => setNavOpen(false)} aria-hidden="true" />
-          <div
-            className="animate-rise absolute inset-x-0 rounded-b-panel border-b border-hair bg-panel shadow-float"
-            style={{ top: 'var(--statusbar-height)' }}
-          >
-            <NavRail variant="sheet" onNavigate={() => setNavOpen(false)} />
-          </div>
-        </div>
-      ) : null}
-
-      {/* The phone's primary navigation: one tab per group. */}
+      {/* The phone's primary navigation: one tab per page. */}
       <nav
         aria-label="Sections"
         className="bottom-nav fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-hair bg-panel/95 backdrop-blur lg:hidden"
       >
-        {NAV_GROUPS.map((navGroup) => {
-          const active = group !== null && group.id === navGroup.id;
-          const badge = navGroup.id === 'play' && queued.length > 0 ? queued.length : null;
+        {TABS.map((entry) => {
+          const active = tab !== null && tab.id === entry.id;
+          const badge = entry.id === 'play' && queued.length > 0 ? queued.length : null;
           return (
             <Link
-              key={navGroup.id}
-              href={newsHref(primaryHrefOf(navGroup), newsSearch)}
+              key={entry.id}
+              href={entry.href}
               aria-current={active ? 'page' : undefined}
               className={cx(
                 'press-pop tap-target relative flex flex-col items-center justify-center gap-1 px-0.5 text-[10px] font-semibold',
@@ -180,9 +127,9 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
                   active ? 'bg-brand-wash' : '',
                 )}
               >
-                <Icon name={navGroup.icon} size={19} accent="inherit" />
+                <Icon name={entry.icon} size={19} accent="inherit" />
               </span>
-              {navGroup.short}
+              {entry.short}
               {badge !== null ? (
                 <span className="figure absolute top-1 right-3 rounded-pill bg-brand px-1 text-[9px] leading-[14px] font-bold text-white">
                   {badge}
@@ -193,11 +140,16 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
         })}
       </nav>
 
+      {/* One sheet, read from `?sheet=`. `useSearchParams` bails the prerender
+          out to the client, so it renders behind its own boundary. */}
+      <Suspense fallback={null}>
+        <SheetHost />
+      </Suspense>
+
       <ChiefOfStaffDock />
-      <ActionQueueTray />
       <ResolvingOverlay />
 
-      {screen === null ? null : <span className="sr-only">{screen.blurb}</span>}
+      {tab === null ? null : <span className="sr-only">{tab.blurb}</span>}
     </div>
   );
 }

@@ -308,6 +308,10 @@ function toggleP(total: number, shown: number, showAll: boolean): ResearchPill |
  */
 function optionPill(option: ResearchOption): ResearchPill {
   const children = unlockPills(option);
+  // The payoff, when the picture would otherwise not state it: every programme
+  // unlocks its own node, that pill is dropped as a duplicate, and an option
+  // whose only unlock was itself would then say nothing about what it buys.
+  const payoff = children.length === 0 && sellsItself(option) ? SELL_HINT : null;
   if (option.running !== null) {
     const short = shortOf(option.running.bottleneck);
     return {
@@ -315,7 +319,7 @@ function optionPill(option: ResearchOption): ResearchPill {
       state: 'live',
       label: option.label,
       figure: `${formatCount(Math.round(option.running.quartersLeft))}q`,
-      data: short ?? `${tagMoney(option.running.quarterlyCostUsd)}/q`,
+      data: short ?? payoff ?? `${tagMoney(option.running.quarterlyCostUsd)}/q`,
       sector: option.sector,
       ringPct: Math.round(Math.max(0, Math.min(1, option.running.progress)) * 100),
       action: { kind: 'node', nodeId: option.nodeId, fallbackNodeId: option.nodeId },
@@ -330,7 +334,7 @@ function optionPill(option: ResearchOption): ResearchPill {
     state: 'possible',
     label: option.label,
     figure: saturated ? `>${formatCount(MAX_FORECAST_QUARTERS)}q` : `~${formatCount(Math.round(option.expectedQuarters))}q`,
-    data: saturated && short !== null ? short : `${tagMoney(low)}–${tagMoney(high)}`,
+    data: saturated && short !== null ? short : (payoff ?? `${tagMoney(low)}–${tagMoney(high)}`),
     sector: option.sector,
     ringPct: null,
     action: { kind: 'node', nodeId: option.nodeId, fallbackNodeId: option.nodeId },
@@ -339,14 +343,31 @@ function optionPill(option: ResearchOption): ResearchPill {
 }
 
 /**
- * What the programme buys, in the order it matters: something to sell first,
- * then the programme after this one, then a count of the rest.
+ * The programme's own node, which `unlocksOf` always lists first: holding a
+ * node is what lets you sell it. As a nested pill it printed the option's own
+ * name back at it — "Training run → Training run · sell it next" — so it is
+ * dropped here and stated as `SELL_HINT` on the option's own data line when
+ * nothing else is left to draw.
+ */
+export const SELL_HINT = 'then sell it';
+
+/** True when researching this node would let the company sell that same node. */
+function sellsItself(option: ResearchOption): boolean {
+  return option.unlocks.some((unlock) => unlock.nodeId === option.nodeId && unlock.kind === 'now_producible');
+}
+
+/**
+ * What else the programme buys, in the order it matters: something to sell
+ * first, then the programme after this one, then a count of the rest.
  *
  * The engine returns `now_producible` before `next_researchable`, so slicing
- * keeps that order without a second sort.
+ * keeps that order without a second sort. The option's own node is filtered
+ * out first, so the two drawn slots go to unlocks the reader has not already
+ * read on the parent pill — and the "+N more" counts what is left after it.
  */
 function unlockPills(option: ResearchOption): readonly ResearchPill[] {
-  const shown = option.unlocks.slice(0, UNLOCKS_PER_OPTION);
+  const others = option.unlocks.filter((unlock) => unlock.nodeId !== option.nodeId);
+  const shown = others.slice(0, UNLOCKS_PER_OPTION);
   const pills: ResearchPill[] = shown.map((unlock) => ({
     key: `unlock_${option.nodeId}_${unlock.nodeId}`,
     state: 'possible',
@@ -361,7 +382,7 @@ function unlockPills(option: ResearchOption): readonly ResearchPill[] {
     action: { kind: 'node', nodeId: unlock.nodeId, fallbackNodeId: option.nodeId },
     children: [],
   }));
-  const hidden = option.unlocks.length - shown.length;
+  const hidden = others.length - shown.length;
   if (hidden > 0) {
     pills.push({
       key: `unlock_${option.nodeId}_more`,

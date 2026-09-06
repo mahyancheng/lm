@@ -29,6 +29,7 @@ import { targetPhrase } from '@frontier/simulation';
 import { formatCount } from '@frontier/shared';
 import type { IconName } from '@/components/ui';
 import type { LayoutGroup, PillState } from './layout';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Shapes                                                                     */
@@ -236,14 +237,24 @@ export function qtyText(qty: number): string {
 }
 
 /**
- * The recipe, as the header's second line: "40 1M tokens per unit".
+ * The recipe, as the header's second line: "40 × 1M tokens per unit".
+ *
+ * The multiplication sign is the whole point of the line. Without it "40 1M
+ * tokens per unit" reads as one mangled quantity rather than as forty of a
+ * thing measured in millions of tokens.
  *
  * The slot's own name is the first line, so it is not repeated here; the unit
- * is dropped when it only says the slot's name back.
+ * is dropped when it only says the slot's name back, and with it goes the
+ * sign, because "40 × per unit" multiplies by nothing.
  */
 export function slotRecipe(slotLabel: string, qty: number, unitLabel: string): string {
-  const unit = unitLabel.trim().toLowerCase() === slotLabel.trim().toLowerCase() ? '' : `${unitLabel} `;
-  return `${qtyText(qty)} ${unit}per unit`;
+  const same = unitLabel.trim().toLowerCase() === slotLabel.trim().toLowerCase();
+  return same ? `${qtyText(qty)} per unit` : `${slotQty(qty, unitLabel)} per unit`;
+}
+
+/** The same quantity where the row has no room for "per unit": "40 × 1M tokens". */
+export function slotQty(qty: number, unitLabel: string): string {
+  return `${qtyText(qty)} × ${unitLabel}`;
 }
 
 /** The first letter up: engine phrases speak mid-sentence, a pill opens one. */
@@ -570,7 +581,7 @@ function customerGroups(
         figure: tagMoney(agency.totalValueUsd),
         detail: ROLE_WORD[agency.role],
         ringPct: null,
-        action: { kind: 'href' as const, href: '/government' },
+        action: { kind: 'href' as const, href: sheetHref('government') },
         ariaLabel: `${agency.name}, ${tagMoney(agency.totalValueUsd)} as ${agency.role}. Open Government.`,
       })),
     });

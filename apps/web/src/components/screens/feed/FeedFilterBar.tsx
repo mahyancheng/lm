@@ -72,10 +72,10 @@ export function FeedFilterBar({
   return (
     <div
       className={cx(
-        // Sticks below the status bar, and below the group's sub-tabs as well
-        // on a phone, where both are present.
+        // Sticks below the status bar. There is no sub-tab strip any more, so
+        // the status bar is the only chrome above a page at every width.
         'sticky z-10 -mx-3 flex flex-col gap-1.5 border-b border-hair bg-base/92 px-3 py-1.5 backdrop-blur sm:-mx-5 sm:px-5',
-        'top-[calc(var(--statusbar-height)+var(--subtab-height))] lg:top-[var(--statusbar-height)]',
+        'top-[var(--statusbar-height)]',
         className,
       )}
     >

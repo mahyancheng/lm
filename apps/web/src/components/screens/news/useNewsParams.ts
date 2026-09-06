@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { rememberNewsSearch } from '@/lib/game';
-import { parseNewsParams, serialiseNewsParams, type NewsParams } from './layout';
+import { newsSearchOver, parseNewsParams, type NewsParams } from './layout';
 
 export function useNewsParams(): [NewsParams, (patch: Partial<NewsParams>) => void] {
   const searchParams = useSearchParams();
@@ -28,16 +28,20 @@ export function useNewsParams(): [NewsParams, (patch: Partial<NewsParams>) => vo
   const params = useMemo(() => parseNewsParams(search), [search]);
 
   // Whatever the URL says the paper is open on, the shell's News links say too.
+  // `rememberNewsSearch` drops `sheet` itself: that is the address the paper is
+  // open *at*, and those links supply it themselves.
   useEffect(() => {
     rememberNewsSearch(search);
   }, [search]);
 
+  // Every write merges over the live address rather than replacing it, so the
+  // `sheet=news` that opened the paper survives a section tap. Dropping it
+  // would close the sheet the reader is standing in.
   const setParams = useCallback(
     (patch: Partial<NewsParams>) => {
-      const next: NewsParams = { ...params, ...patch };
-      router.replace(`${pathname}${serialiseNewsParams(next)}`, { scroll: false });
+      router.replace(`${pathname}${newsSearchOver(search, { ...params, ...patch })}`, { scroll: false });
     },
-    [params, pathname, router],
+    [params, pathname, router, search],
   );
 
   return [params, setParams];

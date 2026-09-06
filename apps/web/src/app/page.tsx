@@ -27,7 +27,8 @@ import {
   type SaveInspection,
   type SlotSummary,
 } from '@/lib/game';
-import { HOME_ROUTE, NAV_GROUPS } from '@/lib/nav';
+import { HOME_ROUTE, TABS } from '@/lib/nav';
+import { SHEETS, sheetsOfTab } from '@/lib/sheets';
 import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import { isSupabaseConfigured } from '@/lib/supabase/config';
 import { type MergedSlot, mergeSlots } from '@/lib/saves/plan';
@@ -859,31 +860,30 @@ SUPABASE_SERVICE_ROLE_KEY=`}
 
         {/* --- what is in there -------------------------------------------- */}
         <section className="order-5 flex flex-col gap-3">
-          <h2 className="text-[17px] font-extrabold tracking-tight text-ink">Eighteen screens, one company</h2>
+          <h2 className="text-[17px] font-extrabold tracking-tight text-ink">Five tabs, one company</h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {NAV_GROUPS.map((group) => (
-              <div key={group.id} className="panel-surface hover-lift min-w-0 p-3.5 sm:p-4">
+            {TABS.map((tab) => (
+              <div key={tab.id} className="panel-surface hover-lift min-w-0 p-3.5 sm:p-4">
                 <div className="mb-2 flex items-center gap-2">
-                  <IconChip name={group.icon} tone="brand" size="sm" />
-                  <span className="label-caps text-brand">{group.label}</span>
+                  <IconChip name={tab.icon} tone="brand" size="sm" />
+                  <span className="label-caps text-brand">{tab.label}</span>
                 </div>
-                <ul>
-                  {group.items.map((item) => (
-                    <li key={item.href} className="min-w-0">
-                      {/* A whole row is the target, and it clears 44px. */}
-                      <Link
-                        href={item.href}
-                        className="icon-knockout-panel flex min-h-11 min-w-0 items-center gap-2.5 rounded-chip px-1.5 py-1.5 text-ink hover:bg-raised hover:text-brand"
-                      >
-                        <Icon name={item.icon} size={17} accent="inherit" className="text-ink-faint" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12.5px] font-semibold">{item.label}</span>
-                          <span className="block truncate text-[10.5px] text-ink-faint">{item.blurb}</span>
-                        </span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                {/* A whole row is the target, and it clears 44px. */}
+                <Link
+                  href={tab.href}
+                  className="icon-knockout-panel flex min-h-11 min-w-0 items-center gap-2.5 rounded-chip px-1.5 py-1.5 text-ink hover:bg-raised hover:text-brand"
+                >
+                  <Icon name={tab.icon} size={17} accent="inherit" className="text-ink-faint" />
+                  <span className="min-w-0 flex-1 text-[11px] leading-snug text-ink-faint">{tab.blurb}</span>
+                </Link>
+                {/* What the tab holds, named. Each of these is a sheet over the
+                    page rather than a page of its own, which is the whole
+                    point of the shape — so they are listed, not linked. */}
+                <p className="mt-1.5 px-1.5 text-[10.5px] leading-snug text-ink-faint">
+                  {sheetsOfTab(tab.id)
+                    .map((id) => SHEETS[id].title)
+                    .join(' · ')}
+                </p>
               </div>
             ))}
           </div>

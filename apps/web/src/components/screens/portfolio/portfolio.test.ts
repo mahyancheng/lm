@@ -27,6 +27,7 @@ import {
   tabCounts,
   totalsLine,
 } from './rows';
+import { sheetHref } from '@/lib/sheets';
 
 /* -------------------------------------------------------------------------- */
 /*  Fixtures                                                                   */
@@ -255,9 +256,11 @@ describe('where an instruction is carried out', () => {
   });
 
   it('sends the two long-form instruments to the screens that own them', () => {
-    // No target in the query string: neither screen reads one, and a URL that
-    // promises a preselection it does not make is worse than a plain one.
-    expect(actionHref('propose_deal', 'cmp_rival')).toBe('/deal-room');
-    expect(actionHref('submit_board_proposal', 'cmp_rival')).toBe('/boardroom');
+    // No target in the query string: neither sheet reads one, and a URL that
+    // promises a preselection it does not make is worse than a plain one. Both
+    // are `?sheet=` addresses on the Market tab now, not routes of their own.
+    expect(actionHref('propose_deal', 'cmp_rival')).toBe(sheetHref('deals'));
+    expect(actionHref('submit_board_proposal', 'cmp_rival')).toBe(sheetHref('boardroom'));
+    expect(actionHref('propose_deal', 'cmp_rival')).toBe('/market?sheet=deals');
   });
 });

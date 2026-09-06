@@ -84,11 +84,40 @@ export function parseNewsParams(search: URLSearchParams | string | null | undefi
 /** The query string for a state. Defaults are omitted, so the plain route stays plain. */
 export function serialiseNewsParams(params: NewsParams): string {
   const out = new URLSearchParams();
+  writeNewsParams(out, params);
+  const text = out.toString();
+  return text.length === 0 ? '' : `?${text}`;
+}
+
+/** The five keys the paper owns. Every other param on the address belongs to somebody else. */
+export const NEWS_PARAM_KEYS: readonly string[] = ['section', 'mine', 'sector', 'company', 'edition'];
+
+function writeNewsParams(out: URLSearchParams, params: NewsParams): void {
   if (params.section !== 'front') out.set('section', params.section);
   if (params.mine) out.set('mine', '1');
   if (params.sector !== null) out.set('sector', params.sector);
   if (params.companyId !== null) out.set('company', params.companyId);
   if (params.edition !== null) out.set('edition', String(params.edition));
+}
+
+/**
+ * The paper's state written over a live address, keeping every param it does
+ * not own.
+ *
+ * The paper is a sheet over the World tab, so `sheet=news` is part of the
+ * address it lives at rather than part of its own state. A serialisation that
+ * replaced the whole query would drop it and close the sheet on every section
+ * tap; the params that are not the paper's lead, unchanged and in their own
+ * order, and the paper's follow.
+ */
+export function newsSearchOver(live: URLSearchParams | string | null | undefined, params: NewsParams): string {
+  const source = typeof live === 'string' ? new URLSearchParams(live.startsWith('?') ? live.slice(1) : live) : (live ?? new URLSearchParams());
+  const out = new URLSearchParams();
+  for (const [key, value] of source) {
+    if (NEWS_PARAM_KEYS.includes(key)) continue;
+    out.set(key, value);
+  }
+  writeNewsParams(out, params);
   const text = out.toString();
   return text.length === 0 ? '' : `?${text}`;
 }

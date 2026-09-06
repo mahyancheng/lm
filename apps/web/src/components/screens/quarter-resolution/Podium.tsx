@@ -20,6 +20,7 @@ import { humanise } from '@/components/screens/reporting/util';
 import { CountUp } from './CountUp';
 import { PodiumFigure } from './Art';
 import { PODIUM_HEIGHTS, podiumOrder } from './theatre';
+import { sheetHref } from '@/lib/sheets';
 
 export interface RankRow {
   readonly board: string;
@@ -54,7 +55,7 @@ export function RankPodium({ rows, reveal = true }: RankPodiumProps): React.JSX.
           return (
             <Link
               key={row.board}
-              href="/leaderboard"
+              href={sheetHref('leaderboard')}
               className="animate-pop-in press-pop flex min-w-0 flex-col items-center gap-1.5 rounded-card focus-visible:outline-2"
               style={reveal ? { animationDelay: `${index * 110}ms` } : undefined}
               title={`${humanise(row.board)} — rank ${row.rank}`}

@@ -27,11 +27,11 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { quarterLabel } from '@frontier/contracts';
 import { connectionsOf } from '@frontier/simulation';
-import { EmptyState, Icon, PageHeader, Panel, cx } from '@/components/ui';
+import { EmptyState, Icon, Panel, cx } from '@/components/ui';
 import { takePendingLine, useActiveCompany, usePlayerView, useSession } from '@/lib/game';
 import type { TargetChoice } from '../products/nodeLaunch';
+import { LineStatCards, LineTables, lineFigures } from '../products/lineStats';
 import { NodeLaunchModal } from '../products/NodeLaunchModal';
 import { NodeLineDrawer } from '../products/NodeLineDrawer';
 import { ConnectionsDiagram } from './ConnectionsDiagram';
@@ -42,7 +42,18 @@ import { useContainerWidth } from './useContainerWidth';
 /** How far a founder may walk up somebody else's chain before the crumb trail is nonsense. */
 const MAX_DEPTH = 8;
 
-export function ConnectionsScreen(): React.JSX.Element {
+export interface ConnectionsScreenProps {
+  /**
+   * A line named in the address — `/company?sheet=products&line=<productId>`.
+   *
+   * The Company tab's Connections card links a line row here, so the picture
+   * opens on that line **and** its drawer opens on the price. Null on a plain
+   * open, which is every other way in.
+   */
+  readonly initialLineId?: string | null;
+}
+
+export function ConnectionsScreen({ initialLineId = null }: ConnectionsScreenProps): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
   const company = useActiveCompany();
@@ -53,6 +64,10 @@ export function ConnectionsScreen(): React.JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSlotId, setDrawerSlotId] = useState<string | null>(null);
   const [drawerAim, setDrawerAim] = useState<TargetChoice | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<'price' | null>(null);
+  // A row in the Lines table opens its own line, which may be a closed one the
+  // picture cannot select — the switcher only carries active lines.
+  const [tableProductId, setTableProductId] = useState<string | null>(null);
   const [launchOpen, setLaunchOpen] = useState(false);
 
   // The Research screen hands a line off through sessionStorage rather than a
@@ -61,6 +76,19 @@ export function ConnectionsScreen(): React.JSX.Element {
     const pending = takePendingLine();
     if (pending !== null) setProductId(pending);
   }, []);
+
+  // A line named in the address: select it, come back off anybody else's
+  // picture, and open its drawer on the price control — the third tap of
+  // "raise a price".
+  useEffect(() => {
+    if (initialLineId === null) return;
+    setSubjectIds([]);
+    setProductId(initialLineId);
+    setDrawerSlotId(null);
+    setDrawerAim(null);
+    setDrawerFocus('price');
+    setDrawerOpen(true);
+  }, [initialLineId]);
 
   const subjectId = subjectIds[subjectIds.length - 1] ?? company.id;
   // Two different questions. `isOwn` decides what may be *done* — my own line's
@@ -97,8 +125,25 @@ export function ConnectionsScreen(): React.JSX.Element {
     [width, model],
   );
 
-  const openProduct =
-    isOwn && connections.productId !== null ? (company.products.find((entry) => entry.id === connections.productId) ?? null) : null;
+  // The table's own pick wins over the picture's selection, so a closed line —
+  // which the switcher cannot hold — still opens its drawer.
+  const drawerProductId = tableProductId ?? connections.productId;
+  const openProduct = isOwn && drawerProductId !== null ? (company.products.find((entry) => entry.id === drawerProductId) ?? null) : null;
+
+  const activeLines = useMemo(() => company.products.filter((product) => product.isActive), [company.products]);
+  const closedLines = useMemo(() => company.products.filter((product) => !product.isActive), [company.products]);
+  const figures = useMemo(() => lineFigures(session, company, activeLines), [session, company, activeLines]);
+
+  /** A row in either table: select it in the switcher where that is possible, and open its drawer. */
+  function openFromTable(productId: string): void {
+    const line = company.products.find((entry) => entry.id === productId) ?? null;
+    if (line !== null && line.isActive) setProductId(productId);
+    setTableProductId(productId);
+    setDrawerSlotId(null);
+    setDrawerAim(null);
+    setDrawerFocus(null);
+    setDrawerOpen(true);
+  }
 
   const companyNames = useMemo(() => new Map(Object.entries(connections.companyNames)), [connections.companyNames]);
 
@@ -106,12 +151,16 @@ export function ConnectionsScreen(): React.JSX.Element {
     setDrawerOpen(false);
     setDrawerSlotId(null);
     setDrawerAim(null);
+    setDrawerFocus(null);
+    setTableProductId(null);
   }
 
   function openLine(slotId: string | null, aim: TargetChoice | null): void {
     if (!isOwn) return;
+    setTableProductId(null);
     setDrawerSlotId(slotId);
     setDrawerAim(aim);
+    setDrawerFocus(null);
     setDrawerOpen(true);
   }
 
@@ -119,6 +168,7 @@ export function ConnectionsScreen(): React.JSX.Element {
     if (companyId === subjectId) return;
     setSubjectIds((stack) => (stack.length >= MAX_DEPTH ? [...stack.slice(1), companyId] : [...stack, companyId]));
     setProductId(null);
+    setTableProductId(null);
   }
 
   function act(action: PillAction): void {
@@ -148,22 +198,17 @@ export function ConnectionsScreen(): React.JSX.Element {
 
   return (
     <>
-      <PageHeader
-        title="Connections"
-        eyebrow={`${quarterLabel(session.startYear, session.quarter)} · ${company.name}`}
-        subtitle="Inputs left, buyers right. Tap anything to act on it."
-        actions={
-          // Somebody else's picture is not somewhere to open my own line: the
-          // panel below says ALETHEIA LABS, and a primary button above it reads
-          // as belonging to them.
-          isOwn ? (
-            <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
-              <Icon name="plus" size={16} accent="current" />
-              Open a line
-            </button>
-          ) : undefined
-        }
-      />
+      {/* The sheet header carries the title. Somebody else's picture is not
+          somewhere to open my own line: the panel below says ALETHEIA LABS,
+          and a primary button above it reads as belonging to them. */}
+      {!isOwn ? null : (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-primary tap-target w-full gap-1.5 sm:w-auto" onClick={() => setLaunchOpen(true)}>
+            <Icon name="plus" size={16} accent="current" />
+            Open a line
+          </button>
+        </div>
+      )}
 
       {!walking ? null : (
         <div className="flex flex-wrap items-center gap-2">
@@ -196,6 +241,10 @@ export function ConnectionsScreen(): React.JSX.Element {
           </span>
         </div>
       )}
+
+      {/* Above the picture, own view only: what the lines booked. A rival's
+          picture is public relationships only, and their revenue is not one. */}
+      {!isOwn ? null : <LineStatCards figures={figures} />}
 
       <Panel
         title={isOwn ? 'Your line' : subjectName}
@@ -258,6 +307,16 @@ export function ConnectionsScreen(): React.JSX.Element {
         </div>
       </Panel>
 
+      {!isOwn ? null : (
+        <LineTables
+          session={session}
+          active={activeLines}
+          sunset={closedLines}
+          onOpenLine={openFromTable}
+          onLaunch={() => setLaunchOpen(true)}
+        />
+      )}
+
       <NodeLineDrawer
         session={session}
         product={drawerOpen ? openProduct : null}
@@ -267,6 +326,11 @@ export function ConnectionsScreen(): React.JSX.Element {
         companyNames={companyNames}
         initialSlotId={drawerSlotId}
         initialAim={drawerAim}
+        initialFocus={drawerFocus}
+        onSeeConnections={(companyId) => {
+          closeDrawer();
+          walkTo(companyId);
+        }}
       />
       <NodeLaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} initialNodeId={null} />
     </>

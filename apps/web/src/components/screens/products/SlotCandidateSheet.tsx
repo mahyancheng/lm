@@ -22,7 +22,8 @@ import type { InputRoute, NodeSlotOptions, SlotCandidate } from '@frontier/simul
 import { NODE_ROLE_LABELS, NODE_TIER_LABELS, type NodeTier } from '@frontier/contracts';
 import { formatMoney, formatPct } from '@frontier/shared';
 import { Icon, Tag } from '@/components/ui';
-import { EMPTY_CHOICE, bestRouteOf, canLeaveEmpty, choiceOfRoute, type SlotChoice } from './nodeLaunch';
+import { slotRecipe } from '@/components/screens/connections/model';
+import { EMPTY_CHOICE, bestRouteOf, canLeaveEmpty, choiceOfFill, choiceOfRoute, type SlotChoice } from './nodeLaunch';
 
 export interface SlotCandidateSheetProps {
   readonly slot: NodeSlotOptions;
@@ -34,6 +35,36 @@ export interface SlotCandidateSheetProps {
   readonly onBack: () => void;
   /** Rendered under the routes: the validator's answer to the last choice, when the host has one. */
   readonly banner?: ReactNode;
+  /**
+   * Walk the host's in-screen stack to the company filling this slot.
+   *
+   * Only the Connections picture has such a stack, so the launch flow leaves
+   * this undefined and draws no row.
+   */
+  readonly onSeeConnections?: (companyId: string) => void;
+}
+
+/**
+ * The company whose line fills this slot right now, or null when nobody's does.
+ *
+ * A `make` route is this company itself and a `market` route is nobody, so
+ * neither is somewhere to walk to; only a `buy` route names a seller. The name
+ * is the route's own label, which is where the engine already put it.
+ */
+export function namedSellerOf(
+  slot: NodeSlotOptions,
+  companyId: string,
+  choice: SlotChoice | undefined,
+): { readonly companyId: string; readonly name: string } | null {
+  const standing = choice ?? (slot.fill === null ? undefined : choiceOfFill(slot.fill));
+  if (standing === undefined || standing.nodeId === null || standing.supplierCompanyId === null) return null;
+  if (standing.supplierCompanyId === companyId) return null;
+  const candidate = slot.candidates.find((entry) => entry.nodeId === standing.nodeId);
+  const route = candidate?.routes.find(
+    (entry) => entry.kind === 'buy' && entry.supplierCompanyId === standing.supplierCompanyId && entry.supplierProductId === standing.supplierProductId,
+  );
+  if (route === undefined) return null;
+  return { companyId: standing.supplierCompanyId, name: route.label };
 }
 
 /** The route a freshly picked node opens on: make when the company runs a line on it, else the open market — the roll-up's own order. */
@@ -41,7 +72,8 @@ export function openingRouteOf(candidate: SlotCandidate): InputRoute | null {
   return candidate.routes.find((route) => route.kind === 'make') ?? candidate.routes.find((route) => route.kind === 'market') ?? null;
 }
 
-export function SlotCandidateSheet({ slot, companyId, choice, onChoose, onBack, banner }: SlotCandidateSheetProps): React.JSX.Element {
+export function SlotCandidateSheet({ slot, companyId, choice, onChoose, onBack, banner, onSeeConnections }: SlotCandidateSheetProps): React.JSX.Element {
+  const seller = namedSellerOf(slot, companyId, choice);
   const chosenNodeId = choice === undefined ? (slot.fill?.nodeId ?? null) : choice.nodeId;
   const [picked, setPicked] = useState<string | null>(chosenNodeId ?? slot.candidates[0]?.nodeId ?? null);
 
@@ -72,11 +104,30 @@ export function SlotCandidateSheet({ slot, companyId, choice, onChoose, onBack, 
             {slot.required ? <span className="ml-1 font-bold text-loss">*</span> : null}
           </div>
           <div className="truncate text-[10.5px] text-ink-faint">
-            {NODE_ROLE_LABELS[slot.role]} · {slot.qtyPerUnit} {slot.unitLabel} per unit · {slot.required ? 'required' : 'optional'}
+            {NODE_ROLE_LABELS[slot.role]} · {slotRecipe(slot.label, slot.qtyPerUnit, slot.unitLabel)} ·{' '}
+            {slot.required ? 'required' : 'optional'}
             {slot.kind === 'delivery' ? ' · what it ships on' : ''}
           </div>
         </div>
       </div>
+
+      {/* The way up somebody else's chain. A slot filled by a named seller is
+          the only pill on this picture that leads to another company, and
+          without this row an opening with no named buyer — Enterprise AI —
+          cannot be walked at all. Make and open-market fills name nobody, so
+          they get no row. */}
+      {seller === null || onSeeConnections === undefined ? null : (
+        <button
+          type="button"
+          data-testid="slot-see-connections"
+          className="flex min-h-11 w-full items-center gap-2 rounded-card border border-hairline bg-raised px-3 text-left"
+          onClick={() => onSeeConnections(seller.companyId)}
+        >
+          <Icon name="network" size={15} accent="brand" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink">See {seller.name}’s connections</span>
+          <Icon name="chevronRight" size={14} accent="neutral" />
+        </button>
+      )}
 
       <ul className="space-y-1.5">
         {slot.candidates.map((candidate) => {

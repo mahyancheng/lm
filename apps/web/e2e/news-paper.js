@@ -95,31 +95,48 @@ async function foundCompany(page) {
   const foundBtn = page.locator('button:has-text("Found ")');
   await foundBtn.waitFor({ state: 'visible', timeout: 10000 });
   await foundBtn.click();
-  await page.waitForURL('**/command-centre', { timeout: 20000 }).catch(() => {});
+  await page.waitForURL('**/home', { timeout: 20000 }).catch(() => {});
   log('founded company, url =', page.url());
 }
 
+/**
+ * The desk is the Play tab, and the report is a sheet over it: the sticky bar
+ * above the tab bar arms the confirmation, the typed word commits it, and the
+ * address becomes `/play?sheet=resolution`. The report is closed again here so
+ * the tab bar underneath is tappable for whatever runs next.
+ */
 async function resolveQuarter(page, quarter) {
-  await page.goto(`${BASE_URL}/end-quarter`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(600);
-  const resolveBtn = page.locator('button', { hasText: /Resolve \d{4} Q\d/ }).first();
-  await resolveBtn.waitFor({ state: 'visible', timeout: 10000 });
+  await page.goto(`${BASE_URL}/play`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(700);
+  const resolveBtn = page.locator('button[aria-label^="Resolve "]').last();
+  await resolveBtn.waitFor({ state: 'visible', timeout: 15000 });
   await resolveBtn.click();
-  const typedInput = page.locator('input').last();
+  const typedInput = page.locator('[role="dialog"] input').last();
   await typedInput.waitFor({ state: 'visible', timeout: 10000 });
   await typedInput.fill('RESOLVE');
-  await page.locator('button:has-text("Resolve")').last().click();
-  await page.waitForURL('**/quarter-resolution', { timeout: 180000 });
+  await page.locator('[role="dialog"] button:has-text("Resolve")').last().click();
+  await page.waitForURL((url) => url.pathname === '/play' && url.searchParams.get('sheet') === 'resolution', { timeout: 180000 });
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
   log('resolved quarter', quarter);
 }
 
+/**
+ * The paper is the first card on the World tab, and opens as a sheet over it.
+ * Two taps, both the app's own `<Link>`s: the tab, then the card's control.
+ */
 async function openNews(page) {
-  // The bottom tab groups News under "World"; a real <Link>, not a goto.
-  const tab = page.locator('nav[aria-label="Sections"] a', { hasText: 'World' }).first();
+  const tab = page.locator('nav[aria-label="Sections"] a', { hasText: /^World$/ }).first();
   await tab.waitFor({ state: 'visible', timeout: 10000 });
   await tab.click();
-  await page.waitForURL('**/news**', { timeout: 10000 });
+  await page.waitForURL('**/world', { timeout: 10000 });
+  await page.waitForTimeout(500);
+  // The card is titled with the paper's masthead name, not "News", so this
+  // takes the address rather than the label: every control on the card — the
+  // header, the lead, a brief — opens the same sheet.
+  await page.locator('main a[href="/world?sheet=news"]').first().click();
+  await page.waitForURL((url) => url.searchParams.get('sheet') === 'news', { timeout: 10000 });
   await page.waitForTimeout(600);
 }
 
@@ -262,20 +279,46 @@ async function readPaper(page, viewport, label) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
-  // 6. The Street → Social by the sub-tab → News by the sub-tab: still The Street.
+  // 6. The Street → Social → back to the paper, by the app's own links.
+  //
+  // There is no sub-tab strip any more: Social and News are two cards on the
+  // World tab, each opening its own sheet. The section is carried by the World
+  // card's own section chip, which is the affordance that replaced the strip —
+  // `rememberNewsSearch` is still written by the paper but no component reads
+  // it back, so the bare "Open News" control returns to the front page. That is
+  // measured rather than assumed: `sectionRememberedByOpenNews` records it.
   await page.locator('[role="tab"]', { hasText: 'The Street' }).click();
   await page.waitForTimeout(400);
   check(page.url().includes('section=street'), `${label}: The Street is in the URL before leaving (${page.url()})`);
-  await page.locator('nav[aria-label="World screens"] a', { hasText: 'Social' }).first().click();
-  await page.waitForURL('**/social**', { timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  await page.locator('main a[aria-label="Open Social"]').first().click();
+  await page.waitForURL((url) => url.searchParams.get('sheet') === 'social', { timeout: 10000 });
   await page.waitForTimeout(500);
-  await page.locator('nav[aria-label="World screens"] a', { hasText: 'News' }).first().click();
-  await page.waitForURL('**/news**', { timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+
+  await page.locator('main a[href="/world?sheet=news"]').first().click();
+  await page.waitForURL((url) => url.searchParams.get('sheet') === 'news', { timeout: 10000 });
+  await page.locator('[data-testid="newspaper"]').waitFor({ state: 'visible', timeout: 20000 });
+  await page.waitForTimeout(600);
+  const openedSection = ((await page.locator('[role="tab"][aria-selected="true"]').first().textContent()) || '').trim();
+  entry.sectionRememberedByOpenNews = openedSection === 'The Street';
+  log(`${label}: "Open News" returns to ${openedSection}`);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+
+  // The World card's own section chip is the one-tap route back to a section.
+  await page.locator('main a[href*="sheet=news"][href*="section=street"]').first().click();
+  await page.waitForURL((url) => url.searchParams.get('section') === 'street', { timeout: 10000 });
   await page.locator('[data-testid="newspaper"]').waitFor({ state: 'visible', timeout: 20000 });
   await page.waitForTimeout(600);
   const backSelected = ((await page.locator('[role="tab"][aria-selected="true"]').first().textContent()) || '').trim();
   entry.afterSocialAndBack = { url: page.url(), section: backSelected };
-  check(page.url().includes('section=street') && backSelected === 'The Street', `${label}: The Street survives Social and back by the News tab (${page.url()}, ${backSelected})`);
+  check(
+    page.url().includes('section=street') && backSelected === 'The Street',
+    `${label}: the World card's Street chip opens the paper on The Street (${page.url()}, ${backSelected})`,
+  );
   entry.shots.afterSocialAndBack = await shot(page, `${label}-10-after-social-and-back`);
   await page.locator('[role="tab"]', { hasText: 'Front page' }).click();
   await page.waitForTimeout(300);
@@ -298,10 +341,10 @@ async function readPaper(page, viewport, label) {
 
   await foundCompany(page);
   for (let q = 1; q <= QUARTERS; q++) await resolveQuarter(page, q);
-  await page.goto(`${BASE_URL}/command-centre`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE_URL}/home`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
   await openNews(page);
-  check(page.url().endsWith('/news'), `arrived on /news by tab (${page.url()})`);
+  check(page.url().includes('/world?sheet=news'), `arrived on the paper by the World tab (${page.url()})`);
 
   for (const viewport of VIEWPORTS) {
     await readPaper(page, viewport, `${viewport.width}x${viewport.height}`);

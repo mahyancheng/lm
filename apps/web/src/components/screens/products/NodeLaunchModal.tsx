@@ -26,6 +26,7 @@ import { economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
 import { biggestCostSentence, costBreakdown, launchCapacityPreview, nodeEntryRoutes, slotOptions, unitCostOf } from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { CashAfter, Drawer, Icon, SliderField, Tag, ValidationBanner, roundStep, sectorLabel } from '@/components/ui';
+import { slotQty } from '@/components/screens/connections/model';
 import { setPendingResearchNode, useActiveCompany, useGameActions, useSession } from '@/lib/game';
 import {
   CUSTOMER_CHIP,
@@ -310,7 +311,7 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
                               {slot.required ? <span className="font-bold text-loss">*</span> : null}
                               {roleCaption(slot) === '' ? null : <span className="shrink-0 text-[10.5px] text-ink-faint">· {roleCaption(slot)}</span>}
                               <span className="figure ml-auto shrink-0 text-[10.5px] text-ink-faint">
-                                {slot.qtyPerUnit} {slot.unitLabel}
+                                {slotQty(slot.qtyPerUnit, slot.unitLabel)}
                               </span>
                             </div>
                             <div className="truncate text-[11px] text-ink-dim">{fillSummary(slot, fills[slot.slotId], company.id)}</div>

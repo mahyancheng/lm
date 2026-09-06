@@ -413,7 +413,18 @@ moderation.
 
 ## 9. Target screen map
 
-Twenty-one screens. Every one is specified in [UI_SYSTEM.md](./UI_SYSTEM.md).
+Twenty-one subjects. Every one is specified in [UI_SYSTEM.md](./UI_SYSTEM.md).
+
+**They are not twenty-one destinations.** The game is navigated as **five tabs**
+— Home, Company, Market, World, Play — each one scrolling page of cards, with
+every subject below reached as a *sheet* over the tab that owns it. Home is the
+company at a glance and owns no sheet of its own; Company holds the floor, the
+lines, people, research, government and the books; Market holds the stock, the
+funding, the register, the tape, deals and the board; World holds the paper, the
+social feed, the people, the standings and the economy; Play is the desk where
+a quarter is ended, with the Chief of Staff as the shortcut to anything that has
+no panel. There is no sub-tab strip and no hamburger: a thumb is one tap from
+any subject in the game.
 
 | # | Screen | Purpose |
 |---:|---|---|

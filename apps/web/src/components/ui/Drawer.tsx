@@ -20,6 +20,13 @@ export interface DrawerProps {
    * been a route. From `sm` up it is the side pane it says it is.
    */
   readonly side?: 'right' | 'bottom';
+  /**
+   * `sheet` is the 85dvh detail pane every existing mount site uses; `full` is
+   * the registry sheet — a whole screen over its tab, 95dvh on a phone.
+   */
+  readonly height?: 'sheet' | 'full';
+  /** Rendered left of the title: a Back control on a registry sheet. */
+  readonly leading?: ReactNode;
   readonly width?: number;
   readonly className?: string;
 }
@@ -44,6 +51,8 @@ export function Drawer({
   children,
   footer,
   side = 'right',
+  height = 'sheet',
+  leading,
   width = 460,
   className,
 }: DrawerProps): React.JSX.Element | null {
@@ -65,8 +74,9 @@ export function Drawer({
           'animate-rise absolute flex flex-col border-hair bg-panel shadow-sheet',
           side === 'right'
             ? // phone: a bottom sheet; `sm` and up: the side pane
-              'inset-x-0 bottom-0 max-h-[85dvh] rounded-t-panel border-t sm:inset-y-0 sm:right-0 sm:left-auto sm:max-h-none sm:w-[var(--drawer-width)] sm:rounded-none sm:border-t-0 sm:border-l'
-            : 'inset-x-0 bottom-0 max-h-[85dvh] rounded-t-panel border-t',
+              'inset-x-0 bottom-0 rounded-t-panel border-t sm:inset-y-0 sm:right-0 sm:left-auto sm:max-h-none sm:w-[var(--drawer-width)] sm:rounded-none sm:border-t-0 sm:border-l'
+            : 'inset-x-0 bottom-0 rounded-t-panel border-t',
+          height === 'full' ? 'max-h-[95dvh]' : 'max-h-[85dvh]',
           className,
         )}
         style={side === 'right' ? ({ ['--drawer-width' as string]: `${width}px` } as React.CSSProperties) : undefined}
@@ -75,7 +85,8 @@ export function Drawer({
           <span className="sheet-grip" />
         </div>
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hair px-5 py-3">
-          <div className="min-w-0">
+          {leading === undefined ? null : <div className="flex shrink-0 items-center self-center">{leading}</div>}
+          <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-[14px] font-bold text-ink">
               {title}
             </h2>

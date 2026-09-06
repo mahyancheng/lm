@@ -14,7 +14,7 @@ The rule everything else follows from:
 
 | Document | One line |
 |---|---|
-| [GAME_DESIGN.md](./GAME_DESIGN.md) | Product thesis, the progression ladder, the three scales, plural success, the CEO/owner split, first playable and the eighteen screens. |
+| [GAME_DESIGN.md](./GAME_DESIGN.md) | Product thesis, the progression ladder, the three scales, plural success, the CEO/owner split, first playable and the twenty-one subjects behind five tabs. |
 | [SIMULATION.md](./SIMULATION.md) | `S_{t+1} = F(…)`, the twelve world domains, the hazard pipeline, the eighteen resolution phases, truth versus belief, the ledger, determinism, idempotency and the thirteen invariants. |
 | [ECONOMY.md](./ECONOMY.md) | Products, people, compute, financial statements, valuation anchors, the quarterly return model, funding rounds, dilution, debt, acquisitions and balance-sheet invariants. |
 | [LLM_CONTRACTS.md](./LLM_CONTRACTS.md) | The seven roles and their authority boundaries, per-role input/output schemas, tiered agent economics, run logging, deterministic fallbacks and Anthropic API conventions. |
@@ -22,7 +22,7 @@ The rule everything else follows from:
 | [GOVERNMENT.md](./GOVERNMENT.md) | Procurement end to end: agencies, contract forms, evaluation weights, the bid trade-off space, consortiums, past performance, and why connections help discovery and never award. |
 | [MARKETS.md](./MARKETS.md) | The in-world exchange, the optional read-only reference tape, belief-based pricing, disclosures and rumour credibility, ownership thresholds and proxy contests. |
 | [MULTIPLAYER.md](./MULTIPLAYER.md) | Shared session worlds, the asynchronous quarter cadence, connection level versus relationship, the access rule, structured deals, moderation, Realtime channels and leaderboards. |
-| [UI_SYSTEM.md](./UI_SYSTEM.md) | The aesthetic, all eighteen screens, the quarter-resolution moment, Frontier Map rendering rules and the Chief-of-Staff interaction contract. |
+| [UI_SYSTEM.md](./UI_SYSTEM.md) | The aesthetic, every screen, the quarter-resolution moment, Frontier Map rendering rules and the Chief-of-Staff interaction contract. |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Hosting (the always-on Pi via `deploy/pi`; the generic VPS kit), Supabase setup, migrations and seeds, environment variables, demo mode versus the full stack, LLM cost controls and the operational runbook. |
 
 ## Reading paths

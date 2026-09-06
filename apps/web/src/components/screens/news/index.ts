@@ -30,6 +30,7 @@ export type { TypeMeasure } from './useTypeMeasure';
 export {
   DEFAULT_NEWS_PARAMS,
   HALF_WIDTH_FALLBACK_CHARS,
+  NEWS_PARAM_KEYS,
   NEWS_SECTIONS,
   SECOND_TIER_MAX,
   SECOND_TIER_MIN,
@@ -39,6 +40,7 @@ export {
   isNewsSection,
   kindsOfSection,
   layoutFrontPage,
+  newsSearchOver,
   pairForColumns,
   parentOf,
   parseNewsParams,

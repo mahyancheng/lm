@@ -165,9 +165,14 @@ export function ConnectionsDiagram({ model, layout, onAct }: ConnectionsDiagramP
           >
             {/* The slot's own name, at 8.5 points rather than the shared
                 `label-caps` 10, because "COMPANY-WIDE" plus "+2 more" is 19
-                characters and the column is 130 points. */}
+                characters and the column is 130 points. Tracking is 0.02em,
+                not the 0.06em uppercase usually earns: inside a sheet the
+                column is 111 points on a 360-point phone, where "MANUFACTURING
+                · 10" wants 113 at the looser setting and loses its last
+                character. Nine points of letter-spacing is more than the two
+                characters it costs here. */}
             <div className={cx('flex w-full min-w-0 items-baseline gap-1 whitespace-nowrap', align)}>
-              <span data-testid="conn-header-name" className="min-w-0 truncate text-[8.5px] font-bold uppercase tracking-[0.06em] text-ink-faint">
+              <span data-testid="conn-header-name" className="min-w-0 truncate text-[8.5px] font-bold uppercase tracking-[0.02em] text-ink-faint">
                 {box.text}
               </span>
               {group.required ? <span className="shrink-0 text-[8.5px] font-bold text-loss">*</span> : null}

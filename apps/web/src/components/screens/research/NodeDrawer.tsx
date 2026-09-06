@@ -75,6 +75,7 @@ import {
   unlockLines,
   worldThinksLine,
 } from './nodeState';
+import { sheetHref } from '@/lib/sheets';
 
 export interface NodeDrawerProps {
   readonly session: SessionState;
@@ -318,7 +319,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
               )}
               {nodeEconomy.canProduce ? (
                 <Link
-                  href="/products"
+                  href={sheetHref('products')}
                   onClick={() => setPendingLaunchCategory(nodeEconomy.node.id)}
                   className="btn btn-primary tap-target mt-2 gap-1"
                 >
@@ -368,7 +369,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
                     <span className="text-[11.5px] text-ink-dim">{category.label}</span>
                     {state.kind === 'done' ? (
                       <Link
-                        href="/products"
+                        href={sheetHref('products')}
                         onClick={() => setPendingLaunchCategory(category.id)}
                         className="btn btn-sm tap-target gap-1 sm:min-h-0"
                       >

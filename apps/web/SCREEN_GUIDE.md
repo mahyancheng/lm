@@ -1,44 +1,54 @@
 # Screen Guide
 
-The contract between the application shell and the eighteen screens.
+The contract between the application shell, the five tabs and the sheet bodies.
 
 Everything in this document is built and green: the engine runs in the browser,
-the store wraps it, the primitives are written, and every route renders. Your
-job is to replace one placeholder file per screen with the real surface.
+the store wraps it, the primitives are written, and every tab and sheet renders.
+Your job is to write one surface — a tab's cards, or one sheet body.
 
-**Read this whole file before writing a screen.** Half of it is rules that stop
-a screen from leaking private state or inventing a number, and those are
+**Read this whole file before writing a surface.** Half of it is rules that stop
+a surface from leaking private state or inventing a number, and those are
 invariants, not style preferences.
 
 ---
 
 ## 1. What you own
 
-Replace exactly one file per screen:
+The game is **five tabs**. Each is one scrolling page of cards; every
+drill-down is a **sheet** over the tab that owns it, addressed by `?sheet=<id>`
+and opened by `SheetHost` in the shell. There is no sub-tab strip, no hamburger
+and no second row of navigation: the bottom bar is the whole of it.
 
-| Screen | Route file |
+| Tab | Route file | Body |
+|---|---|---|
+| Home | `src/app/(game)/home/page.tsx` | `components/screens/tabs/HomeTab.tsx` |
+| Company | `src/app/(game)/company/page.tsx` | `components/screens/tabs/CompanyTab.tsx` |
+| Market | `src/app/(game)/market/page.tsx` | `components/screens/tabs/MarketTab.tsx` |
+| World | `src/app/(game)/world/page.tsx` | `components/screens/tabs/WorldTab.tsx` |
+| Play | `src/app/(game)/play/page.tsx` | `components/screens/tabs/PlayTab.tsx` |
+
+Every subject that used to be a route of its own is now a **sheet body** under
+`src/components/screens/<subject>/<Subject>Screen.tsx`, named in
+`src/lib/sheets.ts` and switched on by `components/shell/SheetHost.tsx`:
+
+| Tab | Sheets |
 |---|---|
-| Command Centre | `src/app/(game)/command-centre/page.tsx` |
-| Company | `src/app/(game)/company/page.tsx` |
-| Products | `src/app/(game)/products/page.tsx` |
-| Research / Frontier | `src/app/(game)/research/page.tsx` |
-| People | `src/app/(game)/people/page.tsx` |
-| Network | `src/app/(game)/network/page.tsx` |
-| Markets | `src/app/(game)/markets/page.tsx` |
-| Capital | `src/app/(game)/capital/page.tsx` |
-| Boardroom | `src/app/(game)/boardroom/page.tsx` |
-| Government | `src/app/(game)/government/page.tsx` |
-| Social | `src/app/(game)/social/page.tsx` |
-| News | `src/app/(game)/news/page.tsx` |
-| Deal Room | `src/app/(game)/deal-room/page.tsx` |
-| Financials | `src/app/(game)/financials/page.tsx` |
-| Leaderboard | `src/app/(game)/leaderboard/page.tsx` |
-| Chief of Staff | `src/app/(game)/chief-of-staff/page.tsx` |
-| End Quarter | `src/app/(game)/end-quarter/page.tsx` |
-| Quarter Resolution | `src/app/(game)/quarter-resolution/page.tsx` |
+| Company | Company, Group, Products, People, Research, Government, Financials |
+| Market | Markets, Capital, Portfolio, The Street, Deal Room, Boardroom |
+| World | News, Social, Network, Leaderboard, Sector |
+| Play | Quarter Resolution, Chief of Staff |
 
-You may also add screen-local components under
-`src/components/screens/<screen>/`. Do **not** edit:
+Home owns no sheet: it is the company at a glance, and every card on it opens a
+sheet on one of the other four tabs.
+
+All twenty-two old addresses still resolve. `app/(game)/[...legacy]/page.tsx`
+looks the first segment up in `LEGACY_ROUTES` and replaces onto the new one;
+an unknown segment is a real 404. **Never write a legacy path into a
+component** — `legacyHref()` and `sheetHref()` in `lib/sheets.ts` are the only
+places one belongs, and `shell/legacyLinks.test.ts` fails a build that does.
+
+You may add screen-local components under
+`src/components/screens/<subject>/`. Do **not** edit:
 
 - `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`
 - `src/lib/**`, `src/components/ui/**`, `src/components/shell/**`
@@ -51,38 +61,36 @@ exists rather than editing the primitive — three agents share those files.
 
 ## 2. Page skeleton
 
-Every screen is a client component that renders **a header row, then a grid of
-panels**. The shell supplies the rail, the status bar, the action tray and the
-resolving overlay; a page renders neither chrome nor a page background.
+**A tab is a page of cards.** One scrolling column: each card states its
+figures on the page — so the answer is read without a tap — and opens exactly
+one sheet. A card that states nothing and only links is a menu entry, and menus
+are what this shape exists to remove.
+
+**A sheet body renders no `PageHeader`.** The sheet's own header carries the
+title and the Back control; a body that drew a second one drew it twice. What
+used to be the header's `actions` becomes the first flex-wrap row of the body.
+
+Both return a **fragment**. The shell supplies the status bar, the bottom bar,
+`SheetHost`, the Chief of Staff dock and the resolving overlay; neither a tab
+nor a sheet body renders chrome or a page background.
 
 ```tsx
 'use client';
 
-import { PageHeader, Panel, StatCard } from '@/components/ui';
-import { usePlayerCompany, usePlayerView, useSession } from '@/lib/game';
-import { quarterLabel } from '@frontier/contracts';
+import { Panel, StatCard } from '@/components/ui';
+import { useActiveCompany, useSession } from '@/lib/game';
+import { sheetHref } from '@/lib/sheets';
 import { formatMoney } from '@frontier/shared';
 
-export default function ProductsPage(): React.JSX.Element {
+export function CompanyTab(): React.JSX.Element {
   const session = useSession();
-  const company = usePlayerCompany();
+  const company = useActiveCompany();
 
   return (
     <>
-      <PageHeader
-        title="Products"
-        eyebrow={quarterLabel(session.startYear, session.quarter)}
-        subtitle="Pricing, customers and unit economics."
-        actions={<button className="btn btn-sm">Launch product</button>}
-      />
-
-      <div className="grid gap-4 lg:grid-cols-4">
+      {/* A card: its figures, then one address. */}
+      <Panel title="Financials" iconName="ledger" actions={<Link href={sheetHref('financials')}>Open</Link>}>
         <StatCard label="Revenue" value={formatMoney(company.financials.revenueQuarterly)} delta={0.11} />
-        {/* … */}
-      </div>
-
-      <Panel title="Product lines" flush>
-        {/* DataTable */}
       </Panel>
     </>
   );
@@ -91,13 +99,13 @@ export default function ProductsPage(): React.JSX.Element {
 
 Notes:
 
-- The page returns a **fragment**, not a wrapper `<div>`. The shell already
-  provides `max-w-[1400px]`, the padding and a `flex flex-col gap-4` column.
 - Grids: `grid gap-4 lg:grid-cols-3` and friends. Always give a single-column
-  mobile fallback — desktop is primary, but every screen must be readable on a
-  phone.
+  mobile fallback — **the phone is primary**.
 - Wide content scrolls inside its own container (`DataTable` already does).
   **The page body must never scroll horizontally.**
+- Every address goes through `sheetHref()` or `legacyHref()`. A raw `/products`
+  in a component still works — the catch-all redirects it — but it costs a
+  navigation hop and `legacyLinks.test.ts` fails on it.
 
 ---
 
@@ -455,8 +463,11 @@ TabItem = { id, label, badge?, disabled? }
 Modal  { open, onClose, title, subtitle?, children, footer?, width?: 'sm'|'md'|'lg', dismissible? }
 Drawer { open, onClose, title, subtitle?, children, footer?, side?: 'right'|'bottom', width? }
 ```
-`Drawer` is the right home for ledger rows behind a figure, a director's card,
-one node of the Frontier Map.
+`Drawer` takes two more props for the sheet layer: `height?: 'sheet' | 'full'`
+and `leading?: ReactNode`. `SheetHost` mounts every registry sheet as
+`height="full"` with a Back control in `leading`; a screen's own detail drawer
+leaves both off and stays the 85dvh sheet over it. `Drawer` is the right home
+for ledger rows behind a figure, a director's card, one node of a picture.
 
 ### `ConfirmDialog`
 ```ts
@@ -581,9 +592,6 @@ in a test; container width comes from `useContainerWidth` (fallback 356 — the
 panel's *measured* content box on a 390-point phone), and its ref must sit on a
 nearly unpadded box or the picture is drawn wider than the column it lands in.
 
-### `ActionQueueTray`
-Rendered by the shell. Do not mount it yourself.
-
 ### Utilities
 `cx(...)` joins class names. `TONE_VAR` gives the raw CSS variable for inline
 SVG. `toneOfDelta(value, invert?)` and `toneOfLine(resolutionTone)` map to the
@@ -612,9 +620,22 @@ Premium financial terminal × venture dashboard. Dark, dense, information first.
   sits above `[Approve] [Edit]`. Below `confidence` 0.7 the panel is styled as
   a draft.
 
-Responsive: desktop primary, usable on a tablet, readable on a phone. The rail
-collapses under `lg` — screens do not need to handle that, but they do need a
-single-column layout at that width.
+Responsive: **the phone is primary** — 390×844, portrait, one thumb. Desktop
+gets the same page with the rail beside it, and every surface needs a
+single-column layout under `lg`.
+
+- **Chrome is 116 points** at 390: the status bar (56) and the bottom bar (60).
+  There is no sub-tab strip and no hamburger; a tab has 728 points of body.
+- **A sheet is 95dvh with a Back control** in its header (`Drawer height="full"`,
+  `leading`). It is opened by `?sheet=` and closed by Back — the browser's or
+  the header's.
+- **A detail drawer over a sheet is the 85dvh sheet** (`Drawer` as it always
+  was): one node of the picture, one director's card, one line's controls.
+- **Two levels, never three.** A drawer inside a sheet may not open another
+  drawer. The deepest thing on the screen is a centred `ConfirmDialog` or
+  `Modal`, which is a decision rather than a level.
+- **Every tappable clears 44×44** (`tap-target`), on a card, in a table row and
+  on a pill alike.
 
 ---
 

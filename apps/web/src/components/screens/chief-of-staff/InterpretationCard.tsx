@@ -17,70 +17,23 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import type { ActionIntent, ActionType, ActionValidationResult, CosAvailableAction, CosBound } from '@frontier/contracts';
+import type { ActionIntent, ActionValidationResult, CosAvailableAction, CosBound } from '@frontier/contracts';
 import { formatCount, formatMoney } from '@frontier/shared';
 import { ConfirmDialog, Icon, Meter, SectionHeading, Tag, ValidationBanner, cx, labelOfStatus, toneOfStatus } from '@/components/ui';
 import { availableActionsForSession, needsConfirmation, useActiveCompany, useGameActions, useSession } from '@/lib/game';
+import { hrefOfAction } from '@/lib/sheets';
 import { describeIntent } from '@/components/screens/end-quarter/intents';
 import type { TranscriptEntry } from './transcript';
 
-/** Where a player goes to do this by hand. The two paths produce the same object. */
-export const ROUTE_OF_ACTION: Readonly<Record<ActionType, string>> = {
-  set_research_budget: '/research',
-  start_research_project: '/research',
-  adjust_research_project: '/research',
-  abandon_research_project: '/research',
-  propose_innovation: '/research',
-  publish_research: '/research',
-  set_product_price: '/products',
-  launch_product: '/products',
-  set_data_policy: '/products',
-  license_node: '/research',
-  publish_licence_terms: '/research',
-  sunset_product: '/products',
-  set_marketing_budget: '/social',
-  marketing_campaign: '/social',
-  hire: '/people',
-  layoff: '/people',
-  poach_executive: '/people',
-  appoint_executive: '/people',
-  reserve_compute: '/company',
-  buy_cloud_capacity: '/company',
-  buy_accelerators: '/company',
-  invest_capacity: '/company',
-  allocate_compute: '/company',
-  set_supply_terms: '/products',
-  choose_supplier: '/products',
-  fill_slot: '/products',
-  set_target_market: '/products',
-  raise_round: '/capital',
-  issue_debt: '/capital',
-  buyback: '/capital',
-  issue_shares: '/capital',
-  ipo: '/capital',
-  set_dividend_policy: '/capital',
-  set_logistics_toll: '/company',
-  buy_shares: '/markets',
-  sell_shares: '/markets',
-  acquire_company: '/deal-room',
-  submit_board_proposal: '/boardroom',
-  lobby_director: '/boardroom',
-  bid_government: '/government',
-  decline_opportunity: '/government',
-  form_consortium: '/government',
-  meet_regulator: '/government',
-  social_post: '/social',
-  give_guidance: '/markets',
-  respond_crisis: '/news',
-  propose_deal: '/deal-room',
-  accept_deal: '/deal-room',
-  reject_deal: '/deal-room',
-  request_introduction: '/network',
-  // Group control (STAGE 4): the screens stage gives these their own surface;
-  // until then the portfolio tab is where a subsidiary is visible at all.
-  transfer_between_group: '/portfolio',
-  merge_subsidiary: '/portfolio',
-};
+/**
+ * Where a player goes to do this by hand — `hrefOfAction`, read straight from
+ * the sheet registry rather than restated here, because a second copy of that
+ * map is exactly what pointed four of these at the wrong screen.
+ *
+ * `null` for the eleven instructions with no by-hand surface. The card then
+ * shows what is true — that this one only happens through the Chief of Staff —
+ * instead of a link to a screen that cannot do it.
+ */
 
 const DRAFT_CONFIDENCE = 0.7;
 
@@ -172,6 +125,8 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
         description: describeIntent(intent, startYear),
         validation: validateIntent(intent),
         needsHuman: needsConfirmation(intent.type),
+        // Null for the eleven only this drawer can queue.
+        href: hrefOfAction(intent.type),
         limits: limitsOf(availability.get(intent.type) ?? null),
       })),
     [availability, interpretation.interpretedInstructions, startYear, validateIntent, session],
@@ -274,14 +229,14 @@ export function InterpretationCard({ entry, startYear, variant = 'card' }: Inter
 
                     {done === undefined ? (
                       <div className="flex items-center gap-2">
-                        <Link
-                          href={ROUTE_OF_ACTION[row.intent.type]}
-                          className="btn btn-ghost tap-target flex-1 sm:flex-none"
-                          title={`Do this by hand at ${ROUTE_OF_ACTION[row.intent.type]}`}
-                        >
-                          <Icon name="chevronRight" size={15} />
-                          Edit
-                        </Link>
+                        {row.href === null ? (
+                          <Tag tone="info">Only through me</Tag>
+                        ) : (
+                          <Link href={row.href} className="btn btn-ghost tap-target flex-1 sm:flex-none" title={`Do this by hand at ${row.href}`}>
+                            <Icon name="chevronRight" size={15} />
+                            Edit
+                          </Link>
+                        )}
                         <button
                           type="button"
                           className="btn tap-target press-pop flex-1 sm:flex-none"

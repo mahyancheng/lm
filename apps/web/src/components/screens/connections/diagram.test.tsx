@@ -31,6 +31,7 @@ import { ConnectionsDiagram } from './ConnectionsDiagram';
 import { NAME_SIZES, NESTED_NAME_SIZES, PILL_CHROME, ROW_CH, ROW_SIZES, TAG_CHROME, lineCount, nameSizePx, rowSizePx } from './ConnectionPill';
 import { NESTED_INDENT, layoutConnections } from './layout';
 import { connectionsModel, layoutGroupsOf, tagCount } from './model';
+import { sheetHref } from '@/lib/sheets';
 
 const PLAYER = 'cmp_player_ventures';
 const WIDTH = 356;
@@ -490,7 +491,7 @@ describe('the drawing says what the states mean', () => {
     state.governmentContracts.push(contract);
 
     const markup = render(state, PLAYER, PLAYER);
-    expect(markup).toContain('href="/government"');
+    expect(markup).toContain(`href="${sheetHref('government')}"`);
     expect(markup).toContain(agency.shortName);
     expect(markup).toContain('$4.0M');
   });

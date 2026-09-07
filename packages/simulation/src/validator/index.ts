@@ -288,9 +288,18 @@ export function validateAction(
   /* --- board matters become proposals rather than executing --------------- */
   const matter = company.boardId === null ? null : boardMatterFor(verdict.current, company);
   const debtMandate = isNodeEconomyWorld(draft) && verdict.current.type === 'issue_debt' ? verdict.current : null;
-  if (matter !== null && (debtMandate !== null || !authorisedByBoard(draft, company.id, matter.kind, verdict.current))) {
+  const equityMandate =
+    isNodeEconomyWorld(draft) &&
+    (verdict.current.type === 'raise_round' || verdict.current.type === 'issue_shares' || verdict.current.type === 'ipo')
+      ? verdict.current
+      : null;
+  if (matter !== null && (debtMandate !== null || equityMandate !== null || !authorisedByBoard(draft, company.id, matter.kind, verdict.current))) {
     verdict.replaceWith(
-      { ...toBoardProposalIntent(matter), ...(debtMandate === null ? {} : { debtTerms: { amountUsd: debtMandate.amountUsd, maxRatePct: debtMandate.maxRatePct, termQuarters: debtMandate.termQuarters } }) },
+      {
+        ...toBoardProposalIntent(matter),
+        ...(debtMandate === null ? {} : { debtTerms: { amountUsd: debtMandate.amountUsd, maxRatePct: debtMandate.maxRatePct, termQuarters: debtMandate.termQuarters } }),
+        ...(equityMandate === null ? {} : { equityTerms: equityMandate }),
+      },
       'board_approval_required',
       `${intent.type.replace(/_/g, ' ')} is a ${matter.kind.replace(/_/g, ' ')} matter for the board of ${company.name}. It has been tabled as a proposal instead; win the vote and it executes.`,
     );

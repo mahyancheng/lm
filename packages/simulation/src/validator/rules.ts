@@ -2002,8 +2002,8 @@ const submitBoardProposal: Rule<'submit_board_proposal'> = (intent, verdict, ctx
   // accepted on a user-authored board proposal: otherwise the proposal action
   // (which is not itself confirmation-gated) could smuggle a financing
   // mandate past the explicit human-confirmation requirement.
-  if (intent.debtTerms !== undefined) {
-    verdict.reject('illegal_value', 'Debt terms can only be attached by the engine when a confirmed debt issue is routed to the board.');
+  if (intent.debtTerms !== undefined || intent.equityTerms !== undefined) {
+    verdict.reject('illegal_value', 'Financing terms can only be attached by the engine when a confirmed financing action is routed to the board.');
     return;
   }
   if (ctx.company.boardId === null) {

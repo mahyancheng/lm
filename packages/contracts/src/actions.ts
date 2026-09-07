@@ -40,7 +40,7 @@ import {
 } from './company';
 import { RegionSchema, SectorSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
-import { BoardProposalKindSchema, CommitmentConditionSchema, DebtIssueTermsSchema } from './governance';
+import { BoardProposalKindSchema, CommitmentConditionSchema, DebtIssueTermsSchema, EquityFinancingTermsSchema } from './governance';
 import { GovernmentBidSchema } from './government';
 import { InnovationProposalSchema, PublicationModeSchema } from './tech';
 import { SocialPostDraftSchema, CampaignThemeSchema } from './social';
@@ -549,6 +549,7 @@ export const ActionIntentSchema = z
       .object({
         type: z.literal('submit_board_proposal'),
         debtTerms: DebtIssueTermsSchema.optional(),
+        equityTerms: EquityFinancingTermsSchema.optional(),
         kind: BoardProposalKindSchema,
         title: z.string().min(3).max(140),
         summary: z.string().min(10).max(1200).describe('The case, including the numbers directors will argue about.'),

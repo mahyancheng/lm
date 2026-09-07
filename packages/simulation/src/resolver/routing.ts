@@ -70,6 +70,32 @@ export function executeApprovedDebt(draft: SessionState): void {
   }
 }
 
+/** Restore the exact equity action after its vote, once. Market clearing still decides the outcome. */
+export function executeApprovedEquity(draft: SessionState): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  for (const proposal of draft.boardProposals) {
+    const terms = proposal.equityTerms;
+    if (proposal.status !== 'passed' || terms === undefined || proposal.equityExecutionQuarter !== undefined) continue;
+    if (proposal.decisionQuarter !== draft.quarter) continue;
+    if ((terms.type === 'ipo' ? proposal.kind !== 'ipo' : proposal.kind !== 'financing')) continue;
+    const amount = terms.type === 'raise_round' ? terms.targetAmountUsd : terms.type === 'issue_shares' ? terms.shares * terms.minPricePerShareUsd : terms.targetRaiseUsd;
+    if (proposal.amountUsd !== amount) continue;
+    const source = draft.pendingActions.find((action) => {
+      if (action.actionId !== proposal.linkedActionId || action.actorCompanyId !== proposal.companyId || action.intent.type !== 'submit_board_proposal') return false;
+      return JSON.stringify(action.intent.equityTerms) === JSON.stringify(terms);
+    });
+    if (source === undefined || !source.confirmedByHuman) continue;
+    draft.pendingActions.push({
+      ...source,
+      actionId: makeId('equity', proposal.id),
+      sequence: Math.max(-1, ...draft.pendingActions.map((action) => action.sequence)) + 1,
+      origin: 'board_execution',
+      intent: terms,
+    });
+    proposal.equityExecutionQuarter = draft.quarter;
+  }
+}
+
 /** Table every `submit_board_proposal` that is not already on the agenda. */
 export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext): BoardProposal[] {
   const created: BoardProposal[] = [];
@@ -105,11 +131,12 @@ export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext):
       decisionQuarter: draft.quarter,
       status: 'tabled',
       amountUsd: intent.amountUsd,
-      dilutionPct: null,
+      dilutionPct: isNodeEconomyWorld(draft) ? mandateDilution(draft, company, intent.equityTerms) : null,
       stockComponentPct: intent.stockComponentPct,
       targetCompanyId: intent.targetCompanyId,
       linkedActionId: action.actionId,
       ...(isNodeEconomyWorld(draft) && intent.debtTerms !== undefined ? { debtTerms: intent.debtTerms } : {}),
+      ...(isNodeEconomyWorld(draft) && intent.equityTerms !== undefined ? { equityTerms: intent.equityTerms } : {}),
       requiredThresholdFraction: rule.supermajorityKinds.includes(intent.kind)
         ? rule.supermajorityThresholdFraction
         : rule.passThresholdFraction,
@@ -143,6 +170,16 @@ export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext):
   }
 
   return created;
+}
+
+/** The dilution directors are voting on, kept with the exact equity mandate. */
+function mandateDilution(draft: SessionState, company: Company, terms: { type: 'raise_round'; maxDilutionPct: number } | { type: 'issue_shares'; shares: number } | { type: 'ipo'; floatPct: number } | undefined): number | null {
+  if (terms === undefined) return null;
+  if (terms.type === 'raise_round') return terms.maxDilutionPct;
+  if (terms.type === 'ipo') return terms.floatPct;
+  const table = draft.capTables.find((entry) => entry.companyId === company.id);
+  const issued = table?.fullyDilutedShares ?? 0;
+  return terms.shares / Math.max(1, issued + terms.shares);
 }
 
 /* -------------------------------------------------------------------------- */

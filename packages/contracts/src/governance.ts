@@ -17,6 +17,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, score100, signedScore100, unitInterval, usd } from './ids';
+import { FundingStageSchema } from './ownership';
 
 /* -------------------------------------------------------------------------- */
 /*  Directors                                                                  */
@@ -152,6 +153,14 @@ export const DebtIssueTermsSchema = z.object({
   termQuarters: z.number().int().min(1).max(40),
 });
 
+/** Exact equity mandate, restored once and only once after a passing board vote. */
+export const EquityFinancingTermsSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('raise_round'), stage: FundingStageSchema, targetAmountUsd: z.number().positive(), maxDilutionPct: z.number().min(0).max(1) }),
+  z.object({ type: z.literal('issue_shares'), shares: z.number().int().positive(), shareClassId: z.string().min(1), minPricePerShareUsd: z.number().positive() }),
+  z.object({ type: z.literal('ipo'), targetRaiseUsd: z.number().positive(), floatPct: z.number().min(0).max(1), minPricePerShareUsd: z.number().positive() }),
+]);
+export type EquityFinancingTerms = z.infer<typeof EquityFinancingTermsSchema>;
+
 export const BoardProposalSchema = z
   .object({
     id: z.string().min(1),
@@ -170,6 +179,8 @@ export const BoardProposalSchema = z
     targetCompanyId: z.string().nullable().describe('Target of an acquisition or divestiture, or null.'),
     debtTerms: DebtIssueTermsSchema.optional().describe('Exact debt mandate, executed once after approval.'),
     debtExecutionQuarter: QuarterIndexSchema.optional(),
+    equityTerms: EquityFinancingTermsSchema.optional().describe('Exact equity mandate, executed once after approval.'),
+    equityExecutionQuarter: QuarterIndexSchema.optional(),
     linkedActionId: z.string().nullable().describe('Submitted action this proposal authorises, so a pass executes exactly what was voted on.'),
     requiredThresholdFraction: unitInterval('Fraction of present votes needed, resolved from the board quorum rule at tabling time.'),
   })

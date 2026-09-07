@@ -30,6 +30,7 @@ import type {
 } from '@frontier/contracts';
 import { DEFAULT_QUORUM_RULE, economicNodeById, makeId } from '@frontier/contracts';
 import { labelFor, pendingOfType } from './actions';
+import { experimentResources } from '../research/experiments';
 import { plannedProgrammeQuarters } from '../research/forecast';
 import { abandonProject } from '../research/ownership';
 import { emitPartialFill } from '../companies/partialFill';
@@ -330,7 +331,9 @@ export function applyResearchAdjustments(draft: SessionState, ctx: ResolverConte
     let wantedCompute = Math.max(0, Math.round(intent.computeUnits));
     if (isMultiSectorWorld(draft) && company !== undefined) {
       const freeResearchers = Math.max(0, company.employees.researchers - researchersCommitted(draft, company.id) + before.talentAllocated);
-      const freeCompute = Math.max(0, Math.floor(researchComputeHeadroom(draft, company)) - computeCommitted(draft, company.id) + before.computeAllocated);
+      const freeCompute = project.experiment
+        ? experimentResources(draft, company, project.id).computeUnits
+        : Math.max(0, Math.floor(researchComputeHeadroom(draft, company)) - computeCommitted(draft, company.id) + before.computeAllocated);
       const cappedTalent = Math.min(wantedTalent, freeResearchers);
       const cappedCompute = Math.min(wantedCompute, freeCompute);
       if (cappedTalent < wantedTalent || cappedCompute < wantedCompute) {
@@ -351,6 +354,18 @@ export function applyResearchAdjustments(draft: SessionState, ctx: ResolverConte
       wantedCompute = cappedCompute;
     }
 
+    if (project.experiment) {
+      const experiment = project.experiment;
+      if (!intent.experimentDirection || !experiment.awaitingReview || !experiment.findings.some((finding) => finding.round === experiment.round)) continue;
+      if (wantedTalent < 1 || intent.budgetUsd < 1 || experiment.round >= 200 || project.quartersElapsed + experiment.mandate.reviewAfterQuarters > 200) continue;
+      experiment.mandate = { ...experiment.mandate, method: intent.experimentDirection, budgetUsd: intent.budgetUsd, computeUnits: wantedCompute, researchersAssigned: wantedTalent };
+      experiment.round += 1;
+      experiment.roundQuarters = 0;
+      experiment.computeUsed = 0;
+      experiment.researcherQuarters = 0;
+      experiment.awaitingReview = false;
+      project.status = 'active';
+    }
     project.budgetQuarterly = Math.max(0, intent.budgetUsd);
     project.computeAllocated = wantedCompute;
     project.talentAllocated = wantedTalent;

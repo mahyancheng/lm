@@ -96,6 +96,7 @@ export * from './sim';
 export * from './session';
 export * from './nodeOwnership';
 export * from './llm';
+export * from './llmWire';
 export * from './engine';
 
 /**
@@ -103,4 +104,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.11.0';
+export const CONTRACTS_VERSION = '1.12.0';

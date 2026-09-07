@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import {
+  llmWireSchema,
   CharacterReplySchema,
   ChiefOfStaffInterpretationSchema,
   DealExtractionSchema,
@@ -861,7 +862,7 @@ describe('constants and invariants', () => {
   // discriminated unions rather than inserted, which is what the append-only
   // test below polices.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.11.0');
+    expect(CONTRACTS_VERSION).toBe('1.12.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {
@@ -995,7 +996,7 @@ describe('LLM-facing schemas stay compatible with structured outputs', () => {
   it.each(LLM_FACING_SCHEMAS.map(([name, schema]) => ({ name, schema })))(
     '$name contains no optional, record, transform or default node',
     ({ schema }) => {
-      const names = collectTypeNames(schema);
+      const names = collectTypeNames(llmWireSchema(schema));
       expect(names.has('ZodOptional')).toBe(false);
       expect(names.has('ZodRecord')).toBe(false);
       expect(names.has('ZodEffects')).toBe(false);

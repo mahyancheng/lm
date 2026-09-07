@@ -167,11 +167,49 @@ export const RESEARCH_PROJECT_STATUSES = ['active', 'paused', 'succeeded', 'fail
 export const ResearchProjectStatusSchema = z.enum(RESEARCH_PROJECT_STATUSES).describe('State of a research programme.');
 export type ResearchProjectStatus = z.infer<typeof ResearchProjectStatusSchema>;
 
+/** A bounded investigation; the outcome is deliberately not specified. */
+export const ExperimentPlanSchema = z.object({
+  question: z.string().min(12).max(1200),
+  method: z.string().min(12).max(1200),
+  budgetUsd: z.number().finite().min(1).max(1e12),
+  computeUnits: z.number().int().min(0).max(1e9),
+  researchersAssigned: z.number().int().min(1).max(1e7),
+  reviewAfterQuarters: z.number().int().min(1).max(4),
+});
+export type ExperimentPlan = z.infer<typeof ExperimentPlanSchema>;
+
+export const ExperimentReviewSchema = z.object({
+  projectId: z.string().min(1).max(200),
+  round: z.number().int().min(1).max(200),
+  elapsedQuarters: z.number().int().min(1).max(200),
+  outcome: z.enum(['promising', 'unexpected', 'inconclusive', 'negative', 'evaluation_failure']),
+  observation: z.string().min(20).max(1600),
+  interpretation: z.string().min(20).max(1200),
+  nextDirections: z.array(z.string().min(12).max(500)).min(1).max(4),
+  capabilityGains: z.array(z.object({ area: z.string().min(1).max(80), gain: z.number().finite().min(0).max(0.03) })).max(3),
+});
+export type ExperimentReview = z.infer<typeof ExperimentReviewSchema>;
+
+export const ResearchExperimentSchema = z.object({
+  mandate: ExperimentPlanSchema,
+  round: z.number().int().min(1).max(200),
+  roundQuarters: z.number().int().min(0).max(4),
+  awaitingReview: z.boolean(),
+  lastRunQuarter: QuarterIndexSchema.nullable(),
+  computeUsedLastRun: z.number().finite().nonnegative(),
+    cashSpentLastRun: z.number().finite().min(0),
+  computeUsed: z.number().finite().min(0),
+  researcherQuarters: z.number().finite().min(0),
+  findings: z.array(ExperimentReviewSchema.extend({ quarter: QuarterIndexSchema, eventId: z.string().min(1) })).max(200),
+});
+export type ResearchExperiment = z.infer<typeof ResearchExperimentSchema>;
+
 export const ResearchProjectSchema = z
   .object({
     id: z.string().min(1),
     companyId: z.string().min(1),
     targetNodeId: z.string().min(1).describe('The Frontier Map node this programme is trying to reach.'),
+    experiment: ResearchExperimentSchema.optional(),
     budgetQuarterly: usd('Cash committed per quarter, excluding compute.'),
     computeAllocated: intCount('Accelerator-equivalents dedicated to the programme each quarter.'),
     talentAllocated: intCount('Researchers assigned. The binding constraint more often than money.'),
@@ -198,6 +236,8 @@ export const INITIAL_TECH_VISIBILITIES = ['public', 'company_private'] as const;
 
 export const InnovationProposalSchema = z
   .object({
+    experiment: ExperimentPlanSchema.optional(),
+    experimentReview: ExperimentReviewSchema.optional(),
     nodeType: z
       .enum(['player_hypothesis'])
       .describe('Always "player_hypothesis". Marks the node as invented within this session rather than seeded, which is how the game credits an inventor.'),

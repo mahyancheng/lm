@@ -1342,6 +1342,8 @@ export type CharacterReply = z.infer<typeof CharacterReplySchema>;
 
 export const InnovationInterpreterInputSchema = z
   .object({
+    experimentMode: z.enum(['design', 'review']).optional(),
+    experimentContext: z.string().max(16000).optional(),
     sessionId: z.string().min(1),
     quarter: QuarterIndexSchema,
     companyId: z.string().min(1),

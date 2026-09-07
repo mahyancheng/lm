@@ -41,6 +41,7 @@ import { useGameActions, useLlm } from '@/lib/game';
 import { buildInnovationInput, requestInnovation } from './innovationClient';
 
 export interface InnovationPanelProps {
+  readonly initialIdea?: string;
   readonly session: SessionState;
   readonly company: Company;
   /** The reduced map. Never `session.techGraph`. */
@@ -63,12 +64,12 @@ const EMPTY_FORM = {
   rationale: '',
 };
 
-export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, computeUnits }: InnovationPanelProps): React.JSX.Element {
+export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, computeUnits, initialIdea = '' }: InnovationPanelProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
   const llm = useLlm();
 
   const [mode, setMode] = useState<Mode>('write');
-  const [idea, setIdea] = useState('');
+  const [idea, setIdea] = useState(initialIdea);
   const [busy, setBusy] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [proposal, setProposal] = useState<InnovationProposal | null>(null);

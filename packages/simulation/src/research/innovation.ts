@@ -19,6 +19,7 @@
  * `propose_innovation` action that carried it.
  */
 
+import { integrateExperiment } from './experiments';
 import type {
   Company,
   InnovationIntegrationResult,
@@ -134,6 +135,7 @@ export function integrateInnovationProposal(
   proposal: InnovationProposal,
   ctx: ResolverContext,
 ): InnovationIntegrationResult {
+  if (proposal.experiment || proposal.experimentReview) return integrateExperiment(draft, proposal, ctx);
   const reasons: string[] = [];
   const proposer = resolveProposer(draft, ctx, proposal);
   const company = proposer.company;

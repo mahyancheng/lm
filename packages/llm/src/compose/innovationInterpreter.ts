@@ -55,6 +55,24 @@ export function composeInnovationInterpreter(input: InnovationInterpreterInput):
     `compute: ${input.companyResources.computeUnits} accelerator-equivalents`,
   ];
 
+  const experimentTask = input.experimentMode === 'design' ? [
+    'Design an exploratory experiment, not a guaranteed technology unlock. Return experiment with question, method, budgetUsd, computeUnits, researchersAssigned and reviewAfterQuarters.',
+    'The resource mandate in the context is binding. Use exactly those resource ceilings. estimatedCost is the cash budget times the review interval; do not inflate it into the cost of an eventual breakthrough.',
+    'The founder may ask agents to evolve, search, invent or investigate an unknown. Describe what they will try and how observations will be evaluated. No existing technology node is required as the destination.',
+    'Set experimentReview to null. Fill the ordinary proposal fields too; keep initialVisibility company_private. No success is promised.',
+  ] : input.experimentMode === 'review' ? [
+    'Adjudicate the findings of a FICTIONAL in-game experiment from its question, method, recorded resource use and previous findings. You determine a plausible result; this is not a report of a real laboratory run.',
+    'Return experimentReview with the exact projectId, round and elapsedQuarters in the context. Set experiment to null.',
+    'Choose promising, unexpected, inconclusive, negative, or evaluation_failure. Do not always reward ambition or assume self-improvement works. Distinguish observation from interpretation; explain limits and alternative explanations.',
+    'Invent specific, coherent in-world observations shaped by THIS method and history, not a generic quality bonus. Do not invent resources spent or results of experiments that were never run.',
+    'Propose 1–4 concrete nextDirections: continued evolution, a changed test, investigating a surprising result, or a follow-up research thesis. Preserve discoveries and failures from prior rounds.',
+    'capabilityGains may be empty. Only promising or unexpected findings justify small gains in capability areas listed in the dossier, with total gain at most 0.02. A failed evaluation grants none.',
+    'Fill the ordinary proposal fields as a short summary of this review; the review records findings on the existing project and does not create another technology. Its title may repeat the existing experiment title.',
+  ] : [
+    'Express this idea as one typed node proposal. Set experiment and experimentReview to null.',
+    'Depend only on node ids listed above, and do not duplicate a node that already exists — if the idea restates one, say so in the rationale and set novelty low.',
+    'Be honest about plausibility and about cost relative to what this company can afford.',
+  ];
   const prompt = joinBlocks([
     `# Innovation proposal — quarter ${input.quarter}, session ${input.sessionId}, company ${input.companyId}`,
     section('The founder\'s idea, in their own words', truncate(input.playerIdea, 4000)),
@@ -62,13 +80,10 @@ export function composeInnovationInterpreter(input: InnovationInterpreterInput):
     section('What this company can actually do today', bullets(capabilities)),
     section('What this company can actually afford', bullets(resources)),
     section('World conditions bearing on feasibility', input.worldContext),
+    section('Experiment mandate and recorded history', input.experimentContext ?? '(ordinary technology proposal)'),
     section(
       'Your task',
-      [
-        'Express this idea as one typed node proposal.',
-        'Depend only on node ids listed above, and do not duplicate a node that already exists — if the idea restates one, say so in the rationale and set novelty low.',
-        'Be honest about plausibility and about cost relative to what this company can afford.',
-      ].join('\n'),
+      experimentTask.join('\n'),
     ),
   ]);
 

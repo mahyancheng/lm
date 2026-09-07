@@ -304,6 +304,10 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             break;
 
           case 'research_resolution': {
+            // Experiments begin before work is run; ordinary hypotheses retain their legacy order.
+            for (const { intent } of pendingOfType(draft, 'propose_innovation')) {
+              if (intent.proposal.experiment || intent.proposal.experimentReview) subsystems.research.integrateInnovationProposal(draft, intent.proposal, ctx);
+            }
             ensureResearchProjects(draft, ctx);
             // Re-resourcing lands before the quarter is advanced, so the fix a
             // founder made this quarter is the resourcing this quarter runs on.
@@ -318,7 +322,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             subsystems.research.achieveNodes(draft, ctx);
             subsystems.research.updateTechConfidence(draft, ctx);
             for (const { intent } of pendingOfType(draft, 'propose_innovation')) {
-              subsystems.research.integrateInnovationProposal(draft, intent.proposal, ctx);
+              if (!intent.proposal.experiment && !intent.proposal.experimentReview) subsystems.research.integrateInnovationProposal(draft, intent.proposal, ctx);
             }
             break;
           }

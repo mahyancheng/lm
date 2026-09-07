@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ResearchProject, Sector, TechNode } from '@frontier/contracts';
-import { SECTORS, quarterLabel } from '@frontier/contracts';
+import { SECTORS, quarterLabel, economicNodeById } from '@frontier/contracts';
 import { heldComputeUnits, isNodeEconomyWorld, researchEnvelopeUsd, runningForecast, unmetDependencies } from '@frontier/simulation';
 import { formatMoney, formatPct } from '@frontier/shared';
 import {
@@ -42,6 +42,7 @@ import {
 } from '@/components/ui';
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
 import { ResearchConnectionsScreen } from '@/components/screens/research/ResearchConnectionsScreen';
+import { ExperimentsPanel } from './ExperimentsPanel';
 import { InnovationPanel } from '@/components/screens/research/InnovationPanel';
 import { NodeDrawer } from '@/components/screens/research/NodeDrawer';
 import { EDGE_STYLE } from '@/components/screens/research/graphLayout';
@@ -93,6 +94,7 @@ export function ResearchScreen(): React.JSX.Element {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inventing, setInventing] = useState(false);
+  const [followUpIdea, setFollowUpIdea] = useState('');
   const [filter, setFilter] = useState<MapFilter>('all');
   const [trackSector, setTrackSector] = useState<Sector | null>(null);
   const [budgetText, setBudgetText] = useState('');
@@ -110,6 +112,8 @@ export function ResearchScreen(): React.JSX.Element {
   }, []);
 
   const graph = view.techGraph;
+  const experimentNodes = new Set(view.ownResearchProjects.filter((project) => project.experiment).map((project) => project.targetNodeId));
+  const customNodes = graph.nodes.filter((node) => !economicNodeById(node.id) && !experimentNodes.has(node.id));
   // World 3's map is the node table projected, drawn on the shared canvas. The
   // programme tables below are unchanged: a research project targets a node id
   // in both economies, and everything about running one is the same.
@@ -536,6 +540,11 @@ export function ResearchScreen(): React.JSX.Element {
         {/* Inventing a technology is the rarest thing a founder does on this
             screen, so it sits at the end of the map behind one button rather
             than as a permanent panel competing with the programmes. */}
+
+      </Panel>
+      )}
+
+      <Panel title="Explore beyond the map" iconName="flask" subtitle="Propose a new technology or investigate an open question.">
         <div className="mt-3 border-t border-hair pt-3">
           <button
             type="button"
@@ -551,10 +560,17 @@ export function ResearchScreen(): React.JSX.Element {
           </p>
         </div>
       </Panel>
-      )}
+      <ExperimentsPanel key={`${session.sessionId}:${company.id}`} session={session} company={company} graph={graph} onFollowUp={(idea) => { setFollowUpIdea(idea); setInventing(true); }} />
+      {nodeEconomy && customNodes.length > 0 ? (
+        <Panel title="Your discoveries and hypotheses" iconName="compass">
+          <div className="space-y-2">
+            {customNodes.map((node) => <button key={node.id} type="button" className="btn w-full text-left" onClick={() => setSelectedId(node.id)}>{node.title}</button>)}
+          </div>
+        </Panel>
+      ) : null}
 
       {!inventing ? null : (
-        <InnovationPanel session={session} company={company} graph={graph} researchEnvelopeUsd={envelope} computeUnits={Math.round(held)} />
+        <InnovationPanel key={`${company.id}:${followUpIdea}`} initialIdea={followUpIdea} session={session} company={company} graph={graph} researchEnvelopeUsd={envelope} computeUnits={Math.round(held)} />
       )}
 
       {moves.length === 0 ? null : (
@@ -634,7 +650,7 @@ export function ResearchScreen(): React.JSX.Element {
         <Panel iconName="flask" title="Research programmes" subtitle="Yours, secret ones included" className="lg:col-span-2" flush>
           <DataTable
             columns={ownColumns}
-            rows={ownProjects}
+            rows={ownProjects.filter((project) => !project.experiment)}
             rowKey={(row) => row.id}
             onRowClick={(row) => setSelectedId(row.targetNodeId)}
             initialSort={{ key: 'progress', direction: 'desc' }}

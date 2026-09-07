@@ -74,8 +74,8 @@ export const ABANDON_REPUTATION_COST = 2;
 /** Nodes this programme's target requires that the company does not hold. */
 export function unheldRequirements(draft: SessionState, company: Company, nodeId: string): readonly string[] {
   const node = economicNodeById(nodeId);
-  if (node === undefined) return [];
-  return node.requires.filter((required) => !holdsNode(company, required, draft.quarter));
+  const dependencies = node?.requires ?? draft.techGraph.nodes.find((entry) => entry.id === nodeId)?.dependencies ?? [];
+  return dependencies.filter((required) => !holdsNode(company, required, draft.quarter));
 }
 
 /** The plain-words name of a node, for a report line. Falls back to the id. */

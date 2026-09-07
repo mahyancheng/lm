@@ -1,3 +1,4 @@
+import { fromLlmWire } from '@frontier/contracts';
 /**
  * @frontier/llm — transport/types.ts
  *
@@ -171,7 +172,7 @@ export function validationFailed(schemaName: string, issues: readonly string[], 
 
 /** Parse `text` against `schema`, returning either the value or tagged issues. */
 export function parseAgainst<T>(schema: z.ZodType<T>, value: unknown): { ok: true; value: T } | { ok: false; issues: string[] } {
-  const result = schema.safeParse(value);
+  const result = schema.safeParse(fromLlmWire(schema, value));
   if (result.success) return { ok: true, value: result.data };
   return { ok: false, issues: zodIssueSummary(result.error).map((line) => taggedIssue('invalid_output', line)) };
 }

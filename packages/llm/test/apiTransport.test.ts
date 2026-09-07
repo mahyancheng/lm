@@ -145,8 +145,8 @@ describe('structured-output schema narrowing', () => {
     const items = properties['items']?.['items'] as Record<string, unknown>;
     expect(items['type']).toBe('object');
     expect(items['additionalProperties']).toBe(false);
-    // An optional field is simply absent from `required`; the object stays strict.
-    expect(items['required']).toEqual(['label', 'weight']);
+    // Optional saved fields become required and nullable on the model wire.
+    expect(items['required']).toEqual(['label', 'weight', 'note']);
   });
 
   it('keeps the bounds the endpoint refuses as keywords by folding them into the description', () => {

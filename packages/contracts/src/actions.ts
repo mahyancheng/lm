@@ -248,6 +248,7 @@ export const ActionIntentSchema = z
     z
       .object({
         type: z.literal('adjust_research_project'),
+        experimentDirection: z.string().min(12).max(1200).optional().describe('Method for the next approved experiment round. Only after its findings have been recorded.'),
         projectId: z.string().min(1).describe('The running programme to re-resource. Must belong to the acting company and still be active or paused.'),
         budgetUsd: usd('New cash committed per quarter, excluding compute.'),
         computeUnits: intCount('New accelerator-equivalents dedicated per quarter.'),

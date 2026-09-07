@@ -50,6 +50,7 @@ import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { solvencyCommitmentNote } from '../companies/solvency';
 import { resolveCloudSeller, resolveComputeSeller } from '../companies/sellers';
 import { categoryOf } from '../companies/categories';
+import { experimentReviewError, experimentResources } from '../research/experiments';
 import { dependencySatisfied } from '../research/nodes';
 import { unheldRequirements } from '../research/ownership';
 import { launchNodeIdFor } from '../companies/products';
@@ -371,14 +372,30 @@ const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict,
     verdict.reject('requirement_not_met', `The programme is ${project.status} and can no longer be re-resourced.`);
     return;
   }
+  if (project.experiment) {
+    const experiment = project.experiment;
+    if (intent.budgetUsd < 1 || intent.researchersAssigned < 1) {
+      verdict.reject('requirement_not_met', 'An experimental round needs a positive cash budget and at least one researcher.'); return;
+    }
+    if (!intent.experimentDirection || !experiment.awaitingReview || !experiment.findings.some((finding) => finding.round === experiment.round)) {
+      verdict.reject('requirement_not_met', 'Record this round’s findings, then approve a direction for the next experiment round.'); return;
+    }
+    if (experiment.round >= 200 || project.quartersElapsed + experiment.mandate.reviewAfterQuarters > 200) {
+      verdict.reject('requirement_not_met', 'This experiment has reached its lifetime limit. Start a follow-up investigation.'); return;
+    }
+  } else if (intent.experimentDirection) { verdict.reject('requirement_not_met', 'This programme is not an exploratory experiment.'); return; }
   const freeResearchers = Math.max(
     0,
     ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id) + project.talentAllocated,
   );
   const freeCompute = Math.max(
     0,
-    researchComputeHeadroom(ctx.draft, ctx.company) - ctx.budget.committedCompute(ctx.company.id) + project.computeAllocated,
+    (project.experiment ? experimentResources(ctx.draft, ctx.company, project.id).computeUnits : researchComputeHeadroom(ctx.draft, ctx.company) + project.computeAllocated) - ctx.budget.committedCompute(ctx.company.id),
   );
+
+  if (project.experiment && (intent.researchersAssigned > freeResearchers || intent.computeUnits > freeCompute)) {
+    verdict.reject('requirement_not_met', 'The next round exceeds available compute or researchers. Reduce its allocation.'); return;
+  }
 
   if (solvencyWorld(ctx)) {
     // World 2: the re-resourcing runs whole; `applyResearchAdjustments` gives
@@ -463,6 +480,25 @@ const setDataPolicy: Rule<'set_data_policy'> = (intent, verdict, ctx) => {
 };
 
 const proposeInnovation: Rule<'propose_innovation'> = (intent, verdict, ctx) => {
+  if (intent.proposal.experiment && intent.proposal.experimentReview) {
+    verdict.reject('requirement_not_met', 'An experiment cannot start and review a completed round in the same proposal.'); return;
+  }
+  if (intent.proposal.experimentReview) {
+    const error = experimentReviewError(ctx.draft, ctx.company.id, intent.proposal.experimentReview);
+    if (error) verdict.reject('requirement_not_met', error);
+    return;
+  }
+  if (intent.proposal.experiment) {
+    const plan = intent.proposal.experiment;
+    if (!isNodeEconomyWorld(ctx.draft)) { verdict.reject('requirement_not_met', 'Exploratory experiments require a world-3 session.'); return; }
+    const freeResearchers = Math.max(0, ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id));
+    const freeCompute = Math.max(0, experimentResources(ctx.draft, ctx.company).computeUnits - ctx.budget.committedCompute(ctx.company.id));
+    if (plan.researchersAssigned > freeResearchers || plan.computeUnits > freeCompute) {
+      verdict.reject('requirement_not_met', 'The experiment asks for more unassigned researchers or compute than this company has.'); return;
+    }
+    affordable(ctx, verdict, plan.budgetUsd, 'The experiment round', (draft, allowed) => { if (draft.proposal.experiment) draft.proposal.experiment.budgetUsd = allowed; });
+    ctx.reservations.push(() => { ctx.budget.commitStaff(ctx.company.id, 'researchers', plan.researchersAssigned); ctx.budget.commitCompute(ctx.company.id, plan.computeUnits); });
+  }
   if (!ctx.draft.config.allowPlayerInnovation) {
     verdict.reject('requirement_not_met', 'Player innovation is disabled in this session.');
     return;

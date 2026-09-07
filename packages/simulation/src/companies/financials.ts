@@ -363,8 +363,10 @@ function dataCustodyCostUsd(draft: SessionState, company: Company): number {
 function projectBudgetUsd(draft: SessionState, companyId: string): number {
   let total = 0;
   for (const project of draft.researchProjects) {
-    if (project.companyId !== companyId || project.status !== 'active') continue;
-    total += project.budgetQuarterly;
+    if (project.companyId !== companyId) continue;
+    if (project.experiment !== undefined) {
+      if (project.experiment.lastRunQuarter === draft.quarter) total += project.experiment.cashSpentLastRun;
+    } else if (project.status === 'active') total += project.budgetQuarterly;
   }
   return total;
 }

@@ -23,6 +23,7 @@
  * refuses as keywords.
  */
 
+import { llmWireSchema } from '@frontier/contracts';
 import type { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -33,14 +34,14 @@ export function jsonSchemaTextFor(schema: z.ZodType<unknown>, name: string): str
   const key = schema as unknown as object;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  const rendered = JSON.stringify(zodToJsonSchema(schema, { name, target: 'jsonSchema7', $refStrategy: 'none' }));
+  const rendered = JSON.stringify(zodToJsonSchema(llmWireSchema(schema), { name, target: 'jsonSchema7', $refStrategy: 'none' }));
   cache.set(key, rendered);
   return rendered;
 }
 
 /** JSON Schema for `schema` as a plain object, for providers that take one structurally. */
 export function jsonSchemaObjectFor(schema: z.ZodType<unknown>): { [key: string]: unknown } {
-  return zodToJsonSchema(schema, { target: 'jsonSchema7', $refStrategy: 'none' }) as { [key: string]: unknown };
+  return zodToJsonSchema(llmWireSchema(schema), { target: 'jsonSchema7', $refStrategy: 'none' }) as { [key: string]: unknown };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -163,7 +163,15 @@ export function customersPerUnit(draft: SessionState, computeIntensity: number):
 
 /** Accelerator-equivalents pointed at serving rather than training. */
 export function servingComputeUnits(draft: SessionState, company: Company): number {
-  return heldComputeUnits(draft, company) * (1 - unit(company.compute.trainingAllocation));
+  const held = heldComputeUnits(draft, company);
+  const serving = held * (1 - unit(company.compute.trainingAllocation));
+  const experimentalUse = draft.researchProjects.reduce((sum, project) => sum + (
+    project.companyId === company.id && project.experiment?.lastRunQuarter === draft.quarter
+      ? project.experiment.computeUsedLastRun : 0
+  ), 0);
+  // A checkpoint releases next quarter's allocation, not compute already used
+  // this quarter. Experiments use training capacity first, then spare serving.
+  return experimentalUse === 0 ? serving : Math.min(serving, Math.max(0, held - experimentalUse));
 }
 
 /* -------------------------------------------------------------------------- */

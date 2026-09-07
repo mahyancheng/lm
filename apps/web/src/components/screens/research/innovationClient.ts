@@ -13,6 +13,7 @@
  * form, where the player states the same fields in their own hand.
  */
 
+import { InnovationProposalSchema } from '@frontier/contracts';
 import type { Company, InnovationInterpreterInput, InnovationProposal, SessionState, TechGraph } from '@frontier/contracts';
 
 const TIMEOUT_MS = 45_000;
@@ -38,7 +39,13 @@ export async function requestInnovation(input: InnovationInterpreterInput): Prom
     });
     if (!response.ok) return null;
     const parsed = (await response.json()) as RoleResponse;
-    return parsed.output ?? null;
+    const validated = InnovationProposalSchema.safeParse(parsed.output);
+    if (!validated.success) return null;
+    if (!input.experimentMode) {
+      const { experiment: _plan, experimentReview: _review, ...proposal } = validated.data;
+      return proposal;
+    }
+    return validated.data;
   } catch {
     return null;
   } finally {

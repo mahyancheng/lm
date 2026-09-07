@@ -1,3 +1,4 @@
+import { fromLlmWire } from '@frontier/contracts';
 /**
  * @frontier/llm — transport/api.ts
  *
@@ -97,7 +98,7 @@ export function outputFormatFor<T>(schema: z.ZodType<T>): {
   return {
     type: 'json_schema',
     schema: structuredOutputSchemaFor(schema),
-    parse: (content: string): T => schema.parse(JSON.parse(content)),
+    parse: (content: string): T => schema.parse(fromLlmWire(schema, JSON.parse(content))),
   };
 }
 
@@ -177,7 +178,7 @@ export function createApiTransport(config: ApiTransportConfig = {}): LlmTranspor
 
         // parsed_output already ran the contract schema; re-checking is cheap
         // and keeps the "output is schema-valid or null" invariant local.
-        const recheck = req.schema.safeParse(parsed);
+        const recheck = req.schema.safeParse(fromLlmWire(req.schema, parsed));
         if (!recheck.success) {
           return finish({
             output: null,

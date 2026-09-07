@@ -65,10 +65,18 @@ export function techGraphForCompany(graph: TechGraph, companyId: string): TechGr
  * leaked or demonstrated in a product.
  */
 export function publicResearchProjects(draft: SessionState): ResearchProject[] {
-  return draft.researchProjects.filter((p) => !p.isSecret);
+  return draft.researchProjects.filter((p) => !p.isSecret).map(stripExperiment);
 }
 
 /** Research programmes one company can see: everything of its own, plus public work. */
 export function researchProjectsForCompany(draft: SessionState, companyId: string): ResearchProject[] {
-  return draft.researchProjects.filter((p) => p.companyId === companyId || !p.isSecret);
+  return draft.researchProjects.filter((p) => p.companyId === companyId || !p.isSecret)
+    .map((p) => p.companyId === companyId ? p : stripExperiment(p));
+}
+
+/** Publishing a programme does not publish its private experimental notebook. */
+function stripExperiment(project: ResearchProject): ResearchProject {
+  if (!project.experiment) return project;
+  const { experiment: _privateNotebook, ...publicProject } = project;
+  return publicProject;
 }

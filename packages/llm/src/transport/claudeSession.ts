@@ -386,7 +386,7 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
         // The schema is the arbiter of which balanced object in the reply is
         // the answer, so a thinking aside that happens to contain JSON cannot
         // shadow it.
-        const extraction = extractJsonObject(outcome.text, (value) => req.schema.safeParse(value).success);
+        const extraction = extractJsonObject(outcome.text, (value) => parseAgainst(req.schema, value).ok);
         const issues: string[] = [...outcome.errors];
 
         if (!extraction.ok) {

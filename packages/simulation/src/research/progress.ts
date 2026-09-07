@@ -28,6 +28,7 @@
  * internal research and does not move the share price — unless it leaks.
  */
 
+import { advanceExperiment } from './experiments';
 import type { ResearchProject, ResolverContext, SessionState, TechNode } from '@frontier/contracts';
 import {
   BASE_PROJECT_COMPUTE_UNITS,
@@ -180,6 +181,8 @@ export function advanceProjects(draft: SessionState, ctx: ResolverContext): void
     // pinned at ninety-eight percent for ever. Draws no random number, so the
     // call sequence of every other programme is untouched.
     if (isNodeEconomyWorld(draft) && pauseIfUnheld(draft, ctx, project, node)) continue;
+
+    if (project.experiment !== undefined) { advanceExperiment(draft, ctx, project); continue; }
 
     const factors = resourcingFactors(draft, project, node);
     const plannedRate = 1 / Math.max(1, project.expectedQuarters);

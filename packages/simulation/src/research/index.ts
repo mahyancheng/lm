@@ -69,6 +69,7 @@ export type {
   RunningForecast,
 } from './forecast';
 export * from './balance';
+export { experimentReviewError, experimentResources } from './experiments';
 
 /**
  * Build the research subsystem. Stateless: everything it needs comes from the

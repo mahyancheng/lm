@@ -157,6 +157,7 @@ export {
   INPUT_FILL_FLOOR,
   ORDER_BOOK_QUARTERS,
   QUALITY_DECAY,
+  currentAcceleratorOutputCapacity,
   deliveredQuality,
   effectiveQuality,
   inputFillRatio,

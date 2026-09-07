@@ -71,6 +71,24 @@ export function executeApprovedDebt(draft: SessionState): void {
 }
 
 /** Restore the exact equity action after its vote, once. Market clearing still decides the outcome. */
+export function executeApprovedMaterialDeal(draft: SessionState): void {
+  for (const proposal of draft.boardProposals) {
+    const source = draft.pendingActions.find((action) => action.actionId === proposal.linkedActionId && action.actorCompanyId === proposal.companyId);
+    if (source === undefined || source.intent.type !== 'submit_board_proposal') continue;
+    if (proposal.dealProposalJson !== undefined && source.intent.dealProposal !== undefined && JSON.stringify(source.intent.dealProposal) === proposal.dealProposalJson) {
+      draft.pendingActions.push({ ...source, actionId: makeId('deal', proposal.id), sequence: Math.max(-1, ...draft.pendingActions.map((action) => action.sequence)) + 1, origin: 'board_execution', intent: { type: 'propose_deal', proposal: source.intent.dealProposal } });
+      proposal.dealProposalJson = undefined;
+      continue;
+    }
+    if (proposal.dealAcceptanceDealId === undefined || proposal.dealAcceptanceJson === undefined || source.intent.dealAcceptance === undefined) continue;
+    const deal = draft.deals.find((candidate) => candidate.id === proposal.dealAcceptanceDealId);
+    if (deal === undefined || deal.status !== 'proposed' || deal.expiresQuarter < draft.quarter || source.intent.dealAcceptance.dealId !== deal.id || source.intent.dealAcceptance.dealJson !== proposal.dealAcceptanceJson || JSON.stringify(deal) !== proposal.dealAcceptanceJson) continue;
+    draft.pendingActions.push({ ...source, actionId: makeId('accept', proposal.id), sequence: Math.max(-1, ...draft.pendingActions.map((action) => action.sequence)) + 1, origin: 'board_execution', intent: { type: 'accept_deal', dealId: deal.id } });
+    proposal.dealAcceptanceDealId = undefined;
+    proposal.dealAcceptanceJson = undefined;
+  }
+}
+
 export function executeApprovedEquity(draft: SessionState): void {
   if (!isNodeEconomyWorld(draft)) return;
   for (const proposal of draft.boardProposals) {
@@ -137,6 +155,9 @@ export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext):
       linkedActionId: action.actionId,
       ...(isNodeEconomyWorld(draft) && intent.debtTerms !== undefined ? { debtTerms: intent.debtTerms } : {}),
       ...(isNodeEconomyWorld(draft) && intent.equityTerms !== undefined ? { equityTerms: intent.equityTerms } : {}),
+      ...(intent.executiveAppointmentTerms !== undefined ? { executiveAppointmentTerms: intent.executiveAppointmentTerms } : {}),
+      ...(intent.dealProposal !== undefined ? { dealProposalJson: JSON.stringify(intent.dealProposal) } : {}),
+      ...(intent.dealAcceptance !== undefined ? { dealAcceptanceDealId: intent.dealAcceptance.dealId, dealAcceptanceJson: intent.dealAcceptance.dealJson } : {}),
       requiredThresholdFraction: rule.supermajorityKinds.includes(intent.kind)
         ? rule.supermajorityThresholdFraction
         : rule.passThresholdFraction,
@@ -685,6 +706,17 @@ export function routeDeals(draft: SessionState, ctx: ResolverContext): void {
       payload: { proposerId: deal.proposerId, reason: clip(intent.reason, 240) },
       visibility: deal.confidentiality === 'public' ? 'public' : 'company',
     });
+  }
+
+  for (const { action, intent } of pendingOfType(draft, 'cancel_deal')) {
+    const deal = draft.deals.find((candidate) => candidate.id === intent.dealId);
+    const terms = deal === undefined ? undefined : [...deal.gives, ...deal.gets].find((entry) => entry.kind === 'owned_accelerator_supply');
+    if (deal === undefined || terms === undefined || deal.status !== 'accepted' || !terms.cancellable) continue;
+    if (action.actorCompanyId !== terms.supplierCompanyId && action.actorCompanyId !== terms.buyerCompanyId) continue;
+    deal.settlements = [...(deal.settlements ?? []), { quarter: draft.quarter, obligationKind: 'owned_accelerator_supply', status: 'cancelled', dueUnits: 0, deliveredUnits: 0, unitPriceUsd: 0, totalUsd: 0, reason: clip(intent.reason, 240) }];
+    deal.status = 'executed';
+    ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_executed', actorId: action.actorCompanyId, targetId: deal.id,
+      payload: { cancelled: true, reason: clip(intent.reason, 240), futureInstalmentsOnly: true }, visibility: deal.confidentiality === 'public' ? 'public' : 'company' });
   }
 
   executeCashDeals(draft, ctx);

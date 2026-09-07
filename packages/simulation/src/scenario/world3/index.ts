@@ -1351,3 +1351,5 @@ export {
   world3BackgroundsForSector,
 } from './highlights';
 export type { W3OpeningFacts } from './highlights';
+export { W3_TESSELLATE_ACCELERATOR_SAVE_UPGRADE, upgradeWorld3TessellateAcceleratorSupplier } from './saveUpgrade';
+export type { World3SaveUpgradeResult } from './saveUpgrade';

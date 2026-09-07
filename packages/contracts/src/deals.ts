@@ -58,6 +58,7 @@ export const DEAL_OBLIGATION_KINDS = [
   // ordinary deal path because a licence is a bargain between two companies and
   // the deal path already proposes, accepts, rejects, expires and audits.
   'node_licence',
+  'owned_accelerator_supply',
 ] as const;
 
 /**
@@ -68,6 +69,22 @@ export const DEAL_OBLIGATION_KINDS = [
  */
 export const DealObligationSchema = z
   .discriminatedUnion('kind', [
+    z
+      .object({
+        kind: z.literal('owned_accelerator_supply'),
+        supplierCompanyId: z.string().min(1).describe('Manufacturer that transfers title to the hardware.'),
+        buyerCompanyId: z.string().min(1).describe('Company receiving and owning the hardware.'),
+        quantityPerQuarter: z.number().int().min(1).describe('Accelerators due each quarter.'),
+        durationQuarters: z.number().int().min(1).max(20).describe('Number of quarterly delivery instalments.'),
+        hardwarePriceReference: z.literal('seller_quote').describe('Each instalment is struck from the supplier hardware quote in its delivery quarter.'),
+        premiumPct: z.number().int().min(-50).max(100).describe('Whole-percent premium or discount applied to the supplier quote.'),
+        maxUnitPriceUsd: usd('Buyer-approved maximum all-in price per accelerator. An instalment above it defaults without a delivery.'),
+        priority: z.number().int().min(1).max(10).describe('Higher priority receives scarce output first; equal priority breaks by deal id.'),
+        nonExclusive: z.boolean().describe('The supplier remains free to sell hardware to other buyers.'),
+        cancellable: z.boolean().describe('Whether either party may cancel future, undelivered instalments.'),
+        contractEndQuarter: QuarterIndexSchema.describe('No instalment may be delivered after this quarter. This is distinct from the offer response expiry.'),
+      })
+      .describe('A private recurring transfer of owned accelerators. This is hardware title, not rental compute_supply.'),
     z
       .object({
         kind: z.literal('compute_supply'),
@@ -242,6 +259,16 @@ export const DealProposalSchema = DealProposalDraftSchema.extend({
   respondedQuarter: QuarterIndexSchema.nullable().describe('Quarter the counterparty answered, or null.'),
   conversationId: z.string().nullable().describe('Conversation the deal came out of, for the audit trail.'),
   breachedByPartyId: z.string().nullable().describe('Party that failed to discharge an obligation, or null. A breach is permanent in every counterparty\'s memory.'),
+  settlements: z.array(z.object({
+    quarter: QuarterIndexSchema,
+    obligationKind: z.literal('owned_accelerator_supply'),
+    status: z.enum(['pending', 'delivered', 'partial', 'defaulted', 'price_cap_unmet', 'cancelled', 'expired']),
+    dueUnits: intCount('Units due under the instalment.'),
+    deliveredUnits: intCount('Units actually transferred.'),
+    unitPriceUsd: usd('Exact seller-quote price, including the contract premium.'),
+    totalUsd: usd('Capital settled through the normal accelerator purchase accounting.'),
+    reason: z.string().max(240).nullable(),
+  })).max(40).optional().describe('Per-quarter contract delivery receipts. Optional for pre-contract saves.'),
 }).describe('A structured deal in session state. Nothing about a deal is enforceable until status is "accepted" and binding is true.');
 export type DealProposal = z.infer<typeof DealProposalSchema>;
 

@@ -67,6 +67,7 @@
 import type { CapacityKind, Company, NodeCostCache, NodeLineRef, ResolverContext, SessionState } from '@frontier/contracts';
 import {
   ECONOMIC_NODES,
+  COMPUTE_CAPACITY_NODE_ID,
   GRID_POWER_NODE_ID,
   NODE_PRICE_BASELINE,
   PRODUCT_SEGMENTS,
@@ -538,6 +539,13 @@ export function nodeBalances(state: SessionState, cache: NodeCostCache = createN
       if (node.energyMwhPerUnit > 0) land(derived, derivedTotal, GRID_POWER_NODE_ID, buyerCell, sold * node.energyMwhPerUnit);
     }
   }
+
+  // Direct owned-accelerator deliveries were physically allocated earlier in
+  // this product-demand phase. They are settled by financials, not by the node
+  // market, so remove them from the anonymous accelerator supply once before
+  // pricing the remaining output.
+  const directAccelerators = Object.values(state.acceleratorDirectAllocatedUnitsBySeller ?? {}).reduce((sum, units) => sum + Math.max(0, units), 0);
+  if (directAccelerators > 0) supply.set(COMPUTE_CAPACITY_NODE_ID, Math.max(0, (supply.get(COMPUTE_CAPACITY_NODE_ID) ?? 0) - directAccelerators));
 
   const out: Record<string, NodeBalance> = {};
   for (const node of [...ECONOMIC_NODES, ...(state.customEconomicNodes ?? [])]) {

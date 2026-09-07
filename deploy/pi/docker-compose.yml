@@ -41,6 +41,9 @@ services:
       - "8110:3000"
 
     env_file: .env
+    environment:
+      # Canonical game command records on the existing persistent /data volume.
+      GAME_SESSION_DIR: ${GAME_SESSION_DIR:-/data/games}
 
     # Memory is the whole reason this deployment needed thought.
     #

@@ -44,7 +44,7 @@ import { BatchBudget, Verdict, findCompany, shareholderStake, type ValidationAct
 import { applyTypeRules, type RuleContext } from './rules';
 import { isNodeEconomyWorld } from '../economy/sectors';
 import { isEliminated } from '../companies/entrants';
-import { authorisedByBoard, boardMatterFor, toBoardProposalIntent } from './boardMatters';
+import { authorisedByBoard, boardMatterFor, materialHardwareDealAmount, toBoardProposalIntent } from './boardMatters';
 
 export { BatchBudget, Verdict, canReach, researchComputeHeadroom, shareholderStake, type ValidationActor, type ReachDecision } from './context';
 export { RULES, applyTypeRules, quarterlyHireCostUsd, reservableUnits, type RuleContext } from './rules';
@@ -79,7 +79,7 @@ export {
  *
  * Being chief executive and owning the company are separate states, and a
  * dismissal ends only the first. A founder who was voted out keeps every share,
- * and a shareholder of that size is not a spectator: they can trade, deal, speak
+ * and a shareholder of that size is not a spectator: they can trade, speak
  * publicly, ask for an introduction, and — the route back — requisition a matter
  * for the board that removed them. Everything else needs the office.
  *
@@ -90,9 +90,6 @@ export {
 export const SHAREHOLDER_CAPACITY_ACTIONS: readonly ActionType[] = [
   'buy_shares',
   'sell_shares',
-  'propose_deal',
-  'accept_deal',
-  'reject_deal',
   'social_post',
   'request_introduction',
   'submit_board_proposal',
@@ -286,19 +283,37 @@ export function validateAction(
   if (verdict.isRejected) return verdict.toResult(actionId);
 
   /* --- board matters become proposals rather than executing --------------- */
-  const matter = company.boardId === null ? null : boardMatterFor(verdict.current, company);
+  const acceptanceIntent = verdict.current.type === 'accept_deal' ? verdict.current : null;
+  const acceptedDeal = acceptanceIntent === null ? null : draft.deals.find((deal) => deal.id === acceptanceIntent.dealId) ?? null;
+  const acceptanceAmount = acceptedDeal === null ? null : materialHardwareDealAmount(acceptedDeal, company);
+  const acceptanceMatter = acceptanceAmount === null
+    ? null
+    : { kind: 'financing' as const, title: 'Approve acceptance of a material accelerator supply contract', summary: `Management seeks authority to accept the exact hardware supply offer ${acceptedDeal?.id ?? ''}, with a maximum commitment of ${acceptanceAmount}.`, amountUsd: acceptanceAmount, targetCompanyId: acceptedDeal?.proposerId ?? null, stockComponentPct: null };
+  const matter = company.boardId === null ? null : acceptanceMatter ?? boardMatterFor(verdict.current, company);
   const debtMandate = isNodeEconomyWorld(draft) && verdict.current.type === 'issue_debt' ? verdict.current : null;
   const equityMandate =
     isNodeEconomyWorld(draft) &&
     (verdict.current.type === 'raise_round' || verdict.current.type === 'issue_shares' || verdict.current.type === 'ipo')
       ? verdict.current
       : null;
-  if (matter !== null && (debtMandate !== null || equityMandate !== null || !authorisedByBoard(draft, company.id, matter.kind, verdict.current))) {
+  const dealMandate = verdict.current.type === 'propose_deal' ? verdict.current.proposal : null;
+  if (matter !== null && (debtMandate !== null || equityMandate !== null || dealMandate !== null || !authorisedByBoard(draft, company.id, matter.kind, verdict.current))) {
     verdict.replaceWith(
       {
         ...toBoardProposalIntent(matter),
         ...(debtMandate === null ? {} : { debtTerms: { amountUsd: debtMandate.amountUsd, maxRatePct: debtMandate.maxRatePct, termQuarters: debtMandate.termQuarters } }),
         ...(equityMandate === null ? {} : { equityTerms: equityMandate }),
+        ...(dealMandate === null ? {} : { dealProposal: dealMandate }),
+        ...(acceptedDeal === null || acceptanceAmount === null ? {} : { dealAcceptance: { dealId: acceptedDeal.id, dealJson: JSON.stringify(acceptedDeal) } }),
+        ...(verdict.current.type === 'appoint_executive'
+          ? {
+              executiveAppointmentTerms: {
+                characterId: verdict.current.characterId,
+                executiveRole: verdict.current.executiveRole,
+                annualCompUsd: verdict.current.annualCompUsd,
+              },
+            }
+          : {}),
       },
       'board_approval_required',
       `${intent.type.replace(/_/g, ' ')} is a ${matter.kind.replace(/_/g, ' ')} matter for the board of ${company.name}. It has been tabled as a proposal instead; win the vote and it executes.`,

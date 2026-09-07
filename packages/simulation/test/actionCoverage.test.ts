@@ -152,6 +152,38 @@ function stageWorld(): SessionState {
     conversationId: null,
     breachedByPartyId: null,
   });
+  state.deals.push({
+    id: 'deal_coverage_cancellable_hardware',
+    proposerId: DEMO_COMPANIES.nexus,
+    proposerKind: 'company',
+    counterpartyId: DEMO_COMPANIES.player,
+    counterpartyKind: 'company',
+    gives: [{
+      kind: 'owned_accelerator_supply',
+      supplierCompanyId: DEMO_COMPANIES.nexus,
+      buyerCompanyId: DEMO_COMPANIES.player,
+      quantityPerQuarter: 10,
+      durationQuarters: 2,
+      hardwarePriceReference: 'seller_quote',
+      premiumPct: 5,
+      maxUnitPriceUsd: 1_000_000,
+      priority: 5,
+      nonExclusive: true,
+      cancellable: true,
+      contractEndQuarter: state.quarter + 4,
+    }],
+    gets: [],
+    confidentiality: 'private',
+    expiresQuarter: state.quarter,
+    binding: true,
+    intentStatements: [],
+    summary: 'A cancellable recurring hardware contract staged for action coverage.',
+    status: 'accepted',
+    createdQuarter: state.quarter,
+    respondedQuarter: state.quarter,
+    conversationId: null,
+    breachedByPartyId: null,
+  });
   state.mediaStories.push({
     id: 'sty_coverage_crisis',
     quarter: state.quarter,
@@ -294,7 +326,7 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
     case 'buyback':
       return { type, budgetUsd: 1_000_000, maxPricePerShareUsd: 5 };
     case 'issue_shares':
-      return { type, shares: 100_000, shareClassId: 'shc_player_ventures_common', minPricePerShareUsd: 1 };
+      return { type, shares: 100_000, shareClassId: 'shc_orbit_common', minPricePerShareUsd: 1 };
     case 'ipo':
       return { type, targetRaiseUsd: 40_000_000, floatPct: 0.2, minPricePerShareUsd: 4 };
     case 'set_dividend_policy':
@@ -438,6 +470,8 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
       // absorbs outright already — so this is refused there for the same
       // reason; world-2 behaviour is tested in groupControl.test.ts.
       return { type, subsidiaryCompanyId: DEMO_COMPANIES.meridian };
+    case 'cancel_deal':
+      return { type, dealId: 'deal_coverage_cancellable_hardware', reason: 'Cancellation coverage.' };
     default: {
       const exhaustive: never = type;
       throw new Error(`no coverage intent for ${String(exhaustive)}`);
@@ -451,6 +485,10 @@ function intentFor(type: ActionType, state: SessionState): ActionIntent {
  */
 function actorFor(type: ActionType): { companyId: string; characterId: string; playerId: string | null } {
   if (type === 'give_guidance') return { companyId: DEMO_COMPANIES.nexus, characterId: DEMO_CHARACTERS.maya, playerId: null };
+  // Primary issuance is available only to a listed company. The player fixture
+  // is deliberately private, so exercise the public issuer rather than making
+  // this coverage test pretend a private float can be created.
+  if (type === 'issue_shares') return { companyId: DEMO_COMPANIES.orbit, characterId: DEMO_CHARACTERS.daniel, playerId: null };
   return { companyId: DEMO_COMPANIES.player, characterId: DEMO_CHARACTERS.player, playerId: DEMO_PLAYER_ID };
 }
 
@@ -523,7 +561,7 @@ describe('every accepted action changes something', () => {
     // abandon_research_project and set_data_policy, and 48 before it appended
     // license_node and publish_licence_terms, and 50 before the composed line
     // appended fill_slot and set_target_market.
-    expect(ACTION_TYPES.length).toBe(52);
+    expect(ACTION_TYPES.length).toBe(53);
     expect([...LATER_WORLD_ONLY_ACTIONS]).toEqual([
       'buy_accelerators',
       'invest_capacity',

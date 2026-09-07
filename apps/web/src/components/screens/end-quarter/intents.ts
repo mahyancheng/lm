@@ -444,6 +444,9 @@ export function describeIntent(intent: ActionIntent, startYear: number): IntentD
     case 'reject_deal':
       return { label: `Reject ${intent.dealId}`, terms: [term('Reason', intent.reason || '—')] };
 
+    case 'cancel_deal':
+      return { label: `Cancel ${intent.dealId}`, terms: [term('Reason', intent.reason || '—')] };
+
     case 'request_introduction':
       return {
         label: `Ask ${intent.viaCharacterId} for an introduction`,
@@ -495,6 +498,7 @@ export const PHASE_OF_ACTION: Readonly<Record<ActionType, ResolutionPhase>> = {
   acquire_company: 'capital_resolution',
   transfer_between_group: 'capital_resolution',
   merge_subsidiary: 'capital_resolution',
+  cancel_deal: 'capital_resolution',
 
   bid_government: 'government_resolution',
   decline_opportunity: 'government_resolution',
@@ -658,6 +662,8 @@ export function cashEffectOf(session: SessionState, intent: ActionIntent): CashE
       return { outflowUsd: 0, inflowUsd: 0, note: 'Nothing moves until the counterparty accepts.' };
     case 'accept_deal':
       return { outflowUsd: 0, inflowUsd: 0, note: 'Obligations begin executing next quarter.' };
+    case 'cancel_deal':
+      return { outflowUsd: 0, inflowUsd: 0, note: 'Cancels only future undelivered contract instalments.' };
     case 'transfer_between_group':
       return intent.cashUsd !== null
         ? { outflowUsd: intent.cashUsd, inflowUsd: 0, note: 'Moves within the group; nothing leaves it.' }

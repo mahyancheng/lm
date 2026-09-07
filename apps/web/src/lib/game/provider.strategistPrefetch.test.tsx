@@ -104,6 +104,7 @@ beforeEach(() => {
   llmHealth.mockResolvedValue({ available: false, transportKind: 'none', model: null });
   const dom = fakeDom(fakeStorage());
   globals.window = dom.win;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, reason: 'authority_disabled' }), { status: 404, headers: { 'content-type': 'application/json' } })));
   container = dom.container;
   roots = [];
 });
@@ -112,6 +113,7 @@ afterEach(async () => {
   for (const root of roots) {
     await act(async () => root.unmount());
   }
+  vi.unstubAllGlobals();
   delete globals.window;
 });
 

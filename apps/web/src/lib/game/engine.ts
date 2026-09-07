@@ -16,7 +16,6 @@ import type {
   ActionValidationResult,
   GmProposalBatch,
   NewGameSetupInput,
-  NpcActionBundle,
   ResolverContext,
   SessionDifficulty,
   SessionState,
@@ -34,6 +33,7 @@ import {
   phaseStream,
   type FrontierEngine,
   type FrontierResolutionOutcome,
+  type NpcBundleInput,
 } from '@frontier/simulation';
 
 export { DEMO_CHARACTERS, DEMO_COMPANIES, DEMO_PLAYER_ID, DEMO_SEED } from '@frontier/simulation';
@@ -289,7 +289,7 @@ export interface ResolveAttempt {
   /** The World Director proposal the surviving attempt actually used. */
   readonly gmProposal: GmProposalBatch | null;
   /** The NPC bundles the surviving attempt actually used. */
-  readonly npcBundles: readonly NpcActionBundle[];
+  readonly npcBundles: readonly NpcBundleInput[];
   /** Why nothing resolved, or null. */
   readonly error: string | null;
 }
@@ -314,12 +314,12 @@ export function resolveQuarterSafely(
   session: SessionState,
   submitted: readonly SubmittedAction[],
   gmProposal: GmProposalBatch | null,
-  npcBundles: readonly NpcActionBundle[],
+  npcBundles: readonly NpcBundleInput[],
   resolve: (
     state: SessionState,
     actions: readonly SubmittedAction[],
     proposal: GmProposalBatch | null,
-    bundles: readonly NpcActionBundle[],
+    bundles: readonly NpcBundleInput[],
   ) => FrontierResolutionOutcome = (state, actions, proposal, bundles) =>
     getEngine().resolver.resolveQuarter(state, actions, proposal, bundles),
 ): ResolveAttempt {

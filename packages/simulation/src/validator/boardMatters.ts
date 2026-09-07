@@ -43,6 +43,7 @@ export const BOARD_MATTER_BY_ACTION: Partial<Record<ActionType, BoardProposalKin
   publish_research: 'model_release',
   layoff: 'restructuring',
   set_dividend_policy: 'dividend',
+  propose_deal: 'financing',
 };
 
 /** What a transformed proposal carries into the boardroom. */
@@ -53,6 +54,15 @@ export interface BoardMatter {
   readonly amountUsd: number | null;
   readonly targetCompanyId: string | null;
   readonly stockComponentPct: number | null;
+}
+
+/** Maximum buyer commitment on a binding owned-accelerator contract, or null. */
+export function materialHardwareDealAmount(intent: Extract<ActionIntent, { type: 'propose_deal' }>['proposal'], company: Company): number | null {
+  const hardware = [...intent.gives, ...intent.gets].find((obligation) => obligation.kind === 'owned_accelerator_supply');
+  if (hardware === undefined || !intent.binding) return null;
+  const maximumCommitment = hardware.quantityPerQuarter * hardware.durationQuarters * hardware.maxUnitPriceUsd;
+  const threshold = Math.max(BOARD_GOV_CONTRACT_FLOOR_USD, company.financials.revenueQuarterly * BOARD_GOV_CONTRACT_REVENUE_MULTIPLE);
+  return maximumCommitment >= threshold ? maximumCommitment : null;
 }
 
 /**
@@ -154,6 +164,20 @@ export function boardMatterFor(intent: ActionIntent, company: Company): BoardMat
       };
     }
 
+    case 'propose_deal': {
+      const maximumCommitment = materialHardwareDealAmount(intent.proposal, company);
+      const hardware = [...intent.proposal.gives, ...intent.proposal.gets].find((obligation) => obligation.kind === 'owned_accelerator_supply');
+      if (maximumCommitment === null || hardware === undefined) return null;
+      return {
+        kind: 'financing',
+        title: 'Approve a material accelerator supply contract',
+        summary: `Management proposes a binding ${hardware.durationQuarters}-quarter accelerator supply contract for ${count(hardware.quantityPerQuarter)} units per quarter. Its maximum commitment is ${usd(maximumCommitment)}.`,
+        amountUsd: maximumCommitment,
+        targetCompanyId: intent.proposal.counterpartyKind === 'company' ? intent.proposal.counterpartyId : null,
+        stockComponentPct: null,
+      };
+    }
+
     case 'appoint_executive':
       return {
         kind: 'csuite_appointment',
@@ -232,10 +256,39 @@ export function authorisedByBoard(draft: SessionState, companyId: string, kind: 
     if (proposal.companyId !== companyId || proposal.kind !== kind) continue;
     if (proposal.status !== 'passed') continue;
     if (draft.quarter - proposal.decisionQuarter > BOARD_AUTHORISATION_WINDOW_QUARTERS) continue;
-    // A debt mandate is an exact one-time authorization, not a generic
-    // financing blanket for equity or another financing action.
-    if (proposal.debtTerms !== undefined && requestedIntent?.type !== 'issue_debt') continue;
+    // Financing approvals are exact mandates. A passed debt/equity proposal
+    // must never become a reusable blanket for a different amount, rate,
+    // dilution or listing. An old kind-only financing row cannot authorise a
+    // new financial action because it lacks the terms directors voted on.
+    const financialRequest = requestedIntent?.type === 'issue_debt' || requestedIntent?.type === 'raise_round' || requestedIntent?.type === 'issue_shares' || requestedIntent?.type === 'ipo';
+    if (financialRequest && proposal.debtTerms === undefined && proposal.equityTerms === undefined) continue;
+    if (proposal.debtTerms !== undefined) {
+      if (proposal.debtExecutionQuarter !== undefined || requestedIntent?.type !== 'issue_debt') continue;
+      if (
+        requestedIntent.amountUsd !== proposal.debtTerms.amountUsd ||
+        requestedIntent.maxRatePct !== proposal.debtTerms.maxRatePct ||
+        requestedIntent.termQuarters !== proposal.debtTerms.termQuarters
+      ) continue;
+    }
+    if (proposal.equityTerms !== undefined) {
+      if (proposal.equityExecutionQuarter !== undefined || !sameEquityTerms(requestedIntent, proposal.equityTerms)) continue;
+    }
     return true;
+  }
+  return false;
+}
+
+
+function sameEquityTerms(requested: ActionIntent | undefined, approved: NonNullable<import('@frontier/contracts').BoardProposal['equityTerms']>): boolean {
+  if (requested === undefined || requested.type !== approved.type) return false;
+  if (requested.type === 'raise_round' && approved.type === 'raise_round') {
+    return requested.stage === approved.stage && requested.targetAmountUsd === approved.targetAmountUsd && requested.maxDilutionPct === approved.maxDilutionPct;
+  }
+  if (requested.type === 'issue_shares' && approved.type === 'issue_shares') {
+    return requested.shares === approved.shares && requested.shareClassId === approved.shareClassId && requested.minPricePerShareUsd === approved.minPricePerShareUsd;
+  }
+  if (requested.type === 'ipo' && approved.type === 'ipo') {
+    return requested.targetRaiseUsd === approved.targetRaiseUsd && requested.floatPct === approved.floatPct && requested.minPricePerShareUsd === approved.minPricePerShareUsd;
   }
   return false;
 }

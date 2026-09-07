@@ -236,8 +236,24 @@ export const W3_RIVAL_LINES: Readonly<Record<string, readonly W3SeedLine[]>> = {
 
   /* --- Manufacturing ----------------------------------------------------- */
   [W2_COMPANIES.tessellate]: [
-    { nodeId: 'mat_wafer_300mm', revenueShare: 0.5, segment: 'enterprise', targetIndustry: 'manufacturing', published: true, fills: [] },
-    { nodeId: 'sys_advanced_package', revenueShare: 0.5, segment: 'enterprise', targetIndustry: 'manufacturing', published: true, fills: [] },
+    { nodeId: 'mat_wafer_300mm', revenueShare: 0.35, segment: 'enterprise', targetIndustry: 'manufacturing', published: true, fills: [] },
+    { nodeId: 'sys_advanced_package', revenueShare: 0.3, segment: 'enterprise', targetIndustry: 'manufacturing', published: true, fills: [] },
+    // The finished accelerator is the physical hardware market's supply
+    // line. Without it World 3 had a priced accelerator node but no company
+    // capable of selling one, so neither spot orders nor private supply
+    // contracts had a real counterparty.
+    {
+      nodeId: 'sys_ai_accelerator',
+      revenueShare: 0.35,
+      segment: 'enterprise',
+      targetIndustry: 'manufacturing',
+      published: true,
+      fills: [
+        { slotId: 'package', nodeId: 'sys_advanced_package', source: 'self' },
+        { slotId: 'power', nodeId: 'cmp_power_electronics', source: 'halcyon' },
+        { slotId: 'structure', nodeId: 'mat_machined_structure', source: 'rasan' },
+      ],
+    },
   ],
   [W2_COMPANIES.halcyon]: [
     {

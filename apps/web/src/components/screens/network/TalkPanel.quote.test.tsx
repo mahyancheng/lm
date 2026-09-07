@@ -32,6 +32,7 @@ vi.mock('@/components/ui', () => ({
 
 import { TalkPanel } from './TalkPanel';
 import { GameProvider, PLAYER_ID, playerCompanyOf, useGame, useGameActions, type GameStoreActions, type GameStoreState } from '@/lib/game';
+import { canonicalSessionRevision } from '@/lib/game/canonicalSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -183,5 +184,35 @@ describe('TalkPanel accelerator quote', () => {
     expect(characterReply).not.toHaveBeenCalled();
     expect(companyReply.mock.calls[0]?.[0].gameFacts).toEqual(expect.arrayContaining([{ label: 'Negotiation counterparty (company)', value: sellerCompanyId }]));
     expect(PLAYER_ID).toBe(state!.session.players[0]?.playerId);
+  });
+
+  it('shows a company command receipt as queued terms and advances the canonical revision', async () => {
+    await act(async () => {
+      actions!.newGame({ seed: 525252, setup: NewGameSetupSchema.parse({ companyName: 'Northwind AI', founderName: 'Rae Fontaine', backgroundId: 'consumer_ai', worldVersion: 2 }) });
+    });
+    const company = playerCompanyOf(state!.session);
+    const seller = sellersFor(state!.session, 'accelerators', company.id)[0]!;
+    sellerCompanyId = seller.company.id;
+    targetCharacterId = seller.company.ceoCharacterId!;
+    companyReply.mockResolvedValue({
+      output: { text: 'We have queued our answer for the quarter.', dealDraft: undefined, acceleratorPurchaseDraft: undefined, newCommitment: null, relationshipDeltas: { trust: 0, warmth: 0, respect: 0, hostility: 0 }, memoryToStore: null },
+      revision: 7,
+      receipts: [{ status: 'queued', revision: 6, intent: { type: 'accept_deal', dealId: 'deal_supplier_terms' }, reason: null }],
+    });
+
+    await act(async () => { root.render(<GameProvider><Probe panel /></GameProvider>); });
+    const textarea = walk(container).find((node) => node.tagName === 'TEXTAREA');
+    if (textarea === undefined) throw new Error('TalkPanel textarea was not rendered');
+    await act(async () => {
+      (reactProps(textarea).onChange as (event: { target: { value: string } }) => void)({ target: { value: 'Do you accept the supplier terms?' } });
+    });
+    await act(async () => { click(button('Send')); await Promise.resolve(); });
+
+    expect(walk(container).some((node) => node.textContent === 'Company command status')).toBe(true);
+    expect(walk(container).some((node) => node.textContent === 'Submitted for quarter — see current terms below')).toBe(true);
+    expect(walk(container).some((node) => node.textContent === 'Accept deal deal_supplier_terms')).toBe(true);
+    expect(walk(container).some((node) => node.textContent === 'Accepted')).toBe(false);
+    expect(canonicalSessionRevision(state!.session.sessionId)).toBe(7);
+    expect(state!.session.conversationThreads?.[0]?.turns[1]?.receipts).toEqual([{ status: 'queued', revision: 6, intent: { type: 'accept_deal', dealId: 'deal_supplier_terms' }, reason: null }]);
   });
 });

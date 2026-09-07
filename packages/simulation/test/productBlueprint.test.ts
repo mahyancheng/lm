@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ECONOMIC_NODES, SECTORS, SessionStateSchema, canProduce, canProduceInSession, economicNodeInSession, type ActionIntent, type InnovationProposal, type ResearchProject, type ResolverContext, type SubmittedAction } from '@frontier/contracts';
+import { ECONOMIC_NODES, SECTORS, SessionStateSchema, canProduce, canProduceInSession, economicNodeInSession, productBlueprintNodeId, type ActionIntent, type InnovationProposal, type ResearchProject, type ResolverContext, type SubmittedAction } from '@frontier/contracts';
 import { createRng } from '@frontier/shared';
 import { createWorld3Session } from '../src/scenario/world3';
 import { createDefaultEngine } from '../src/engine';
@@ -8,6 +8,9 @@ import { INNOVATION_COST_RANGE } from '../src/research/balance';
 import { createActionValidator } from '../src/validator';
 import { resolveProducts } from '../src/companies/products';
 import { nodeMapFor } from '../src/graph/projection';
+import { nodeBalances } from '../src/graph/market';
+import { inputFillRatio } from '../src/graph/production';
+import { resolveFills } from '../src/graph/slots';
 
 function fixture() {
   const state = createWorld3Session();
@@ -142,5 +145,100 @@ describe('research-backed products', () => {
     expect(first.nextState.companies.find((company) => company.id === f.company.id)?.products.find((product) => product.id === line.id)?.unitsSoldQuarterly ?? 0).toBeGreaterThan(0);
     expect(replay.committed).toBe(true);
     expect(replay.nextState).toEqual(first.nextState);
+  });
+
+  it.each(SECTORS)('carries a researched, launchable custom recipe through the %s economy', (sector) => {
+    const f = fixture();
+    const input = ECONOMIC_NODES.find((node) => node.sector === sector && node.tier >= 2 && node.tier < 6)!;
+    expect(input).toBeDefined();
+    const proposal: InnovationProposal = {
+      ...f.proposal('app_consumer_subscription'),
+      title: `${sector} operating offer`,
+      productBlueprint: {
+        customerValue: `A measurable ${sector} operating outcome for a paying business customer.`,
+        recipe: { label: `${sector} operating offer`, sector, customerSegment: 'enterprise', unitLabel: 'account', saleKind: 'recurring', inputNodeIds: [input.id], inputQuantities: [1] },
+      },
+    };
+    f.state.pendingActions = [f.submit({ type: 'propose_innovation', proposal })];
+    const integrated = integrateInnovationProposal(f.state, proposal, f.ctx);
+    expect(integrated.accepted, integrated.reasons.join('; ')).toBe(true);
+    const tech = f.state.techGraph.nodes.find((node) => node.id === integrated.nodeId)!;
+    const recipeId = productBlueprintNodeId(tech.productBlueprint!)!;
+    const recipe = economicNodeInSession(f.state, recipeId)!;
+    expect(recipe.sector).toBe(sector);
+    expect(recipe.slots).toHaveLength(1);
+    f.state.researchProjects = [{ id: `rsp_${sector}`, companyId: f.company.id, targetNodeId: tech.id, budgetQuarterly: 1_000_000, computeAllocated: 20, talentAllocated: 5,
+      progress: 1, internalConfidence: 1, quartersElapsed: 4, expectedQuarters: 4, isSecret: true, status: 'active', cumulativeSpendUsd: integrated.adjustedCostUsd, setbacks: 0, startedQuarter: f.state.quarter }];
+    achieveNodes(f.state, f.ctx);
+    expect(canProduceInSession(f.state, f.company, recipeId, f.state.quarter)).toBe(true);
+    const intent: ActionIntent = { type: 'launch_product', name: `${sector} launch`, technologyNodeId: tech.id, categoryId: recipeId,
+      segment: 'enterprise', targetIndustry: sector, pricePerSeatUsd: recipe.basePriceUsd * 1.25, computeIntensity: 0.4, launchMarketingUsd: 50_000, targetQuality: 0.75, supply: [], slots: [] };
+    const verdict = createActionValidator().validateBatch(f.state, [f.submit(intent)])[0]!;
+    expect(verdict.status, verdict.reasons.join('; ')).not.toBe('rejected');
+    f.state.pendingActions = [f.submit(verdict.clampedAction ?? intent)];
+    resolveProducts(f.state, f.ctx);
+    const line = f.company.products.find((product) => product.name === intent.name)!;
+    expect(line.nodeId).toBe(recipeId);
+    expect(line.unitCostUsd).toBeGreaterThan(0);
+  });
+
+  it('permits an achieved private recipe as a blocking upstream ingredient, then caps the chain at an operation', () => {
+    const f = fixture();
+    const source = ECONOMIC_NODES.find((node) => node.tier === 5)!;
+    const first: InnovationProposal = { ...f.proposal(source.id), title: 'Private upstream platform', productBlueprint: {
+      customerValue: 'A private platform with a measurable workflow outcome.',
+      recipe: { label: 'Private upstream platform', sector: 'ai', customerSegment: 'enterprise', unitLabel: 'account', saleKind: 'recurring', inputNodeIds: [source.id], inputQuantities: [1] },
+    } };
+    f.state.pendingActions = [f.submit({ type: 'propose_innovation', proposal: first })];
+    const firstResult = integrateInnovationProposal(f.state, first, f.ctx);
+    expect(firstResult.accepted, firstResult.reasons.join('; ')).toBe(true);
+    const firstTech = f.state.techGraph.nodes.find((node) => node.id === firstResult.nodeId)!;
+    const firstRecipeId = productBlueprintNodeId(firstTech.productBlueprint!)!;
+    f.state.researchProjects = [{ id: 'rsp_first_recipe', companyId: f.company.id, targetNodeId: firstTech.id, budgetQuarterly: 1_000_000, computeAllocated: 20, talentAllocated: 5,
+      progress: 1, internalConfidence: 1, quartersElapsed: 4, expectedQuarters: 4, isSecret: true, status: 'active', cumulativeSpendUsd: firstResult.adjustedCostUsd, setbacks: 0, startedQuarter: f.state.quarter }];
+    achieveNodes(f.state, f.ctx);
+    expect(canProduceInSession(f.state, f.company, firstRecipeId, f.state.quarter)).toBe(true);
+    const second: InnovationProposal = { ...f.proposal(source.id), title: 'Private operating offer', productBlueprint: {
+      customerValue: 'An operating offer built on an owned private platform.',
+      recipe: { label: 'Private operating offer', sector: 'ai', customerSegment: 'enterprise', unitLabel: 'contract', saleKind: 'contract', outputStage: 'operation', inputNodeIds: [firstRecipeId], inputQuantities: [1] },
+    } };
+    f.state.pendingActions = [f.submit({ type: 'propose_innovation', proposal: second })];
+    const secondResult = integrateInnovationProposal(f.state, second, f.ctx);
+    expect(secondResult.accepted, secondResult.reasons.join('; ')).toBe(true);
+    const secondTech = f.state.techGraph.nodes.find((node) => node.id === secondResult.nodeId)!;
+    const secondRecipe = economicNodeInSession(f.state, productBlueprintNodeId(secondTech.productBlueprint!)!)!;
+    expect(secondRecipe.tier).toBe(7);
+    expect(secondRecipe.role).toBe('retail');
+    expect(secondRecipe.slots[0]!.blocking).toBe(true);
+
+    // Both downstream lines use last quarter's units to ask for the same
+    // private platform. The upstream plant can make 100 against 200 requested,
+    // so each receives the same shared fraction; the private route bypasses
+    // neither the aggregate allocation nor the catalogue-input 75% floor.
+    (economicNodeInSession(f.state, firstRecipeId)! as { capacityKind: 'plant'; capacityDrawPerUnit: number }).capacityKind = 'plant';
+    (economicNodeInSession(f.state, firstRecipeId)! as { capacityKind: string; capacityDrawPerUnit: number }).capacityDrawPerUnit = 1;
+    (secondRecipe as { capacityKind: 'plant'; capacityDrawPerUnit: number }).capacityKind = 'plant';
+    (secondRecipe as { capacityKind: string; capacityDrawPerUnit: number }).capacityDrawPerUnit = 1;
+    f.company.capacity = { plantUsd: 100_000_000, fleetUsd: 0, gridUsd: 0 };
+    const template = f.company.products[0]!;
+    const upstream = { ...template, id: 'prd_private_upstream', name: 'Private upstream', nodeId: firstRecipeId, unitsSoldLastQuarter: 0, isActive: true };
+    const downstream = (id: string) => ({ ...template, id, name: id, nodeId: secondRecipe.id, unitsSoldQuarterly: 100, unitsSoldLastQuarter: 100, isActive: true, slots: [] });
+    const rival = f.state.companies.find((company) => company.id !== f.company.id)!;
+    f.company.products = [upstream, downstream('prd_private_consumer_a')];
+    rival.products = [downstream('prd_private_consumer_b')];
+    rival.capacity = { plantUsd: 100_000_000, fleetUsd: 0, gridUsd: 0 };
+    const balances = nodeBalances(f.state);
+    const firstFill = inputFillRatio(f.state, secondRecipe, resolveFills(f.state, f.company, f.company.products[1]!, secondRecipe), balances);
+    const secondFill = inputFillRatio(f.state, secondRecipe, resolveFills(f.state, rival, rival.products[0]!, secondRecipe), balances);
+    expect(balances[firstRecipeId]!.supplyUnits).toBeGreaterThan(0);
+    expect(balances[firstRecipeId]!.supplyUnits).toBeLessThanOrEqual(110);
+    expect(balances[firstRecipeId]!.derivedDemandUnits).toBe(200);
+    expect(firstFill).toBeCloseTo(secondFill, 8);
+    expect(firstFill).toBeLessThan(0.6);
+    resolveProducts(f.state, f.ctx);
+    const delivered = f.company.products[1]!.unitsSoldQuarterly! + rival.products[0]!.unitsSoldQuarterly!;
+    expect(delivered).toBeLessThanOrEqual(balances[firstRecipeId]!.supplyUnits);
+    f.company.capacity.plantUsd = 0;
+    expect(inputFillRatio(f.state, secondRecipe, resolveFills(f.state, f.company, f.company.products[1]!, secondRecipe), nodeBalances(f.state))).toBe(0);
   });
 });

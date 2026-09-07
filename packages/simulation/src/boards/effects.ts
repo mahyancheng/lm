@@ -216,24 +216,53 @@ export function applyProposalEffects(draft: SessionState, ctx: ResolverContext, 
     }
 
     case 'csuite_appointment': {
+      const terms = proposal.executiveAppointmentTerms;
+      if (terms === undefined) {
+        return NOTHING(`${company.name}'s board approved an appointment without executable terms.`, { authorised: false });
+      }
+      const appointee = draft.characters.find((candidate) => candidate.id === terms.characterId && candidate.isActive) ?? null;
+      if (appointee === null) {
+        return NOTHING(`${company.name}'s board approval could not be executed because its named candidate is no longer active.`, {
+          authorised: false,
+          appointedCharacterId: terms.characterId,
+        });
+      }
+
       company.employees.morale = score100(company.employees.morale + 2);
-      // The board appoints whoever put the matter to it. For a chief executive
-      // that is a routine authorisation and changes nothing; for a shareholder
-      // who requisitioned the meeting it is the route back — win the vote, take
-      // the office, and with the office the direction of the company. This is
-      // the other half of the separation `dismissChiefExecutive` opens: control
-      // is lost at a vote and it can be won back at one.
-      const appointee = draft.characters.find((c) => c.id === proposal.proposedByCharacterId && c.isActive) ?? null;
-      if (appointee === null || appointee.id === company.ceoCharacterId) {
-        return { summary: `${company.name} filled the post the board approved.`, eventIds: [], changes: { authorised: true, moraleDelta: 2 } };
+      const roleTitle = terms.executiveRole.replace(/_/g, ' ');
+      const alreadyEmployed = appointee.companyId === company.id;
+      if (!alreadyEmployed) {
+        const headcount = company.employees.engineers + company.employees.researchers + company.employees.sales + company.employees.ops + company.employees.execs;
+        company.employees.avgComp = (company.employees.avgComp * headcount + terms.annualCompUsd) / Math.max(1, headcount + 1);
+        company.employees.execs += 1;
+      }
+      appointee.companyId = company.id;
+      appointee.role = terms.executiveRole === 'ceo' && appointee.isPlayer ? 'founder_ceo' : 'executive';
+      appointee.title = `${terms.executiveRole === 'ceo' ? 'CEO' : roleTitle} — ${company.name}`;
+
+      // Only an explicit CEO appointment changes executive control. A CFO or
+      // CTO appointment must never silently reinstall the person who tabled
+      // the matter as chief executive.
+      if (terms.executiveRole !== 'ceo') {
+        return {
+          summary: `${company.name}'s board appointed ${appointee.name} as ${roleTitle}.`,
+          eventIds: [],
+          changes: {
+            authorised: true,
+            moraleDelta: 2,
+            appointedCharacterId: appointee.id,
+            executiveRole: terms.executiveRole,
+            annualCompUsd: terms.annualCompUsd,
+          },
+        };
       }
 
       const previousCeo = company.ceoCharacterId;
       const previousController = company.controllerPlayerId;
       company.ceoCharacterId = appointee.id;
-      appointee.companyId = company.id;
       const seat = draft.players.find((player) => player.characterId === appointee.id && player.companyId === company.id && player.isActive) ?? null;
-      if (seat !== null) company.controllerPlayerId = seat.playerId;
+      company.controllerPlayerId = seat?.playerId ?? null;
+      const reinstatement = previousController === null && seat !== null;
 
       const eventId = emitEvent(
         draft,
@@ -247,12 +276,15 @@ export function applyProposalEffects(draft: SessionState, ctx: ResolverContext, 
           replacedCharacterId: previousCeo,
           controllerPlayerIdBefore: previousController,
           controllerPlayerIdAfter: company.controllerPlayerId,
+          appointmentKind: reinstatement ? 'reinstatement' : 'appointment',
+          executiveRole: terms.executiveRole,
+          annualCompUsd: terms.annualCompUsd,
           interim: false,
         },
         'public',
       );
       return {
-        summary: `${company.name}'s board appointed ${appointee.name} chief executive${
+        summary: `${company.name}'s board ${reinstatement ? 'reinstated' : 'appointed'} ${appointee.name} as chief executive${
           company.controllerPlayerId !== previousController ? ', returning the company to their direction' : ''
         }.`,
         eventIds: [eventId],
@@ -263,6 +295,8 @@ export function applyProposalEffects(draft: SessionState, ctx: ResolverContext, 
           replacedCharacterId: previousCeo,
           controllerPlayerIdBefore: previousController,
           controllerPlayerIdAfter: company.controllerPlayerId,
+          appointmentKind: reinstatement ? 'reinstatement' : 'appointment',
+          annualCompUsd: terms.annualCompUsd,
         },
       };
     }

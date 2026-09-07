@@ -47,8 +47,8 @@ import type {
   GmProposalBatch,
   Leaderboard,
   NewGameSetup,
+  QuarterResolutionOutcome,
   NewGameSetupInput,
-  NpcActionBundle,
   PlayerView,
   Quote,
   SessionDifficulty,
@@ -60,7 +60,7 @@ import type {
   SimEvent,
 } from '@frontier/contracts';
 import { ConversationRecordInputSchema, LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
-import type { FrontierResolutionOutcome } from '@frontier/simulation';
+import type { FrontierResolutionOutcome, NpcBundleSubmission } from '@frontier/simulation';
 import {
   applySocialTextOverrides,
   audienceFor,
@@ -119,6 +119,7 @@ import {
   type ReplayProgress,
 } from './persistence';
 import { inspectSaveValue } from './saveFile';
+import { upgradeSaveFileAtLoad } from './saveUpgrade';
 import {
   founderNetWorth,
   leaderboardOf,
@@ -129,6 +130,7 @@ import {
 } from './playerView';
 import { saveSlotOf } from '@/lib/saves/plan';
 import { saveSync } from '@/lib/saves/sync';
+import { bindCanonicalGameSession, resolveCanonicalGameQuarter, syncCanonicalGameSession } from './canonicalSession';
 
 /* -------------------------------------------------------------------------- */
 /*  Shapes                                                                     */
@@ -338,6 +340,7 @@ type Action =
       record: QuarterRecord;
     }
   | { type: 'resolve_failed'; notice: string }
+  | { type: 'canonical_outcome'; outcome: QuarterResolutionOutcome }
   | { type: 'settings'; partial: Partial<GameSettings> }
   | { type: 'llm'; health: LlmHealth }
   | { type: 'notice'; notice: string | null }
@@ -581,6 +584,14 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       };
     }
 
+    case 'canonical_outcome': {
+      // The canonical service persists the committed envelope by request id.
+      // The file above remains the state source; this restores the same report
+      // and visible events a local `resolve_done` would have retained.
+      const projected = projectForPlayer(action.outcome as FrontierResolutionOutcome, state.session);
+      return { ...state, lastOutcome: projected, ledger: projected.events, resolving: false, resolveStatus: '' };
+    }
+
     case 'resolve_failed':
       // The overlay covers the whole application and has no dismiss control, so
       // the one thing this path may never do is leave `resolving` true.
@@ -631,7 +642,7 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       const nextTurns = [
         ...(existing?.turns ?? []),
         { speakerId: player.id, text: record.playerText, quarter: record.quarter, targetCompanyId: target.companyId },
-        { speakerId: target.id, text: record.replyText, quarter: record.quarter, targetCompanyId: target.companyId },
+        { speakerId: target.id, text: record.replyText, quarter: record.quarter, targetCompanyId: target.companyId, receipts: record.receipts },
       ].slice(-30);
       const thread = {
         id,
@@ -799,7 +810,12 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     }
     const nextSequence = restored.reduce((max, entry) => Math.max(max, entry.sequence + 1), 0);
     sequences.reset(nextSequence);
-    savedFile.current = inspection.file;
+    // Persist the bounded checkpoint repair immediately. It changes no historical
+    // records; if storage rejects it, the loaded state remains usable and the
+    // original file stays intact for retry.
+    const upgraded = loaded.complete ? upgradeSaveFileAtLoad(inspection.file, loaded.session, loaded.migrationEvents[0] ?? null) : { file: inspection.file, changed: false };
+    const loadedFile = upgraded.changed && writeSaveFile(upgraded.file) ? upgraded.file : inspection.file;
+    savedFile.current = loadedFile;
     // What just loaded is what storage holds; the persist effect's first run
     // after this would only rewrite it (stamping the current SAVE_VERSION on a
     // file an older build could still read), so that one run is skipped.
@@ -830,7 +846,14 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
         if (!cancelled) dispatch({ type: 'hydrated' });
         return;
       }
-      await runLoad();
+      if (inspection.file === null) { await runLoad(inspection); return; }
+      const binding = await bindCanonicalGameSession(inspection.file);
+      if (cancelled) return;
+      if (binding.kind === 'blocked') {
+        dispatch({ type: 'load_failed', notice: 'The canonical game service could not verify this session. Its local copy is left untouched and quarter resolution is blocked.' });
+        return;
+      }
+      await runLoad(binding.kind === 'bound' ? inspectSaveValue(binding.file) : inspection);
     })();
     return () => {
       cancelled = true;
@@ -953,6 +976,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
         savedFile.current = file;
         persistedLogLength.current = state.actionLog.length;
         pushToServer(null, file);
+        // A command server can only authoritatively stage a company action
+        // after it has the replay input it will validate against.
+        void syncCanonicalGameSession(file, state.session.sessionId);
       } else if (!saveHealthWarned.current) {
         // Said once, not per write: a browser that refuses storage refuses it
         // for the whole session, and the player needs the fact, not a drumbeat.
@@ -1099,8 +1125,51 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
     const session = current.session;
     const submitted = [...current.queuedActions];
+
+    // Bind before every resolve. A tab may have been reloaded before its
+    // asynchronous registration completed; it must never create a local fork.
+    dispatch({ type: 'resolve_status', status: 'Verifying canonical session' });
+    const authorityFile = savedFile.current ?? buildSaveFile({ seed: current.settings.seed, difficulty: current.settings.difficulty, autoExecuteRoutine: current.settings.autoExecuteRoutine, setup: current.settings.setup, log: current.actionLog, queue: current.queuedActions, session: current.session, previous: null });
+    const binding = await bindCanonicalGameSession(authorityFile);
+    if (binding.kind === 'blocked') {
+      dispatch({ type: 'resolve_failed', notice: 'The canonical game service could not verify this session. Your queue is unchanged.' });
+      return false;
+    }
+    // A registered Pi session owns its quarter. Do this before consulting
+    // optional browser-side agents: a failed authority request must leave the
+    // player's queue intact rather than silently resolving a divergent tab.
+    const canonical = await resolveCanonicalGameQuarter(
+      session.sessionId,
+      `quarter_${session.sessionId}_${session.quarter}`,
+      submitted,
+    );
+    if (canonical !== null) {
+      if ((canonical.status === 'resolved' || canonical.status === 'duplicate') && canonical.file !== null) {
+        const loaded = await replayAsync(canonical.file);
+        const restored: SubmittedAction[] = [];
+        const validations: Record<string, ActionValidationResult> = {};
+        const seen = new Set<string>();
+        for (const entry of loaded.queue) {
+          if (entry.quarter !== loaded.session.quarter || seen.has(entry.actionId)) continue;
+          const validation = validateSubmittedAction(loaded.session, entry);
+          if (validation.status === 'rejected') continue;
+          seen.add(entry.actionId); restored.push(entry); validations[entry.actionId] = { ...validation, actionId: entry.actionId };
+        }
+        const nextSequence = restored.reduce((max, entry) => Math.max(max, entry.sequence + 1), 0);
+        sequences.reset(nextSequence);
+        savedFile.current = canonical.file;
+        persistedLogLength.current = loaded.log.length;
+        suppressNextPersist.current = true;
+        dispatch({ type: 'loaded', loaded, queue: restored, validations, droppedCount: loaded.queue.length - restored.length, nextSequence, activeCompanyId: resolveActiveCompanyId(loaded.session, current.activeCompanyId) });
+        if (canonical.outcome !== null) dispatch({ type: 'canonical_outcome', outcome: canonical.outcome });
+        dispatch({ type: 'notice', notice: canonical.outcome === null ? 'Canonical quarter committed. The visible ledger contains this quarter’s reported outcomes.' : null });
+        return true;
+      }
+      dispatch({ type: 'resolve_failed', notice: canonical.status === 'stale' ? 'The canonical game changed in another session. Reload its latest state before submitting again.' : 'The canonical game service refused this quarter. Your queue is unchanged.' });
+      return false;
+    }
     let gmProposal: GmProposalBatch | null = null;
-    let npcBundles: NpcActionBundle[] = [];
+    let npcBundles: NpcBundleSubmission[] = [];
     let modelAvailable = false;
 
     /*
@@ -1218,7 +1287,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
           rows.push(...strategistRows.values());
           renderProgress();
 
-          const collected: NpcActionBundle[] = [];
+          const collected: NpcBundleSubmission[] = [];
           for (const id of ids) {
             const row = strategistRows.get(id);
             if (row === undefined) continue;
@@ -1252,7 +1321,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
             } else {
               row.state = 'done';
               row.doneAt = Date.now();
-              if (bundle !== null) collected.push(bundle);
+              // Bind the reply to the company whose dossier was sent. The
+              // resolver still rejects a model that claims another company.
+              if (bundle !== null) collected.push({ requestedCompanyId: id, bundle });
             }
             renderProgress();
           }
@@ -1269,8 +1340,8 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       }
     }
 
-    setHeadline('Resolving eighteen phases');
-    const engineRow: ProgressRow = { label: 'Resolving eighteen phases', state: 'running', startedAt: Date.now(), doneAt: null, note: null };
+    setHeadline('Resolving nineteen phases');
+    const engineRow: ProgressRow = { label: 'Resolving nineteen phases', state: 'running', startedAt: Date.now(), doneAt: null, note: null };
     rows.push(engineRow);
     renderProgress();
     await nextPaint();

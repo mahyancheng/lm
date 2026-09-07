@@ -46,6 +46,7 @@ import {
 } from '../src/graph/licensing';
 import { createNodeCostCache } from '../src/graph/lines';
 import { unitCostOf } from '../src/graph/cost';
+import { currentAcceleratorOutputCapacity } from '../src/graph/production';
 import { acceleratorLineOutputUnits, sellersFor, sellsAcceleratorNode } from '../src/companies/sellers';
 import { validateAction } from '../src/validator';
 import { BatchBudget } from '../src/validator/context';
@@ -492,7 +493,7 @@ describe('who sells accelerators in the node economy', () => {
     const market = sellersFor(state, 'accelerators', PLAYER);
     for (const seller of market) {
       expect(sellsAcceleratorNode(state, seller.company)).toBe(true);
-      expect(seller.sellableUnits).toBe(acceleratorLineOutputUnits(seller.company));
+      expect(seller.sellableUnits).toBe(currentAcceleratorOutputCapacity(state, seller.company));
       // The node market has already priced the quarter's scarcity, once, for
       // everybody: what is left is the seller's own region and load.
       const list = nodeMarketPriceUsd(state, COMPUTE_CAPACITY_NODE_ID);
@@ -503,17 +504,17 @@ describe('who sells accelerators in the node economy', () => {
 
   it('starts when an owner opens a line and stops when the line does', () => {
     const state = createWorld3Session();
-    // An owner of the node with no line on it is not a seller: owning a design
-    // and running a fab are different things.
+    // A live owner-line is a seller. Taking that line offline proves ownership
+    // alone is insufficient, then restoring it reopens the market.
     const owner = state.companies.find((company) => ownsNodeOutright(company, COMPUTE_CAPACITY_NODE_ID));
     expect(owner, 'the seeded world has no owner of the accelerator node').toBeDefined();
     if (owner === undefined) return;
-    expect(sellsAcceleratorNode(state, owner)).toBe(false);
-
-    const line = owner.products[0];
+    const line = owner.products.find((product) => product.nodeId === COMPUTE_CAPACITY_NODE_ID) ?? owner.products[0];
     expect(line).toBeDefined();
     if (line === undefined) return;
-    owner.products = [{ ...line, id: 'prd_accelerator_line', name: 'Accelerators', nodeId: COMPUTE_CAPACITY_NODE_ID, unitsSoldQuarterly: 4_000, isActive: true }];
+    owner.products = [{ ...line, id: 'prd_accelerator_line', name: 'Accelerators', nodeId: COMPUTE_CAPACITY_NODE_ID, unitsSoldQuarterly: 4_000, isActive: false }];
+    expect(sellsAcceleratorNode(state, owner)).toBe(false);
+    owner.products[0] = { ...owner.products[0]!, isActive: true };
 
     expect(sellsAcceleratorNode(state, owner)).toBe(true);
     expect(acceleratorLineOutputUnits(owner)).toBe(4_000);
@@ -523,7 +524,7 @@ describe('who sells accelerators in the node economy', () => {
     const list = nodeMarketPriceUsd(state, COMPUTE_CAPACITY_NODE_ID);
     // The node market has already priced the quarter's scarcity, once, for
     // everybody: what is left is the seller's own region and load.
-    expect(quote?.sellableUnits).toBe(4_000);
+    expect(quote?.sellableUnits).toBe(currentAcceleratorOutputCapacity(state, owner));
     expect(quote?.unitPriceUsd ?? 0).toBeGreaterThan(list * 0.6);
     expect(quote?.unitPriceUsd ?? 0).toBeLessThan(list * 1.6);
 

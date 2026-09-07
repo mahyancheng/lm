@@ -1345,6 +1345,8 @@ export const CharacterReplySchema = z
     ),
     relationshipDeltas: RelationshipDeltasSchema,
     memoryToStore: MemoryDraftSchema.nullable().describe('Something the speaker will remember about this exchange, or null when it was unremarkable.'),
+    /** Company-agent requests only. The server binds the speaker and executes these through the command service. */
+    commands: z.array(ActionIntentSchema).max(2).optional().describe('Typed company actions the speaking NPC asks the server to validate. Never an asserted outcome.'),
   })
   .describe('One reply from a character. The support score, the price and every other number remain engine state: dialogue creates commitments, it does not change reality.');
 export type CharacterReply = z.infer<typeof CharacterReplySchema>;

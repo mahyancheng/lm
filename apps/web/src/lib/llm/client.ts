@@ -14,6 +14,7 @@ import type {
   AgentRole,
   CharacterReply,
   CharacterUtteranceContext,
+  ActionIntent,
   ChiefOfStaffInput,
   ChiefOfStaffInterpretation,
   GmProposalBatch,
@@ -488,9 +489,39 @@ export function requestNpcBundle(
   return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, timeoutMs, signal);
 }
 
+export interface CompanyCommandReceipt {
+  readonly status: 'queued' | 'duplicate' | 'stale' | 'forbidden' | 'rejected' | 'session_not_registered';
+  readonly revision: number | null;
+  readonly intent: ActionIntent | null;
+  readonly reason: string | null;
+}
+
+export interface CompanyDialogueReply {
+  readonly output: CharacterReply | null;
+  readonly receipts: readonly CompanyCommandReceipt[];
+  readonly revision: number | null;
+}
+
 /** Speak to a company CEO through the company's persistent outward-facing agent. */
-export function requestCompanyDialogue(context: CharacterUtteranceContext, conversation: ConversationRef): Promise<CharacterReply | null> {
-  return postRole<CharacterReply>('/api/llm/company-dialogue', { context, conversation: conversationBody(conversation) });
+export async function requestCompanyDialogue(context: CharacterUtteranceContext, conversation: ConversationRef): Promise<CompanyDialogueReply | null> {
+  // Canonical company dialogue derives the NPC dossier and authority from the
+  // server game; the browser sends only the conversation target and words.
+  const turnId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().replaceAll('-', '_')
+    : `turn_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+  if (typeof window === 'undefined') return null;
+  try {
+    const response = await fetch('/api/llm/company-dialogue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: conversation.sessionId, companyId: conversation.conversationId, turnId, message: context.topic }), cache: 'no-store' });
+    if (!response.ok) return null;
+    const body = await response.json() as { output?: CharacterReply | null; revision?: unknown; receipts?: readonly { status?: unknown; revision?: unknown; queuedAction?: { intent?: ActionIntent } | null; validation?: { reasons?: readonly { message?: unknown }[] } | null }[] };
+    const receipts: CompanyCommandReceipt[] = (body.receipts ?? []).map((receipt) => ({
+      status: receipt.status === 'queued' || receipt.status === 'duplicate' || receipt.status === 'stale' || receipt.status === 'forbidden' || receipt.status === 'rejected' || receipt.status === 'session_not_registered' ? receipt.status : 'rejected',
+      revision: typeof receipt.revision === 'number' && Number.isInteger(receipt.revision) ? receipt.revision : null,
+      intent: receipt.queuedAction?.intent ?? null,
+      reason: receipt.validation?.reasons?.map((reason) => typeof reason.message === 'string' ? reason.message : '').filter(Boolean).join(' ') || null,
+    }));
+    return { output: body.output ?? null, receipts, revision: typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null };
+  } catch { return null; }
 }
 
 /**

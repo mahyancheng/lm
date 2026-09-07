@@ -26,6 +26,7 @@ import type {
   SocialTextOverride,
   SubmittedAction,
   WorldVersion,
+  SimEvent,
 } from '@frontier/contracts';
 import {
   GmProposalBatchSchema,
@@ -35,6 +36,7 @@ import {
   NpcActionBundleSchema,
   SESSION_DIFFICULTIES,
   SessionStateSchema,
+  SimEventSchema,
   SocialTextOverrideSchema,
   SubmittedActionSchema,
   WORLD_VERSIONS,
@@ -42,6 +44,12 @@ import {
 } from '@frontier/contracts';
 
 export const SAVE_VERSION = 5;
+
+/** A strategist reply paired with the company whose dossier it answered. */
+export interface RecordedNpcBundle {
+  readonly requestedCompanyId: string;
+  readonly bundle: NpcActionBundle;
+}
 
 /**
  * Versions this build can read. A save written by any of these loads; anything
@@ -75,7 +83,8 @@ export interface QuarterRecord {
   /** What the World Director proposed, or null when the quarter resolved offline. */
   readonly gmProposal: GmProposalBatch | null;
   /** What the rival strategists proposed. Empty when the quarter resolved offline. */
-  readonly npcBundles: readonly NpcActionBundle[];
+  /** Bare bundles are accepted only to type old records; new writes retain the request binding. */
+  readonly npcBundles: readonly (RecordedNpcBundle | NpcActionBundle)[];
   /**
    * Words a model wrote over engine-authored posts *after* the quarter
    * committed, capped at `MAX_SOCIAL_TEXT_OVERRIDES`.
@@ -137,6 +146,10 @@ export interface SaveFile {
    * trusted for any logic, ordering or replay decision. Null in a v1–v3 file.
    */
   readonly savedAtIso: string | null;
+  /** Versioned, append-only compatibility repairs applied to this save. */
+  readonly scenarioMigrations?: readonly string[];
+  /** Append-only current-state repair rows; never mixed into historic quarter records. */
+  readonly migrationEvents?: readonly SimEvent[];
 }
 
 /** Why a stored file could not be read. `unsupported` is preserved, never overwritten. */
@@ -188,11 +201,19 @@ export function parseRecords(raw: unknown): QuarterRecord[] {
       }
     }
     const gm = GmProposalBatchSchema.safeParse(value.gmProposal);
-    const npcBundles: NpcActionBundle[] = [];
+    const npcBundles: RecordedNpcBundle[] = [];
     if (Array.isArray(value.npcBundles)) {
-      for (const bundle of value.npcBundles) {
-        const parsed = NpcActionBundleSchema.safeParse(bundle);
-        if (parsed.success) npcBundles.push(parsed.data);
+      for (const rawBundle of value.npcBundles) {
+        const wrapped = rawBundle !== null && typeof rawBundle === 'object' && 'bundle' in rawBundle
+          ? rawBundle as { requestedCompanyId?: unknown; bundle?: unknown }
+          : null;
+        const parsed = NpcActionBundleSchema.safeParse(wrapped?.bundle ?? rawBundle);
+        const requestedCompanyId = typeof wrapped?.requestedCompanyId === 'string' && wrapped.requestedCompanyId.length > 0
+          ? wrapped.requestedCompanyId
+          // Legacy records cannot preserve the question identity. Their old
+          // semantics are retained; every newly written record has the proof.
+          : parsed.success ? parsed.data.companyId : null;
+        if (parsed.success && requestedCompanyId !== null) npcBundles.push({ requestedCompanyId, bundle: parsed.data });
       }
     }
     const socialTexts: SocialTextOverride[] = [];
@@ -321,6 +342,8 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
       // The queue and the timestamp arrive with v4. A v1–v3 file has neither.
       queue: parseQueue(parsed.queue),
       savedAtIso: typeof parsed.savedAtIso === 'string' ? parsed.savedAtIso : null,
+      scenarioMigrations: Array.isArray(parsed.scenarioMigrations) ? parsed.scenarioMigrations.filter((entry): entry is string => typeof entry === 'string').slice(0, 20) : [],
+      migrationEvents: Array.isArray(parsed.migrationEvents) ? parsed.migrationEvents.map((entry) => SimEventSchema.safeParse(entry)).filter((entry) => entry.success).map((entry) => entry.data) : [],
     },
   };
 }
@@ -476,7 +499,9 @@ export function saveFileBody(file: SaveFile): string {
     `,"checkpoint":${checkpoint}` +
     `,"savedQuarter":${JSON.stringify(file.savedQuarter)}` +
     `,"endedQuarter":${JSON.stringify(file.endedQuarter)}` +
-    `,"queue":${JSON.stringify(file.queue)}`
+    `,"queue":${JSON.stringify(file.queue)}` +
+    `,"scenarioMigrations":${JSON.stringify(file.scenarioMigrations ?? [])}` +
+    `,"migrationEvents":${JSON.stringify(file.migrationEvents ?? [])}`
   );
 }
 
@@ -486,7 +511,8 @@ export function saveFileBody(file: SaveFile): string {
  * either way; only the cost of producing it changes.
  */
 export function serializeSaveFile(file: SaveFile): string {
-  return `${saveFileBody(file)},"savedAtIso":${JSON.stringify(file.savedAtIso)}}`;
+  // Keep the externally visible byte order exactly equal to JSON.stringify.
+  return JSON.stringify(file);
 }
 
 /**
@@ -546,7 +572,7 @@ export function buildSaveFile(input: {
     // Derived, never passed in: the setup is what `createSession` dispatches on,
     // so a `worldVersion` that could disagree with it would be a second answer
     // to a question that already has one.
-    worldVersion: worldVersionOf(input.setup, null),
+    worldVersion: input.setup?.worldVersion ?? input.session.config.worldVersion,
     log: input.log,
     checkpoint,
     savedQuarter: input.session.quarter,
@@ -555,5 +581,10 @@ export function buildSaveFile(input: {
     endedQuarter: input.session.players.find((player) => player.eliminatedQuarter != null)?.eliminatedQuarter ?? null,
     queue: input.queue,
     savedAtIso: (input.now ?? (() => new Date().toISOString()))(),
+    // A fresh World 3 seed already contains every current seeded line. The
+    // marker means a later deliberate sunset/removal is never reinterpreted
+    // as the brief pre-fix layout on a future load.
+    scenarioMigrations: input.setup?.worldVersion === 3 || input.session.config.worldVersion === 3 ? ['w3_tessellate_accelerator_supplier_v1'] : [],
+    migrationEvents: previous?.migrationEvents ?? [],
   };
 }

@@ -18,7 +18,7 @@
  */
 
 import { z } from 'zod';
-import { QuarterIndexSchema, unitInterval } from './ids';
+import { QuarterIndexSchema, intCount, unitInterval } from './ids';
 import { DEFAULT_REGION, DEFAULT_SECTOR, RegionSchema, SectorSchema, defaultRegionFor, type Sector } from './sectors';
 import { SectorStateMapSchema, WorldStateSchema } from './world';
 import { ActiveModifierSchema } from './modifiers';
@@ -750,6 +750,10 @@ export const SessionStateSchema = z
 
     // --- deals ---
     deals: z.array(DealProposalSchema).default([]),
+    // Written during product-demand resolution in worlds with named hardware
+    // sellers. It lets node production reserve the physical accelerator output
+    // already transferred through private/spot owned-hardware channels.
+    acceleratorDirectAllocatedUnitsBySeller: z.record(z.string(), intCount('Accelerators directly allocated from this seller this quarter.')).optional(),
 
     // --- capital entities (world version 2 and later) ---
     //

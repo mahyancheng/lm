@@ -18,6 +18,7 @@
 import { z } from 'zod';
 import { QuarterIndexSchema, score100, signedScore100, unitInterval, usd } from './ids';
 import { FundingStageSchema } from './ownership';
+import { ExecutiveRoleSchema } from './company';
 
 /* -------------------------------------------------------------------------- */
 /*  Directors                                                                  */
@@ -161,6 +162,14 @@ export const EquityFinancingTermsSchema = z.discriminatedUnion('type', [
 ]);
 export type EquityFinancingTerms = z.infer<typeof EquityFinancingTermsSchema>;
 
+/** The exact candidate, office and package the board approved. */
+export const ExecutiveAppointmentTermsSchema = z.object({
+  characterId: z.string().min(1),
+  executiveRole: ExecutiveRoleSchema,
+  annualCompUsd: z.number().positive(),
+});
+export type ExecutiveAppointmentTerms = z.infer<typeof ExecutiveAppointmentTermsSchema>;
+
 export const BoardProposalSchema = z
   .object({
     id: z.string().min(1),
@@ -181,6 +190,10 @@ export const BoardProposalSchema = z
     debtExecutionQuarter: QuarterIndexSchema.optional(),
     equityTerms: EquityFinancingTermsSchema.optional().describe('Exact equity mandate, executed once after approval.'),
     equityExecutionQuarter: QuarterIndexSchema.optional(),
+    executiveAppointmentTerms: ExecutiveAppointmentTermsSchema.optional().describe('Exact executive appointment approved by the board.'),
+    dealProposalJson: z.string().min(2).optional().describe('Canonical JSON of a material deal draft approved by the board.'),
+    dealAcceptanceDealId: z.string().min(1).optional().describe('Canonical material deal this board approved accepting.'),
+    dealAcceptanceJson: z.string().min(2).optional().describe('Exact canonical deal snapshot approved for acceptance.'),
     linkedActionId: z.string().nullable().describe('Submitted action this proposal authorises, so a pass executes exactly what was voted on.'),
     requiredThresholdFraction: unitInterval('Fraction of present votes needed, resolved from the board quorum rule at tabling time.'),
   })

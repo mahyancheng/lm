@@ -160,7 +160,7 @@ export function admissibleSetFor(node: EconomicNode, slot: NodeSlot): ReadonlySe
   // Dynamic recipes are terminal nodes with explicitly named catalogue
   // ingredients. They are not in the immutable table used by
   // `admissibleNodesFor`, so read that declarative list directly.
-  if (node.id.startsWith('app_custom_')) return new Set(slot.accepts);
+  if (/^(?:mat|cmp|sys|app)_custom_/.test(node.id)) return new Set(slot.accepts);
   const key = `${node.id}.${slot.id}`;
   const memo = ADMISSIBLE_MEMO.get(key);
   if (memo !== undefined) return memo;

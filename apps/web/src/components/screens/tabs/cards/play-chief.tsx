@@ -42,7 +42,7 @@ export const CHIEF_ONLY_COPY = {
   reserve_compute: { label: 'Reserve compute ahead of the quarter', ask: 'Reserve compute for us ahead of this quarter. How many accelerators can the market actually free, and at what price?' },
   buy_cloud_capacity: { label: 'Buy cloud capacity', ask: 'Buy cloud capacity for us this quarter. Say what term and what it commits us to before you propose it.' },
   invest_capacity: { label: 'Invest in production capacity', ask: 'Invest in our production capacity. What would it cost, and how long before it is serving anything?' },
-  issue_shares: { label: 'Issue new shares', ask: 'Issue new shares. Tell me the dilution before you propose an amount.' },
+  issue_shares: { label: 'Issue new shares', ask: 'If we are private, raise a round instead; listed companies can issue new shares. Tell me the amount and dilution.' },
   ipo: { label: 'Take the company public', ask: 'Take the company public. Say plainly whether the listing window is open enough for it to work.' },
   give_guidance: { label: 'Give the market guidance', ask: 'Give the market guidance this quarter. What would you say, and what does missing it cost us?' },
   respond_crisis: { label: 'Respond to a crisis', ask: 'Respond publicly to what is running against us. What is the least damaging thing we can say that is also true?' },

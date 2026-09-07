@@ -40,7 +40,7 @@ import {
 } from './company';
 import { RegionSchema, SectorSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
-import { BoardProposalKindSchema, CommitmentConditionSchema, DebtIssueTermsSchema, EquityFinancingTermsSchema } from './governance';
+import { BoardProposalKindSchema, CommitmentConditionSchema, DebtIssueTermsSchema, EquityFinancingTermsSchema, ExecutiveAppointmentTermsSchema } from './governance';
 import { GovernmentBidSchema } from './government';
 import { InnovationProposalSchema, PublicationModeSchema } from './tech';
 import { SocialPostDraftSchema, CampaignThemeSchema } from './social';
@@ -551,6 +551,9 @@ export const ActionIntentSchema = z
         type: z.literal('submit_board_proposal'),
         debtTerms: DebtIssueTermsSchema.optional(),
         equityTerms: EquityFinancingTermsSchema.optional(),
+        executiveAppointmentTerms: ExecutiveAppointmentTermsSchema.optional(),
+        dealProposal: DealProposalDraftSchema.optional(),
+        dealAcceptance: z.object({ dealId: z.string().min(1), dealJson: z.string().min(2) }).optional(),
         kind: BoardProposalKindSchema,
         title: z.string().min(3).max(140),
         summary: z.string().min(10).max(1200).describe('The case, including the numbers directors will argue about.'),
@@ -655,6 +658,9 @@ export const ActionIntentSchema = z
         reason: z.string().max(300).describe('Why. The proposer\'s character remembers how they were turned down.'),
       })
       .describe('Reject a deal.'),
+
+    z.object({ type: z.literal('cancel_deal'), dealId: z.string().min(1), reason: z.string().max(300) })
+      .describe('Cancel future undelivered instalments of a cancellable recurring hardware contract. Already staged deliveries remain payable.'),
 
     z
       .object({
@@ -776,6 +782,7 @@ export const ACTION_TYPES = [
   'propose_deal',
   'accept_deal',
   'reject_deal',
+  'cancel_deal',
   'request_introduction',
   // Appended, never inserted: ACTION_TYPES backs a zod enum and a saved game
   // names its actions by string.

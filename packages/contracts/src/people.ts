@@ -21,6 +21,7 @@
 
 import { z } from 'zod';
 import { QuarterIndexSchema, bipolarUnit, score100, unitInterval, usd } from './ids';
+import { ActionIntentSchema } from './actions';
 
 /* -------------------------------------------------------------------------- */
 /*  Characters                                                                 */
@@ -268,6 +269,15 @@ export const CONVERSATION_KINDS = ['direct_message', 'group', 'boardroom', 'nego
 export const ConversationKindSchema = z.enum(CONVERSATION_KINDS).describe('What sort of channel this is. Each has its own access rules and its own moderation posture.');
 export type ConversationKind = z.infer<typeof ConversationKindSchema>;
 
+/** A canonical company-command outcome tied to the NPC turn that requested it. */
+export const ConversationReceiptSchema = z.object({
+  status: z.enum(['queued', 'duplicate', 'stale', 'forbidden', 'rejected', 'session_not_registered']),
+  revision: z.number().int().min(0).nullable(),
+  intent: ActionIntentSchema.nullable(),
+  reason: z.string().min(1).max(600).nullable(),
+});
+export type ConversationReceipt = z.infer<typeof ConversationReceiptSchema>;
+
 /** A bounded, private transcript used only to continue one player-company ↔ NPC thread. */
 export const ConversationTurnSchema = z.object({
   speakerId: z.string().min(1),
@@ -275,6 +285,8 @@ export const ConversationTurnSchema = z.object({
   quarter: QuarterIndexSchema,
   /** Counterparty employer at this exact turn; absent only in pre-field saves. */
   targetCompanyId: z.string().min(1).nullable().optional(),
+  /** Server command receipts, present only on company-agent replies. */
+  receipts: z.array(ConversationReceiptSchema).max(2).optional(),
 });
 export type ConversationTurn = z.infer<typeof ConversationTurnSchema>;
 
@@ -301,6 +313,7 @@ export const ConversationRecordInputSchema = z.object({
   replyText: z.string().min(1).max(1200),
   quarter: QuarterIndexSchema,
   memory: MemoryDraftSchema.nullable(),
+  receipts: z.array(ConversationReceiptSchema).max(2).optional(),
 });
 export type ConversationRecordInput = z.infer<typeof ConversationRecordInputSchema>;
 

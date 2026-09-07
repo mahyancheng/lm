@@ -15,6 +15,7 @@ import { formatMoney } from '@frontier/shared';
 export type ObligationKind = (typeof DEAL_OBLIGATION_KINDS)[number];
 
 export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
+  owned_accelerator_supply: 'Recurring accelerator supply',
   compute_supply: 'Compute supply',
   tech_license: 'Technology licence',
   cash_payment: 'Cash payment',
@@ -41,10 +42,11 @@ export const OBLIGATION_LABELS: Readonly<Record<ObligationKind, string>> = {
  * do with either, so neither appears in the picker.
  */
 export const BUILDABLE_OBLIGATION_KINDS: readonly ObligationKind[] = DEAL_OBLIGATION_KINDS.filter(
-  (kind) => kind !== 'term_sheet' && kind !== 'buyout_offer' && kind !== 'node_licence',
+  (kind) => kind !== 'term_sheet' && kind !== 'buyout_offer' && kind !== 'node_licence' && kind !== 'owned_accelerator_supply',
 );
 
 export const OBLIGATION_HINTS: Readonly<Record<ObligationKind, string>> = {
+  owned_accelerator_supply: 'A private, non-exclusive hardware commitment. Each instalment uses the supplier’s current quote and reserved physical output.',
   compute_supply: 'The supplier must actually hold the capacity every quarter, or be in breach.',
   tech_license: 'Grants use of one Frontier Map node or one product. Set exactly one.',
   cash_payment: 'Settled in the capital phase of the quarter after acceptance.',

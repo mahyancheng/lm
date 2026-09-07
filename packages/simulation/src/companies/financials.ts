@@ -76,6 +76,7 @@ import {
   sectorTradeShare,
   economicNodeById,
   economicNodeInSession,
+  COMPUTE_CAPACITY_NODE_ID,
 } from '@frontier/contracts';
 import { accordBonusPctFor, activeAccords, chargesTollPct, regionLogistics, tollPaidPct } from '../economy/prices';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
@@ -592,6 +593,27 @@ export function resolveFinancials(
       // share of any input nobody named a supplier for.
       if (multiSector) supplyCost += (supplyCostByProduct.get(`${company.id}|${product.id}`) ?? 0) + openMarketSupplyCostUsd(draft, company, product);
     }
+    // Direct owned-hardware transfers have already been removed from the node
+    // market's anonymous production pool. Their revenue is credited through
+    // counterpartyCharges, so book the same rolled manufacturing cost here
+    // once, weighted across the seller's actual accelerator lines.
+    let directHardwareCogs = 0;
+    if (nodeEconomy) {
+      const directUnits = Math.max(0, draft.acceleratorDirectAllocatedUnitsBySeller?.[company.id] ?? 0);
+      const lines = activeProducts(company).filter((product) => lineNodeIdOf(product, draft) === COMPUTE_CAPACITY_NODE_ID);
+      if (directUnits > 0 && lines.length > 0) {
+        let weightedCost = 0;
+        let weight = 0;
+        for (const product of lines) {
+          const cost = unitCostOfProduct(draft, company, product, costCache) ?? unitCostOf(draft, company, COMPUTE_CAPACITY_NODE_ID, costCache);
+          const units = Math.max(1, product.unitsSoldQuarterly ?? product.activeCustomers);
+          weightedCost += (product.unitCostUsd ?? cost.unitCostUsd) * units;
+          weight += units;
+        }
+        directHardwareCogs = money(directUnits * (weight > 0 ? weightedCost / weight : 0));
+        nodeCogs += directHardwareCogs;
+      }
+    }
     const contractRevenue = contractRevenueUsd(draft, ctx, company.id);
     if (contractRevenue > 0) {
       revenueBySegment.set('government', (revenueBySegment.get('government') ?? 0) + contractRevenue);
@@ -1015,6 +1037,7 @@ export function resolveFinancials(
               idleCapacityUsd: money(idleCapacityUsd),
               dataCustodyUsd: money(dataCustodyUsd),
               nodeCogsUsd: money(nodeCogs),
+              directHardwareCogsUsd: money(directHardwareCogs),
               labourInCogsUsd: money(labourInCogs),
               capacityInCogsUsd: money(capacityInCogs),
               capacityChargeUsd: money(capacityChargeUsd),

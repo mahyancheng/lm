@@ -161,6 +161,8 @@ export const SIM_EVENT_TYPES = [
   // line aimed at a market cell. Appended, never inserted.
   'slot_filled',
   'target_market_set',
+  // Versioned state repair, recorded at the current open quarter.
+  'migration_applied',
 ] as const;
 
 export const SimEventTypeSchema = z.enum(SIM_EVENT_TYPES).describe('What kind of thing happened. Every economic mutation in the game produces one of these.');

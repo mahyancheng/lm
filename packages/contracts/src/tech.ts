@@ -70,21 +70,34 @@ const ProductRecipeBaseSchema = z.object({
   unitLabel: z.string().min(1).max(16),
   saleKind: z.enum(['recurring', 'unit', 'contract']),
 });
-// Structured output schemas cannot contain effects.  A union of fixed-length
-// tuple pairs expresses the same one-quantity-per-input invariant directly.
+/**
+ * The deliberately bounded bill of materials accepted at the LLM boundary.
+ * Six inputs cover the displayed node-card limit and let physical lines name
+ * material, power, control, delivery and data without turning a proposal into
+ * an unreviewable procurement programme.  The engine, not the model, resolves
+ * the ids, tiers, ownership and whether an input can be imported.
+ */
 export interface ProductRecipe {
   readonly label: string;
   readonly sector: Sector;
   readonly customerSegment: ProductSegment;
   readonly unitLabel: string;
   readonly saleKind: 'recurring' | 'unit' | 'contract';
+  readonly outputStage?: 'material' | 'component' | 'subsystem' | 'system' | 'platform' | 'operation';
   readonly inputNodeIds: readonly string[];
   readonly inputQuantities: readonly number[];
 }
-export const ProductRecipeSchema = z.union([1, 2, 3, 4].map((length) => ProductRecipeBaseSchema.extend({
-  inputNodeIds: z.array(z.string().min(1).max(120)).length(length),
-  inputQuantities: z.array(z.number().finite().positive().max(1e6)).length(length),
-})) as unknown as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]) as z.ZodType<ProductRecipe>;
+const ProductRecipeStageSchema = ProductRecipeBaseSchema.extend({
+  outputStage: z.enum(['material', 'component', 'subsystem', 'system', 'platform', 'operation']).describe('Economic layer the engine-created node occupies. Materials through systems may be used upstream by later research; platforms and operations are customer-facing offers.'),
+});
+const RECIPE_INPUT_COUNTS = [1, 2, 3, 4, 5, 6] as const;
+// The stage-less half preserves recorded proposals. New interpreters should
+// send the staged half; the engine reads an omitted stage as a platform.
+export const ProductRecipeSchema = z.union([...RECIPE_INPUT_COUNTS.map((length) => ProductRecipeBaseSchema.extend({
+  inputNodeIds: z.array(z.string().min(1).max(120)).length(length), inputQuantities: z.array(z.number().finite().positive().max(1e6)).length(length),
+})), ...RECIPE_INPUT_COUNTS.map((length) => ProductRecipeStageSchema.extend({
+  inputNodeIds: z.array(z.string().min(1).max(120)).length(length), inputQuantities: z.array(z.number().finite().positive().max(1e6)).length(length),
+}))] as unknown as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]) as z.ZodType<ProductRecipe>;
 
 export const ProductBlueprintSchema = z.union([
   z.object({ nodeId: z.string().min(1).max(120), customerValue: z.string().min(10).max(600) }),

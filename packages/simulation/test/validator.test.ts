@@ -427,6 +427,12 @@ describe('people', () => {
       act({ type: 'appoint_executive', characterId: DEMO_CHARACTERS.grace, executiveRole: 'cfo', annualCompUsd: 400_000 }),
     );
     expect(codes(player)).toContain('board_approval_required');
+    if (player.clampedAction?.type !== 'submit_board_proposal') throw new Error('expected board proposal');
+    expect(player.clampedAction.executiveAppointmentTerms).toEqual({
+      characterId: DEMO_CHARACTERS.grace,
+      executiveRole: 'cfo',
+      annualCompUsd: 400_000,
+    });
   });
 });
 
@@ -494,6 +500,7 @@ describe('capital', () => {
       dilutionPct: null,
       stockComponentPct: null,
       targetCompanyId: null,
+      equityTerms: { type: 'raise_round', stage: 'series_a', targetAmountUsd: 12_000_000, maxDilutionPct: 0.2 },
       linkedActionId: null,
       requiredThresholdFraction: 0.5,
     });
@@ -513,6 +520,12 @@ describe('capital', () => {
     state.world.capitalMarkets.debtAvailability = 0;
     const result = run(npc(DEMO_COMPANIES.orbit, DEMO_CHARACTERS.daniel, { type: 'issue_debt', amountUsd: 100_000_000, maxRatePct: 0.12, termQuarters: 12 }));
     expect(codes(result)).toContain('requirement_not_met');
+  });
+
+  it('routes a private company to a funding round instead of creating public float', () => {
+    const result = run(act({ type: 'issue_shares', shares: 1, shareClassId: 'shc_player_common', minPricePerShareUsd: 1 }));
+    expect(codes(result)).toContain('requirement_not_met');
+    expect(result.reasons.join(' ')).toContain('raise_round');
   });
 
   it('clamps a share issue to the unissued authorisation', () => {
@@ -981,6 +994,26 @@ describe('deals and introductions', () => {
     ).toContain('unknown_target');
   });
 
+  it('does not let a qualifying minority shareholder accept or reject a company deal', () => {
+    const nexus = state.companies.find((company) => company.id === DEMO_COMPANIES.nexus);
+    const table = state.capTables.find((entry) => entry.companyId === DEMO_COMPANIES.nexus);
+    if (nexus === undefined || table === undefined) throw new Error('missing Nexus');
+    nexus.controllerPlayerId = null;
+    table.holdings.push({
+      id: 'hld_player_nexus_minority', holderId: DEMO_PLAYER_ID, holderKind: 'player', securityId: 'sec_nexus_common',
+      shares: 40_000_000, costBasisUsd: 1, acquiredQuarter: 0, lockupUntilQuarter: null, isDisclosed: true,
+    });
+    state.deals.push({
+      ...draft, id: 'deal_for_nexus', counterpartyId: DEMO_COMPANIES.nexus, proposerId: DEMO_COMPANIES.orbit, proposerKind: 'company',
+      status: 'proposed', createdQuarter: 0, respondedQuarter: null, conversationId: null, breachedByPartyId: null,
+    });
+    const actor = { companyId: DEMO_COMPANIES.nexus, characterId: DEMO_CHARACTERS.player };
+    expect(codes(run(act({ type: 'accept_deal', dealId: 'deal_for_nexus' }, actor)))).toContain('not_controller_of_company');
+    expect(codes(run(act({ type: 'reject_deal', dealId: 'deal_for_nexus', reason: 'No authority.' }, actor)))).toContain('not_controller_of_company');
+    // The same holder still retains the governance route a dismissal is meant to preserve.
+    expect(run(act({ type: 'submit_board_proposal', kind: 'annual_plan', title: 'Shareholder requisition', summary: 'Put a material operating plan before the board for its decision.', amountUsd: null, targetCompanyId: null, stockComponentPct: null }, actor)).status).not.toBe('rejected');
+  });
+
   it('accepts and rejects a deal addressed to you, and refuses one that is not', () => {
     state.deals.push({
       ...draft,
@@ -1217,20 +1250,6 @@ describe('a shareholder who no longer directs the company', () => {
     });
     const surface: ActionIntent[] = [
       { type: 'buy_shares', securityId: 'sec_nexus_common', shares: 10, targetPct: null, maxPricePerShareUsd: 90 },
-      {
-        type: 'propose_deal',
-        proposal: {
-          counterpartyId: DEMO_COMPANIES.nexus,
-          counterpartyKind: 'company',
-          gives: [],
-          gets: [],
-          confidentiality: 'private',
-          expiresQuarter: state.quarter + 2,
-          binding: false,
-          intentStatements: [],
-          summary: 'A standstill while the board settles down, with a seat for me at the end of it.',
-        },
-      },
       {
         type: 'social_post',
         draft: {

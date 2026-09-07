@@ -58,7 +58,7 @@
  */
 
 import type { Company, EconomicNode, NodeCostCache, Product, ProductSegment, ResolverContext, Sector, SessionState, UnitCostResult } from '@frontier/contracts';
-import { economicNodeById } from '@frontier/contracts';
+import { COMPUTE_CAPACITY_NODE_ID, economicNodeById } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
   CAPACITY_BASE_LOSS_CEILING,
@@ -240,6 +240,31 @@ export interface StagedLineInputs {
   readonly shockByProduct: ReadonlyMap<string, number>;
 }
 
+/**
+ * Current-quarter physical accelerator output available for direct delivery.
+ * Compute calls this before it allocates owned hardware. It uses the same
+ * capacity and blocking-input rules as production, but does not mutate lines,
+ * draw RNG, price a node, or book a financial entry.
+ */
+export function currentAcceleratorOutputCapacity(state: SessionState, company: Company): number {
+  const cache = createNodeCostCache(state);
+  const balances = nodeBalances(state, cache);
+  const lines = cache.linesByCompany.get(company.id) ?? [];
+  const companies = new Map(state.companies.map((entry) => [entry.id, entry]));
+  let output = 0;
+  for (const line of lines) {
+    if (line.nodeId !== COMPUTE_CAPACITY_NODE_ID) continue;
+    const product = company.products.find((entry) => entry.id === line.productId);
+    const node = product === undefined ? undefined : lineNodeOf(product, state);
+    if (product === undefined || node === undefined) continue;
+    const cost = unitCostOfProduct(state, company, product, cache) ?? unitCostOf(state, company, node.id, cache);
+    if (cost.blockedInputNodeIds.length > 0) continue;
+    const fills = resolveFills(state, company, product, node, cache);
+    output += Math.max(0, producibleUnits(state, line, cache.linesByCompany, companies) * inputFillRatio(state, node, fills, balances));
+  }
+  return Math.floor(output);
+}
+
 /** The quality this line actually delivers: what it is built to, through the one lever. */
 export function deliveredQuality(product: Product): number {
   const craft = product.craftQuality ?? product.qualityScore;
@@ -314,8 +339,14 @@ export function effectiveQuality(
  * world produces — that one is imported and its balance reads as fully
  * supplied.
  */
-export function inputFillRatio(node: EconomicNode, fills: readonly ResolvedFill[], balances: Readonly<Record<string, NodeBalance>>): number {
+export function inputFillRatio(
+  state: Pick<SessionState, 'customEconomicNodes'>,
+  node: EconomicNode,
+  fills: readonly ResolvedFill[],
+  balances: Readonly<Record<string, NodeBalance>>,
+): number {
   let fill = 1;
+  const privateNodes = new Set((state.customEconomicNodes ?? []).map((entry) => entry.id));
   for (const slot of node.slots) {
     if (!slot.blocking) continue;
     const resolved = fills.find((candidate) => candidate.slotId === slot.id);
@@ -323,8 +354,17 @@ export function inputFillRatio(node: EconomicNode, fills: readonly ResolvedFill[
     const balance = balances[resolved.nodeId];
     if (balance === undefined) continue;
     if (balance.fillRatio < fill) fill = balance.fillRatio;
+    // The normal floor represents contracts, inventories and substitution for
+    // catalogue inputs. A private recipe has none of those external sources:
+    // every downstream line shares its upstream node's actual balance, and a
+    // zero-capacity owner therefore ships zero rather than an invented 75%.
+    if (privateNodes.has(resolved.nodeId)) continue;
   }
-  return clamp(fill, INPUT_FILL_FLOOR, 1);
+  const tightestPrivate = node.slots
+    .filter((slot) => slot.blocking)
+    .map((slot) => fills.find((candidate) => candidate.slotId === slot.id)?.nodeId ?? null)
+    .some((nodeId) => nodeId !== null && privateNodes.has(nodeId));
+  return tightestPrivate ? clamp(fill, 0, 1) : clamp(fill, INPUT_FILL_FLOOR, 1);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -405,7 +445,7 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
     const priceUsd = Math.max(0, product.pricePerSeat);
     const marketPriceUsd = balances[node.id]?.priceUsd ?? 0;
     const blocked = cost.blockedInputNodeIds.length > 0;
-    const inputFill = blocked ? 0 : inputFillRatio(node, fills, balances);
+    const inputFill = blocked ? 0 : inputFillRatio(draft, node, fills, balances);
 
     const lineRef = (linesByCompany.get(company.id) ?? []).find((candidate) => candidate.productId === product.id);
     const capacityUnits = lineRef === undefined ? 0 : producibleUnits(draft, lineRef, linesByCompany, companiesById);
@@ -453,6 +493,18 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
       noise,
     });
   }
+
+  /* --- current-quarter private-input allocation ------------------------- */
+  // Node-market prices intentionally use last quarter's derived demand. That
+  // lag must not turn a newly launched private chain into free physical output
+  // for one quarter. For private session nodes only, reserve the upstream
+  // capacity against every downstream line's current feasible run rate before
+  // order pools are allocated. The resulting proportional cap is independent
+  // of company iteration order and guarantees aggregate consumption never
+  // exceeds the upstream line capacity. Catalogue inputs retain their legacy
+  // import/inventory treatment.
+  reservePrivateRecipeInputs(draft, drafts, balances);
+  reserveDirectAcceleratorOutput(draft, drafts);
 
   /* --- pass two: allocate each cell's order pool -------------------------- */
   // Only `unit` and `contract` lines share a pool, and only lines aimed at the
@@ -504,6 +556,71 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
   // stamped and inside the same phase. It draws no random number, so it cannot
   // move any other phase's call sequence.
   resolveNodeData(draft, ctx, cache);
+}
+
+/** Apply a same-quarter physical allocation to private recipe inputs. */
+function reservePrivateRecipeInputs(
+  state: Pick<SessionState, 'customEconomicNodes'>,
+  drafts: LineDraft[],
+  _balances: Readonly<Record<string, NodeBalance>>,
+): void {
+  const privateNodes = new Map((state.customEconomicNodes ?? []).map((node) => [node.id, node] as const));
+  // Process the dependency DAG from lower to higher tier. A downstream node
+  // therefore sees the *feasible* same-quarter output of its private input,
+  // after that input has already been rationed by anything below it; raw plant
+  // capacity can never be reused through a three-stage chain.
+  const inputIds = [...privateNodes.values()].sort((a, b) => a.tier - b.tier || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map((node) => node.id);
+  for (const inputId of inputIds) {
+    const consumers: { index: number; qty: number }[] = [];
+    for (let index = 0; index < drafts.length; index += 1) {
+      const entry = drafts[index]!;
+      for (const fill of entry.fills) {
+        if (fill.nodeId !== inputId) continue;
+        const slot = entry.node.slots.find((candidate) => candidate.id === fill.slotId);
+        if (slot?.blocking === true) consumers.push({ index, qty: slot.qtyPerUnit });
+      }
+    }
+    if (consumers.length === 0) continue;
+    const supply = drafts.reduce((sum, entry) => sum + (entry.node.id === inputId ? Math.max(0, entry.producible) : 0), 0);
+    const requested = consumers.reduce((sum, { index, qty }) => sum + Math.max(0, drafts[index]!.producible) * qty, 0);
+    const ratio = requested <= 0 ? 1 : Math.min(1, supply / requested);
+    if (ratio >= 1) continue;
+    for (const { index } of consumers) {
+      const entry = drafts[index]!;
+      drafts[index] = { ...entry, inputFill: Math.min(entry.inputFill, ratio), producible: entry.producible * ratio };
+    }
+  }
+}
+
+/**
+ * Hardware already delivered through the direct contract/spot channel cannot
+ * also appear as anonymous node-market output. Compute records the delivered
+ * physical units per seller; production removes that quantity from every
+ * accelerator line's current capacity in stable proportional shares. Financial
+ * settlement remains the sole writer of the direct-sale cash, COGS, PPE and
+ * counterparty revenue, so this is a quantity reservation only.
+ */
+function reserveDirectAcceleratorOutput(
+  state: Pick<SessionState, 'acceleratorDirectAllocatedUnitsBySeller'>,
+  drafts: LineDraft[],
+): void {
+  const direct = state.acceleratorDirectAllocatedUnitsBySeller ?? {};
+  for (const [sellerId, delivered] of Object.entries(direct)) {
+    if (delivered <= 0) continue;
+    const indexes = drafts
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => entry.company.id === sellerId && entry.node.id === COMPUTE_CAPACITY_NODE_ID);
+    const total = indexes.reduce((sum, { entry }) => sum + Math.max(0, entry.producible), 0);
+    if (total <= 0) continue;
+    // Product shipment counts are whole units downstream. Reserve against the
+    // whole physical pool, then round each remaining line down so independent
+    // line rounding cannot recreate one accelerator after a direct sale.
+    const remaining = Math.max(0, Math.floor(total) - delivered);
+    for (const { entry, index } of indexes) {
+      const share = Math.max(0, entry.producible) / total;
+      drafts[index] = { ...entry, producible: Math.floor(remaining * share) };
+    }
+  }
 }
 
 /** The pool a unit or contract line draws from: its node, its industry and its customer type. */

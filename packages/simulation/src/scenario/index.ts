@@ -77,5 +77,7 @@ export {
   world3BackgroundHighlights,
   world3BackgroundsForSector,
   world3SessionInput,
+  W3_TESSELLATE_ACCELERATOR_SAVE_UPGRADE,
+  upgradeWorld3TessellateAcceleratorSupplier,
 } from './world3';
-export type { W3OpeningFacts, W3SeedFill, W3SeedLine } from './world3';
+export type { W3OpeningFacts, W3SeedFill, W3SeedLine, World3SaveUpgradeResult } from './world3';

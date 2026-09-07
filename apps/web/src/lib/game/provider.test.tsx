@@ -112,6 +112,10 @@ let roots: Root[] = [];
 beforeEach(() => {
   const dom = fakeDom(fakeStorage());
   globals.window = dom.win;
+  // Ordinary provider tests exercise the browser-only demo path. The command
+  // service explicitly says it is disabled; every other authority failure is
+  // covered by canonical binding tests instead of silently becoming local.
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, reason: 'authority_disabled' }), { status: 404, headers: { 'content-type': 'application/json' } })));
   container = dom.container;
   roots = [];
 });
@@ -121,6 +125,7 @@ afterEach(async () => {
     await act(async () => root.unmount());
   }
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   delete globals.window;
 });
 

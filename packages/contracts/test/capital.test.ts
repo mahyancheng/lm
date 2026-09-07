@@ -442,6 +442,7 @@ describe('every enum grew at the end', () => {
       'node_licence_lapsed',
       'slot_filled',
       'target_market_set',
+      'migration_applied',
     ]);
     expect(new Set(SIM_EVENT_TYPES).size).toBe(SIM_EVENT_TYPES.length);
   });
@@ -462,11 +463,11 @@ describe('every enum grew at the end', () => {
     expect(ACTION_ORIGINS[0]).toBe('player_ui');
   });
 
-  it('appends three deal obligations that the union actually carries', () => {
+  it('appends deal obligations that the union actually carries', () => {
     // `node_licence` was appended after the two capital-entity obligations when
     // world 3 put licensing on the ordinary deal path. An append, never an
     // insertion: a saved deal names its obligations by string.
-    expect(DEAL_OBLIGATION_KINDS.slice(-3)).toEqual(['term_sheet', 'buyout_offer', 'node_licence']);
+    expect(DEAL_OBLIGATION_KINDS.slice(-4)).toEqual(['term_sheet', 'buyout_offer', 'node_licence', 'owned_accelerator_supply']);
     const licence = DealObligationSchema.parse({
       kind: 'node_licence',
       nodeId: 'sys_ai_accelerator',

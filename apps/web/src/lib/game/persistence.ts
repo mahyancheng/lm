@@ -59,7 +59,7 @@ import type {
   SubmittedAction,
   WorldVersion,
 } from '@frontier/contracts';
-import { applySocialTextOverrides } from '@frontier/simulation';
+import { applySocialTextOverrides, upgradeWorld3TessellateAcceleratorSupplier } from '@frontier/simulation';
 import { getEngine, createSession, DEMO_SEED } from './engine';
 import {
   ABSENT_SAVE_SUMMARY,
@@ -132,6 +132,8 @@ export interface LoadedGame {
    * empty log): the ledger is derived from the save, never stored in it.
    */
   readonly ledger: readonly SimEvent[];
+  /** Current-state compatibility rows emitted after a complete replay. */
+  readonly migrationEvents: readonly SimEvent[];
 }
 
 function storage(): Storage | null {
@@ -434,7 +436,9 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
   const rejectedQuarters: number[] = [];
   let replayedCount = 0;
   let complete = pending.length === outstanding.length;
-  let ledger: readonly SimEvent[] = [];
+  // Compatibility rows live beside the historical quarter log, so reloads keep
+  // their audit trail without pretending the event happened in an old quarter.
+  let ledger: readonly SimEvent[] = [...(file.migrationEvents ?? [])];
 
   for (const record of pending) {
     yield { completed: replayedCount, total: pending.length, quarter: record.quarter };
@@ -468,6 +472,17 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     replayedCount += 1;
   }
 
+  // Repair only the fully replayed present state. Applying it to an old
+  // checkpoint before its recorded quarters would change those historical
+  // resolutions. The persisted marker/checkpoint is written by the load path.
+  let migrationEvents: readonly SimEvent[] = [];
+  if (complete && !(file.scenarioMigrations ?? []).includes('w3_tessellate_accelerator_supplier_v1')) {
+    const upgrade = upgradeWorld3TessellateAcceleratorSupplier(session);
+    session = upgrade.state;
+    migrationEvents = upgrade.event === null ? [] : [upgrade.event];
+    if (migrationEvents.length > 0) ledger = [...ledger, ...migrationEvents];
+  }
+
   return {
     session,
     log,
@@ -482,6 +497,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
     replayedCount,
     queue: file.queue,
     ledger,
+    migrationEvents,
   };
 }
 

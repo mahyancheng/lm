@@ -22,13 +22,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AcceleratorPurchaseDraft, Character, CharacterUtteranceContext, DealProposalDraft, Memory, MemoryDraft, Relationship, SessionState } from '@frontier/contracts';
-import { AiLabel, Icon, SectionHeading, Tag, cx } from '@/components/ui';
+import type { AcceleratorPurchaseDraft, ActionIntent, Character, CharacterReply, CharacterUtteranceContext, ConversationReceipt, DealProposal, DealProposalDraft, Memory, MemoryDraft, Relationship, SessionState } from '@frontier/contracts';
+import { AiLabel, ConfirmDialog, Icon, SectionHeading, Tag, cx } from '@/components/ui';
 import { DealBuilder } from '../deal-room/DealBuilder';
 import { BuyAccelerators } from '../company/BuyAccelerators';
 import { acceleratorPurchaseDraft, acceleratorPurchaseQuoteStatus, negotiationDraft, negotiationFacts, proposalStatusSummary } from './negotiation';
 import { PLAYER_ID, useActiveCompany, useGame, useGameActions, usePlayerView, useQueuedActions } from '@/lib/game';
 import { requestCharacterReply, requestCompanyDialogue } from '@/lib/llm/client';
+import { noteCanonicalSessionRevision } from '@/lib/game/canonicalSession';
 import { sellersFor } from '@frontier/simulation';
 import { offlineReply, publicFactsFor, type DialogueTurn } from './actions';
 
@@ -41,6 +42,51 @@ const PROMPTS: readonly string[] = [
   'What do you make of where this market is going?',
   'Who else should I be talking to?',
 ];
+
+
+function receiptLabel(status: ConversationReceipt['status']): string {
+  switch (status) {
+    case 'queued': return 'Submitted for quarter — see current terms below';
+    case 'duplicate': return 'Already queued';
+    case 'stale': return 'Pending refresh';
+    case 'rejected': return 'Rejected';
+    case 'session_not_registered': return 'Pending canonical session';
+    case 'forbidden': return 'Rejected by authority';
+  }
+}
+
+function receiptTone(status: ConversationReceipt['status']): 'gain' | 'warn' | 'loss' | 'neutral' {
+  return status === 'queued' || status === 'duplicate' ? 'gain' : status === 'stale' || status === 'session_not_registered' ? 'warn' : 'loss';
+}
+
+function commandTerms(intent: ActionIntent | null): readonly string[] {
+  if (intent === null) return [];
+  switch (intent.type) {
+    case 'propose_deal': return [
+      `Offer to ${intent.proposal.counterpartyId}`,
+      intent.proposal.binding ? 'Binding obligations if accepted' : 'Non-binding intent only',
+      ...intent.proposal.gives.concat(intent.proposal.gets).flatMap((obligation) => obligation.kind === 'owned_accelerator_supply'
+        ? [`Owned accelerators: ${obligation.quantityPerQuarter}/quarter for ${obligation.durationQuarters} quarters`, `Premium ${obligation.premiumPct}% · cap $${obligation.maxUnitPriceUsd.toLocaleString()} · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries cancellable' : 'Future deliveries not cancellable']
+        : [obligation.kind.replaceAll('_', ' ')]),
+      `Expires Q${intent.proposal.expiresQuarter}`,
+    ];
+    case 'accept_deal': return [`Accept deal ${intent.dealId}`];
+    case 'reject_deal': return [`Reject deal ${intent.dealId}`, intent.reason ? `Reason: ${intent.reason}` : 'No reason supplied'];
+    case 'cancel_deal': return [`Cancel future obligations for deal ${intent.dealId}`, intent.reason ? `Reason: ${intent.reason}` : 'No reason supplied'];
+    case 'submit_board_proposal': return [`Board proposal: ${intent.title}`, intent.summary];
+    default: return [intent.type.replaceAll('_', ' ')];
+  }
+}
+
+function hardwareTerms(deal: DealProposal): readonly string[] {
+  return [...deal.gives, ...deal.gets].flatMap((obligation) => obligation.kind === 'owned_accelerator_supply'
+    ? [`${obligation.quantityPerQuarter} owned accelerators/quarter × ${obligation.durationQuarters} quarters`, `Premium ${obligation.premiumPct}% · max $${obligation.maxUnitPriceUsd.toLocaleString()}/unit · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries may be cancelled' : 'Not cancellable']
+    : []);
+}
+
+function hasCancellableHardware(deal: DealProposal, companyId: string): boolean {
+  return deal.status === 'accepted' && [...deal.gives, ...deal.gets].some((obligation) => obligation.kind === 'owned_accelerator_supply' && obligation.cancellable && (obligation.supplierCompanyId === companyId || obligation.buyerCompanyId === companyId));
+}
 
 /** Context for a company CEO: historic chats follow the employer at each turn. */
 export function companyDialogueHistory(
@@ -79,7 +125,7 @@ export function TalkPanel({
 }: TalkPanelProps): React.JSX.Element {
   const company = useActiveCompany();
   const view = usePlayerView();
-  const { recordConversationTurn } = useGameActions();
+  const { recordConversationTurn, queueAction } = useGameActions();
   const { ledger } = useGame();
   const queuedActions = useQueuedActions();
   const counterparty = view.visibleCompanies.find((entry) => entry.id === target.companyId && entry.id !== company.id && entry.isActive !== false);
@@ -123,6 +169,9 @@ export function TalkPanel({
   const [sending, setSending] = useState(false);
   const [offline, setOffline] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const storedReceipts = useMemo(() => (storedThread?.turns ?? []).flatMap((turn) => turn.receipts ?? []), [storedThread?.nextTurnSequence]);
+  const conversationDeals = useMemo(() => target.companyId === null ? [] : session.deals.filter((deal) => (deal.proposerId === company.id && deal.counterpartyId === target.companyId) || (deal.proposerId === target.companyId && deal.counterpartyId === company.id)), [session.deals, company.id, target.companyId]);
+  const [pendingDealAction, setPendingDealAction] = useState<{ readonly type: 'accept_deal' | 'reject_deal' | 'cancel_deal'; readonly deal: DealProposal } | null>(null);
 
   // A new person/company is a new thread and may discard local reply cards.
   useEffect(() => {
@@ -175,30 +224,39 @@ export function TalkPanel({
     const requestQuarter = session.quarter;
     let reply: string | null = null;
     let memory: MemoryDraft | null = null;
+    let receipts: ConversationReceipt[] | undefined;
     try {
       // A company CEO shares the company agent's server-derived Claude
       // identity. Everyone else keeps a character-scoped conversation.
-      const result = await (companyDialogue ? requestCompanyDialogue : requestCharacterReply)(context, {
-        sessionId: session.sessionId,
-        playerId: PLAYER_ID,
-        conversationId: companyDialogue ? target.companyId! : `${company.id}:${target.id}`,
-      });
+      const output = companyDialogue
+        ? await (async () => {
+          const companyResult = await requestCompanyDialogue(context, { sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: target.companyId! });
+          // Old deterministic adapters return CharacterReply directly; the
+          // actual route returns an envelope with receipts and a revision.
+          const wire = companyResult as unknown as { output?: CharacterReply | null; receipts?: readonly ConversationReceipt[]; revision?: number | null; text?: string } | null;
+          if (wire !== null && Array.isArray(wire.receipts)) {
+            noteCanonicalSessionRevision(session.sessionId, wire.revision ?? null);
+            receipts = [...wire.receipts];
+          }
+          return wire?.output ?? (wire?.text === undefined ? null : wire as unknown as CharacterReply);
+        })()
+        : await requestCharacterReply(context, { sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: `${company.id}:${target.id}` });
       if (scopeRef.current !== scope || quarterRef.current !== requestQuarter) {
         if (scopeRef.current === scope) setSending(false);
         return;
       }
-      const offered = negotiationDraft(result?.dealDraft, counterparty?.id, session.quarter, company.id);
-      const verifiedAcceleratorOrder = acceleratorPurchaseDraft(result?.acceleratorPurchaseDraft, session, company, counterparty?.id);
+      const offered = negotiationDraft(output?.dealDraft, counterparty?.id, session.quarter, company.id);
+      const verifiedAcceleratorOrder = acceleratorPurchaseDraft(output?.acceleratorPurchaseDraft, session, company, counterparty?.id);
       setDeal(offered);
       // Store only a quote that matched canonical availability when received;
       // later state changes render this same quote as expired rather than hiding it.
       setAcceleratorQuote(verifiedAcceleratorOrder);
       setShowDeal(offered !== undefined);
       setDealRevision((value) => value + 1);
-      reply = result?.text ?? null;
+      reply = output?.text ?? null;
       // The store accepts only the LLM contract's bounded memory draft and
       // converts it to a factual, non-binding conversation memory.
-      memory = result?.memoryToStore ?? null;
+      memory = output?.memoryToStore ?? null;
     } catch {
       // The client never throws at a screen. A model failure is a degraded
       // conversation, not a broken one.
@@ -218,6 +276,7 @@ export function TalkPanel({
       replyText: spoken,
       quarter: requestQuarter,
       memory: memory === null ? null : { kind: memory.kind, summary: memory.summary, sentiment: memory.sentiment },
+      receipts,
     });
     setOffline(reply === null);
     setTurns((current) => [...current, { speakerId: target.id, text: spoken }].slice(-MAX_TURNS));
@@ -238,6 +297,34 @@ export function TalkPanel({
           </li>
         ))}
         </ul>
+      </section> : null}
+
+      {storedReceipts.length > 0 ? <section className="mt-2 rounded-card raised-surface px-3 py-2 text-xs text-ink-dim">
+        <SectionHeading rule>Company command status</SectionHeading>
+        <p className="mt-1">A company action has no outcome until the matching receipt is queued and the quarter resolves.</p>
+        <ul className="mt-2 flex flex-col gap-2">
+          {storedReceipts.map((receipt, index) => <li key={`${receipt.revision ?? 'local'}-${index}`}>
+            <Tag tone={receiptTone(receipt.status)}>{receiptLabel(receipt.status)}</Tag>
+            {commandTerms(receipt.intent).map((term) => <div key={term} className="mt-1">{term}</div>)}
+            {receipt.reason === null ? null : <div className="mt-1 text-warn">{receipt.reason}</div>}
+          </li>)}
+        </ul>
+      </section> : null}
+
+      {conversationDeals.length > 0 ? <section className="mt-2 flex flex-col gap-2">
+        <SectionHeading rule>Current company terms</SectionHeading>
+        {conversationDeals.map((deal) => {
+          const inboundDeal = deal.counterpartyId === company.id;
+          const answerable = inboundDeal && deal.status === 'proposed' && deal.expiresQuarter >= session.quarter;
+          return <article key={deal.id} className="rounded-card raised-surface px-3 py-2 text-xs text-ink-dim">
+            <div className="flex flex-wrap items-center gap-2"><Tag tone={deal.status === 'accepted' || deal.status === 'executed' ? 'gain' : deal.status === 'rejected' ? 'loss' : 'warn'}>{deal.status}</Tag><span>{deal.binding ? 'Binding if accepted' : 'Non-binding intent'}</span></div>
+            <p className="mt-1">{deal.summary}</p>
+            {hardwareTerms(deal).map((term) => <div key={term} className="mt-1">{term}</div>)}
+            {deal.settlements?.length ? <div className="mt-1">Latest delivery: {deal.settlements.at(-1)?.status.replaceAll('_', ' ')} · {deal.settlements.at(-1)?.deliveredUnits ?? 0} units</div> : null}
+            {answerable ? <div className="mt-2 flex gap-2"><button type="button" className="btn btn-primary" onClick={() => setPendingDealAction({ type: 'accept_deal', deal })}>Accept terms</button><button type="button" className="btn" onClick={() => setPendingDealAction({ type: 'reject_deal', deal })}>Reject terms</button></div> : null}
+            {hasCancellableHardware(deal, company.id) ? <button type="button" className="btn mt-2" onClick={() => setPendingDealAction({ type: 'cancel_deal', deal })}>Cancel future deliveries</button> : null}
+          </article>;
+        })}
       </section> : null}
 
       {turns.length === 0 ? (
@@ -312,7 +399,7 @@ export function TalkPanel({
         <button type="button" className="btn tap-target" onClick={() => setShowDeal((value) => !value)}>{showDeal ? 'Hide offer' : 'Build an offer'}</button>
         {showDeal ? <div className="mt-3">
           <SectionHeading rule>{deal ? 'Review negotiated terms' : 'Propose a deal'}</SectionHeading>
-          <p className="my-2 text-xs text-ink-dim">Binding cash-only deals settle in the quarter after acceptance. Technology licences settle on signing with the canonical fee plus any bilateral cash in the same bundle. Include the technology, fee, royalty and duration; other terms are recorded as non-binding intent. Track responses in Deal Room.</p>
+          <p className="my-2 text-xs text-ink-dim">Binding cash, technology, and owned-hardware terms settle only through the resolver after acceptance. Owned-hardware supply records quantity, price cap, duration, priority, and whether future deliveries may be cancelled; other terms are non-binding intent. Track responses in Deal Room.</p>
           <DealBuilder key={`${scope}:${dealRevision}`} initialDraft={deal}
             counterparties={[{ id: counterparty.id, label: counterparty.name ?? counterparty.id, kind: 'company' }]}
             securities={session.securities.filter((security) => security.companyId === company.id || view.visibleCompanies.some((entry) => entry.id === security.companyId && entry.isPublic)).map((security) => ({ id: security.id, label: security.symbol ?? security.id }))}
@@ -342,6 +429,7 @@ export function TalkPanel({
           <Tag tone="neutral">Deterministic reply — no model available</Tag>
         </div>
       ) : null}
+      <ConfirmDialog open={pendingDealAction !== null} title={pendingDealAction === null ? '' : pendingDealAction.type === 'accept_deal' ? 'Accept these company terms' : pendingDealAction.type === 'reject_deal' ? 'Reject these company terms' : 'Cancel future deliveries'} actionType={pendingDealAction?.type ?? 'accept_deal'} body={pendingDealAction?.type === 'cancel_deal' ? 'This cancels only future owned-hardware deliveries. Settled deliveries remain recorded.' : 'This queues your company’s response for quarter resolution; it is not an immediate outcome.'} terms={pendingDealAction === null ? [] : [{ label: 'Deal', value: pendingDealAction.deal.summary }, ...hardwareTerms(pendingDealAction.deal).map((value) => ({ label: 'Term', value }))]} confirmLabel={pendingDealAction?.type === 'accept_deal' ? 'Queue acceptance' : pendingDealAction?.type === 'reject_deal' ? 'Queue rejection' : 'Queue cancellation'} onCancel={() => setPendingDealAction(null)} onConfirm={() => { if (pendingDealAction === null) return; const intent = pendingDealAction.type === 'accept_deal' ? { type: 'accept_deal' as const, dealId: pendingDealAction.deal.id } : pendingDealAction.type === 'reject_deal' ? { type: 'reject_deal' as const, dealId: pendingDealAction.deal.id, reason: 'Declined in CEO conversation.' } : { type: 'cancel_deal' as const, dealId: pendingDealAction.deal.id, reason: 'Cancelled in CEO conversation.' }; queueAction(intent, { confirmed: true }); setPendingDealAction(null); }} />
     </div>
   );
 }

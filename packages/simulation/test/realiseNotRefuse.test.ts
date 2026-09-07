@@ -63,7 +63,7 @@ function playerCompany(state: SessionState) {
 }
 
 let sequence = 0;
-function submit(state: SessionState, intent: ActionIntent, companyId: string, characterId: string): SubmittedAction {
+function submit(state: SessionState, intent: ActionIntent, companyId: string, characterId: string, actorPlayerId: string | null = state.players[0]?.playerId ?? null): SubmittedAction {
   sequence += 1;
   const seat = state.players[0];
   if (seat === undefined) throw new Error('no player seat');
@@ -72,12 +72,12 @@ function submit(state: SessionState, intent: ActionIntent, companyId: string, ch
     sessionId: state.sessionId,
     quarter: state.quarter,
     sequence,
-    actorPlayerId: seat.playerId,
+    actorPlayerId,
     actorCompanyId: companyId,
     actorCharacterId: characterId,
-    origin: 'player_ui',
+    origin: actorPlayerId === null ? 'npc_default' : 'player_ui',
     intent,
-    confirmedByHuman: true,
+    confirmedByHuman: actorPlayerId !== null,
   };
 }
 
@@ -169,16 +169,21 @@ describe('the validator table: availability is accepted and noted, not refused',
 
   it('issue_shares beyond a class’s unissued authorisation', () => {
     const state = staged();
-    const company = playerCompany(state);
+    const company = state.companies.find((entry) => entry.isPublic && entry.ceoCharacterId !== null);
+    if (company === undefined) throw new Error('no public company with a chief executive');
+    // This action creates public float; a private player company must use a
+    // financing round. Use the listed issuer's own CEO, not player authority.
+    company.boardId = null;
     const security = state.securities.find((entry) => entry.id === company.primarySecurityId);
     if (security === undefined) throw new Error('no primary security');
     const validator = createActionValidator();
     const [result] = validator.validateBatch(state, [
       submit(
         state,
-        { type: 'issue_shares', shareClassId: security.shareClassId, shares: 500_000_000, minPricePerShareUsd: 1 },
+        { type: 'issue_shares', shareClassId: security.shareClassId, shares: 50_000_000_000, minPricePerShareUsd: 1 },
         company.id,
-        company.ceoCharacterId ?? '',
+        company.ceoCharacterId,
+        null,
       ),
     ]);
     if (result === undefined) throw new Error('no result');

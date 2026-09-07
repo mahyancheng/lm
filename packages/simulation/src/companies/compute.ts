@@ -50,10 +50,10 @@
  * company's own holdings and the world's compute prices.
  */
 
-import type { Company, ResolverContext, SessionState } from '@frontier/contracts';
+import type { Company, DealProposal, ResolverContext, SessionState } from '@frontier/contracts';
 import { RESERVATION_RENEWAL_CASH_COVER_QUARTERS, RESERVATION_RENEWAL_QUARTERS } from './balance';
 import { reservedRentUsd } from '../graph/lines';
-import { resolveCloudSeller, resolveComputeSeller, sellerPriceFactor } from './sellers';
+import { resolveCloudSeller, resolveComputeSeller, sellerPriceFactor, sellersFor } from './sellers';
 import { emitPartialFill } from './partialFill';
 import { isMultiSectorWorld } from '../economy/sectors';
 import { reservableUnits } from '../fills';
@@ -62,6 +62,79 @@ import { activeCompanies, companyActions, count, emitEvent, intentsOfType, money
 /** What one reserved accelerator-equivalent costs this quarter, at the world's index. */
 export function reservedUnitPriceUsd(draft: SessionState): number {
   return money(reservedRentUsd(draft));
+}
+
+/** Choose against the mutable quarterly allocation book, with the market's
+ * documented price/id tie-break. */
+function availableAcceleratorSeller(
+  draft: SessionState, buyerCompanyId: string, requestedId: string | null | undefined, needed: number, availability: ReadonlyMap<string, number>,
+) {
+  const market = sellersFor(draft, 'accelerators', buyerCompanyId).filter((seller) => (availability.get(seller.company.id) ?? 0) > 0);
+  if (typeof requestedId === 'string') return market.find((seller) => seller.company.id === requestedId) ?? null;
+  const whole = market.find((seller) => (availability.get(seller.company.id) ?? 0) >= needed);
+  if (whole !== undefined) return whole;
+  return market.reduce<typeof market[number] | null>((best, seller) => best === null || (availability.get(seller.company.id) ?? 0) > (availability.get(best.company.id) ?? 0) ? seller : best, null);
+}
+
+type HardwareTerms = Extract<DealProposal['gives'][number], { kind: 'owned_accelerator_supply' }>;
+
+function hardwareTerms(deal: DealProposal): HardwareTerms | null {
+  const all = [...deal.gives, ...deal.gets].filter((entry): entry is HardwareTerms => entry.kind === 'owned_accelerator_supply');
+  return all.length === 1 ? all[0]! : null;
+}
+
+/**
+ * Contracted hardware is allocated before ordinary spot demand, by the
+ * negotiated priority then stable deal id.  A receipt is written for every due
+ * quarter, including short delivery and default, while payment and seller
+ * revenue remain the normal staged accelerator-purchase path.
+ */
+function resolveOwnedAcceleratorContracts(draft: SessionState, ctx: ResolverContext, availability: Map<string, number>): void {
+  const due = draft.deals
+    .map((deal) => ({ deal, terms: hardwareTerms(deal) }))
+    .filter((entry): entry is { deal: DealProposal; terms: HardwareTerms } => entry.terms !== null && entry.deal.status === 'accepted' && entry.deal.binding && entry.deal.respondedQuarter !== null && entry.deal.respondedQuarter < ctx.quarter)
+    .sort((a, b) => b.terms.priority - a.terms.priority || (a.deal.id < b.deal.id ? -1 : a.deal.id > b.deal.id ? 1 : 0));
+  for (const { deal, terms } of due) {
+    const receipts = deal.settlements ?? [];
+    if (receipts.some((row) => row.obligationKind === 'owned_accelerator_supply' && row.quarter === ctx.quarter)) continue;
+    const complete = receipts.filter((row) => row.obligationKind === 'owned_accelerator_supply' && row.status !== 'price_cap_unmet').length;
+    if (complete >= terms.durationQuarters) { deal.status = 'executed'; continue; }
+    const supplier = draft.companies.find((company) => company.id === terms.supplierCompanyId);
+    const buyer = draft.companies.find((company) => company.id === terms.buyerCompanyId);
+    if (supplier === undefined || buyer === undefined || !supplier.isActive || !buyer.isActive || ctx.quarter > terms.contractEndQuarter) {
+      deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status: 'expired', dueUnits: terms.quantityPerQuarter, deliveredUnits: 0, unitPriceUsd: 0, totalUsd: 0, reason: 'Contract term ended or a party is inactive.' }];
+      deal.status = 'executed';
+      emitEvent(draft, ctx, 'deal_breached', terms.supplierCompanyId, terms.buyerCompanyId, { dealId: deal.id, status: 'expired', reason: 'Contract term ended or a party is inactive.' }, 'company');
+      continue;
+    }
+    const seller = availableAcceleratorSeller(draft, buyer.id, supplier.id, terms.quantityPerQuarter, availability);
+    const unitPrice = seller === null ? 0 : money(seller.unitPriceUsd * (1 + terms.premiumPct / 100));
+    const remaining = seller === null ? 0 : availability.get(supplier.id) ?? 0;
+    const delivered = unitPrice > terms.maxUnitPriceUsd ? 0 : Math.min(terms.quantityPerQuarter, remaining);
+    const status = unitPrice > terms.maxUnitPriceUsd ? 'price_cap_unmet' : delivered === terms.quantityPerQuarter ? 'delivered' : delivered > 0 ? 'partial' : 'defaulted';
+    const reason = unitPrice > terms.maxUnitPriceUsd ? 'Seller quote exceeds the buyer-approved maximum price; delivery is suspended, not a supplier breach.' : delivered === 0 ? 'Supplier had no allocable hardware output.' : delivered < terms.quantityPerQuarter ? 'Supplier output was scarce; partial delivery recorded.' : null;
+    const totalUsd = money(delivered * unitPrice);
+    deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status, dueUnits: terms.quantityPerQuarter, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, reason }];
+    // A zero-fill is an explicit supplier supply default and ends the remaining
+    // obligation. A partial fill is recorded but leaves later instalments live.
+    // Buyer cash is deliberately not a delivery gate: the ordinary world-2
+    // accelerator order is realised then carries its overdraft into financials.
+    if (status === 'defaulted') { deal.breachedByPartyId = supplier.id; deal.status = 'executed'; }
+    if (delivered > 0) {
+      availability.set(supplier.id, Math.max(0, remaining - delivered));
+      draft.acceleratorDirectAllocatedUnitsBySeller = {
+        ...(draft.acceleratorDirectAllocatedUnitsBySeller ?? {}),
+        [supplier.id]: count((draft.acceleratorDirectAllocatedUnitsBySeller?.[supplier.id] ?? 0) + delivered),
+      };
+      buyer.compute.ownedAccelerators = count(buyer.compute.ownedAccelerators + delivered);
+      buyer.compute.pendingAcceleratorPurchases = [...(buyer.compute.pendingAcceleratorPurchases ?? []), { sellerCompanyId: supplier.id, units: delivered, unitPriceUsd: unitPrice, totalUsd }];
+    }
+    const eventId = emitEvent(draft, ctx, status === 'defaulted' ? 'deal_breached' : 'accelerators_bought', supplier.id, buyer.id,
+      { dealId: deal.id, supplierCompanyId: supplier.id, buyerCompanyId: buyer.id, dueUnits: terms.quantityPerQuarter, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, status, reason }, 'company');
+    const verb = status === 'delivered' ? 'delivered' : status === 'partial' ? 'partly delivered' : status === 'price_cap_unmet' ? 'suspended at the price cap on' : 'defaulted on';
+    ctx.log({ phase: 'product_demand_resolution', text: `${supplier.name} ${verb} hardware contract ${deal.id}: ${delivered}/${terms.quantityPerQuarter} accelerators.`, deltaLabel: `${delivered}/${terms.quantityPerQuarter}`, refEventIds: [eventId], tone: status === 'delivered' ? 'positive' : 'warning', subjectId: supplier.id });
+    if (deal.status !== 'executed' && (deal.settlements ?? []).filter((row) => row.status !== 'price_cap_unmet').length >= terms.durationQuarters) deal.status = 'executed';
+  }
 }
 
 /**
@@ -201,6 +274,14 @@ function reviewReservation(draft: SessionState, ctx: ResolverContext, company: C
  * serving capacity is computed from them.
  */
 export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext): void {
+  // A seller's published output is a quarterly physical limit.  Keep one
+  // decrementing allocation book for private hardware contracts and ordinary
+  // spot orders: looking at sellersFor independently for each buyer is how the
+  // old system sold the same fab output several times.
+  const acceleratorAvailability = new Map<string, number>();
+  if (isMultiSectorWorld(draft)) draft.acceleratorDirectAllocatedUnitsBySeller = {};
+  for (const seller of sellersFor(draft, 'accelerators', null)) acceleratorAvailability.set(seller.company.id, seller.sellableUnits);
+  resolveOwnedAcceleratorContracts(draft, ctx, acceleratorAvailability);
   for (const company of activeCompanies(draft)) {
     const actions = companyActions(draft, ctx, company.id);
 
@@ -353,8 +434,8 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
     // property, plant and equipment. Nothing here touches cash.
     for (const { action, intent } of intentsOfType(actions, 'buy_accelerators')) {
       if (!isMultiSectorWorld(draft)) continue;
-      const seller = resolveComputeSeller(draft, 'accelerators', intent.sellerCompanyId, company.id, intent.units);
-      const units = seller === null ? 0 : Math.min(count(intent.units), seller.sellableUnits);
+      const seller = availableAcceleratorSeller(draft, company.id, intent.sellerCompanyId, intent.units, acceleratorAvailability);
+      const units = seller === null ? 0 : Math.min(count(intent.units), acceleratorAvailability.get(seller.company.id) ?? 0);
       // A dialogue quote is validated against the named seller when submitted,
       // then remains the agreed price through this resolution. Ordinary market
       // orders keep the live clearing-price behaviour.
@@ -411,6 +492,11 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
       }
 
       const totalUsd = money(units * unitPrice);
+      acceleratorAvailability.set(seller.company.id, Math.max(0, (acceleratorAvailability.get(seller.company.id) ?? 0) - units));
+      draft.acceleratorDirectAllocatedUnitsBySeller = {
+        ...(draft.acceleratorDirectAllocatedUnitsBySeller ?? {}),
+        [seller.company.id]: count((draft.acceleratorDirectAllocatedUnitsBySeller?.[seller.company.id] ?? 0) + units),
+      };
       const ownedBefore = company.compute.ownedAccelerators;
       company.compute.ownedAccelerators = count(ownedBefore + units);
       company.compute.pendingAcceleratorPurchases = [

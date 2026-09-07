@@ -19,7 +19,7 @@
  * `propose_innovation` action that carried it.
  */
 
-import { ECONOMIC_NODES_BY_ID, economicNodeById, economicNodeInSession, productBlueprintNodeId, type EconomicNode, type ProductRecipe } from '@frontier/contracts';
+import { ECONOMIC_NODES_BY_ID, canProduceInSession, economicNodeById, economicNodeInSession, productBlueprintNodeId, type EconomicNode, type ProductRecipe } from '@frontier/contracts';
 import { isNodeEconomyWorld } from '../economy/sectors';
 import { integrateExperiment } from './experiments';
 import type {
@@ -58,12 +58,19 @@ interface Proposer {
 /**
  * Find the company behind a proposal. The proposal itself carries no company id,
  * so it is matched to the `propose_innovation` action queued for this quarter
- * that carries the same title.
+ * that carries the same complete, typed proposal.  A title is presentation
+ * text, not authority: two companies can independently investigate the same
+ * named idea.  Reference identity covers normal resolver use; canonical
+ * structural comparison preserves replay/reparsed action support.
  */
 function resolveProposer(draft: SessionState, ctx: ResolverContext, proposal: InnovationProposal): Proposer {
-  for (const action of draft.pendingActions) {
-    if (action.quarter !== ctx.quarter || action.intent.type !== 'propose_innovation') continue;
-    if (action.intent.proposal.title !== proposal.title) continue;
+  const exact = draft.pendingActions.find((action) => action.quarter === ctx.quarter && action.intent.type === 'propose_innovation' && action.intent.proposal === proposal);
+  const fingerprint = innovationFingerprint(proposal);
+  const matching = draft.pendingActions
+    .filter((action) => action.quarter === ctx.quarter && action.intent.type === 'propose_innovation' && innovationFingerprint(action.intent.proposal) === fingerprint)
+    .sort((a, b) => a.sequence - b.sequence || (a.actionId < b.actionId ? -1 : a.actionId > b.actionId ? 1 : 0));
+  const action = exact ?? matching[0];
+  if (action !== undefined) {
     return {
       companyId: action.actorCompanyId,
       characterId: action.actorCharacterId,
@@ -71,6 +78,16 @@ function resolveProposer(draft: SessionState, ctx: ResolverContext, proposal: In
     };
   }
   return { companyId: null, characterId: null, company: undefined };
+}
+
+/** Stable JSON for the typed proposal shape; no model text is interpreted. */
+function innovationFingerprint(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(innovationFingerprint).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${innovationFingerprint(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /** Capital a company could plausibly reach for a programme: cash plus a year of revenue. */
@@ -128,35 +145,47 @@ export function assessCostUsd(proposal: InnovationProposal): number {
  * catalogue inputs.  Keeping it here also means the immutable catalogue is
  * never extended or cached globally.
  */
-function materialiseRecipe(draft: SessionState, recipe: ProductRecipe, techId: string, ctx: ResolverContext): EconomicNode | null {
-  // Recipes may compose only public catalogue inputs.  A session-local recipe
-  // is private canonical state and must never become an upstream dependency.
-  const inputs = recipe.inputNodeIds.map((id) => ECONOMIC_NODES_BY_ID[id]);
+function materialiseRecipe(draft: SessionState, recipe: ProductRecipe, techId: string, ctx: ResolverContext, company: Company | undefined): EconomicNode | null {
+  // Catalogue ingredients are importable at the market price. A private
+  // session-created ingredient is different: it may be used upstream only by
+  // a company that has actually achieved or licensed it. This preserves its
+  // provenance and prevents a non-blocking open-market fallback from creating
+  // a free supply chain out of another company's private invention.
+  const inputs = recipe.inputNodeIds.map((id) => economicNodeInSession(draft, id));
   if (inputs.some((node) => node === undefined) || new Set(recipe.inputNodeIds).size !== recipe.inputNodeIds.length) return null;
   const inputNodes = inputs as EconomicNode[];
-  // Recipes are terminal apps/services.  Requiring a lower-tier input keeps
-  // the roll-up acyclic even when a session has several invented products.
-  if (inputNodes.some((node) => node.tier >= 6)) return null;
-  const id = `app_custom_${slugify(techId).replace(/^tech_/, '').slice(0, 72)}`;
+  const customIds = new Set((draft.customEconomicNodes ?? []).map((node) => node.id));
+  if (inputNodes.some((node) => customIds.has(node.id) && (company === undefined || !canProduceInSession(draft, company, node.id, ctx.quarter)))) return null;
+  // The typed stage permits upstream materials/components as well as finished
+  // offers. It chooses one engine-owned tier/role/prefix triple, and every
+  // selected input must sit below it, so cycles remain unrepresentable.
+  const output = recipeOutput(recipe.outputStage ?? 'platform');
+  if (inputNodes.some((node) => node.tier >= output.tier)) return null;
+  const id = `${output.prefix}custom_${slugify(techId).replace(/^tech_/, '').slice(0, 72)}`;
   if (ECONOMIC_NODES_BY_ID[id] !== undefined || draft.customEconomicNodes?.some((node) => node.id === id)) return null;
   const inputCost = inputNodes.reduce((sum, node, index) => sum + node.basePriceUsd * recipe.inputQuantities[index]!, 0);
   const recurring = recipe.saleKind === 'recurring';
   const contract = recipe.saleKind === 'contract';
   const sector = recipe.sector;
+  const production = recipeProductionProfile(recipe, output.tier);
   return {
     id, label: recipe.label, blurb: `A researched ${recipe.label.toLowerCase()} product.`, sector,
-    tier: 6, role: 'app', maturity: 'frontier',
+    tier: output.tier, role: output.role, maturity: 'frontier',
     unitLabel: recipe.unitLabel, saleKind: recipe.saleKind,
     lifetimeQuarters: recipe.saleKind === 'unit' ? 12 : null,
     contractQuarters: contract ? 4 : null,
     basePriceUsd: money(Math.max(1, inputCost * (recurring ? 1.8 : contract ? 1.5 : 1.3) + 25)),
     requires: [],
-    slots: inputNodes.map((node, index) => ({ id: `input_${index + 1}`, role: node.role, label: node.label.slice(0, 24), qtyPerUnit: recipe.inputQuantities[index]!, required: true, blocking: false, accepts: [node.id], defaultNodeId: node.id, kind: 'input' as const })),
-    capacityKind: recurring ? 'compute' : 'plant', capacityDrawPerUnit: recurring ? 0.000002 : 0.00001,
+    slots: inputNodes.map((node, index) => ({ id: `input_${index + 1}`, role: node.role, label: node.label.slice(0, 24), qtyPerUnit: recipe.inputQuantities[index]!, required: true,
+      // Catalogue goods can be imported under scarcity. Private custom inputs
+      // have no public market until a future publication/licensing feature, so
+      // losing the owner-owned source genuinely stops the downstream line.
+      blocking: customIds.has(node.id), accepts: [node.id], defaultNodeId: node.id, kind: 'input' as const })),
+    capacityKind: production.capacityKind, capacityDrawPerUnit: production.capacityDrawPerUnit,
     // One sold unit is a customer-quarter/physical unit, not a whole FTE.
     // Keep operating labour in the same units as the catalogue so a viable
     // recipe cannot acquire thousands of dollars of labour per seat.
-    labourPerUnit: 0.00002 + inputNodes.length * 0.000005, energyMwhPerUnit: 0,
+    labourPerUnit: production.labourPerUnit + inputNodes.length * 0.000005, energyMwhPerUnit: production.energyMwhPerUnit,
     supportCostShare: 0.08,
     researchCostRangeUsd: [money(Math.max(50_000, inputCost * 4)), money(Math.max(100_000, inputCost * 8))],
     researchComputeIntensity: recurring ? 0.35 : 0.15, talentAreas: ['reasoning'], dataRequiredPb: 0,
@@ -167,6 +196,30 @@ function materialiseRecipe(draft: SessionState, recipe: ProductRecipe, techId: s
     endDemandBaseUnits: recurring ? 5_000 : 1_000, elasticity: recurring ? 1.1 : 0.8,
     churnBand: { min: 0.03, max: 0.1 }, dataYieldPerUnitQuarter: recurring ? 0.0001 : 0, dataSensitivity: 0.25,
   };
+}
+
+const RECIPE_OUTPUTS = {
+  material: { tier: 2, role: 'wafer', prefix: 'mat_' },
+  component: { tier: 3, role: 'chip_component', prefix: 'cmp_' },
+  subsystem: { tier: 4, role: 'control_stack', prefix: 'sys_' },
+  system: { tier: 5, role: 'device', prefix: 'sys_' },
+  platform: { tier: 6, role: 'app', prefix: 'app_' },
+  operation: { tier: 7, role: 'retail', prefix: 'app_' },
+} as const;
+
+function recipeOutput(stage: NonNullable<ProductRecipe['outputStage']>): (typeof RECIPE_OUTPUTS)[keyof typeof RECIPE_OUTPUTS] {
+  return RECIPE_OUTPUTS[stage];
+}
+
+/** Small sector-aware production profiles; the model never writes these. */
+function recipeProductionProfile(recipe: ProductRecipe, tier: number) {
+  if (recipe.sector === 'energy' && tier >= 4) return { capacityKind: 'grid' as const, capacityDrawPerUnit: 0.00001, labourPerUnit: 0.00003, energyMwhPerUnit: 0.001 };
+  if (recipe.sector === 'logistics' && tier >= 5) return { capacityKind: 'fleet' as const, capacityDrawPerUnit: 0.00001, labourPerUnit: 0.00004, energyMwhPerUnit: 0.002 };
+  if (recipe.sector === 'ai' && tier >= 5) return { capacityKind: 'compute' as const, capacityDrawPerUnit: 0.000002, labourPerUnit: 0.00002, energyMwhPerUnit: 0.001 };
+  if (tier <= 5) return { capacityKind: 'plant' as const, capacityDrawPerUnit: 0.00001, labourPerUnit: 0.00004, energyMwhPerUnit: 0.001 };
+  return recipe.saleKind === 'recurring'
+    ? { capacityKind: 'compute' as const, capacityDrawPerUnit: 0.000002, labourPerUnit: 0.00002, energyMwhPerUnit: 0.0005 }
+    : { capacityKind: 'plant' as const, capacityDrawPerUnit: 0.00001, labourPerUnit: 0.00003, energyMwhPerUnit: 0.001 };
 }
 
 /** Map a proposal's stated capabilities onto recognised capability areas where possible. */
@@ -315,13 +368,13 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
   // A recipe is a request for a session-local economic node.  Validate and
   // append it before the tech node is written, so its id can become the
   // blueprint and then be granted only when this programme succeeds.
-  const recipeNode = blueprint !== undefined && 'recipe' in blueprint ? materialiseRecipe(draft, blueprint.recipe, nodeId, ctx) : undefined;
+  const recipeNode = blueprint !== undefined && 'recipe' in blueprint ? materialiseRecipe(draft, blueprint.recipe, nodeId, ctx, company) : undefined;
   if (recipeNode !== undefined && recipeNode !== null && (draft.customEconomicNodes?.length ?? 0) >= 120) {
     reasons.push('This session has reached its limit of 120 custom economic recipes.');
     return rejected();
   }
   if (blueprint !== undefined && 'recipe' in blueprint && recipeNode === null) {
-    reasons.push('The recipe must use distinct, existing lower-tier catalogue inputs and may not collide with an existing product id.');
+    reasons.push('The recipe must use distinct existing inputs below a launchable tier; session-created inputs must already be achieved by this company and cannot form a cycle.');
     return rejected();
   }
   const resolvedBlueprint = recipeNode === undefined || recipeNode === null ? blueprint : { nodeId: recipeNode.id, customerValue: blueprint!.customerValue };

@@ -1032,6 +1032,9 @@ function probeFor(type: ActionType, draft: SessionState, actor: ValidationActor)
       };
     }
 
+    case 'cancel_deal':
+      return { intent: null, reason: 'Choose an active cancellable hardware contract from the deal room.', ...NOTHING };
+
     default: {
       // Exhaustive by construction: `ACTION_TYPES` and the switch are the same
       // union, and the compiler proves it here.

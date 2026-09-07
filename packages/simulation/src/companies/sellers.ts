@@ -51,7 +51,8 @@ import {
 } from './balance';
 import { customersPerUnit, heldComputeUnits } from './products';
 import { INFRASTRUCTURE_ARCHETYPES } from '../markets/valuation';
-import { acceleratorListUsd, cloudRentUsd, lineNodeIdOf, reservedRentUsd } from '../graph/lines';
+import { currentAcceleratorOutputCapacity, lineNodeIdOf } from '../graph';
+import { acceleratorListUsd, cloudRentUsd, reservedRentUsd } from '../graph/lines';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { regionOf, regionalEnergyIndex } from '../economy/regions';
 import { clamp, money, unit } from './util';
@@ -269,7 +270,10 @@ function sellerOf(draft: SessionState, company: Company, offering: ComputeOfferi
       company,
       offering,
       unitPriceUsd: price,
-      sellableUnits: nodeEconomy ? acceleratorLineOutputUnits(company) : acceleratorOutputUnits(draft, company),
+      // Direct hardware deliveries resolve before the node market.  In world 3
+      // they must therefore use the same current-quarter physical capacity the
+      // production pass will later use, never last quarter's shipments.
+      sellableUnits: nodeEconomy ? currentAcceleratorOutputCapacity(draft, company) : acceleratorOutputUnits(draft, company),
       quarterlyCostPerUnitUsd: money(price * PPE_DEPRECIATION_PER_QUARTER),
       energyFactorPct,
       utilisationPct,

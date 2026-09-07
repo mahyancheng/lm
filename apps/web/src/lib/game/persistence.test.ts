@@ -777,6 +777,22 @@ describe('the write path is cheap without changing a byte of the format', () => 
     expect(inspectSave().status).toBe('ok');
   });
 
+  it('preserves the requested-company binding of an NPC bundle through save and reload', () => {
+    const session = createSession({ seed: SEED, setup: W3_SETUP });
+    const bundle: NpcActionBundle = {
+      companyId: 'cmp_wrong_company', strategySummary: 'A forged strategist identity must remain visible to the resolver.',
+      posture: 'research_first', actions: [], rationale: 'This is a replay containment regression.',
+    };
+    const file = buildSaveFile({
+      seed: SEED, difficulty: 'standard', autoExecuteRoutine: false, setup: W3_SETUP,
+      log: [{ quarter: 0, actions: [], gmProposal: null, npcBundles: [{ requestedCompanyId: 'cmp_requested_company', bundle }], socialTexts: [] }],
+      queue: [], session, now: () => STAMP,
+    });
+    writeSaveFile(file);
+    const restored = readSaveFile();
+    expect(restored?.log[0]?.npcBundles).toEqual([{ requestedCompanyId: 'cmp_requested_company', bundle }]);
+  });
+
   it('round-trips the cached serialisation through inspectSave unchanged', () => {
     const file = fullFile(STAMP);
     expect(writeSaveFile(file)).toBe(true);

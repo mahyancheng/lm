@@ -51,7 +51,7 @@ import { maxTollForCompany } from '../economy/prices';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
 import { lastQuarterNetIncomeUsd } from '../companies/financials';
 import { solvencyCommitmentNote } from '../companies/solvency';
-import { resolveCloudSeller, resolveComputeSeller } from '../companies/sellers';
+import { resolveCloudSeller, resolveComputeSeller, sellersFor } from '../companies/sellers';
 import { categoryOf } from '../companies/categories';
 import { experimentReviewError, experimentResources } from '../research/experiments';
 import { dependencySatisfied } from '../research/nodes';
@@ -1626,6 +1626,13 @@ const buyback: Rule<'buyback'> = (intent, verdict, ctx) => {
 };
 
 const issueShares: Rule<'issue_shares'> = (intent, verdict, ctx) => {
+  if (!ctx.company.isPublic) {
+    verdict.reject(
+      'requirement_not_met',
+      `${ctx.company.name} is private. Use raise_round for a private financing; issue_shares places stock into the public float and is available only after an IPO.`,
+    );
+    return;
+  }
   const table = findCapTable(ctx.draft, ctx.company.id);
   const shareClass = table?.shareClasses.find((c) => c.id === intent.shareClassId);
   if (table === null || shareClass === undefined) {
@@ -2004,8 +2011,8 @@ const submitBoardProposal: Rule<'submit_board_proposal'> = (intent, verdict, ctx
   // accepted on a user-authored board proposal: otherwise the proposal action
   // (which is not itself confirmation-gated) could smuggle a financing
   // mandate past the explicit human-confirmation requirement.
-  if (intent.debtTerms !== undefined || intent.equityTerms !== undefined) {
-    verdict.reject('illegal_value', 'Financing terms can only be attached by the engine when a confirmed financing action is routed to the board.');
+  if (intent.debtTerms !== undefined || intent.equityTerms !== undefined || intent.executiveAppointmentTerms !== undefined || intent.dealProposal !== undefined || intent.dealAcceptance !== undefined) {
+    verdict.reject('illegal_value', 'Mandate terms can only be attached by the engine when the corresponding action is routed to the board.');
     return;
   }
   if (ctx.company.boardId === null) {
@@ -2302,6 +2309,8 @@ function hasBindingSettlementRoute(proposal: Extract<ActionIntent, { type: 'prop
       (obligation) => obligation.kind === 'node_licence' || obligation.kind === 'cash_payment',
     );
   }
+  const hardware = obligations.filter((obligation) => obligation.kind === 'owned_accelerator_supply');
+  if (hardware.length > 0) return hardware.length === 1 && obligations.length === 1;
   return obligations.every((obligation) => obligation.kind === 'cash_payment');
 }
 
@@ -2362,6 +2371,23 @@ const proposeDeal: Rule<'propose_deal'> = (intent, verdict, ctx) => {
           );
         }
         break;
+      case 'owned_accelerator_supply': {
+        const terms = obligation;
+        if (!intent.proposal.binding || intent.proposal.counterpartyKind !== 'company' ||
+          terms.supplierCompanyId === terms.buyerCompanyId ||
+          ![ctx.company.id, intent.proposal.counterpartyId].includes(terms.supplierCompanyId) ||
+          ![ctx.company.id, intent.proposal.counterpartyId].includes(terms.buyerCompanyId)) {
+          verdict.reject('illegal_value', 'An owned-accelerator contract must be binding and name the two companies negotiating as supplier and buyer.');
+        }
+        if (terms.contractEndQuarter < ctx.draft.quarter + terms.durationQuarters) {
+          verdict.reject('illegal_value', 'The contract end must cover every promised quarterly instalment.');
+        }
+        if (!sellersFor(ctx.draft, 'accelerators', terms.buyerCompanyId).some((seller) => seller.company.id === terms.supplierCompanyId)) {
+          verdict.reject('requirement_not_met', 'The named supplier has no current accelerator production capability.');
+        }
+        if (!terms.nonExclusive) verdict.reject('requirement_not_met', 'Exclusive hardware allocation has no settlement route; contracts must be non-exclusive.');
+        break;
+      }
       case 'price_accord': {
         // Every member has to be a real, active company in the sector the accord
         // names, and the proposer has to be one of them. A mixed-sector accord is
@@ -2429,6 +2455,17 @@ const rejectDeal: Rule<'reject_deal'> = (intent, verdict, ctx) => {
     return;
   }
   if (deal.status !== 'proposed') verdict.reject('requirement_not_met', `That deal is ${deal.status} and can no longer be rejected.`);
+};
+
+const cancelDeal: Rule<'cancel_deal'> = (intent, verdict, ctx) => {
+  const deal = findDeal(ctx.draft, intent.dealId);
+  const terms = deal === null ? null : [...deal.gives, ...deal.gets].find((entry): entry is Extract<typeof deal.gives[number], { kind: 'owned_accelerator_supply' }> => entry.kind === 'owned_accelerator_supply');
+  if (deal === null || terms === undefined || terms === null || deal.status !== 'accepted') {
+    verdict.reject('requirement_not_met', 'Only an active recurring hardware contract can be cancelled.'); return;
+  }
+  if (!terms.cancellable || (ctx.company.id !== terms.supplierCompanyId && ctx.company.id !== terms.buyerCompanyId)) {
+    verdict.reject('illegal_value', 'This company is not permitted to cancel that hardware contract.');
+  }
 };
 
 const requestIntroduction: Rule<'request_introduction'> = (intent, verdict, ctx) => {
@@ -2626,6 +2663,7 @@ export const RULES: { readonly [K in ActionType]: Rule<K> } = {
   propose_deal: proposeDeal,
   accept_deal: acceptDeal,
   reject_deal: rejectDeal,
+  cancel_deal: cancelDeal,
   request_introduction: requestIntroduction,
   buy_accelerators: buyAccelerators,
   invest_capacity: investCapacity,

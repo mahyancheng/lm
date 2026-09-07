@@ -444,6 +444,7 @@ export const SHEET_OF_ACTION: Readonly<Record<ActionType, SheetId | null>> = {
   propose_deal: 'deals',
   accept_deal: 'deals',
   reject_deal: 'deals',
+  cancel_deal: 'deals',
   request_introduction: 'network',
   // Group control has its own consolidated surface now.
   transfer_between_group: 'group',

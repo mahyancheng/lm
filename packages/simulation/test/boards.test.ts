@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { SessionState, StoredCommitment } from '@frontier/contracts';
+import type { BoardTally, SessionState, StoredCommitment } from '@frontier/contracts';
 import { commitmentConditionsHold } from '@frontier/contracts';
 import {
   assessDirector,
@@ -26,8 +26,10 @@ import {
   proposalCommitmentValues,
   registerCommitment,
   tallyProposal,
+  applyProposalEffects,
 } from '../src/boards/index';
 import { cloneState, companyOf, eventsOfType, makeAction, makeContext, makeProposal, makeState } from './_institutionsHarness';
+import { resolveFinancials } from '../src/companies';
 
 /* -------------------------------------------------------------------------- */
 /*  Fixtures                                                                   */
@@ -279,6 +281,26 @@ describe('proposal effects', () => {
     expect(betrayals.length).toBeGreaterThan(0);
   });
 
+  it('appoints the board-approved candidate and role, not the person who tabled the matter', () => {
+    const state = makeState();
+    companyOf(state, 'cmp_nexus').financials.payroll = 0;
+    const proposal = makeProposal({
+      id: 'prp_cfo', kind: 'csuite_appointment', proposedByCharacterId: 'chr_maya_chen', status: 'passed',
+      executiveAppointmentTerms: { characterId: 'chr_grace_halloran', executiveRole: 'cfo', annualCompUsd: 100_000_000 },
+    });
+    const harness = makeContext(1);
+    const effect = applyProposalEffects(state, harness.ctx, proposal, {} as BoardTally);
+    const company = companyOf(state, 'cmp_nexus');
+    const grace = state.characters.find((person) => person.id === 'chr_grace_halloran');
+    expect(grace?.companyId).toBe(company.id);
+    expect(grace?.title).toBe('cfo — Nexus Intelligence');
+    expect(company.ceoCharacterId).toBe('chr_maya_chen');
+    const payrollBefore = company.financials.payroll;
+    resolveFinancials(state, harness.ctx);
+    expect(company.financials.payroll).toBeGreaterThan(payrollBefore);
+    expect(effect.changes.appointedCharacterId).toBe('chr_grace_halloran');
+  });
+
   it('carries a restructuring into posture, morale and attrition', () => {
     const state = makeState();
     const metrics = state.companyMetrics.find((m) => m.companyId === 'cmp_nexus');
@@ -444,6 +466,7 @@ describe('a shareholder-requisitioned appointment', () => {
         kind: 'csuite_appointment',
         title: 'Reinstate the founder as chief executive',
         proposedByCharacterId: 'chr_maya_chen',
+        executiveAppointmentTerms: { characterId: 'chr_maya_chen', executiveRole: 'ceo', annualCompUsd: 1_000_000 },
       }),
     ];
 
@@ -463,7 +486,10 @@ describe('a shareholder-requisitioned appointment', () => {
     const state = makeState();
     const before = companyOf(state, 'cmp_nexus').ceoCharacterId;
     state.boardProposals = [
-      makeProposal({ id: 'prp_hire_cfo', kind: 'csuite_appointment', title: 'Appoint a chief financial officer', proposedByCharacterId: 'chr_maya_chen' }),
+      makeProposal({
+        id: 'prp_hire_cfo', kind: 'csuite_appointment', title: 'Appoint a chief financial officer', proposedByCharacterId: 'chr_maya_chen',
+        executiveAppointmentTerms: { characterId: 'chr_grace_halloran', executiveRole: 'cfo', annualCompUsd: 400_000 },
+      }),
     ];
 
     const harness = makeContext(2);

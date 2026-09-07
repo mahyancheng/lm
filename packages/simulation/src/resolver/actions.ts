@@ -377,6 +377,8 @@ export function labelFor(intent: ActionIntent): string {
       return `The board matter "${intent.title}"`;
     case 'launch_product':
       return `The launch of ${intent.name}`;
+    case 'cancel_deal':
+      return `Cancelling ${intent.dealId}`;
     default: {
       // Defensive: this also labels an intent the schema gate refused, whose
       // `type` is whatever the sender wrote rather than a member of the union.

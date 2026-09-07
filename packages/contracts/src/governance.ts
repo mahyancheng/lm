@@ -146,6 +146,12 @@ export const BOARD_PROPOSAL_STATUSES = ['draft', 'tabled', 'voted', 'passed', 'f
 export const BoardProposalStatusSchema = z.enum(BOARD_PROPOSAL_STATUSES).describe('Lifecycle of a proposal.');
 export type BoardProposalStatus = z.infer<typeof BoardProposalStatusSchema>;
 
+export const DebtIssueTermsSchema = z.object({
+  amountUsd: z.number().positive(),
+  maxRatePct: z.number().min(0).max(0.5),
+  termQuarters: z.number().int().min(1).max(40),
+});
+
 export const BoardProposalSchema = z
   .object({
     id: z.string().min(1),
@@ -162,6 +168,8 @@ export const BoardProposalSchema = z
     dilutionPct: z.number().min(0).max(1).nullable().describe('Fractional dilution created, or null.'),
     stockComponentPct: z.number().min(0).max(1).nullable().describe('Fraction of consideration paid in stock rather than cash, or null.'),
     targetCompanyId: z.string().nullable().describe('Target of an acquisition or divestiture, or null.'),
+    debtTerms: DebtIssueTermsSchema.optional().describe('Exact debt mandate, executed once after approval.'),
+    debtExecutionQuarter: QuarterIndexSchema.optional(),
     linkedActionId: z.string().nullable().describe('Submitted action this proposal authorises, so a pass executes exactly what was voted on.'),
     requiredThresholdFraction: unitInterval('Fraction of present votes needed, resolved from the board quorum rule at tabling time.'),
   })

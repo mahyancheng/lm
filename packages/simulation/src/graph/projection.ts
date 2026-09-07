@@ -37,7 +37,7 @@
  */
 
 import type { SessionState, NodeSaleKind, Sector } from '@frontier/contracts';
-import { ECONOMIC_NODES, canProduce, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
+import { ECONOMIC_NODES, canProduceInSession, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
 import { createNodeCostCache, lineNodeIdOf, lineNodeOf, unitsSoldLastQuarterOf } from './lines';
 import { resolveFills } from './slots';
 
@@ -145,14 +145,14 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
 
     for (const product of company.products) {
       if (!product.isActive) continue;
-      const nodeId = lineNodeIdOf(product);
+      const nodeId = lineNodeIdOf(product, state);
       if (nodeId === null) continue;
       push(producers, nodeId, company.id);
 
       // Who runs what on whom. The fills are resolved rather than read raw, so a
       // named supplier whose notice has run out, or whose terms have closed, is
       // no longer a relationship — and a slot the company makes itself is one.
-      const node = lineNodeOf(product);
+      const node = lineNodeOf(product, state);
       if (node === undefined) continue;
       const fills = resolveFills(state, company, product, node, cache);
       for (const fill of fills) {
@@ -178,11 +178,18 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
   const yourLines = new Map<string, string>();
   for (const product of viewer?.products ?? []) {
     if (!product.isActive) continue;
-    const nodeId = lineNodeIdOf(product);
+    const nodeId = lineNodeIdOf(product, state);
     if (nodeId !== null && !yourLines.has(nodeId)) yourLines.set(nodeId, product.id);
   }
 
-  const nodes: NodeMapEntry[] = ECONOMIC_NODES.map((node) => ({
+  // Session recipes remain private until their linked invention is public or
+  // achieved by the viewer.  A rival's private proposal therefore cannot leak
+  // merely because the registry is part of canonical session state.
+  const visibleCustom = (state.customEconomicNodes ?? []).filter((node) => {
+    const tech = state.techGraph.nodes.find((entry) => entry.productBlueprint !== undefined && 'nodeId' in entry.productBlueprint && entry.productBlueprint.nodeId === node.id);
+    return tech?.visibility === 'public' || (viewer !== null && holdsNode(viewer, node.id, state.quarter));
+  });
+  const nodes: NodeMapEntry[] = [...ECONOMIC_NODES, ...visibleCustom].map((node) => ({
     nodeId: node.id,
     label: node.label,
     blurb: node.blurb,
@@ -192,7 +199,7 @@ export function nodeMapFor(state: SessionState, viewerCompanyId: string): NodeMa
     saleKind: node.saleKind,
     marketPriceUsd: nodeMarketPriceUsd(state, node.id),
     youOwn: viewer !== null && holdsNode(viewer, node.id, state.quarter),
-    youCanProduce: viewer !== null && canProduce(viewer, node.id, state.quarter),
+    youCanProduce: viewer !== null && canProduceInSession(state, viewer, node.id, state.quarter),
     yourProductId: yourLines.get(node.id) ?? null,
     ownerCompanyIds: owners.get(node.id) ?? [],
     producerCompanyIds: producers.get(node.id) ?? [],

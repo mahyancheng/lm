@@ -755,6 +755,7 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
     // A shade of noise so an issue that sits exactly on the line is not a
     // foregone conclusion; drawn from the phase stream, so it replays.
     const nudge = rng.range(-0.02, 0.02);
+    const placementRate = isNodeEconomyWorld(draft) ? Math.max(0, rate + nudge) : rate;
     const cleared = marketOpen && rate + nudge <= intent.maxRatePct;
 
     if (!cleared) {
@@ -767,7 +768,7 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
         payload: {
           cleared: false,
           soughtUsd: intent.amountUsd,
-          offeredRate: round(rate, 4),
+          offeredRate: round(placementRate, 4),
           maxRatePct: intent.maxRatePct,
           debtAvailability: round(draft.world.capitalMarkets.debtAvailability, 3),
           sizeThreshold: round(sizeThreshold, 3),
@@ -776,7 +777,7 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
       });
       ctx.log({
         phase: 'capital_resolution',
-        text: `${company.name} could not place ${compactUsd(intent.amountUsd)} of debt: lenders wanted ${(rate * 100).toFixed(1)}% against a ceiling of ${(
+        text: isNodeEconomyWorld(draft) && !marketOpen ? `${company.name} could not place ${compactUsd(intent.amountUsd)} of debt: credit availability cannot support this issue size. Try a smaller issue or wait for credit to improve.` : `${company.name} could not place ${compactUsd(intent.amountUsd)} of debt: lenders wanted ${(placementRate * 100).toFixed(1)}% against a ceiling of ${(
           intent.maxRatePct * 100
         ).toFixed(1)}%.`,
         deltaLabel: 'issue pulled',
@@ -787,6 +788,11 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
       continue;
     }
 
+    if (isNodeEconomyWorld(draft)) {
+      company.debtIssues ??= [];
+      company.debtIssues.push({ id: action.actionId, outstandingUsd: intent.amountUsd, annualRatePct: placementRate,
+        principalPerQuarterUsd: intent.amountUsd / intent.termQuarters, issuedQuarter: draft.quarter, maturityQuarter: draft.quarter + intent.termQuarters - 1 });
+    }
     company.financials.cash += intent.amountUsd;
     company.financials.debt += intent.amountUsd;
     company.balanceSheet.assets.cash += intent.amountUsd;
@@ -801,7 +807,7 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
       payload: {
         cleared: true,
         amountUsd: intent.amountUsd,
-        rate: round(rate, 4),
+        rate: round(placementRate, 4),
         termQuarters: intent.termQuarters,
         debtAfter: round(company.financials.debt, 2),
       },
@@ -809,7 +815,7 @@ function resolveDebtIssues(draft: SessionState, ctx: ResolverContext, rng: Seede
     });
     ctx.log({
       phase: 'capital_resolution',
-      text: `${company.name} issued ${compactUsd(intent.amountUsd)} of debt at ${(rate * 100).toFixed(1)}% over ${intent.termQuarters} quarters.`,
+      text: `${company.name} issued ${compactUsd(intent.amountUsd)} of debt at ${(placementRate * 100).toFixed(1)}% over ${intent.termQuarters} quarters.`,
       deltaLabel: `+${compactUsd(intent.amountUsd)} cash`,
       refEventIds: [eventId],
       tone: 'neutral',

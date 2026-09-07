@@ -25,7 +25,8 @@ import { ActiveModifierSchema } from './modifiers';
 import { EventHazardMapSchema, WorldEventSchema } from './events';
 import { CompanySchema, CompanyQuarterMetricsSchema } from './company';
 import { EconomyReportSchema, SECTOR_PRICE_BOUNDS, SECTOR_SHORTAGE_MAX, TOLL_MAX_PCT } from './economy';
-import { NODE_PRICE_BOUNDS } from './nodes';
+import { EconomicNodeSchema, NODE_PRICE_BOUNDS } from './nodes';
+import { ECONOMIC_NODES_BY_ID } from './nodeGraph';
 import { CapTableSchema, FundingRoundSchema, SecuritySchema } from './ownership';
 import { MarketBeliefSchema, MarketInstrumentSchema, PublicDisclosureSchema, QuoteSchema, ValuationAnchorSchema } from './markets';
 import { BoardProposalSchema, BoardSchema, StoredCommitmentSchema } from './governance';
@@ -711,6 +712,14 @@ export const SessionStateSchema = z
     // --- technology ---
     techGraph: TechGraphSchema,
     researchProjects: z.array(ResearchProjectSchema).default([]).describe('Canonical private reality of every research programme, secret ones included.'),
+    customEconomicNodes: z.array(EconomicNodeSchema).max(120).superRefine((nodes, ctx) => {
+      const seen = new Set<string>();
+      for (const node of nodes) {
+        if (seen.has(node.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate custom economic node: ${node.id}` });
+        if (ECONOMIC_NODES_BY_ID[node.id] !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `custom economic node collides with catalogue id: ${node.id}` });
+        seen.add(node.id);
+      }
+    }).optional().describe('World 3 only: session-local, engine-validated product recipes discovered through research. Absent in legacy worlds and old saves.'),
 
     // --- people ---
     characters: z.array(CharacterSchema).default([]),

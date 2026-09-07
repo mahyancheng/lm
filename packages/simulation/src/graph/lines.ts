@@ -26,7 +26,10 @@ import {
   ECONOMIC_NODES,
   ECONOMIC_NODES_BY_ID,
   canProduce,
+  canProduceInSession,
   economicNodeById,
+  economicNodeInSession,
+  economicNodesInSession,
   holdsNode,
   nodeMarketPriceUsd,
   type CapacityKind,
@@ -56,10 +59,10 @@ import { lineUnitCostUsd } from './cost';
  * that is not in the table is treated as absent rather than trusted: a save
  * written against an older table must not be able to invent a node.
  */
-export function lineNodeIdOf(product: Product): string | null {
+export function lineNodeIdOf(product: Product, state?: Pick<SessionState, 'customEconomicNodes'>): string | null {
   const nodeId = product.nodeId;
   if (nodeId === undefined || nodeId === null) return null;
-  return ECONOMIC_NODES_BY_ID[nodeId] === undefined ? null : nodeId;
+  return economicNodeInSession(state, nodeId) === undefined ? null : nodeId;
 }
 
 /**
@@ -109,9 +112,9 @@ export function productOf(state: SessionState, companyId: string, productId: str
 }
 
 /** The node a line sells, or undefined. */
-export function lineNodeOf(product: Product): EconomicNode | undefined {
-  const nodeId = lineNodeIdOf(product);
-  return nodeId === null ? undefined : economicNodeById(nodeId);
+export function lineNodeOf(product: Product, state?: SessionState): EconomicNode | undefined {
+  const nodeId = lineNodeIdOf(product, state);
+  return nodeId === null ? undefined : economicNodeInSession(state, nodeId);
 }
 
 /**
@@ -129,7 +132,7 @@ export function nodeLinesOf(state: SessionState): readonly NodeLineRef[] {
     if (!company.isActive) continue;
     for (const product of company.products) {
       if (!product.isActive) continue;
-      const nodeId = lineNodeIdOf(product);
+      const nodeId = lineNodeIdOf(product, state);
       if (nodeId === null) continue;
       lines.push({
         companyId: company.id,
@@ -222,7 +225,7 @@ export function linesOf(state: SessionState, companyId: string, nodeId: string, 
   const out: NodeLineRef[] = [];
   for (const product of company.products) {
     if (!product.isActive) continue;
-    if (lineNodeIdOf(product) !== nodeId) continue;
+    if (lineNodeIdOf(product, state) !== nodeId) continue;
     out.push({
       companyId,
       productId: product.id,
@@ -301,30 +304,28 @@ export interface LaunchableNode {
 /**
  * Every node this company could sell, open now or gated on ownership.
  *
- * The list is its own sector plus anything it already owns, which is exactly
- * the owner's sentence made visible: *"I'm an AI lab, I shouldn't start with
- * having techs of robotics. I can purchase or invest but I don't start with
- * it."* A robotics node is absent from an AI laboratory's list until the
- * laboratory owns one, and then it is there.
+ * The list contains the whole visible catalogue. Foreign-sector nodes remain
+ * visible as locked opportunities, so a founder can see what to research,
+ * licence, or buy; visibility never implies free production.
  *
  * `locked` runs the identical `canProduce` test the validator's world-3
  * `launch_product` rule does, so a row marked open here is a row the validator
  * actually accepts. Pure and total.
  */
 export function launchableNodes(state: SessionState, company: Company): readonly LaunchableNode[] {
-  const owned = new Set(company.ownedNodes ?? []);
-  const sector = company.sector;
   const lineNodeIds = new Set<string>();
   for (const product of company.products) {
     if (!product.isActive) continue;
-    const nodeId = lineNodeIdOf(product);
+    const nodeId = lineNodeIdOf(product, state);
     if (nodeId !== null) lineNodeIds.add(nodeId);
   }
-  return ECONOMIC_NODES.filter((node) => node.sector === sector || owned.has(node.id)).map((node) => {
+  // A private recipe becomes actionable only for its owner.  Do not put an
+  // unproven rival thesis in this generic launch list.
+  return economicNodesInSession(state).filter((node) => !node.id.startsWith('app_custom_') || holdsNode(company, node.id, state.quarter)).map((node) => {
     const missingNodeIds = [node.id, ...node.requires].filter((id) => !holdsNode(company, id, state.quarter));
     return {
       node,
-      locked: !canProduce(company, node.id, state.quarter),
+      locked: !canProduceInSession(state, company, node.id, state.quarter),
       missingNodeIds,
       alreadySold: lineNodeIds.has(node.id),
     };

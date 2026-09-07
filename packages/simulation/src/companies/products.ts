@@ -43,7 +43,9 @@ import {
   resolveCategory,
   undercutFraction,
   canProduce,
+  canProduceInSession,
   economicNodeById,
+  economicNodeInSession,
   nodeMarketPriceUsd,
   primaryCustomerOf,
 } from '@frontier/contracts';
@@ -554,7 +556,7 @@ export function resolveProducts(draft: SessionState, ctx: ResolverContext): void
     resolveNodeProduction(draft, ctx, stagedLineInputs(companies, staged));
     for (const company of companies) {
       for (const product of activeProducts(company)) {
-        if (lineNodeIdOf(product) !== null) continue;
+        if (lineNodeIdOf(product, draft) !== null) continue;
         product.unitsSoldQuarterly = count(product.activeCustomers);
       }
     }
@@ -646,8 +648,8 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       // intent is read as a node id, which is unambiguous because the two id
       // spaces are disjoint (every node carries a res_/mat_/cmp_/sys_/svc_/
       // app_/dat_ prefix).
-      const nodeId = isNodeEconomyWorld(draft) ? launchNodeIdFor(company, intent.categoryId ?? null, intent.segment) : null;
-      const node = nodeId === null ? undefined : economicNodeById(nodeId);
+      const nodeId = isNodeEconomyWorld(draft) ? launchNodeIdFor(draft, company, intent.categoryId ?? null, intent.segment) : null;
+      const node = nodeId === null ? undefined : economicNodeInSession(draft, nodeId);
       const category = multiSector && nodeId === null ? resolveCategory(intent.categoryId, company.sector, intent.segment) : null;
       const product: Product = {
         id,
@@ -665,6 +667,7 @@ function applyProductActions(draft: SessionState, ctx: ResolverContext, company:
       };
       if (node !== undefined) {
         product.nodeId = node.id;
+        if (intent.technologyNodeId !== undefined) product.technologyNodeId = intent.technologyNodeId;
         // The world-3 readings of the two world-2 levers. `qualityTier` is one
         // lever with both consequences: it scales the capacity a unit draws and
         // the quality delivered by the same factor, so a higher tier costs real
@@ -889,13 +892,13 @@ export function resolveCompositionOrders(draft: SessionState, ctx: ResolverConte
  * report says which. Null only when the company owns nothing at all, which the
  * scenario rules out.
  */
-export function launchNodeIdFor(company: Company, requestedId: string | null, segment: ProductSegment): string | null {
-  if (requestedId !== null && economicNodeById(requestedId) !== undefined && canProduce(company, requestedId)) return requestedId;
-  const owned = (company.ownedNodes ?? []).filter((id) => canProduce(company, id));
+export function launchNodeIdFor(state: SessionState, company: Company, requestedId: string | null, segment: ProductSegment): string | null {
+  if (requestedId !== null && economicNodeInSession(state, requestedId) !== undefined && canProduceInSession(state, company, requestedId, state.quarter)) return requestedId;
+  const owned = (company.ownedNodes ?? []).filter((id) => canProduceInSession(state, company, id, state.quarter));
   let best: string | null = null;
   let bestTier = -1;
   for (const id of owned) {
-    const node = economicNodeById(id);
+    const node = economicNodeInSession(state, id);
     if (node === undefined) continue;
     if (primaryCustomerOf(node) !== segment) continue;
     if (node.tier > bestTier) {
@@ -906,7 +909,7 @@ export function launchNodeIdFor(company: Company, requestedId: string | null, se
   if (best !== null) return best;
   // Nothing sells into that segment: the highest-tier thing they can make.
   for (const id of owned) {
-    const node = economicNodeById(id);
+    const node = economicNodeInSession(state, id);
     if (node === undefined) continue;
     if (node.tier > bestTier) {
       best = id;
@@ -1190,7 +1193,7 @@ export function unclampedGrossMargin(draft: SessionState, product: Product): num
   // produced and the profit and loss booked, against the price actually
   // charged. The compute-only formula below it survives only for worlds 1 and
   // 2, which are frozen and must keep hashing to what they always hashed to.
-  if (isNodeEconomyWorld(draft) && lineNodeIdOf(product) !== null) {
+  if (isNodeEconomyWorld(draft) && lineNodeIdOf(product, draft) !== null) {
     const unitCost = product.unitCostUsd ?? 0;
     if (!(product.pricePerSeat > 0)) return 0;
     return 1 - unitCost / product.pricePerSeat;
@@ -1248,7 +1251,7 @@ function resolvePredation(draft: SessionState, ctx: ResolverContext): PressureMa
       // across all six sectors — about $21,000 for enterprise — so judging a
       // wafer fab's undercut against it was never a statement about the wafer
       // market.
-      const nodeId = nodeEconomy ? lineNodeIdOf(product) : null;
+      const nodeId = nodeEconomy ? lineNodeIdOf(product, draft) : null;
       const reference = nodeId === null ? segmentOf(segment) : nodeMarketPriceUsd(draft, nodeId);
       const undercut = undercutFraction(product.pricePerSeat, reference);
       const margin = unclampedGrossMargin(draft, product);

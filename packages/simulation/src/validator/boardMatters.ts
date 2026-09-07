@@ -227,11 +227,14 @@ export function boardMatterFor(intent: ActionIntent, company: Company): BoardMat
  * to be asked again in the same breath. `linkedActionId` narrows it further when
  * the proposal was tabled for one specific action.
  */
-export function authorisedByBoard(draft: SessionState, companyId: string, kind: BoardProposalKind): boolean {
+export function authorisedByBoard(draft: SessionState, companyId: string, kind: BoardProposalKind, requestedIntent?: ActionIntent): boolean {
   for (const proposal of draft.boardProposals) {
     if (proposal.companyId !== companyId || proposal.kind !== kind) continue;
     if (proposal.status !== 'passed') continue;
     if (draft.quarter - proposal.decisionQuarter > BOARD_AUTHORISATION_WINDOW_QUARTERS) continue;
+    // A debt mandate is an exact one-time authorization, not a generic
+    // financing blanket for equity or another financing action.
+    if (proposal.debtTerms !== undefined && requestedIntent?.type !== 'issue_debt') continue;
     return true;
   }
   return false;

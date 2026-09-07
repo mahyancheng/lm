@@ -2831,6 +2831,36 @@ export const ECONOMIC_NODES: readonly EconomicNode[] = withDerivedMarkets([
 /** Lookup by id. Total for a known id; undefined for anything else. */
 export const ECONOMIC_NODES_BY_ID: Readonly<Record<string, EconomicNode>> = Object.fromEntries(ECONOMIC_NODES.map((entry) => [entry.id, entry]));
 
+/** Resolve a node from the immutable catalogue or a validated session recipe. */
+export function economicNodeInSession(
+  session: { readonly customEconomicNodes?: readonly EconomicNode[] } | null | undefined,
+  nodeId: string,
+): EconomicNode | undefined {
+  // The shipped catalogue is immutable and always wins. A save or model
+  // proposal must never shadow a canonical recipe by reusing its id.
+  return ECONOMIC_NODES_BY_ID[nodeId] ?? session?.customEconomicNodes?.find((node) => node.id === nodeId);
+}
+
+/** The immutable catalogue followed by this session's validated recipes. */
+export function economicNodesInSession(
+  session: { readonly customEconomicNodes?: readonly EconomicNode[] } | null | undefined,
+): readonly EconomicNode[] {
+  return [...ECONOMIC_NODES, ...(session?.customEconomicNodes ?? [])];
+}
+
+/** Session-aware ownership gate. Custom recipes live only on their session. */
+export function canProduceInSession(
+  session: { readonly customEconomicNodes?: readonly EconomicNode[]; readonly quarter?: number } | null | undefined,
+  company: { readonly ownedNodes?: readonly string[]; readonly licences?: readonly { nodeId: string; expiryQuarter: number }[] },
+  nodeId: string,
+  quarter = session?.quarter ?? 0,
+): boolean {
+  const node = economicNodeInSession(session, nodeId);
+  if (node === undefined) return false;
+  const holds = (id: string) => company.ownedNodes?.includes(id) === true || company.licences?.some((licence) => licence.nodeId === id && licence.expiryQuarter > quarter) === true;
+  return holds(nodeId) && node.requires.every(holds);
+}
+
 /** The table indexed as a map, in table order, for the slot readers that take one. */
 const NODE_INDEX: ReadonlyMap<string, EconomicNode> = indexNodes(ECONOMIC_NODES);
 
@@ -2897,8 +2927,8 @@ export const ECONOMIC_NODE_SECTORS = SECTORS;
  * unknown id answers 0 rather than throwing: a corrupt save must not take a
  * quarter down.
  */
-export function nodeMarketPriceUsd(state: NodePricedState, nodeId: string): number {
-  const node = ECONOMIC_NODES_BY_ID[nodeId];
+export function nodeMarketPriceUsd(state: NodePricedState & { readonly customEconomicNodes?: readonly EconomicNode[] }, nodeId: string): number {
+  const node = economicNodeInSession(state, nodeId);
   if (node === undefined) return 0;
   return nodePriceUsd(node, nodePriceIndex(state, nodeId));
 }

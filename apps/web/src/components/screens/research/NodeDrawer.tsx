@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { ActionIntent, ActionValidationResult, Company, PublicationMode, ResearchProject, SessionState, TechGraph, TechNode } from '@frontier/contracts';
-import { categoryById, economicNodeById, nodeMarketPriceUsd, quarterLabel } from '@frontier/contracts';
+import { canProduceInSession, categoryById, economicNodeInSession, holdsNode, nodeMarketPriceUsd, productBlueprintNodeId, quarterLabel } from '@frontier/contracts';
 import {
   RESEARCH_EFFORTS,
   costBreakdown,
@@ -249,7 +249,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
   // exists — rather than anything computed here.
   const nodeEconomy = useMemo(() => {
     if (node === null || !isNodeEconomyWorld(session)) return null;
-    const economic = economicNodeById(node.id);
+    const economic = economicNodeInSession(session, node.id);
     if (economic === undefined) return null;
     const cost = unitCostOf(session, company, economic.id);
     const rows = costBreakdown(cost);
@@ -286,6 +286,30 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
           </div>
 
           <p className="text-[12.5px] leading-relaxed text-ink-dim">{node.summary}</p>
+
+          {node.productBlueprint !== undefined ? (() => {
+            const productNodeId = productBlueprintNodeId(node.productBlueprint);
+            const product = productNodeId === undefined ? undefined : economicNodeInSession(session, productNodeId);
+            // Owning the research and recipe is enough to open Products. The
+            // launch flow names any missing inputs and the routes to them.
+            const canOpenLaunch = product !== undefined && holdsNode(company, node.id, session.quarter) && holdsNode(company, product.id, session.quarter);
+            const canProduce = product !== undefined && canProduceInSession(session, company, product.id, session.quarter);
+            return (
+              <div className="rounded-card border border-brand/25 bg-brand-wash px-3.5 py-3">
+                <p className="label-caps-faint">Product unlocked on successful research</p>
+                <p className="mt-1 text-[12.5px] font-semibold text-ink">{product?.label ?? ('recipe' in node.productBlueprint ? node.productBlueprint.recipe.label : productNodeId)}</p>
+                <p className="mt-1 text-[11.5px] leading-snug text-ink-dim">{node.productBlueprint.customerValue}</p>
+                {canOpenLaunch ? (
+                  <Link href={sheetHref('products')} onClick={() => setPendingLaunchCategory(product.id)} className="btn btn-primary tap-target mt-2">
+                    Open a line on it
+                  </Link>
+                ) : (
+                  <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">Research must succeed before this invention can be selected behind a launch.</p>
+                )}
+                {!canOpenLaunch || canProduce ? null : <p className="mt-1.5 text-[11px] leading-snug tone-warn">Its recipe is yours. The launch flow will show the missing inputs and the available ways to get them.</p>}
+              </div>
+            );
+          })() : null}
 
           {/* --- 0. world 3: what owning this would mean --------------------- */}
           {nodeEconomy === null ? null : (

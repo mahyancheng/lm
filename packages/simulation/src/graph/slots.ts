@@ -41,7 +41,7 @@
  */
 
 import type { Company, EconomicNode, NodeCostCache, NodeSlot, Product, ProductSegment, ProductSlotFill, SessionState } from '@frontier/contracts';
-import { ECONOMIC_NODES_BY_ID, SECTORS, admissibleNodesFor, type Sector } from '@frontier/contracts';
+import { ECONOMIC_NODES_BY_ID, SECTORS, admissibleNodesFor, economicNodeInSession, type Sector } from '@frontier/contracts';
 import { lineOf, ownedNodeIdsOf, producersOf } from './lines';
 
 /* -------------------------------------------------------------------------- */
@@ -157,6 +157,10 @@ const ADMISSIBLE_MEMO = new Map<string, ReadonlySet<string>>();
 
 /** The set of node ids a slot admits. */
 export function admissibleSetFor(node: EconomicNode, slot: NodeSlot): ReadonlySet<string> {
+  // Dynamic recipes are terminal nodes with explicitly named catalogue
+  // ingredients. They are not in the immutable table used by
+  // `admissibleNodesFor`, so read that declarative list directly.
+  if (node.id.startsWith('app_custom_')) return new Set(slot.accepts);
   const key = `${node.id}.${slot.id}`;
   const memo = ADMISSIBLE_MEMO.get(key);
   if (memo !== undefined) return memo;
@@ -224,7 +228,7 @@ export function resolveFill(
 
   /* --- 2 and 3: the node, bounds-checked against the table ----------------- */
   let nodeId: string | null = fill === null ? slot.defaultNodeId : fill.nodeId;
-  if (nodeId !== null && (ECONOMIC_NODES_BY_ID[nodeId] === undefined || !slotAdmits(node, slot, nodeId))) nodeId = slot.defaultNodeId;
+  if (nodeId !== null && (economicNodeInSession(state, nodeId) === undefined || !slotAdmits(node, slot, nodeId))) nodeId = slot.defaultNodeId;
   // A required slot cannot be left empty: a null fill on one reads as the default.
   if (nodeId === null && slot.required) nodeId = slot.defaultNodeId;
   if (nodeId === null) return empty();

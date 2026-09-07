@@ -22,6 +22,7 @@ import type {
   Company,
   DealConfidentiality,
   DealObligation,
+  DealProposalDraft,
   DealPartyKind,
   VoteStance,
 } from '@frontier/contracts';
@@ -30,6 +31,7 @@ import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
 import { CashAfter, ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { AccordFields, type AccordContext } from './AccordFields';
+import { canExecuteNegotiatedDraft } from '../network/negotiation';
 import {
   OBLIGATION_HINTS,
   BUILDABLE_OBLIGATION_KINDS,
@@ -50,6 +52,7 @@ export interface CounterpartyOption extends NamedOption {
 }
 
 export interface DealBuilderProps {
+  readonly initialDraft?: DealProposalDraft;
   readonly counterparties: readonly CounterpartyOption[];
   readonly securities: readonly NamedOption[];
   readonly opportunities: readonly NamedOption[];
@@ -60,6 +63,8 @@ export interface DealBuilderProps {
   /** Uncommitted cash, so a cash obligation can be read against it. */
   /** The proposing company: the builder reads its cash and its solvency clock. */
   readonly company: Company;
+  /** Chat-launched offers are limited to obligations with a resolver path. */
+  readonly negotiationOnly?: boolean;
   /**
    * What a price accord needs to know about the sector it would cover.
    *
@@ -73,6 +78,7 @@ export interface DealBuilderProps {
 type Side = 'gives' | 'gets';
 
 export function DealBuilder({
+  initialDraft,
   counterparties,
   securities,
   opportunities,
@@ -82,18 +88,19 @@ export function DealBuilder({
   accord,
   startYear,
   company,
+  negotiationOnly = false,
 }: DealBuilderProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
 
   const first = counterparties[0];
-  const [counterpartyId, setCounterpartyId] = useState(first?.id ?? '');
-  const [gives, setGives] = useState<DealObligation[]>([]);
-  const [gets, setGets] = useState<DealObligation[]>([]);
-  const [binding, setBinding] = useState(true);
-  const [confidentiality, setConfidentiality] = useState<DealConfidentiality>('private');
-  const [expires, setExpires] = useState(quarter + 2);
-  const [summary, setSummary] = useState('');
-  const [statements, setStatements] = useState('');
+  const [counterpartyId, setCounterpartyId] = useState(initialDraft?.counterpartyId ?? first?.id ?? '');
+  const [gives, setGives] = useState<DealObligation[]>(initialDraft?.gives ?? []);
+  const [gets, setGets] = useState<DealObligation[]>(initialDraft?.gets ?? []);
+  const [binding, setBinding] = useState(initialDraft?.binding ?? true);
+  const [confidentiality, setConfidentiality] = useState<DealConfidentiality>(initialDraft?.confidentiality ?? 'private');
+  const [expires, setExpires] = useState(initialDraft?.expiresQuarter ?? quarter + 2);
+  const [summary, setSummary] = useState(initialDraft?.summary ?? '');
+  const [statements, setStatements] = useState(initialDraft?.intentStatements.join('\n') ?? '');
   const [result, setResult] = useState<ActionValidationResult | null>(null);
   const [pending, setPending] = useState<ActionIntent | null>(null);
   const [queued, setQueued] = useState(false);
@@ -106,6 +113,18 @@ export function DealBuilder({
     .slice(0, 4);
 
   const ready = counterparty !== null && summary.trim().length >= 10 && gives.length + gets.length > 0;
+  const bindingSupported = !negotiationOnly || canExecuteNegotiatedDraft({
+    counterpartyId: counterpartyId || 'pending',
+    counterpartyKind: counterparty?.kind ?? 'company',
+    gives,
+    gets,
+    confidentiality,
+    expiresQuarter: expires,
+    binding: true,
+    intentStatements,
+    summary: summary.trim() || 'pending terms',
+  });
+  const effectiveBinding = binding && bindingSupported;
 
   const intent: ActionIntent | null = useMemo(() => {
     if (counterparty === null) return null;
@@ -118,14 +137,14 @@ export function DealBuilder({
         gets,
         confidentiality,
         expiresQuarter: expires,
-        binding,
+        binding: effectiveBinding,
         intentStatements,
         summary: summary.trim(),
       },
     };
     // `intentStatements` is derived from `statements` each render; listing the
     // source keeps the memo honest without re-deriving on every keystroke.
-  }, [counterparty, gives, gets, confidentiality, expires, binding, summary, statements]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [counterparty, gives, gets, confidentiality, expires, effectiveBinding, summary, statements, negotiationOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function check(): void {
     if (intent === null || !ready) return;
@@ -178,13 +197,13 @@ export function DealBuilder({
       <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
         <button
           type="button"
-          className={cx('btn btn-sm tap-target w-full sm:w-auto sm:min-h-0', binding ? 'btn-primary' : '')}
+          className={cx('btn btn-sm tap-target w-full sm:w-auto sm:min-h-0', effectiveBinding ? 'btn-primary' : '')}
           onClick={() => {
-            setBinding((value) => !value);
+            setBinding((value) => value ? false : bindingSupported);
             setResult(null);
           }}
         >
-          {binding ? 'Binding' : 'Non-binding'}
+          {effectiveBinding ? 'Binding' : 'Non-binding'}
         </button>
         <button
           type="button"
@@ -197,9 +216,11 @@ export function DealBuilder({
           {confidentiality === 'public' ? 'Announced publicly' : 'Confidential'}
         </button>
         <span className="col-span-2 text-[12px] leading-relaxed text-ink-faint sm:col-span-1 sm:text-[10px]">
-          {binding
+          {effectiveBinding
             ? 'Obligations are enforced every quarter; failing to deliver is a breach with permanent consequences.'
-            : 'Nothing is enforced. The whole agreement is a recorded statement of intent.'}
+            : binding && !bindingSupported
+              ? 'These terms are recorded as intent only until every obligation has a deterministic settlement rule.'
+              : 'Nothing is enforced. The whole agreement is a recorded statement of intent.'}
         </span>
       </div>
 
@@ -300,7 +321,7 @@ export function DealBuilder({
             <Icon name="import" size={13} accent="current" />
             {gets.length} received
           </span>
-          <Tag tone={binding ? 'info' : 'warn'}>{binding ? 'binding' : 'intent only'}</Tag>
+          <Tag tone={effectiveBinding ? 'info' : 'warn'}>{effectiveBinding ? 'binding' : 'intent only'}</Tag>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 lg:mt-0 lg:flex lg:flex-wrap lg:items-center">
           <button type="button" className="btn btn-sm tap-target w-full lg:w-auto lg:min-h-0" onClick={check} disabled={!ready}>
@@ -332,7 +353,7 @@ export function DealBuilder({
           { label: 'To', value: counterparty?.label ?? '—' },
           { label: 'You give', value: gives.map(describeObligation).join(' · ') || 'nothing' },
           { label: 'You get', value: gets.map(describeObligation).join(' · ') || 'nothing', emphasis: true },
-          { label: 'Binding', value: binding ? 'Yes' : 'No — statement of intent' },
+          { label: 'Binding', value: effectiveBinding ? 'Yes' : 'No — statement of intent' },
           { label: 'Lapses', value: quarterLabel(startYear, expires) },
         ]}
         confirmLabel="Queue the offer"
@@ -341,7 +362,7 @@ export function DealBuilder({
           if (pending !== null) {
             const outcome = queueAction(pending, { confirmed: true });
             setResult(outcome.validation);
-            setQueued(true);
+            setQueued(outcome.validation.status !== 'rejected');
           }
           setPending(null);
         }}

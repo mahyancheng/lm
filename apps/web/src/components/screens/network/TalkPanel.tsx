@@ -22,9 +22,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { Character, CharacterUtteranceContext, Memory, Relationship, SessionState } from '@frontier/contracts';
+import type { Character, CharacterUtteranceContext, DealProposalDraft, Memory, Relationship, SessionState } from '@frontier/contracts';
 import { Icon, SectionHeading, Tag, cx } from '@/components/ui';
-import { PLAYER_ID } from '@/lib/game';
+import { DealBuilder } from '../deal-room/DealBuilder';
+import { negotiationDraft, negotiationFacts } from './negotiation';
+import { PLAYER_ID, useActiveCompany, usePlayerView } from '@/lib/game';
 import { requestCharacterReply } from '@/lib/llm/client';
 import { offlineReply, publicFactsFor, type DialogueTurn } from './actions';
 
@@ -61,6 +63,15 @@ export function TalkPanel({
   theirMemories,
   accessBasis,
 }: TalkPanelProps): React.JSX.Element {
+  const company = useActiveCompany();
+  const view = usePlayerView();
+  const counterparty = view.visibleCompanies.find((entry) => entry.id === target.companyId && entry.id !== company.id && entry.isActive !== false);
+  const [deal, setDeal] = useState<DealProposalDraft | undefined>();
+  const [showDeal, setShowDeal] = useState(false);
+  const [dealRevision, setDealRevision] = useState(0);
+  const scope = `${session.sessionId}:${session.quarter}:${company.id}:${target.id}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const [turns, setTurns] = useState<readonly DialogueTurn[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -70,10 +81,13 @@ export function TalkPanel({
   // A new person is a new thread. The drawer keys this panel on the character
   // id as well, so this only fires when the same mounted panel changes subject.
   useEffect(() => {
+    setDeal(undefined);
+    setShowDeal(false);
+    setSending(false);
     setTurns([]);
     setDraft('');
     setOffline(false);
-  }, [target.id]);
+  }, [scope]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'nearest' });
@@ -94,7 +108,7 @@ export function TalkPanel({
       counterpartRelationship: outbound,
       memories: theirMemories.slice(0, 6),
       topic: message.slice(0, 200),
-      gameFacts: publicFactsFor(session, target),
+      gameFacts: negotiationFacts(session, target, company, view.techGraph, counterparty?.id),
       conversationHistory: history.map((turn) => ({ speakerId: turn.speakerId, text: turn.text.slice(0, 600) })),
       accessBasis,
       pendingProposalSummary: null,
@@ -107,6 +121,11 @@ export function TalkPanel({
         playerId: PLAYER_ID,
         conversationId: target.id,
       });
+      if (scopeRef.current !== scope) return;
+      const offered = negotiationDraft(result?.dealDraft, counterparty?.id, session.quarter, company.id);
+      setDeal(offered);
+      setShowDeal(offered !== undefined);
+      setDealRevision((value) => value + 1);
       reply = result?.text ?? null;
     } catch {
       // The client never throws at a screen. A model failure is a degraded
@@ -114,6 +133,7 @@ export function TalkPanel({
       reply = null;
     }
 
+    if (scopeRef.current !== scope) return;
     const spoken = reply ?? offlineReply(target, inbound?.trust ?? null, inbound?.hostility ?? null, message.slice(0, 120));
     setOffline(reply === null);
     setTurns((current) => [...current, { speakerId: target.id, text: spoken }].slice(-MAX_TURNS));
@@ -126,8 +146,7 @@ export function TalkPanel({
 
       {turns.length === 0 ? (
         <p className="mt-2 text-[12.5px] leading-relaxed text-ink-dim">
-          {target.name} answers from their traits, their standing and what they remember about you. Nothing said here moves a number: a
-          conversation produces words, and sometimes a commitment you then act on.
+          {target.name} answers from their traits, their standing and what they remember about you. Negotiate concrete terms, then review and queue an offer below. The other company decides whether to accept during quarter resolution.
         </p>
       ) : (
         <ul className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">
@@ -193,6 +212,20 @@ export function TalkPanel({
         </button>
       </div>
 
+      {counterparty?.id ? <div className="mt-3">
+        <button type="button" className="btn tap-target" onClick={() => setShowDeal((value) => !value)}>{showDeal ? 'Hide offer' : 'Build an offer'}</button>
+        {showDeal ? <div className="mt-3">
+          <SectionHeading rule>{deal ? 'Review negotiated terms' : 'Propose a deal'}</SectionHeading>
+          <p className="my-2 text-xs text-ink-dim">Binding cash-only deals settle in the quarter after acceptance. Technology licences settle on signing with the canonical fee plus any bilateral cash in the same bundle. Include the technology, fee, royalty and duration; other terms are recorded as non-binding intent. Track responses in Deal Room.</p>
+          <DealBuilder key={`${scope}:${dealRevision}`} initialDraft={deal}
+            counterparties={[{ id: counterparty.id, label: counterparty.name ?? counterparty.id, kind: 'company' }]}
+            securities={session.securities.filter((security) => security.companyId === company.id || view.visibleCompanies.some((entry) => entry.id === security.companyId && entry.isPublic)).map((security) => ({ id: security.id, label: security.symbol ?? security.id }))}
+            opportunities={view.opportunities.filter((entry) => entry.status === 'open').map((entry) => ({ id: entry.id, label: entry.programme }))}
+            techNodes={view.techGraph.nodes.map((node) => ({ id: node.id, label: node.title }))}
+            products={company.products.map((product) => ({ id: product.id, label: product.name }))}
+            quarter={session.quarter} startYear={session.startYear} company={company} negotiationOnly />
+        </div> : null}
+      </div> : null}
       {offline && turns.length > 0 ? (
         <div className="mt-1.5">
           <Tag tone="neutral">Deterministic reply — no model available</Tag>

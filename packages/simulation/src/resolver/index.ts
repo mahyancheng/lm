@@ -72,6 +72,7 @@ import {
   applyResearchAbandonments,
   applyResearchAdjustments,
   ensureBoardProposals,
+  executeApprovedDebt,
   ensureGovernmentBids,
   ensureResearchProjects,
   ensureSocialPosts,
@@ -283,6 +284,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             ensureBoardProposals(draft, ctx);
             subsystems.boards.applyCommitments(draft, ctx);
             subsystems.boards.resolveProposals(draft, ctx);
+            executeApprovedDebt(draft);
             break;
 
           case 'capital_resolution':

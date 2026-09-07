@@ -41,7 +41,7 @@
  */
 
 import type { Company, ResearchProject, ResolverContext, SessionState, TechNode } from '@frontier/contracts';
-import { ECONOMIC_NODES_BY_ID, economicNodeById, holdsNode, requiresClosure } from '@frontier/contracts';
+import { ECONOMIC_NODES_BY_ID, economicNodeById, economicNodeInSession, holdsNode, productBlueprintNodeId, requiresClosure } from '@frontier/contracts';
 import { stateAfterFirstAchievement } from '../graph/techGraph';
 import { lineNodeIdOf } from '../graph/lines';
 import { UNLOCK_CONFIDENCE_GAIN } from './balance';
@@ -73,14 +73,14 @@ export const ABANDON_REPUTATION_COST = 2;
 
 /** Nodes this programme's target requires that the company does not hold. */
 export function unheldRequirements(draft: SessionState, company: Company, nodeId: string): readonly string[] {
-  const node = economicNodeById(nodeId);
+  const node = economicNodeInSession(draft, nodeId);
   const dependencies = node?.requires ?? draft.techGraph.nodes.find((entry) => entry.id === nodeId)?.dependencies ?? [];
   return dependencies.filter((required) => !holdsNode(company, required, draft.quarter));
 }
 
 /** The plain-words name of a node, for a report line. Falls back to the id. */
-function nameOf(nodeId: string): string {
-  return ECONOMIC_NODES_BY_ID[nodeId]?.label ?? nodeId;
+function nameOf(draft: SessionState, nodeId: string): string {
+  return economicNodeInSession(draft, nodeId)?.label ?? nodeId;
 }
 
 /**
@@ -109,7 +109,7 @@ export function pauseIfUnheld(draft: SessionState, ctx: ResolverContext, project
   if (!project.isSecret) {
     ctx.log({
       phase: 'research_resolution',
-      text: `${node.title} is paused: ${missing.map(nameOf).join(', ')} is no longer yours to build on, so the programme stops spending until it is. Resume it by owning or licensing that again, or close it.`,
+      text: `${node.title} is paused: ${missing.map((id) => nameOf(draft, id)).join(', ')} is no longer yours to build on, so the programme stops spending until it is. Resume it by owning or licensing that again, or close it.`,
       deltaLabel: 'paused',
       refEventIds: [eventId],
       tone: 'warning',
@@ -187,7 +187,13 @@ export function achieveOwnedNodes(draft: SessionState, ctx: ResolverContext): vo
     node.confidenceByCompany[project.companyId] = 1;
 
     const granted = grantOwnership(company, project.targetNodeId);
-    const improvedLines = improveLinesOnAchievement(company, project.targetNodeId);
+    const productNode = node.productBlueprint === undefined || productBlueprintNodeId(node.productBlueprint) === undefined ? undefined : economicNodeInSession(draft, productBlueprintNodeId(node.productBlueprint)!);
+    if (productNode?.researchable && grantOwnership(company, productNode.id)) {
+      emitEvent(draft, ctx, 'node_owned', company.id, productNode.id, {
+        nodeId: productNode.id, technologyNodeId: node.id, projectId: project.id, ownershipGranted: true,
+      }, project.isSecret ? 'private' : 'public');
+    }
+    const improvedLines = improveLinesOnAchievement(company, project.targetNodeId) + (productNode === undefined ? 0 : improveLinesOnAchievement(company, productNode.id));
     const gains = applyCapabilityGain(draft, project, node);
     const unlocks = unlockTargets(draft, node);
     graphChanged = true;

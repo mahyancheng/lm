@@ -29,7 +29,7 @@
  */
 
 import type { Company, EconomicNode, NodeCostCache, NodeSlot, NodeSlotKind, NodeRole, SessionState, UnitCostResult } from '@frontier/contracts';
-import { ECONOMIC_NODES_BY_ID, admissibleNodesFor, canProduce, economicNodeById, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
+import { ECONOMIC_NODES_BY_ID, admissibleNodesFor, canProduce, economicNodeById, economicNodeInSession, holdsNode, nodeMarketPriceUsd } from '@frontier/contracts';
 import { OPEN_MARKET_PREMIUM, namedSupplierPriceUsd, openMarketPriceUsd, unitCostOf } from './cost';
 import { lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf, unitsSoldLastQuarterOf } from './lines';
 import { dataSelfSupplyShare } from './data';
@@ -180,7 +180,7 @@ export function slotOptions(
   productId: string | null = null,
   cache?: NodeCostCache,
 ): readonly NodeSlotOptions[] {
-  const node = economicNodeById(nodeId);
+  const node = economicNodeInSession(state, nodeId);
   if (node === undefined) return [];
 
   const product = productId === null ? null : (company.products.find((candidate) => candidate.id === productId) ?? null);
@@ -193,7 +193,9 @@ export function slotOptions(
 
   return node.slots.map((slot) => {
     const fill = resolveFill(state, company, product, node, slot, cache);
-    const admissible = admissibleNodesFor(node.id, slot.id);
+    const admissible = node.id.startsWith('app_custom_')
+      ? slot.accepts.map((id) => economicNodeInSession(state, id)).filter((candidate): candidate is EconomicNode => candidate !== undefined)
+      : admissibleNodesFor(node.id, slot.id);
     const candidates = admissible.map((candidate) => slotCandidate(state, company, node, slot, candidate, fill, unitsPerQuarter, owned, cache));
     return {
       slotId: slot.id,
@@ -342,7 +344,7 @@ export interface NodeEntryRoutes {
 
 /** What stands between `company` and a line on `nodeId`, with every way through it. */
 export function nodeEntryRoutes(state: SessionState, company: Company, nodeId: string): NodeEntryRoutes {
-  const node = economicNodeById(nodeId);
+  const node = economicNodeInSession(state, nodeId);
   if (node === undefined) return { nodeId, canProduce: false, missing: [], buyInstead: [] };
 
   const missingIds = [nodeId, ...node.requires].filter((id) => !holdsNode(company, id, state.quarter));

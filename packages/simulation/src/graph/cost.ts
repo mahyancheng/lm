@@ -73,7 +73,7 @@
  */
 
 import type { Company, EconomicNode, NodeCostCache, NodeSlot, SessionState, UnitCostLine, UnitCostResult } from '@frontier/contracts';
-import { GRID_POWER_NODE_ID, NODE_TIERS, economicNodeById, nodeMarketPriceUsd, requiresClosure, type Product } from '@frontier/contracts';
+import { GRID_POWER_NODE_ID, NODE_TIERS, economicNodeById, economicNodeInSession, nodeMarketPriceUsd, requiresClosure, type Product } from '@frontier/contracts';
 import { companyEnergyCostFactor } from '../economy/regions';
 import { sellerPriceFactor } from '../companies/sellers';
 import { capacityRateUsd, drawPerUnitAtTier, drawPerUnitOf, lineNodeOf, lineOf, productOf, unitsSoldLastQuarterOf } from './lines';
@@ -204,7 +204,7 @@ function costForNode(
   depth: number,
   override?: FillOverride,
 ): UnitCostResult {
-  const node = economicNodeById(nodeId);
+  const node = economicNodeInSession(state, nodeId);
   if (node === undefined) return emptyResult(nodeId);
   const line = lineOf(state, company.id, nodeId, cache, depth);
   const product = line === undefined ? null : (productOf(state, company.id, line.productId) ?? null);
@@ -469,7 +469,7 @@ export function lineIsBlocked(result: UnitCostResult): boolean {
  * one a transfer would take. Null for a product that is not a node line.
  */
 export function unitCostOfProduct(state: SessionState, company: Company, product: Product, cache?: NodeCostCache): UnitCostResult | null {
-  const node = lineNodeOf(product);
+  const node = lineNodeOf(product, state);
   return node === undefined ? null : rollUp(state, company, node, product, cache, 0);
 }
 
@@ -481,7 +481,7 @@ export function unitCostOfProduct(state: SessionState, company: Company, product
  * zero would let a corrupt table restart `MAX_COST_DEPTH` on every hop.
  */
 export function lineUnitCostUsd(state: SessionState, company: Company, product: Product, cache: NodeCostCache | undefined, depth: number): number {
-  const node = lineNodeOf(product);
+  const node = lineNodeOf(product, state);
   return node === undefined ? 0 : rollUp(state, company, node, product, cache, depth).unitCostUsd;
 }
 
@@ -489,4 +489,3 @@ export function lineUnitCostUsd(state: SessionState, company: Company, product: 
 export function inputLinesOf(result: UnitCostResult): readonly UnitCostLine[] {
   return result.lines.filter((entry) => entry.sourceKind !== 'conversion');
 }
-

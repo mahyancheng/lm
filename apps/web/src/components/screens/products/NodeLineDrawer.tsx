@@ -34,7 +34,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionValidationResult, DataCollectionLevel, EconomyReport, Product, SessionState, SupplyTerms } from '@frontier/contracts';
-import { DATA_COLLECTION_LEVELS, economicNodeById, nodeMarketPriceUsd, quarterLabel, rivalPressureFor } from '@frontier/contracts';
+import { DATA_COLLECTION_LEVELS, economicNodeInSession, nodeMarketPriceUsd, quarterLabel, rivalPressureFor } from '@frontier/contracts';
 import {
   DATA_POLICY_CHURN,
   DATA_POLICY_REPUTATION,
@@ -160,7 +160,7 @@ export function NodeLineDrawer({
   const [pendingTermsId, setPendingTermsId] = useState<string | null>(null);
 
   const nodeId = product === null ? null : lineNodeIdOf(product);
-  const node = nodeId === null ? undefined : economicNodeById(nodeId);
+  const node = nodeId === null ? undefined : economicNodeInSession(session, nodeId);
   const isOwnCompany = company.id === companyId;
 
   const proposed = Number.parseFloat(priceText);
@@ -177,7 +177,7 @@ export function NodeLineDrawer({
     [session, company, nodeId, product, isOwnCompany],
   );
   const names = useMemo(() => companyNames ?? new Map(session.companies.map((entry) => [entry.id, entry.name])), [companyNames, session.companies]);
-  const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, names, company.id)), [node, cost, names, company.id]);
+  const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, names, company.id, session)), [node, cost, names, company.id, session]);
 
   // Who builds on this line: `customersOf` resolves every buyer's fills the way
   // the engine does, and carries the order book — the units each of them drew
@@ -190,7 +190,7 @@ export function NodeLineDrawer({
       .map((row) => ({
         companyId: row.buyerCompanyId,
         name: names.get(row.buyerCompanyId) ?? row.buyerCompanyId,
-        nodeLabel: economicNodeById(row.buyerNodeId)?.label ?? row.buyerNodeId,
+        nodeLabel: economicNodeInSession(session, row.buyerNodeId)?.label ?? row.buyerNodeId,
         units: row.unitsDrawnLastQuarter,
       }));
   }, [session, company.id, product, nodeId, isOwnCompany, names]);
@@ -562,7 +562,7 @@ export function NodeLineDrawer({
               </ul>
               {cost.blockedInputNodeIds.length === 0 ? null : (
                 <p className="mt-2 rounded-card bg-loss-wash px-3 py-2 text-[11px] leading-snug font-semibold text-loss">
-                  {cost.blockedInputNodeIds.map((id) => economicNodeById(id)?.label ?? id).join(', ')}: nobody in the world owns this, so the
+                  {cost.blockedInputNodeIds.map((id) => economicNodeInSession(session, id)?.label ?? id).join(', ')}: nobody in the world owns this, so the
                   line ships nothing until somebody does — or until you fill that slot with something else.
                 </p>
               )}

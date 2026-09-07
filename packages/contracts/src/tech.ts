@@ -26,7 +26,8 @@
 
 import { z } from 'zod';
 import { CalendarYearSchema, QuarterIndexSchema, intCount, unitInterval, usd } from './ids';
-import { DEFAULT_SECTOR, SectorSchema } from './sectors';
+import { DEFAULT_SECTOR, SectorSchema, type Sector } from './sectors';
+import { ProductSegmentSchema, type ProductSegment } from './company';
 
 /* -------------------------------------------------------------------------- */
 /*  Epistemic state                                                            */
@@ -62,8 +63,41 @@ export type TechVisibility = z.infer<typeof TechVisibilitySchema>;
 /*  Nodes                                                                      */
 /* -------------------------------------------------------------------------- */
 
+const ProductRecipeBaseSchema = z.object({
+  label: z.string().min(3).max(40),
+  sector: SectorSchema,
+  customerSegment: ProductSegmentSchema,
+  unitLabel: z.string().min(1).max(16),
+  saleKind: z.enum(['recurring', 'unit', 'contract']),
+});
+// Structured output schemas cannot contain effects.  A union of fixed-length
+// tuple pairs expresses the same one-quantity-per-input invariant directly.
+export interface ProductRecipe {
+  readonly label: string;
+  readonly sector: Sector;
+  readonly customerSegment: ProductSegment;
+  readonly unitLabel: string;
+  readonly saleKind: 'recurring' | 'unit' | 'contract';
+  readonly inputNodeIds: readonly string[];
+  readonly inputQuantities: readonly number[];
+}
+export const ProductRecipeSchema = z.union([1, 2, 3, 4].map((length) => ProductRecipeBaseSchema.extend({
+  inputNodeIds: z.array(z.string().min(1).max(120)).length(length),
+  inputQuantities: z.array(z.number().finite().positive().max(1e6)).length(length),
+})) as unknown as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]) as z.ZodType<ProductRecipe>;
+
+export const ProductBlueprintSchema = z.union([
+  z.object({ nodeId: z.string().min(1).max(120), customerValue: z.string().min(10).max(600) }),
+  z.object({ recipe: ProductRecipeSchema, customerValue: z.string().min(10).max(600) }),
+]);
+export type ProductBlueprint = z.infer<typeof ProductBlueprintSchema>;
+export function productBlueprintNodeId(blueprint: ProductBlueprint): string | undefined {
+  return 'nodeId' in blueprint ? blueprint.nodeId : undefined;
+}
+
 export const TechNodeSchema = z
   .object({
+    productBlueprint: ProductBlueprintSchema.optional(),
     id: z.string().min(1).describe('Node id, e.g. "tech_autonomous_research_v2".'),
     title: z.string().min(3).max(120).describe('Node name as it appears on the Frontier Map, e.g. "Autonomous Research Systems".'),
     summary: z.string().min(10).max(1000).describe('What this technology would be and why it would matter.'),
@@ -181,6 +215,7 @@ export const ExperimentPlanSchema = z.object({
 export type ExperimentPlan = z.infer<typeof ExperimentPlanSchema>;
 
 export const ExperimentHypothesisSchema = z.object({
+  productBlueprint: ProductBlueprintSchema.optional(),
   title: z.string().min(5).max(120),
   summary: z.string().min(20).max(1000),
   requiredCapabilities: z.array(z.string().min(1).max(80)).max(8),
@@ -252,6 +287,7 @@ export const INITIAL_TECH_VISIBILITIES = ['public', 'company_private'] as const;
 
 export const InnovationProposalSchema = z
   .object({
+    productBlueprint: ProductBlueprintSchema.optional(),
     experiment: ExperimentPlanSchema.optional(),
     experimentReview: ExperimentReviewSchema.optional(),
     nodeType: z

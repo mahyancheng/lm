@@ -321,7 +321,9 @@ export function CapitalTickets({ fullyDilutedShares, company, pricePerShare }: C
         onConfirm={() => {
           if (pending !== null) {
             const entry = queueAction(pending, { confirmed: true });
-            setQueued(entry.validation);
+            // A rejected validation is not queued. Do not show the success
+            // banner for malformed or otherwise refused financing terms.
+            setQueued(entry.validation.status === 'rejected' ? null : entry.validation);
           }
           setPending(null);
         }}

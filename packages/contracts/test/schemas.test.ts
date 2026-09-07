@@ -82,6 +82,8 @@ import {
   WORLD_DOMAIN_KEYS,
   WorldStateSchema,
   WorldVersionSchema,
+  ECONOMIC_NODES,
+  economicNodeInSession,
   backgroundById,
   backgroundsForSector,
   balanceSheetReconciles,
@@ -475,6 +477,15 @@ describe('valid fixtures parse', () => {
     expect(parsed.world.compute.spotPrice).toBeCloseTo(1.24);
   });
 
+  it('keeps custom economic nodes optional and resolves them ahead of the static catalogue', () => {
+    expect(SessionStateSchema.parse(minimalSessionState).customEconomicNodes).toBeUndefined();
+    const custom = { ...ECONOMIC_NODES[0]!, id: 'custom_consumer_recipe' };
+    const parsed = SessionStateSchema.parse({ ...minimalSessionState, customEconomicNodes: [custom] });
+    expect(economicNodeInSession(parsed, custom.id)).toEqual(custom);
+    expect(economicNodeInSession(parsed, ECONOMIC_NODES[0]!.id)).toBe(ECONOMIC_NODES[0]);
+    expect(SessionStateSchema.safeParse({ ...minimalSessionState, customEconomicNodes: [{ ...ECONOMIC_NODES[0]! }] }).success).toBe(false);
+  });
+
   it('parses a new-game setup, trims the names and rejects an empty or over-long one', () => {
     const parsed = NewGameSetupSchema.parse({ companyName: '  Acme AI  ', founderName: '  Dana Vale ', backgroundId: 'frontier_lab' });
     expect(parsed.companyName).toBe('Acme AI');
@@ -862,7 +873,7 @@ describe('constants and invariants', () => {
   // discriminated unions rather than inserted, which is what the append-only
   // test below polices.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.13.0');
+    expect(CONTRACTS_VERSION).toBe('1.14.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {

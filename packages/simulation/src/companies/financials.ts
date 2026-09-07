@@ -51,6 +51,7 @@
  * metrics phase, because the market has not priced the quarter yet at eleven.
  */
 
+import { debtService } from './debt';
 import type {
   BalanceSheetCheck,
   Company,
@@ -74,6 +75,7 @@ import {
   sectorPriceFactor,
   sectorTradeShare,
   economicNodeById,
+  economicNodeInSession,
 } from '@frontier/contracts';
 import { accordBonusPctFor, activeAccords, chargesTollPct, regionLogistics, tollPaidPct } from '../economy/prices';
 import { isMultiSectorWorld, isNodeEconomyWorld } from '../economy/sectors';
@@ -275,12 +277,12 @@ function conversionLineUsd(cost: UnitCostResult, key: 'labour' | 'capacity'): nu
  * quarter of every live contract on the book, at the price it was signed at.
  * The advance for the whole term went into deferred revenue when it was signed.
  */
-function contractRecognisedUsd(company: Company): number {
+function contractRecognisedUsd(draft: SessionState, company: Company): number {
   let total = 0;
   for (const product of activeProducts(company)) {
-    const nodeId = lineNodeIdOf(product);
+    const nodeId = lineNodeIdOf(product, draft);
     if (nodeId === null) continue;
-    if (economicNodeById(nodeId)?.saleKind !== 'contract') continue;
+    if (economicNodeInSession(draft, nodeId)?.saleKind !== 'contract') continue;
     total += Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers) * product.pricePerSeat;
   }
   return total;
@@ -304,7 +306,7 @@ function royaltyRevenueByCompany(draft: SessionState, cache: NodeCostCache | und
   for (const company of activeCompanies(draft)) {
     if ((company.licences ?? []).length === 0) continue;
     for (const product of activeProducts(company)) {
-      const nodeId = lineNodeIdOf(product);
+      const nodeId = lineNodeIdOf(product, draft);
       if (nodeId === null) continue;
       const units = Math.max(0, product.unitsSoldQuarterly ?? product.activeCustomers);
       if (units <= 0) continue;
@@ -558,7 +560,7 @@ export function resolveFinancials(
         const revenue = units * product.pricePerSeat;
         productRevenue += revenue;
         revenueBySegment.set(product.segment, (revenueBySegment.get(product.segment) ?? 0) + revenue);
-        const nodeId = lineNodeIdOf(product);
+        const nodeId = lineNodeIdOf(product, draft);
         if (nodeId === null) {
           // Not a node line: nothing was produced against the graph, so the
           // only cost of revenue is the segment's own support share.
@@ -769,7 +771,8 @@ export function resolveFinancials(
     // `interestUsd` figure the cost row already carries. Zero in world 1, where
     // cash never closes below zero.
     const overdraftCharge = multiSector ? overdraftChargeUsd(sheet.assets.cash, draft.world.macro.policyRate) : 0;
-    const interestExpense = sheet.liabilities.debt * debtRate + overdraftCharge;
+    const service = nodeEconomy && company.debtIssues !== undefined ? debtService(company, draft.quarter, debtRate, DEBT_AMORTISATION_PER_QUARTER) : null;
+    const interestExpense = (service?.interestUsd ?? sheet.liabilities.debt * debtRate) + overdraftCharge;
 
     const grossProfit = revenue - cogs;
     const operatingExpenses = payrollBooked + marketing + rdSpend + idleCapacityUsd + dataCustodyUsd;
@@ -792,7 +795,7 @@ export function resolveFinancials(
     // advance is cash in and deferred revenue out; the release is revenue with
     // no cash behind it.
     const deferredAdd = nodeEconomy ? money(contractBilled) : 0;
-    const contractRecognised = nodeEconomy ? contractRevenue + contractRecognisedUsd(company) : contractRevenue;
+    const contractRecognised = nodeEconomy ? contractRevenue + contractRecognisedUsd(draft, company) : contractRevenue;
     const deferredRelease = Math.min(openingDeferred + deferredAdd, contractRecognised);
     const billed = revenue - deferredRelease + deferredAdd;
     const closingReceivables = billed * RECEIVABLE_SHARE;
@@ -812,7 +815,8 @@ export function resolveFinancials(
     const closingPayablesBase = cogsCash * PAYABLE_SHARE;
     const cogsCashPaid = openingPayables + cogsCash - closingPayablesBase;
 
-    const debtRepayment = Math.min(sheet.liabilities.debt, sheet.liabilities.debt * DEBT_AMORTISATION_PER_QUARTER);
+    const debtRepayment = service?.principalUsd ?? Math.min(sheet.liabilities.debt, sheet.liabilities.debt * DEBT_AMORTISATION_PER_QUARTER);
+    if (service !== null) company.debtIssues = service.loans;
     // Accelerators bought outright: staged by the compute phase, settled here,
     // because this is the only phase that moves cash. Cash falls and property,
     // plant and equipment rises by the same figure, so equity does not move and
@@ -854,7 +858,7 @@ export function resolveFinancials(
      * shrinks — which is a real consequence a player can see, act on and finance
      * their way out of, rather than a silent tax on doing nothing.
      */
-    const maintainable = nodeEconomy && activeProducts(company).some((product) => lineNodeIdOf(product) !== null);
+    const maintainable = nodeEconomy && activeProducts(company).some((product) => lineNodeIdOf(product, draft) !== null);
     const fundableMaintenanceUsd = Math.max(0, openingCash + collections - cashOutBeforeMaintenance) * SUSTAINING_CAPITAL_CASH_SHARE;
     const maintenanceCapexUsd = maintainable ? money(Math.min(depreciation, fundableMaintenanceUsd)) : 0;
     const maintenanceShare = depreciation > 0 ? maintenanceCapexUsd / depreciation : 0;

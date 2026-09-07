@@ -16,7 +16,7 @@
  * player. Either route produces the same object.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ActionValidationResult,
   Company,
@@ -24,6 +24,7 @@ import type {
   SessionState,
   TechGraph,
 } from '@frontier/contracts';
+import { ECONOMIC_NODES, economicNodeInSession } from '@frontier/contracts';
 import { assessCostUsd, assessPlausibility, reachableCapitalUsd } from '@frontier/simulation';
 import { formatMoney, formatPct, formatQuarterCount } from '@frontier/shared';
 import {
@@ -53,6 +54,7 @@ export interface InnovationPanelProps {
 type Mode = 'write' | 'form' | 'review';
 
 const EMPTY_FORM = {
+  productNodeId: '',
   title: '',
   summary: '',
   novelty: 0.6,
@@ -76,6 +78,22 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
   const [dependencies, setDependencies] = useState<readonly string[]>([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [result, setResult] = useState<ActionValidationResult | null>(null);
+  // A slow interpreter response must not replace a newer idea (or a form the
+  // founder has already started editing). This is deliberately local rather
+  // than transport-specific: both the live model and deterministic fallback
+  // share the same request boundary.
+  const interpretationRequest = useRef(0);
+
+  useEffect(() => {
+    interpretationRequest.current += 1;
+    setBusy(false);
+    setProposal(null);
+    setResult(null);
+    setMode('write');
+  }, [session.sessionId, session.quarter, company.id]);
+  useEffect(() => () => {
+    interpretationRequest.current += 1;
+  }, []);
 
   const allowed = session.config.allowPlayerInnovation;
 
@@ -94,11 +112,14 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
 
   async function interpret(): Promise<void> {
     if (idea.trim().length === 0) return;
+    const requestId = interpretationRequest.current + 1;
+    interpretationRequest.current = requestId;
     setBusy(true);
     setDeclined(false);
     try {
       const input = buildInnovationInput(session, company, graph, idea.trim(), researchEnvelopeUsd, computeUnits);
       const output = await requestInnovation(input);
+      if (interpretationRequest.current !== requestId) return;
       if (output === null) {
         setDeclined(true);
         setForm((current) => ({ ...current, rationale: idea.trim().slice(0, 800) }));
@@ -109,13 +130,14 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
         setMode('review');
       }
     } finally {
-      setBusy(false);
+      if (interpretationRequest.current === requestId) setBusy(false);
     }
   }
 
   function buildFromForm(): void {
     const cost = Number.parseFloat(form.estimatedCost);
     const built: InnovationProposal = {
+      ...(form.productNodeId ? { productBlueprint: { nodeId: form.productNodeId, customerValue: form.summary.trim().slice(0, 600) } } : {}),
       nodeType: 'player_hypothesis',
       title: form.title.trim().slice(0, 120),
       summary: form.summary.trim().slice(0, 1000),
@@ -139,6 +161,7 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
   const formValid = form.title.trim().length >= 3 && form.summary.trim().length >= 20 && form.rationale.trim().length >= 20;
 
   const preview = proposal === null ? null : validateIntent({ type: 'propose_innovation', proposal });
+  const proposedRecipe = proposal?.productBlueprint !== undefined && 'recipe' in proposal.productBlueprint ? proposal.productBlueprint.recipe : null;
 
   function submit(): void {
     if (proposal === null) return;
@@ -147,6 +170,8 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
   }
 
   function reset(): void {
+    interpretationRequest.current += 1;
+    setBusy(false);
     setProposal(null);
     setResult(null);
     setDeclined(false);
@@ -201,10 +226,10 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             maxLength={1200}
             placeholder="Millions of agents learning economic behaviour together in persistent simulated environments, so that pricing and negotiation emerge from the population rather than from a reward model…"
             value={idea}
-            onChange={(event) => setIdea(event.target.value)}
+            onChange={(event) => { interpretationRequest.current += 1; setBusy(false); setIdea(event.target.value); }}
           />
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-            <button type="button" className="btn btn-ghost btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => setMode('form')}>
+            <button type="button" className="btn btn-ghost btn-sm tap-target w-full sm:w-auto sm:min-h-0" onClick={() => { interpretationRequest.current += 1; setBusy(false); setMode('form'); }}>
               State the fields myself
             </button>
             <button
@@ -243,6 +268,14 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             <textarea className="field tap-target sm:min-h-0" rows={3} maxLength={1000} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
           </label>
 
+          {session.config.worldVersion >= 3 ? <label className="block">
+            <span className="label-caps-faint mb-1 block">Product unlocked on successful research</span>
+            <select className="field" value={form.productNodeId} onChange={(event) => setForm({ ...form, productNodeId: event.target.value })}>
+              <option value="">Scientific research — no product yet</option>
+              {ECONOMIC_NODES.filter((node) => node.researchable).map((node) => <option key={node.id} value={node.id}>{node.sector} · {node.label}</option>)}
+            </select>
+            <p className="mt-1 text-xs text-ink-dim">Choose any industry. The prototype must meet this product’s research cost and prerequisites; launching still needs inputs and capacity.</p>
+          </label> : null}
           {/* Both are the schema's `unitInterval`: 0..1, nothing to type. */}
           <div className="grid gap-3 sm:grid-cols-2">
             <SliderField
@@ -350,6 +383,17 @@ export function InnovationPanel({ session, company, graph, researchEnvelopeUsd, 
             </div>
             <h3 className="mt-2 text-[15px] font-semibold text-ink">{proposal.title}</h3>
             <p className="mt-1 text-[13px] leading-relaxed text-ink-dim sm:text-[12px]">{proposal.summary}</p>
+            {proposal.productBlueprint ? <p className="mt-2 text-xs text-brand">
+              {'nodeId' in proposal.productBlueprint
+                ? `Unlocks ${economicNodeInSession(session, proposal.productBlueprint.nodeId)?.label ?? proposal.productBlueprint.nodeId} after successful research.`
+                : `Proposes a new ${proposal.productBlueprint.recipe.sector} product: ${proposal.productBlueprint.recipe.label}.`}{' '}
+              {proposal.productBlueprint.customerValue}
+            </p> : null}
+            {proposedRecipe !== null ? (
+              <p className="mt-1 text-[11px] leading-snug text-ink-faint">
+                Recipe: {proposedRecipe.inputNodeIds.map((id, index) => `${proposedRecipe.inputQuantities[index]} × ${economicNodeInSession(session, id)?.label ?? id}`).join(' · ')} per {proposedRecipe.unitLabel}.
+              </p>
+            ) : null}
           </div>
 
           <div>

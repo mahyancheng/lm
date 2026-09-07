@@ -40,8 +40,11 @@ import {
   ECONOMIC_NODES_BY_ID,
   TOLL_FLOOR_SHARE,
   canProduce,
+  canProduceInSession,
+  economicNodeInSession,
   defaultCategoryFor,
   holdsNode,
+  productBlueprintNodeId,
   resolveCategory,
 } from '@frontier/contracts';
 import { maxTollForCompany } from '../economy/prices';
@@ -749,6 +752,13 @@ function noteEmptyCell<T extends ActionIntent>(verdict: Verdict<T>, companyName:
 }
 
 const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
+  if (intent.technologyNodeId !== undefined) {
+    const technology = ctx.draft.techGraph.nodes.find((node) => node.id === intent.technologyNodeId);
+    if (!isNodeEconomyWorld(ctx.draft) || !holdsNode(ctx.company, intent.technologyNodeId, ctx.draft.quarter) || technology?.productBlueprint === undefined || productBlueprintNodeId(technology.productBlueprint) !== intent.categoryId) {
+      verdict.reject('requirement_not_met', 'This product needs an owned, demonstrated invention whose blueprint matches the selected product.');
+      return;
+    }
+  }
   const clash = ctx.company.products.find((p) => p.name.toLowerCase() === intent.name.trim().toLowerCase() && p.isActive);
   if (clash !== undefined) {
     verdict.reject('duplicate_action', `${ctx.company.name} already sells a product called ${clash.name}.`);
@@ -768,17 +778,17 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
   // any world-3 path.
   if (isNodeEconomyWorld(ctx.draft)) {
     const requested = intent.categoryId;
-    if (requested !== null && ECONOMIC_NODES_BY_ID[requested] !== undefined && !canProduce(ctx.company, requested, ctx.draft.quarter)) {
-      const node = ECONOMIC_NODES_BY_ID[requested];
+    if (requested !== null && economicNodeInSession(ctx.draft, requested) !== undefined && !canProduceInSession(ctx.draft, ctx.company, requested, ctx.draft.quarter)) {
+      const node = economicNodeInSession(ctx.draft, requested);
       const missing = [requested, ...(node?.requires ?? [])].filter((id) => !holdsNode(ctx.company, id, ctx.draft.quarter));
-      const names = missing.map((id) => ECONOMIC_NODES_BY_ID[id]?.label ?? id).join(', ');
+      const names = missing.map((id) => economicNodeInSession(ctx.draft, id)?.label ?? id).join(', ');
       verdict.reject(
         'requirement_not_met',
         `${ctx.company.name} cannot make ${node?.label ?? requested}: it does not own ${names}. Research it, licence it, or buy a company that has it.`,
       );
       return;
     }
-    const resolved = launchNodeIdFor(ctx.company, requested, intent.segment);
+    const resolved = launchNodeIdFor(ctx.draft, ctx.company, requested, intent.segment);
     if (resolved === null) {
       verdict.reject('requirement_not_met', `${ctx.company.name} owns nothing it could put on sale.`);
       return;
@@ -789,10 +799,10 @@ const launchProduct: Rule<'launch_product'> = (intent, verdict, ctx) => {
           draft.categoryId = resolved;
         },
         'unknown_target',
-        `Launching ${ECONOMIC_NODES_BY_ID[resolved]?.label ?? resolved}, the highest thing ${ctx.company.name} can make for this segment.`,
+        `Launching ${economicNodeInSession(ctx.draft, resolved)?.label ?? resolved}, the highest thing ${ctx.company.name} can make for this segment.`,
       );
     }
-    const node = ECONOMIC_NODES_BY_ID[resolved];
+    const node = economicNodeInSession(ctx.draft, resolved);
     // World 2's supplier-per-category list means nothing against a node's
     // slots: dropped, and said so, rather than silently ignored.
     if (intent.supply.length > 0) {
@@ -1987,6 +1997,15 @@ const mergeSubsidiary: Rule<'merge_subsidiary'> = (intent, verdict, ctx) => {
 /* -------------------------------------------------------------------------- */
 
 const submitBoardProposal: Rule<'submit_board_proposal'> = (intent, verdict, ctx) => {
+  // Debt terms are an engine-generated continuation of a confirmed
+  // `issue_debt` action after it is routed to the board. They must not be
+  // accepted on a user-authored board proposal: otherwise the proposal action
+  // (which is not itself confirmation-gated) could smuggle a financing
+  // mandate past the explicit human-confirmation requirement.
+  if (intent.debtTerms !== undefined) {
+    verdict.reject('illegal_value', 'Debt terms can only be attached by the engine when a confirmed debt issue is routed to the board.');
+    return;
+  }
   if (ctx.company.boardId === null) {
     verdict.reject('requirement_not_met', `${ctx.company.name} has no board to table a matter to.`);
     return;

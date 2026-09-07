@@ -33,6 +33,7 @@ import { ImpactBudgetSchema } from './modifiers';
 import { GmEventProposalSchema, GmProposalBatchSchema } from './events';
 import { WorldEventCandidateSchema } from './engine';
 import { ActionIntentSchema, ActionTypeSchema } from './actions';
+import { DealProposalDraftSchema } from './deals';
 import { ConditionalCommitmentSchema } from './governance';
 import { CharacterBeliefSchema, CharacterRoleSchema, CharacterSchema, MemoryDraftSchema, MemoryKindSchema, MemorySchema, RelationshipSchema, StableTraitsSchema } from './people';
 import { InnovationProposalSchema } from './tech';
@@ -1322,6 +1323,7 @@ export type RelationshipDeltas = z.infer<typeof RelationshipDeltasSchema>;
 
 export const CharacterReplySchema = z
   .object({
+    dealDraft: DealProposalDraftSchema.optional().describe("A reviewable offer from the player company perspective; gives is what the player provides. Never executes from dialogue."),
     text: z
       .string()
       .min(1)

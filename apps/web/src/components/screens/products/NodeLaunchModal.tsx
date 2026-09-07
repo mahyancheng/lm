@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ActionValidationResult, EconomicNode } from '@frontier/contracts';
-import { economicNodeById, nodeMarketPriceUsd } from '@frontier/contracts';
+import { economicNodeInSession, nodeMarketPriceUsd, productBlueprintNodeId } from '@frontier/contracts';
 import { biggestCostSentence, costBreakdown, launchCapacityPreview, nodeEntryRoutes, slotOptions, unitCostOf } from '@frontier/simulation';
 import { formatCount, formatMoney, formatPct } from '@frontier/shared';
 import { CashAfter, Drawer, Icon, SliderField, Tag, ValidationBanner, roundStep, sectorLabel } from '@/components/ui';
@@ -66,7 +66,6 @@ export interface NodeLaunchModalProps {
 }
 
 const LAST_STEP: NodeLaunchStep = 4;
-
 export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLaunchModalProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
   const company = useActiveCompany();
@@ -79,6 +78,7 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   // until the founder types one, so two lines on a node are never both called
   // the same thing by accident.
   const [name, setName] = useState('');
+  const [technologyNodeId, setTechnologyNodeId] = useState('');
   const [price, setPrice] = useState('');
   const [marketing, setMarketing] = useState('250000');
   const [tier, setTier] = useState(DEFAULT_QUALITY_TIER);
@@ -87,7 +87,7 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   const [sheetSlotId, setSheetSlotId] = useState<string | null>(null);
   const [result, setResult] = useState<ActionValidationResult | null>(null);
 
-  const node: EconomicNode | undefined = economicNodeById(nodeId);
+  const node: EconomicNode | undefined = economicNodeInSession(session, nodeId);
 
   /* --- the engine's own answers ------------------------------------------ */
   const slots = useMemo(() => (node === undefined ? [] : slotOptions(session, company, node.id, null)), [session, company, node]);
@@ -104,9 +104,9 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
     [session, company, node, fills, tier],
   );
   const companyNames = useMemo(() => new Map(session.companies.map((entry) => [entry.id, entry.name])), [session.companies]);
-  const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, companyNames, company.id)), [node, cost, companyNames, company.id]);
+  const grouped = useMemo(() => (node === undefined || cost === null ? null : costRowsBySlot(node, cost, companyNames, company.id, session)), [node, cost, companyNames, company.id, session]);
   const headline = cost === null ? '' : biggestCostSentence(cost, costBreakdown(cost), companyNames, (value) => formatMoney(value, 'full'));
-  const blockers = cost === null ? [] : costingBlockers(cost);
+  const blockers = cost === null ? [] : costingBlockers(cost, session);
   // What the line opens with of the company's own bucket: the same share the
   // production pass will apply the quarter it lands.
   const capacity = useMemo(() => (node === undefined ? '' : capacitySentence(launchCapacityPreview(session, company, node.id, tier), node, formatCount)), [session, company, node, tier]);
@@ -115,6 +115,9 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
   function startOn(next: EconomicNode): void {
     const cells = options.find((entry) => entry.node.id === next.id)?.servedCells ?? [];
     setNodeId(next.id);
+    const invention = session.techGraph.nodes.find((entry) => company.ownedNodes?.includes(entry.id) && entry.productBlueprint !== undefined && productBlueprintNodeId(entry.productBlueprint) === next.id);
+    setTechnologyNodeId(invention?.id ?? '');
+    setName(invention?.title.slice(0, 80) ?? '');
     setPrice(String(Math.round(nodeMarketPriceUsd(session, next.id))));
     setFills(defaultFills(slotOptions(session, company, next.id, null)));
     // The heaviest market this company does not already sell this node into:
@@ -126,7 +129,7 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
 
   useEffect(() => {
     if (!open || initialNodeId === null) return;
-    const next = economicNodeById(initialNodeId);
+    const next = economicNodeInSession(session, initialNodeId);
     if (next === undefined) return;
     startOn(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -144,8 +147,8 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
     () =>
       node === undefined || aim === null
         ? null
-        : launchIntent({ node, name: name.trim().length > 0 ? name : lineName, priceUsd, marketingUsd, qualityTier: tier, target: aim, fills }),
-    [node, name, lineName, priceUsd, marketingUsd, tier, aim, fills],
+        : launchIntent({ node, technologyNodeId: technologyNodeId || undefined, name: name.trim().length > 0 ? name : lineName, priceUsd, marketingUsd, qualityTier: tier, target: aim, fills }),
+    [node, name, lineName, priceUsd, marketingUsd, tier, aim, fills, technologyNodeId],
   );
   const preview = intent === null || step !== LAST_STEP ? null : validateIntent(intent);
 
@@ -264,12 +267,19 @@ export function NodeLaunchModal({ open, onClose, initialNodeId = null }: NodeLau
             </ul>
           ) : null}
 
+          {step === 1 && node !== undefined ? <label className="block mb-3">
+            <span className="label-caps-faint">Invention behind this product</span>
+            <select className="field mt-1" value={technologyNodeId} onChange={(event) => { setTechnologyNodeId(event.target.value); setResult(null); }}>
+              <option value="">Standard product design</option>
+              {session.techGraph.nodes.filter((entry) => company.ownedNodes?.includes(entry.id) && entry.productBlueprint !== undefined && productBlueprintNodeId(entry.productBlueprint) === node.id).map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}
+            </select>
+          </label> : null}
           {/* --- 1. inputs: one row per slot -------------------------------- */}
           {step === 1 && node !== undefined ? (
             <div className="space-y-3">
               {routes !== null && !routes.canProduce ? (
                 <div className="rounded-card border border-warn bg-warn-wash px-3 py-2.5">
-                  <p className="text-[12px] leading-snug font-semibold text-warn">{lockReason(routes)}</p>
+                  <p className="text-[12px] leading-snug font-semibold text-warn">{lockReason(routes, node.label)}</p>
                   <ul className="mt-2 space-y-1.5">
                     {entryRoutes(routes, (value) => formatMoney(value, 'full')).map((route) => (
                       <li key={route.kind} className="text-[11px] leading-snug">

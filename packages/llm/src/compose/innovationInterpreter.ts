@@ -20,6 +20,7 @@
  * that will not work.
  */
 
+import { ECONOMIC_NODES } from '@frontier/contracts';
 import type { InnovationInterpreterInput } from '@frontier/contracts';
 import { AUTHORITY_PREAMBLE, type ComposedPrompt, OUTPUT_DISCIPLINE, bullets, joinBlocks, num, section, truncate, usd } from './render';
 import { assertNoInternalMarkers } from './redaction';
@@ -79,6 +80,9 @@ export function composeInnovationInterpreter(input: InnovationInterpreterInput):
     `# Innovation proposal — quarter ${input.quarter}, session ${input.sessionId}, company ${input.companyId}`,
     section('The founder\'s idea, in their own words', truncate(input.playerIdea, 4000)),
     section('The current Frontier Map', bullets(nodes)),
+    section('Commercialization catalogue', ECONOMIC_NODES.filter((node) => node.researchable).map((node) => `${node.id}: ${node.label} (${node.sector}); prerequisites ${node.requires.join(', ') || 'none'}; research floor $${node.researchCostRangeUsd[0]}`).join('\n')),
+    section('Permitted recipe inputs', ECONOMIC_NODES.filter((node) => node.tier < 6).map((node) => `${node.id}: ${node.label}; tier ${node.tier}; ${node.unitLabel}; base $${node.basePriceUsd}`).join('\n')),
+    section('Product inventions', 'A company can enter any industry, including a frontier lab building consumer apps. For an idea or discovered hypothesis that leads to a product, include productBlueprint with either a catalogue nodeId or a novel recipe plus customerValue. A recipe is declarative only: label, sector, customerSegment (consumer, enterprise, developer_api, government), unitLabel, saleKind (recurring, unit, or contract), 1–4 distinct ids from Permitted recipe inputs and exactly matching positive inputQuantities in those inputs\' units. Never invent ids or code. The engine derives price, tier, capacity and market. Successful funded research unlocks that recipe only for its owner. Pure scientific work may omit productBlueprint. Never force an idea into the company starting sector.'),
     section('What this company can actually do today', bullets(capabilities)),
     section('What this company can actually afford', bullets(resources)),
     section('World conditions bearing on feasibility', input.worldContext),

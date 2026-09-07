@@ -28,7 +28,7 @@ import type {
   UnitCostLine,
   UnitCostResult,
 } from '@frontier/contracts';
-import { NODE_ROLE_LABELS, PRODUCT_SEGMENTS, SECTORS, SECTOR_META, economicNodeById, primaryCustomerOf } from '@frontier/contracts';
+import { NODE_ROLE_LABELS, PRODUCT_SEGMENTS, SECTORS, SECTOR_META, economicNodeInSession, primaryCustomerOf } from '@frontier/contracts';
 import {
   cellOf,
   defaultIndustryFor,
@@ -137,10 +137,10 @@ export function servedCaption(option: Pick<LaunchOption, 'servedCells'>): string
  * Empty string when nothing does, so a caller can render it or not without a
  * second condition.
  */
-export function lockReason(routes: NodeEntryRoutes): string {
+export function lockReason(routes: NodeEntryRoutes, nodeLabel = routes.nodeId): string {
   if (routes.canProduce || routes.missing.length === 0) return '';
   const names = routes.missing.map((entry) => entry.label);
-  const node = economicNodeById(routes.nodeId)?.label ?? routes.nodeId;
+  const node = nodeLabel;
   if (names.length === 1 && routes.missing[0]?.nodeId === routes.nodeId) {
     return `You do not own ${node} yet.`;
   }
@@ -535,7 +535,7 @@ export interface CostRow {
  * slot in slot order, each naming the node in it and where it comes from, then
  * the conversion lines. Amounts are the engine's; this only labels them.
  */
-export function costRowsBySlot(node: EconomicNode, result: UnitCostResult, companyNames: ReadonlyMap<string, string>, companyId: string): { readonly inputs: readonly CostRow[]; readonly making: readonly CostRow[] } {
+export function costRowsBySlot(node: EconomicNode, result: UnitCostResult, companyNames: ReadonlyMap<string, string>, companyId: string, session?: SessionState): { readonly inputs: readonly CostRow[]; readonly making: readonly CostRow[] } {
   const total = result.unitCostUsd;
   const share = (amount: number): number => (total <= 0 ? 0 : Math.round((amount / total) * 100));
   const inputs: CostRow[] = [];
@@ -553,7 +553,7 @@ export function costRowsBySlot(node: EconomicNode, result: UnitCostResult, compa
             : result.blockedInputNodeIds.includes(filledWith)
               ? 'nobody makes it'
               : 'open market';
-    const detail = filledWith === null ? source : `${economicNodeById(filledWith)?.label ?? filledWith} · ${source}`;
+    const detail = filledWith === null ? source : `${economicNodeInSession(session, filledWith)?.label ?? filledWith} · ${source}`;
     inputs.push({ key: line.key, label: slot.label, detail, amountUsd: line.amountUsd, sharePct: share(line.amountUsd), sourceKind: line.sourceKind });
   }
   const making: CostRow[] = result.lines
@@ -570,8 +570,8 @@ export function costRowsBySlot(node: EconomicNode, result: UnitCostResult, compa
 }
 
 /** Whether the costing step has anything a founder must act on before pricing. */
-export function costingBlockers(result: UnitCostResult): readonly string[] {
-  return result.blockedInputNodeIds.map((nodeId) => economicNodeById(nodeId)?.label ?? nodeId);
+export function costingBlockers(result: UnitCostResult, session?: SessionState): readonly string[] {
+  return result.blockedInputNodeIds.map((nodeId) => economicNodeInSession(session, nodeId)?.label ?? nodeId);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -592,6 +592,7 @@ export function tierCaption(tier: number): string {
 /* -------------------------------------------------------------------------- */
 
 export interface LaunchDraft {
+  readonly technologyNodeId?: string | undefined;
   readonly node: EconomicNode;
   readonly name: string;
   readonly priceUsd: number;
@@ -618,6 +619,7 @@ export function launchIntent(draft: LaunchDraft): ActionIntent | null {
   const tier = Number.isFinite(draft.qualityTier) ? Math.min(1, Math.max(0, draft.qualityTier)) : DEFAULT_QUALITY_TIER;
   return {
     type: 'launch_product',
+    ...(draft.technologyNodeId ? { technologyNodeId: draft.technologyNodeId } : {}),
     name: name.slice(0, 80),
     segment: draft.target.customer,
     categoryId: draft.node.id,

@@ -372,7 +372,7 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
 
   for (const company of activeCompanies(draft)) {
     for (const product of activeProducts(company)) {
-      const node = lineNodeOf(product);
+      const node = lineNodeOf(product, draft);
       if (node === undefined) continue;
       // One draw per line, here, in company order then product order.
       const noise = ctx.rng.range(DEMAND_NOISE_BAND.min, DEMAND_NOISE_BAND.max);
@@ -491,7 +491,7 @@ export function resolveNodeProduction(draft: SessionState, ctx: ResolverContext,
     if (held <= 0) continue;
     let used = 0;
     for (const product of activeProducts(company)) {
-      const node = lineNodeOf(product);
+      const node = lineNodeOf(product, draft);
       if (node === undefined || node.capacityKind !== 'compute') continue;
       used += Math.max(0, product.unitsSoldQuarterly ?? 0) * drawPerUnitOf(node, product);
     }

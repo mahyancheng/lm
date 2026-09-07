@@ -40,7 +40,7 @@ import {
 } from './company';
 import { RegionSchema, SectorSchema } from './sectors';
 import { FundingStageSchema } from './ownership';
-import { BoardProposalKindSchema, CommitmentConditionSchema } from './governance';
+import { BoardProposalKindSchema, CommitmentConditionSchema, DebtIssueTermsSchema } from './governance';
 import { GovernmentBidSchema } from './government';
 import { InnovationProposalSchema, PublicationModeSchema } from './tech';
 import { SocialPostDraftSchema, CampaignThemeSchema } from './social';
@@ -137,6 +137,7 @@ export type LaunchSlotChoice = z.infer<typeof LaunchSlotChoiceSchema>;
 export const LaunchProductActionSchema = z
   .object({
     type: z.literal('launch_product'),
+    technologyNodeId: z.string().min(1).optional().describe('Owned invented technology with a productBlueprint matching categoryId. Records the invention behind this product.'),
     name: z.string().min(1).max(80).describe('Product name.'),
     segment: ProductSegmentSchema,
     // Required-but-nullable rather than optional: every LLM-facing schema
@@ -547,6 +548,7 @@ export const ActionIntentSchema = z
     z
       .object({
         type: z.literal('submit_board_proposal'),
+        debtTerms: DebtIssueTermsSchema.optional(),
         kind: BoardProposalKindSchema,
         title: z.string().min(3).max(140),
         summary: z.string().min(10).max(1200).describe('The case, including the numbers directors will argue about.'),

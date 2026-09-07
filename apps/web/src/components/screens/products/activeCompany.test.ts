@@ -172,4 +172,11 @@ describe('ConnectionsScreen reads the active company', () => {
     // And the viewer it hands the engine is that company, not the seat.
     expect(source).toMatch(/connectionsOf\(session, company\.id, subjectId, productId\)/);
   });
+
+  it('uses the player projection for rival metadata', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url));
+    const source = readFileSync(`${dir}../connections/ConnectionsScreen.tsx`, 'utf8');
+    expect(source).toContain('[...view.controlledCompanies.map((controlled) => controlled.company), ...view.visibleCompanies]');
+    expect(source, 'Connections must not obtain rival metadata from canonical session companies').not.toMatch(/session\.companies/);
+  });
 });

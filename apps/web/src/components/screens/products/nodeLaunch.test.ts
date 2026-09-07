@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Company, Product, SessionState } from '@frontier/contracts';
-import { economicNodeById, primaryCustomerOf } from '@frontier/contracts';
+import { economicNodeById, economicNodeInSession, primaryCustomerOf } from '@frontier/contracts';
 import { createWorld3Session, defaultIndustryFor, launchCapacityPreview, nodeEntryRoutes, slotOptions, targetOf, targetPhrase, unitCostOf } from '@frontier/simulation';
 import { playerCompanyOf, validateIntentForCompany } from '../../../lib/game/engine';
 import {
@@ -107,13 +107,84 @@ describe('launchOptions', () => {
     }
   });
 
-  it('never offers a node from a sector this company has no foothold in', () => {
+  it('shows foreign-sector nodes as visible locked opportunities, never as free production', () => {
     const { state, company } = world();
     const owned = new Set(company.ownedNodes ?? []);
-    for (const option of launchOptions(state, company)) {
-      const inOwnSector = option.node.sector === company.sector;
-      expect(inOwnSector || owned.has(option.node.id)).toBe(true);
-    }
+    const foreign = launchOptions(state, company).filter((option) => option.node.sector !== company.sector && !owned.has(option.node.id));
+    expect(foreign.length).toBeGreaterThan(0);
+    expect(foreign.every((option) => option.locked)).toBe(true);
+    expect(foreign.every((option) => option.missingNodeIds.includes(option.node.id))).toBe(true);
+  });
+
+  it('merges an owned session recipe into the launch list and carries its technology link on the ticket', () => {
+    const { state, company } = world();
+    const base = economicNodeById(TOOLING)!;
+    const recipe = { ...base, id: 'app_custom_terminal_recipe', label: 'Custom Terminal Recipe' };
+    const technologyId = 'tech_custom_terminal_recipe';
+    state.customEconomicNodes = [recipe];
+    state.techGraph.nodes.push({
+      ...state.techGraph.nodes[0]!,
+      id: technologyId,
+      title: 'Custom Terminal Research',
+      dependencies: [],
+      productBlueprint: { nodeId: recipe.id, customerValue: 'A validated custom workflow that users can buy once the research succeeds.' },
+      status: 'company_thesis',
+      visibility: 'company_private',
+      achievedByCompanyId: company.id,
+      achievedQuarter: state.quarter,
+    });
+    company.ownedNodes = [...new Set([...(company.ownedNodes ?? []), technologyId, recipe.id, ...recipe.requires])];
+
+    expect(economicNodeInSession(state, recipe.id)).toMatchObject({ label: 'Custom Terminal Recipe' });
+    const option = launchOptions(state, company).find((entry) => entry.node.id === recipe.id);
+    expect(option?.locked).toBe(false);
+    const fills = defaultFills(slotOptions(state, company, recipe.id, null));
+    const intent = launchIntent({
+      node: recipe,
+      technologyNodeId: technologyId,
+      name: 'Custom terminal',
+      priceUsd: 600,
+      marketingUsd: 0,
+      qualityTier: 0.5,
+      target: defaultTarget(recipe),
+      fills,
+    });
+    expect(intent).toMatchObject({ type: 'launch_product', categoryId: recipe.id, technologyNodeId: technologyId });
+    expect(validateIntentForCompany(state, intent!, company.id)).not.toMatchObject({ status: 'rejected' });
+  });
+
+  it('does not surface a private rival recipe, and rejects a launch ticket the company does not own', () => {
+    const { state, company } = world();
+    const rival = state.companies.find((candidate) => candidate.id !== company.id)!;
+    const base = economicNodeById(TOOLING)!;
+    const recipe = { ...base, id: 'app_custom_rival_recipe', label: 'Rival Private Recipe' };
+    const technologyId = 'tech_rival_private_recipe';
+    state.customEconomicNodes = [recipe];
+    state.techGraph.nodes.push({
+      ...state.techGraph.nodes[0]!,
+      id: technologyId,
+      title: 'Rival Private Research',
+      dependencies: [],
+      productBlueprint: { nodeId: recipe.id, customerValue: 'A private workflow owned by another company and unavailable to this seat.' },
+      status: 'company_thesis',
+      visibility: 'company_private',
+      achievedByCompanyId: rival.id,
+      achievedQuarter: state.quarter,
+    });
+    rival.ownedNodes = [...new Set([...(rival.ownedNodes ?? []), technologyId, recipe.id, ...recipe.requires])];
+
+    expect(launchOptions(state, company).some((option) => option.node.id === recipe.id)).toBe(false);
+    const intent = launchIntent({
+      node: recipe,
+      technologyNodeId: technologyId,
+      name: 'Forged rival launch',
+      priceUsd: 600,
+      marketingUsd: 0,
+      qualityTier: 0.5,
+      target: defaultTarget(recipe),
+      fills: defaultFills(slotOptions(state, company, recipe.id, null)),
+    });
+    expect(validateIntentForCompany(state, intent!, company.id)).toMatchObject({ status: 'rejected' });
   });
 });
 
@@ -129,7 +200,7 @@ describe('lockReason and the three ways in', () => {
     const { state, company } = world();
     const locked = launchOptions(state, company).find((option) => option.locked);
     if (locked === undefined) return;
-    const reason = lockReason(nodeEntryRoutes(state, company, locked.node.id));
+    const reason = lockReason(nodeEntryRoutes(state, company, locked.node.id), locked.node.label);
     expect(reason.length).toBeGreaterThan(0);
     expect(reason).toContain(locked.node.label);
   });

@@ -188,6 +188,7 @@ export type SupplyTerms = z.infer<typeof SupplyTermsSchema>;
 
 export const ProductSchema = z
   .object({
+    technologyNodeId: z.string().min(1).optional(),
     id: z.string().min(1).describe('Product id, e.g. "prd_enterprise_agent".'),
     name: z.string().min(1).max(80).describe('Product name as customers see it.'),
     segment: ProductSegmentSchema,
@@ -1057,6 +1058,14 @@ export type StrategistMemory = z.infer<typeof StrategistMemorySchema>;
 
 export const CompanySchema = z
   .object({
+    debtIssues: z.array(z.object({
+      id: z.string().min(1),
+      outstandingUsd: z.number().min(0),
+      annualRatePct: z.number().min(0).max(0.5),
+      principalPerQuarterUsd: z.number().positive(),
+      issuedQuarter: z.number().int().min(0),
+      maturityQuarter: z.number().int().min(0),
+    })).optional(),
     // --- identity ---
     id: z.string().min(1).describe('Company id.'),
     name: z.string().min(1).max(120).describe('Company name.'),

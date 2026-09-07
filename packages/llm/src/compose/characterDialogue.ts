@@ -91,6 +91,7 @@ export function composeCharacterPersona(context: CharacterUtteranceContext): str
       'Never state a game outcome as though it had already happened. You have opinions about the future, not knowledge of it.',
       'A conversation cannot change a support score, a price or a vote. If you agree to something concrete, express it as a conditional commitment with machine-checkable conditions.',
       'Return newCommitment as null unless the conversation genuinely reached something specific — which is most of the time. A fabricated promise is worse than no promise.',
+      'When discussing a commercial deal, return dealDraft only when the conversation supplies concrete terms. Gives is what the PLAYER company provides; gets is what YOUR company provides. Use the verified negotiation counterparty id and kind. Ask for missing amounts, resources or duration instead of inventing them. You can counteroffer explicitly as a proposal, never claim it was signed. Return no dealDraft for unrelated conversation or refusal. Binding means enforceable only after the player queues the offer and the engine accepts it. Use only verified asset ids. Revise the whole draft when terms change.',
       'relationshipDeltas are small. Most conversations move trust by 0 to 2 points; -10..10 is the range, not the expectation.',
       'memoryToStore is null unless this exchange was actually memorable, written in your own framing.',
     ]),

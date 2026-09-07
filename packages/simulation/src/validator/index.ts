@@ -42,6 +42,7 @@ import type {
 import { ActionIntentSchema, makeId, requiresExplicitConfirmation } from '@frontier/contracts';
 import { BatchBudget, Verdict, findCompany, shareholderStake, type ValidationActor } from './context';
 import { applyTypeRules, type RuleContext } from './rules';
+import { isNodeEconomyWorld } from '../economy/sectors';
 import { isEliminated } from '../companies/entrants';
 import { authorisedByBoard, boardMatterFor, toBoardProposalIntent } from './boardMatters';
 
@@ -286,9 +287,10 @@ export function validateAction(
 
   /* --- board matters become proposals rather than executing --------------- */
   const matter = company.boardId === null ? null : boardMatterFor(verdict.current, company);
-  if (matter !== null && !authorisedByBoard(draft, company.id, matter.kind)) {
+  const debtMandate = isNodeEconomyWorld(draft) && verdict.current.type === 'issue_debt' ? verdict.current : null;
+  if (matter !== null && (debtMandate !== null || !authorisedByBoard(draft, company.id, matter.kind, verdict.current))) {
     verdict.replaceWith(
-      toBoardProposalIntent(matter),
+      { ...toBoardProposalIntent(matter), ...(debtMandate === null ? {} : { debtTerms: { amountUsd: debtMandate.amountUsd, maxRatePct: debtMandate.maxRatePct, termQuarters: debtMandate.termQuarters } }) },
       'board_approval_required',
       `${intent.type.replace(/_/g, ' ')} is a ${matter.kind.replace(/_/g, ' ')} matter for the board of ${company.name}. It has been tabled as a proposal instead; win the vote and it executes.`,
     );

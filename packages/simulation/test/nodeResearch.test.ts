@@ -671,8 +671,8 @@ describe('the world-2 global achievement test', () => {
     const rules = import.meta.glob('../src/validator/rules.ts', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
     const source = Object.values(rules)[0] ?? '';
     // Both world-3 gates return before the world-2 catalogue branch is reached,
-    // and both name `canProduce` or `holdsNode` instead.
-    expect(source.includes('canProduce(ctx.company')).toBe(true);
+    // and both name the session-aware ownership gate or `holdsNode` instead.
+    expect(source.includes('canProduceInSession(ctx.draft, ctx.company')).toBe(true);
     expect(source.includes('holdsNode(ctx.company')).toBe(true);
   });
 });

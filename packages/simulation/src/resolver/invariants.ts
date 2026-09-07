@@ -381,6 +381,22 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
           if (receiver !== null && value !== null) receiver.capital += value;
         }
         break;
+      case 'deal_executed': {
+        // This event is emitted for cash-only deals. A licence bundle never
+        // emits `deal_executed`: its signing fee and additional cash are both
+        // reported on the `node_licensed` event below.
+        const counterpartyId = typeof event.payload.counterpartyId === 'string' ? event.payload.counterpartyId : null;
+        const counterparty = counterpartyId === null ? null : entry(counterpartyId);
+        const proposerPays = money(event, 'proposerPays');
+        const counterpartyPays = money(event, 'counterpartyPays');
+        if (proposerPays === null || counterpartyPays === null) {
+          actor.unverifiable = 'deal_executed carries no numeric cash consideration';
+          break;
+        }
+        actor.capital += counterpartyPays - proposerPays;
+        if (counterparty !== null) counterparty.capital += proposerPays - counterpartyPays;
+        break;
+      }
       case 'node_licensed': {
         // Publishing terms moves nothing at all. A GRANTED licence moves the
         // signing fee out of the licensee and into the owner in the capital
@@ -392,9 +408,11 @@ function equityMovementsFromLedger(events: readonly SimEvent[], opening: Readonl
           actor.unverifiable = 'node_licensed carries no numeric upfrontUsd';
           break;
         }
-        actor.capital += value;
+        const proposerPays = money(event, 'proposerPays') ?? 0;
+        const counterpartyPays = money(event, 'counterpartyPays') ?? 0;
+        actor.capital += value + proposerPays - counterpartyPays;
         const licensee = event.targetId === null ? null : entry(event.targetId);
-        if (licensee !== null) licensee.capital -= value;
+        if (licensee !== null) licensee.capital -= value + proposerPays - counterpartyPays;
         break;
       }
       case 'subsidiary_merged':

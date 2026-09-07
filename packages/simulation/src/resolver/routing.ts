@@ -36,6 +36,7 @@ import { abandonProject } from '../research/ownership';
 import { emitPartialFill } from '../companies/partialFill';
 import {
   LICENCE_TERM_QUARTERS,
+  MAX_NODE_LICENCES,
   boundedRoyaltyPct,
   dropLapsedLicences,
   grantLicence,
@@ -50,6 +51,24 @@ import { computeCommitted, researchComputeHeadroom, researchersCommitted } from 
 /* -------------------------------------------------------------------------- */
 /*  Board proposals                                                            */
 /* -------------------------------------------------------------------------- */
+
+/** Restore the exact debt mandate after its vote, once. Placement still faces lenders. */
+export function executeApprovedDebt(draft: SessionState): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  for (const proposal of draft.boardProposals) {
+    if (proposal.status !== 'passed' || proposal.kind !== 'financing' || proposal.debtTerms === undefined || proposal.debtExecutionQuarter !== undefined) continue;
+    if (proposal.decisionQuarter !== draft.quarter || proposal.amountUsd !== proposal.debtTerms.amountUsd) continue;
+    const source = draft.pendingActions.find((action) => {
+      if (action.actionId !== proposal.linkedActionId || action.actorCompanyId !== proposal.companyId || action.intent.type !== 'submit_board_proposal') return false;
+      const terms = action.intent.debtTerms;
+      return terms !== undefined && terms.amountUsd === proposal.debtTerms?.amountUsd && terms.maxRatePct === proposal.debtTerms?.maxRatePct && terms.termQuarters === proposal.debtTerms?.termQuarters;
+    });
+    if (source === undefined) continue;
+    draft.pendingActions.push({ ...source, actionId: makeId('debt', proposal.id), sequence: Math.max(-1, ...draft.pendingActions.map((action) => action.sequence)) + 1,
+      origin: 'board_execution', intent: { type: 'issue_debt', ...proposal.debtTerms } });
+    proposal.debtExecutionQuarter = draft.quarter;
+  }
+}
 
 /** Table every `submit_board_proposal` that is not already on the agenda. */
 export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext): BoardProposal[] {
@@ -90,6 +109,7 @@ export function ensureBoardProposals(draft: SessionState, ctx: ResolverContext):
       stockComponentPct: intent.stockComponentPct,
       targetCompanyId: intent.targetCompanyId,
       linkedActionId: action.actionId,
+      ...(isNodeEconomyWorld(draft) && intent.debtTerms !== undefined ? { debtTerms: intent.debtTerms } : {}),
       requiredThresholdFraction: rule.supermajorityKinds.includes(intent.kind)
         ? rule.supermajorityThresholdFraction
         : rule.passThresholdFraction,
@@ -579,6 +599,13 @@ export function routeDeals(draft: SessionState, ctx: ResolverContext): void {
       tone: 'neutral',
       subjectId: action.actorCompanyId,
     });
+
+    // A dialogue-launched node licence is a complete canonical offer.  Let an
+    // NPC owner answer it here so the existing licence executor can settle it
+    // in this same capital pass.  Other obligation mixes stay ordinary
+    // proposals; they are never silently treated as licences.
+    answerNpcNodeLicenceProposal(draft, proposal, ctx);
+    answerNpcCashProposal(draft, proposal, ctx);
   }
 
   for (const { action, intent } of pendingOfType(draft, 'accept_deal')) {
@@ -622,6 +649,136 @@ export function routeDeals(draft: SessionState, ctx: ResolverContext): void {
       visibility: deal.confidentiality === 'public' ? 'public' : 'company',
     });
   }
+
+  executeCashDeals(draft, ctx);
+}
+
+function answerNpcCashProposal(draft: SessionState, proposal: DealProposal, ctx: ResolverContext): void {
+  if (!proposal.binding || proposal.counterpartyKind !== 'company' || proposal.gives.some((o) => o.kind !== 'cash_payment') || proposal.gets.some((o) => o.kind !== 'cash_payment') || proposal.gives.length + proposal.gets.length === 0) return;
+  const owner = draft.companies.find((company) => company.id === proposal.counterpartyId);
+  const proposer = draft.companies.find((company) => company.id === proposal.proposerId);
+  if (owner === undefined || proposer === undefined || owner.controllerPlayerId !== null || !owner.isActive || !proposer.isActive) return;
+  const incoming = proposal.gives.reduce((sum, o) => sum + (o.kind === 'cash_payment' ? Math.max(0, Math.round(o.amount)) : 0), 0);
+  const outgoing = proposal.gets.reduce((sum, o) => sum + (o.kind === 'cash_payment' ? Math.max(0, Math.round(o.amount)) : 0), 0);
+  const accepted = incoming >= outgoing && incoming > 0 && owner.financials.cash >= outgoing && proposer.financials.cash >= incoming;
+  proposal.status = accepted ? 'accepted' : 'rejected';
+  proposal.respondedQuarter = draft.quarter;
+  const reason = accepted ? `${owner.name} accepts the cash terms.` : `${owner.name} declines: the cash consideration is not sufficient or fundable.`;
+  const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: accepted ? 'deal_accepted' : 'deal_rejected', actorId: owner.id, targetId: proposal.id,
+    payload: { proposerId: proposer.id, binding: proposal.binding, reason }, visibility: proposal.confidentiality === 'public' ? 'public' : 'company' });
+  ctx.log({ phase: 'capital_resolution', text: reason, deltaLabel: accepted ? 'accepted' : 'refused', refEventIds: [eventId], tone: accepted ? 'positive' : 'warning', subjectId: proposer.id });
+}
+
+/** The only mixed deal the engine can settle: one licence and bilateral cash. */
+function negotiatedLicenceTerms(deal: DealProposal): Extract<DealProposal['gets'][number], { kind: 'node_licence' }> | null {
+  const licences = [...deal.gives, ...deal.gets].filter((obligation): obligation is Extract<DealProposal['gets'][number], { kind: 'node_licence' }> => obligation.kind === 'node_licence');
+  if (licences.length !== 1 || deal.gets.filter((obligation) => obligation.kind === 'node_licence').length !== 1) return null;
+  if ([...deal.gives, ...deal.gets].some((obligation) => obligation.kind !== 'node_licence' && obligation.kind !== 'cash_payment')) return null;
+  return licences[0]!;
+}
+
+function cashConsideration(deal: DealProposal): { proposerPays: number; counterpartyPays: number } {
+  return {
+    proposerPays: deal.gives.reduce((sum, obligation) => sum + (obligation.kind === 'cash_payment' ? Math.max(0, Math.round(obligation.amount)) : 0), 0),
+    counterpartyPays: deal.gets.reduce((sum, obligation) => sum + (obligation.kind === 'cash_payment' ? Math.max(0, Math.round(obligation.amount)) : 0), 0),
+  };
+}
+
+/** Settle the one generic obligation with a complete deterministic executor. */
+function executeCashDeals(draft: SessionState, ctx: ResolverContext): void {
+  for (const deal of draft.deals) {
+    // Cash is payable in the quarter after the recorded acceptance, not after
+    // the offer was made. A delayed response must therefore not settle early.
+    if (deal.status !== 'accepted' || !deal.binding || deal.respondedQuarter === null || deal.respondedQuarter >= draft.quarter) continue;
+    const obligations = [...deal.gives, ...deal.gets];
+    if (obligations.length === 0 || obligations.some((obligation) => obligation.kind !== 'cash_payment')) continue;
+    const proposer = draft.companies.find((company) => company.id === deal.proposerId);
+    const counterparty = deal.counterpartyKind === 'company' ? draft.companies.find((company) => company.id === deal.counterpartyId) : undefined;
+    if (proposer === undefined || counterparty === undefined || !proposer.isActive || !counterparty.isActive) continue;
+    const { proposerPays, counterpartyPays } = cashConsideration(deal);
+    const proposerCash = proposer.financials.cash;
+    const counterpartyCash = counterparty.financials.cash;
+    if (proposerCash < proposerPays || counterpartyCash < counterpartyPays) {
+      const failed = proposerCash < proposerPays ? proposer.id : counterparty.id;
+      deal.status = 'executed';
+      deal.breachedByPartyId = failed;
+      const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_breached', actorId: failed, targetId: deal.id,
+        payload: { proposerId: deal.proposerId, counterpartyId: deal.counterpartyId, reason: 'Insufficient cash; no consideration moved.' }, visibility: deal.confidentiality === 'public' ? 'public' : 'company' });
+      ctx.log({ phase: 'capital_resolution', text: `${failed} could not fund deal ${deal.id}; no cash moved.`, deltaLabel: 'breached', refEventIds: [eventId], tone: 'warning', subjectId: failed });
+      continue;
+    }
+    transferCash(proposer, counterparty, proposerPays);
+    transferCash(counterparty, proposer, counterpartyPays);
+    deal.status = 'executed';
+    const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_executed', actorId: deal.proposerId, targetId: deal.id,
+      payload: { proposerId: deal.proposerId, counterpartyId: deal.counterpartyId, proposerPays, counterpartyPays }, visibility: deal.confidentiality === 'public' ? 'public' : 'company' });
+    ctx.log({ phase: 'capital_resolution', text: `Deal ${deal.id} settled: ${proposerPays} paid by ${proposer.name}, ${counterpartyPays} paid by ${counterparty.name}.`, deltaLabel: 'settled', refEventIds: [eventId], tone: 'positive', subjectId: deal.proposerId });
+  }
+}
+
+function transferCash(from: Company, to: Company, amount: number): void {
+  const value = Math.max(0, Math.round(amount));
+  if (value === 0) return;
+  from.financials.cash -= value;
+  from.balanceSheet.assets.cash -= value;
+  from.balanceSheet.equity -= value;
+  to.financials.cash += value;
+  to.balanceSheet.assets.cash += value;
+  to.balanceSheet.equity += value;
+}
+
+function answerNpcNodeLicenceProposal(draft: SessionState, proposal: DealProposal, ctx: ResolverContext): void {
+  if (!isNodeEconomyWorld(draft)) return;
+  const obligations = [...proposal.gives, ...proposal.gets];
+  const hasLicence = obligations.some((obligation) => obligation.kind === 'node_licence');
+  const terms = negotiatedLicenceTerms(proposal);
+  if (hasLicence && terms === null) {
+    proposal.status = 'rejected';
+    proposal.respondedQuarter = draft.quarter;
+    ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_rejected', actorId: proposal.counterpartyId, targetId: proposal.id,
+      payload: { proposerId: proposal.proposerId, reason: 'A node licence must be received on the get side and may be bundled only with cash payments.' }, visibility: 'company' });
+    return;
+  }
+  if (terms !== null && !proposal.binding) {
+    proposal.status = 'rejected';
+    proposal.respondedQuarter = draft.quarter;
+    ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_rejected', actorId: proposal.counterpartyId, targetId: proposal.id,
+      payload: { proposerId: proposal.proposerId, reason: 'A node licence must be binding to execute.' }, visibility: 'company' });
+    return;
+  }
+  if (terms === null) return;
+  if (proposal.counterpartyKind !== 'company' || proposal.counterpartyId === proposal.proposerId || terms.ownerCompanyId !== proposal.counterpartyId || terms.licenseeCompanyId !== proposal.proposerId) {
+    proposal.status = 'rejected';
+    proposal.respondedQuarter = draft.quarter;
+    ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_rejected', actorId: proposal.counterpartyId, targetId: proposal.id,
+      payload: { proposerId: proposal.proposerId, reason: 'Licence parties must match the companies negotiating.' }, visibility: 'company' });
+    return;
+  }
+  const owner = draft.companies.find((company) => company.id === proposal.counterpartyId);
+  const licensee = draft.companies.find((company) => company.id === proposal.proposerId);
+  const node = economicNodeById(terms.nodeId);
+  if (owner === undefined || licensee === undefined || node === undefined || !owner.isActive || !licensee.isActive || !ownsNodeOutright(owner, node.id)) {
+    proposal.status = 'rejected';
+    proposal.respondedQuarter = draft.quarter;
+    ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_rejected', actorId: proposal.counterpartyId, targetId: proposal.id,
+      payload: { proposerId: proposal.proposerId, reason: 'The named owner cannot grant this node licence.' }, visibility: 'company' });
+    return;
+  }
+  if (owner.controllerPlayerId !== null) return;
+  const grudge = (owner.strategistMemory?.grudges ?? []).find((held) => held.companyId === licensee.id);
+  const verdict = npcLicenceVerdict(owner, licensee, node, terms.royaltyPct, grudge?.intensity ?? 0);
+  const cash = cashConsideration(proposal);
+  // The fee in the licence is already consideration. Extra cash must not turn
+  // the owner into a lender, and both sides must be able to fund the exact
+  // bundle now; execution repeats this preflight before it mutates anything.
+  const fundable = licensee.financials.cash >= Math.max(0, Math.round(terms.upfrontUsd)) + cash.proposerPays && owner.financials.cash >= cash.counterpartyPays;
+  const accepted = verdict.accepted && cash.proposerPays >= cash.counterpartyPays && fundable;
+  proposal.status = accepted ? 'accepted' : 'rejected';
+  proposal.respondedQuarter = draft.quarter;
+  const reason = !verdict.accepted ? verdict.reason : !fundable ? `${owner.name} declines: the complete signing bundle is not fundable.` : cash.proposerPays < cash.counterpartyPays ? `${owner.name} declines: the additional cash consideration is net negative.` : verdict.reason;
+  const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: accepted ? 'deal_accepted' : 'deal_rejected', actorId: owner.id, targetId: proposal.id,
+    payload: { proposerId: licensee.id, binding: proposal.binding, reason: clip(reason, 240) }, visibility: 'company' });
+  ctx.log({ phase: 'capital_resolution', text: reason, deltaLabel: accepted ? 'accepted' : 'refused', refEventIds: [eventId], tone: accepted ? 'positive' : 'warning', subjectId: licensee.id });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -845,7 +1002,19 @@ function executeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
   for (const deal of draft.deals) {
     if (deal.status !== 'accepted' || !deal.binding) continue;
     const terms = nodeLicenceOf(deal);
-    if (terms === null) continue;
+    const allObligations = [...deal.gives, ...deal.gets];
+    const bundledTerms = negotiatedLicenceTerms(deal);
+    // Do not let an accepted status (including one forged by a client or model)
+    // turn an unsupported obligation into a partially executed agreement.
+    if (terms !== null && (bundledTerms === null || deal.counterpartyKind !== 'company' || terms.ownerCompanyId !== deal.counterpartyId || terms.licenseeCompanyId !== deal.proposerId)) {
+      deal.status = 'rejected';
+      deal.respondedQuarter = draft.quarter;
+      const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_rejected', actorId: deal.counterpartyId, targetId: deal.id,
+        payload: { proposerId: deal.proposerId, reason: 'Mixed or misaddressed licence obligations cannot be settled.' }, visibility: 'company' });
+      ctx.log({ phase: 'capital_resolution', text: `Deal ${deal.id} carried an invalid mixed or misaddressed node licence and was not executed.`, deltaLabel: 'not executed', refEventIds: [eventId], tone: 'warning', subjectId: deal.proposerId });
+      continue;
+    }
+    if (terms === null || bundledTerms === null) continue;
 
     const owner = draft.companies.find((candidate) => candidate.id === terms.ownerCompanyId);
     const licensee = draft.companies.find((candidate) => candidate.id === terms.licenseeCompanyId);
@@ -853,8 +1022,9 @@ function executeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
     // Executed-with-nothing-done rather than left accepted for ever: the
     // counterparty is gone or the node is not in this session's table, and
     // re-checking it every quarter would be a slow way to keep saying no.
-    if (owner === undefined || licensee === undefined || node === undefined || !ownsNodeOutright(owner, node.id)) {
-      deal.status = 'executed';
+    if (owner === undefined || licensee === undefined || owner.id === licensee.id || node === undefined || !owner.isActive || !licensee.isActive || !ownsNodeOutright(owner, node.id)) {
+      deal.status = 'rejected';
+      deal.respondedQuarter = draft.quarter;
       continue;
     }
 
@@ -864,20 +1034,36 @@ function executeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
       royaltyPct: terms.royaltyPct,
       expiryQuarter: draft.quarter + terms.quarters,
     };
-    if (!grantLicence(licensee, licence)) {
+    // All mutable conditions are checked before any cash moves.  A bundle is
+    // one transaction: no fee or negotiated cash moves if the licence cannot
+    // be granted, and no licence is granted if either party cannot fund it.
+    const renewal = (licensee.licences ?? []).some((entry) => entry.nodeId === licence.nodeId && entry.ownerCompanyId === licence.ownerCompanyId);
+    const { proposerPays, counterpartyPays } = cashConsideration(deal);
+    const upfrontUsd = Math.max(0, Math.round(terms.upfrontUsd));
+    const capacityBlocked = !renewal && (licensee.licences ?? []).length >= MAX_NODE_LICENCES;
+    const licenseeUnfunded = licensee.financials.cash < upfrontUsd + proposerPays;
+    const ownerUnfunded = owner.financials.cash < counterpartyPays;
+    if (capacityBlocked || licenseeUnfunded || ownerUnfunded) {
       deal.status = 'executed';
+      deal.breachedByPartyId = capacityBlocked || licenseeUnfunded ? licensee.id : owner.id;
+      const failed = deal.breachedByPartyId;
+      const eventId = ctx.emit({ sessionId: draft.sessionId, quarter: draft.quarter, type: 'deal_breached', actorId: failed, targetId: deal.id,
+        payload: { proposerId: deal.proposerId, counterpartyId: deal.counterpartyId, reason: capacityBlocked ? 'The licensee has reached its licence capacity; no consideration moved.' : 'Insufficient cash; no consideration moved.' }, visibility: deal.confidentiality === 'public' ? 'public' : 'company' });
       ctx.log({
         phase: 'capital_resolution',
-        text: `${licensee.name} already licenses as much as it can carry, so ${node.label} was not added.`,
-        deltaLabel: 'not granted',
-        refEventIds: [],
+        text: `Deal ${deal.id} could not settle atomically; no licence or cash consideration moved.`,
+        deltaLabel: 'breached',
+        refEventIds: [eventId],
         tone: 'warning',
         subjectId: licensee.id,
       });
       continue;
     }
+    if (!grantLicence(licensee, licence)) throw new Error(`licence preflight changed while settling ${deal.id}`);
+    payLicenceFee(licensee, owner, upfrontUsd);
+    transferCash(licensee, owner, proposerPays);
+    transferCash(owner, licensee, counterpartyPays);
     deal.status = 'executed';
-    payLicenceFee(licensee, owner, terms.upfrontUsd);
 
     const eventId = ctx.emit({
       sessionId: draft.sessionId,
@@ -890,17 +1076,19 @@ function executeNodeLicences(draft: SessionState, ctx: ResolverContext): void {
         dealId: deal.id,
         nodeId: node.id,
         royaltyPct: terms.royaltyPct,
-        upfrontUsd: terms.upfrontUsd,
+        upfrontUsd,
+        proposerPays,
+        counterpartyPays,
         expiryQuarter: licence.expiryQuarter,
       },
       visibility: 'company',
     });
     ctx.log({
       phase: 'capital_resolution',
-      text: `${licensee.name} may now make ${node.label} under ${owner.name}'s licence: ${compactUsd(terms.upfrontUsd)} paid, ${
+      text: `${licensee.name} may now make ${node.label} under ${owner.name}'s licence: ${compactUsd(upfrontUsd)} paid, ${
         terms.royaltyPct
       }% of every line that needs it for the next ${terms.quarters} quarters, and no right to licence it on.`,
-      deltaLabel: `-${compactUsd(terms.upfrontUsd)}`,
+      deltaLabel: `-${compactUsd(upfrontUsd + proposerPays - counterpartyPays)}`,
       refEventIds: [eventId],
       tone: 'positive',
       subjectId: licensee.id,

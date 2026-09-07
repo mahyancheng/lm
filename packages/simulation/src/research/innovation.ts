@@ -19,6 +19,8 @@
  * `propose_innovation` action that carried it.
  */
 
+import { ECONOMIC_NODES_BY_ID, economicNodeById, economicNodeInSession, productBlueprintNodeId, type EconomicNode, type ProductRecipe } from '@frontier/contracts';
+import { isNodeEconomyWorld } from '../economy/sectors';
 import { integrateExperiment } from './experiments';
 import type {
   Company,
@@ -107,7 +109,64 @@ export function assessPlausibility(
 /** The engine's own cost estimate, which may be far above what the proposer claimed. */
 export function assessCostUsd(proposal: InnovationProposal): number {
   const floor = INNOVATION_COST_FLOOR_USD * (1 + INNOVATION_NOVELTY_COST_MULTIPLE * proposal.novelty) * (2 - proposal.plausibility);
-  return money(Math.max(proposal.estimatedCost, floor));
+  // A product-backed thesis must cost at least the catalogue's low research
+  // estimate. Keep this in the shared estimator so the review card cannot
+  // promise a cheaper programme than integration will accept.
+  const blueprint = proposal.productBlueprint;
+  const productFloor = blueprint === undefined
+    ? 0
+    : 'recipe' in blueprint
+      ? Math.max(50_000, blueprint.recipe.inputNodeIds.reduce((total, id, index) => total + (ECONOMIC_NODES_BY_ID[id]?.basePriceUsd ?? 0) * blueprint.recipe.inputQuantities[index]!, 0) * 4) / INNOVATION_COST_RANGE.low
+      : (economicNodeById(productBlueprintNodeId(blueprint)!)?.researchCostRangeUsd[0] ?? 0) / INNOVATION_COST_RANGE.low;
+  return money(Math.max(proposal.estimatedCost, floor, productFloor));
+}
+
+/**
+ * Turn the deliberately small, declarative recipe accepted from an innovation
+ * proposal into a real world-3 node.  This is engine code, not model output:
+ * prices, tier, capacity and market are fixed functions of the selected
+ * catalogue inputs.  Keeping it here also means the immutable catalogue is
+ * never extended or cached globally.
+ */
+function materialiseRecipe(draft: SessionState, recipe: ProductRecipe, techId: string, ctx: ResolverContext): EconomicNode | null {
+  // Recipes may compose only public catalogue inputs.  A session-local recipe
+  // is private canonical state and must never become an upstream dependency.
+  const inputs = recipe.inputNodeIds.map((id) => ECONOMIC_NODES_BY_ID[id]);
+  if (inputs.some((node) => node === undefined) || new Set(recipe.inputNodeIds).size !== recipe.inputNodeIds.length) return null;
+  const inputNodes = inputs as EconomicNode[];
+  // Recipes are terminal apps/services.  Requiring a lower-tier input keeps
+  // the roll-up acyclic even when a session has several invented products.
+  if (inputNodes.some((node) => node.tier >= 6)) return null;
+  const id = `app_custom_${slugify(techId).replace(/^tech_/, '').slice(0, 72)}`;
+  if (ECONOMIC_NODES_BY_ID[id] !== undefined || draft.customEconomicNodes?.some((node) => node.id === id)) return null;
+  const inputCost = inputNodes.reduce((sum, node, index) => sum + node.basePriceUsd * recipe.inputQuantities[index]!, 0);
+  const recurring = recipe.saleKind === 'recurring';
+  const contract = recipe.saleKind === 'contract';
+  const sector = recipe.sector;
+  return {
+    id, label: recipe.label, blurb: `A researched ${recipe.label.toLowerCase()} product.`, sector,
+    tier: 6, role: 'app', maturity: 'frontier',
+    unitLabel: recipe.unitLabel, saleKind: recipe.saleKind,
+    lifetimeQuarters: recipe.saleKind === 'unit' ? 12 : null,
+    contractQuarters: contract ? 4 : null,
+    basePriceUsd: money(Math.max(1, inputCost * (recurring ? 1.8 : contract ? 1.5 : 1.3) + 25)),
+    requires: [],
+    slots: inputNodes.map((node, index) => ({ id: `input_${index + 1}`, role: node.role, label: node.label.slice(0, 24), qtyPerUnit: recipe.inputQuantities[index]!, required: true, blocking: false, accepts: [node.id], defaultNodeId: node.id, kind: 'input' as const })),
+    capacityKind: recurring ? 'compute' : 'plant', capacityDrawPerUnit: recurring ? 0.000002 : 0.00001,
+    // One sold unit is a customer-quarter/physical unit, not a whole FTE.
+    // Keep operating labour in the same units as the catalogue so a viable
+    // recipe cannot acquire thousands of dollars of labour per seat.
+    labourPerUnit: 0.00002 + inputNodes.length * 0.000005, energyMwhPerUnit: 0,
+    supportCostShare: 0.08,
+    researchCostRangeUsd: [money(Math.max(50_000, inputCost * 4)), money(Math.max(100_000, inputCost * 8))],
+    researchComputeIntensity: recurring ? 0.35 : 0.15, talentAreas: ['reasoning'], dataRequiredPb: 0,
+    novelty: 0.5, plausibility: 0.65, researchable: true,
+    publicConfidence: 0.15, confidenceByCompany: {}, estimatedWindow: [quarterToYear(draft.startYear, ctx.quarter), quarterToYear(draft.startYear, ctx.quarter) + 2],
+    originalProposerId: null, visibility: 'company_private', pioneer: null, createdQuarter: ctx.quarter,
+    market: { customers: { [recipe.customerSegment]: 1 }, industries: { [sector]: 1 } },
+    endDemandBaseUnits: recurring ? 5_000 : 1_000, elasticity: recurring ? 1.1 : 0.8,
+    churnBand: { min: 0.03, max: 0.1 }, dataYieldPerUnitQuarter: recurring ? 0.0001 : 0, dataSensitivity: 0.25,
+  };
 }
 
 /** Map a proposal's stated capabilities onto recognised capability areas where possible. */
@@ -149,9 +208,11 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
   const reasons: string[] = [];
   const company = proposer.company;
 
+  const blueprint = isNodeEconomyWorld(draft) ? proposal.productBlueprint : undefined;
+  const productNode = blueprint === undefined || productBlueprintNodeId(blueprint) === undefined ? undefined : economicNodeInSession(draft, productBlueprintNodeId(blueprint)!);
   const knownDependencies: TechNode[] = [];
   const unknownDependencies: string[] = [];
-  for (const depId of proposal.dependencies) {
+  for (const depId of [...proposal.dependencies, ...(productNode?.requires ?? [])]) {
     const node = draft.techGraph.nodes.find((n) => n.id === depId);
     if (node === undefined) unknownDependencies.push(depId);
     else if (!knownDependencies.some((k) => k.id === node.id)) knownDependencies.push(node);
@@ -203,6 +264,11 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
     return rejected();
   }
 
+  if (blueprint !== undefined && 'nodeId' in blueprint && (productNode === undefined || !productNode.researchable)) {
+    reasons.push('Choose a researchable product from the commercialization catalogue; raw resources must be acquired.');
+    return rejected();
+  }
+
   const titleSlug = slugify(proposal.title);
   const duplicate = draft.techGraph.nodes.find((n) => slugify(n.title) === titleSlug);
   if (duplicate !== undefined) {
@@ -246,6 +312,19 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
   if (draft.techGraph.nodes.some((n) => n.id === nodeId)) nodeId = makeId('tech', titleSlug, ctx.quarter);
 
   const year = quarterToYear(draft.startYear, ctx.quarter);
+  // A recipe is a request for a session-local economic node.  Validate and
+  // append it before the tech node is written, so its id can become the
+  // blueprint and then be granted only when this programme succeeds.
+  const recipeNode = blueprint !== undefined && 'recipe' in blueprint ? materialiseRecipe(draft, blueprint.recipe, nodeId, ctx) : undefined;
+  if (recipeNode !== undefined && recipeNode !== null && (draft.customEconomicNodes?.length ?? 0) >= 120) {
+    reasons.push('This session has reached its limit of 120 custom economic recipes.');
+    return rejected();
+  }
+  if (blueprint !== undefined && 'recipe' in blueprint && recipeNode === null) {
+    reasons.push('The recipe must use distinct, existing lower-tier catalogue inputs and may not collide with an existing product id.');
+    return rejected();
+  }
+  const resolvedBlueprint = recipeNode === undefined || recipeNode === null ? blueprint : { nodeId: recipeNode.id, customerValue: blueprint!.customerValue };
   const arrival = year + Math.ceil(adjustedQuarters / 4);
   const isPublic = proposal.initialVisibility === 'public';
   const publicConfidence = isPublic
@@ -270,13 +349,14 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
     summary: proposal.summary,
     // An invented node joins its proposer's track; with no proposing company it
     // lands on the default one.
-    sector: company?.sector ?? DEFAULT_SECTOR,
+    sector: (recipeNode === null ? undefined : recipeNode?.sector) ?? productNode?.sector ?? company?.sector ?? DEFAULT_SECTOR,
+    ...(resolvedBlueprint === undefined ? {} : { productBlueprint: resolvedBlueprint }),
     status: 'company_thesis',
     publicConfidence,
     confidenceByCompany,
     estimatedWindow: [clamp(arrival, 1900, 2200), clamp(arrival + 2 + Math.round(proposal.novelty * 3), 1900, 2200)],
     researchCostRange: [money(adjustedCost * INNOVATION_COST_RANGE.low), money(adjustedCost * INNOVATION_COST_RANGE.high)],
-    computeIntensity,
+    computeIntensity: Math.max(computeIntensity, productNode?.researchComputeIntensity ?? 0),
     talentRequirements: normaliseCapabilities(proposal.requiredCapabilities),
     dependencies: knownDependencies.map((n) => n.id),
     possibleUnlocks: [],
@@ -288,6 +368,11 @@ function integrateTechnology(draft: SessionState, proposal: InnovationProposal, 
     novelty: proposal.novelty,
     plausibility: adjustedPlausibility,
   };
+
+  if (recipeNode !== undefined && recipeNode !== null) {
+    draft.customEconomicNodes ??= [];
+    draft.customEconomicNodes.push(recipeNode);
+  }
 
   draft.techGraph.nodes.push(node);
   const edges: TechEdge[] = knownDependencies.map((dep) => ({

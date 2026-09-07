@@ -37,6 +37,29 @@ stopping. The engine stops at the total spending limit and does not run unfunded
 Close the investigation at any time, or override its next direction and allocation.
 Manual investigations still require the founder to approve each next round. Custom hypotheses appear beneath the world-3 map.
 
+## Research-to-product path
+
+In the world-3 launch sheet, all six industry tracks remain visible. A node in
+another sector is shown as a locked opportunity, not as free production; the
+Inputs step explains the available research, licence and buy routes.
+
+A custom technology proposal may carry a `productBlueprint` for either a
+commercialization-catalogue product or a bounded novel terminal recipe. The
+recipe records its label, sector, customer segment, sale kind, unit label and
+one to four distinct existing lower-tier input nodes with explicit quantities.
+The engine validates those bounds, materialises the result only in this
+session beside the unproven private technology, and rejects collisions, cycles,
+raw-resource targets and arbitrary production logic. On successful research,
+the proposing company gains ownership of the demonstrated technology and its
+recipe; the research screen then links directly to the Products launch flow.
+The launch still validates technology ownership, inputs, capacity and pricing
+through the normal deterministic path.
+
+The customer-value text is descriptive context for the thesis, not a new demand
+model or an economic multiplier. A rival's private session recipe is not shown
+in another company's launch choices. World 1 and world 2 campaign behavior
+remains frozen; these catalogue and ownership rules apply to world 3.
+
 ## Compatibility and boundaries
 
 - This uses the existing Claude integration and `/api/llm/innovation` route.
@@ -55,6 +78,11 @@ Manual investigations still require the founder to approve each next round. Cust
   only those null extension fields before canonical validation and storage.
 - Experimental compute used during a quarter remains unavailable to production
   during that quarter even when the checkpoint releases its future allocation.
+- Company-chat deals have two executable paths: binding cash-only deals settle
+  in the quarter after acceptance, while a binding node licence settles on
+  signing and may carry additional bilateral cash in the same atomic bundle.
+  Other typed terms remain recorded intent until a contract action supports
+  them.
 
 ## Verification
 

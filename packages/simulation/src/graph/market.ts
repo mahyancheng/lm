@@ -72,6 +72,7 @@ import {
   PRODUCT_SEGMENTS,
   SECTORS,
   economicNodeById,
+  economicNodeInSession,
   nextNodePriceIndex,
   nodeImbalance,
   nodePriceIndex,
@@ -296,7 +297,7 @@ export function producibleUnits(
   linesByCompany: ReadonlyMap<string, readonly NodeLineRef[]>,
   companiesById?: ReadonlyMap<string, Company>,
 ): number {
-  const node = economicNodeById(line.nodeId);
+  const node = economicNodeInSession(state, line.nodeId);
   if (node === undefined) return 0;
   if (node.capacityKind === 'none' || node.capacityDrawPerUnit <= 0) return Number.POSITIVE_INFINITY;
 
@@ -312,7 +313,7 @@ export function producibleUnits(
   // and it does not hand a line that sold nothing last quarter exactly nothing
   // to sell with either. Both readings are pure functions of last quarter, so
   // the split is deterministic and needs no allocation pass.
-  const { ownDraw, totalDraw, sharers } = bucketDrawsOf(company, linesByCompany, node.capacityKind, line.productId);
+  const { ownDraw, totalDraw, sharers } = bucketDrawsOf(state, company, linesByCompany, node.capacityKind, line.productId);
   const share = bucketShare(ownDraw, totalDraw, sharers);
   const stock = capacityStockOf(state, company, node.capacityKind) * share;
   // The draw is the node's, scaled by this line's own quality tier: a line
@@ -328,6 +329,7 @@ export function producibleUnits(
  * total over every line on the bucket, and how many lines that is.
  */
 function bucketDrawsOf(
+  state: SessionState,
   company: Company,
   linesByCompany: ReadonlyMap<string, readonly NodeLineRef[]>,
   capacityKind: CapacityKind,
@@ -337,7 +339,7 @@ function bucketDrawsOf(
   let ownDraw = 0;
   let totalDraw = 0;
   for (const sibling of linesByCompany.get(company.id) ?? []) {
-    const siblingNode = economicNodeById(sibling.nodeId);
+    const siblingNode = economicNodeInSession(state, sibling.nodeId);
     if (siblingNode === undefined || siblingNode.capacityKind !== capacityKind) continue;
     sharers += 1;
     const siblingProduct = company.products.find((candidate) => candidate.id === sibling.productId);
@@ -375,9 +377,9 @@ export function launchCapacityPreview(
   qualityTier: number,
   cache: NodeCostCache = createNodeCostCache(state),
 ): LaunchCapacityPreview | null {
-  const node = economicNodeById(nodeId);
+  const node = economicNodeInSession(state, nodeId);
   if (node === undefined || node.capacityKind === 'none' || node.capacityDrawPerUnit <= 0) return null;
-  const { totalDraw, sharers } = bucketDrawsOf(company, cache.linesByCompany, node.capacityKind, null);
+  const { totalDraw, sharers } = bucketDrawsOf(state, company, cache.linesByCompany, node.capacityKind, null);
   const share = bucketShare(0, totalDraw, sharers + 1);
   const stock = capacityStockOf(state, company, node.capacityKind) * share;
   return {
@@ -503,7 +505,7 @@ export function nodeBalances(state: SessionState, cache: NodeCostCache = createN
     const buyerCell = cellKey(sectorOf(company), 'enterprise');
 
     for (const line of companyLines) {
-      const node = economicNodeById(line.nodeId);
+      const node = economicNodeInSession(state, line.nodeId);
       if (node === undefined) continue;
       const product = company.products.find((candidate) => candidate.id === line.productId);
 
@@ -538,7 +540,7 @@ export function nodeBalances(state: SessionState, cache: NodeCostCache = createN
   }
 
   const out: Record<string, NodeBalance> = {};
-  for (const node of ECONOMIC_NODES) {
+  for (const node of [...ECONOMIC_NODES, ...(state.customEconomicNodes ?? [])]) {
     // The cells: end demand where the market gives weight, plus whatever landed.
     const cells: Record<string, number> = {};
     let end = 0;
@@ -621,14 +623,15 @@ export function priceNodes(draft: SessionState, ctx: ResolverContext): void {
   if (!isNodeEconomyWorld(draft)) return;
 
   const balances = nodeBalances(draft);
+  const nodes = [...ECONOMIC_NODES, ...(draft.customEconomicNodes ?? [])];
   const prices: Record<string, number> = {};
-  for (const node of ECONOMIC_NODES) prices[node.id] = balances[node.id]?.index ?? NODE_PRICE_BASELINE;
+  for (const node of nodes) prices[node.id] = balances[node.id]?.index ?? NODE_PRICE_BASELINE;
   draft.nodePrices = prices;
 
   // Ledger first, report second: the lines the screen shows are chosen from
   // rows that already exist, never the other way round.
   const moved: { balance: NodeBalance; eventId: string }[] = [];
-  for (const node of ECONOMIC_NODES) {
+  for (const node of nodes) {
     const balance = balances[node.id];
     if (balance === undefined) continue;
     if (balance.index === balance.indexBefore) continue;
@@ -653,7 +656,7 @@ export function priceNodes(draft: SessionState, ctx: ResolverContext): void {
         worldShifterPct: Math.round(balance.worldShifter * 100),
         producerCount: balance.producerCount,
       },
-      visibility: 'public',
+      visibility: isCustomNodePublic(draft, node.id) ? 'public' : 'company',
     });
     moved.push({ balance, eventId });
   }
@@ -669,7 +672,7 @@ export function priceNodes(draft: SessionState, ctx: ResolverContext): void {
     .slice(0, NODE_PRICE_REPORT_LIMIT);
 
   for (const { balance, eventId } of reportable) {
-    const node = economicNodeById(balance.nodeId);
+    const node = economicNodeInSession(draft, balance.nodeId);
     if (node === undefined) continue;
     const up = balance.index > balance.indexBefore;
     const shortOfMakers = balance.producerCount === 0;
@@ -684,4 +687,10 @@ export function priceNodes(draft: SessionState, ctx: ResolverContext): void {
       subjectId: null,
     });
   }
+}
+
+/** Custom recipe pricing is canonical immediately, public only after disclosure. */
+function isCustomNodePublic(state: SessionState, nodeId: string): boolean {
+  if (ECONOMIC_NODES.some((node) => node.id === nodeId)) return true;
+  return state.techGraph.nodes.some((tech) => tech.visibility === 'public' && tech.productBlueprint !== undefined && 'nodeId' in tech.productBlueprint && tech.productBlueprint.nodeId === nodeId);
 }

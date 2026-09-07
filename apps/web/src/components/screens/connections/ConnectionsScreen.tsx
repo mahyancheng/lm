@@ -29,7 +29,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { connectionsOf } from '@frontier/simulation';
 import { EmptyState, Icon, Panel, cx } from '@/components/ui';
-import { takePendingLine, useActiveCompany, usePlayerView, useSession } from '@/lib/game';
+import { takePendingLaunchCategory, takePendingLine, useActiveCompany, usePlayerView, useSession } from '@/lib/game';
 import type { TargetChoice } from '../products/nodeLaunch';
 import { LineStatCards, LineTables, lineFigures } from '../products/lineStats';
 import { NodeLaunchModal } from '../products/NodeLaunchModal';
@@ -69,12 +69,21 @@ export function ConnectionsScreen({ initialLineId = null }: ConnectionsScreenPro
   // picture cannot select — the switcher only carries active lines.
   const [tableProductId, setTableProductId] = useState<string | null>(null);
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [launchCategoryId, setLaunchCategoryId] = useState<string | null>(null);
 
   // The Research screen hands a line off through sessionStorage rather than a
   // query param — see deepLink.ts — taken once on mount.
   useEffect(() => {
     const pending = takePendingLine();
     if (pending !== null) setProductId(pending);
+  }, []);
+
+  useEffect(() => {
+    const pending = takePendingLaunchCategory();
+    if (pending !== null) {
+      setLaunchCategoryId(pending);
+      setLaunchOpen(true);
+    }
   }, []);
 
   // A line named in the address: select it, come back off anybody else's
@@ -108,9 +117,11 @@ export function ConnectionsScreen({ initialLineId = null }: ConnectionsScreenPro
   // would otherwise draw every company in the same neutral roof.
   const archetypes = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const entry of session.companies) out[entry.id] = entry.archetype;
+    for (const entry of [...view.controlledCompanies.map((controlled) => controlled.company), ...view.visibleCompanies]) {
+      if (entry.id !== undefined && entry.archetype !== undefined) out[entry.id] = entry.archetype;
+    }
     return out;
-  }, [session.companies]);
+  }, [view.controlledCompanies, view.visibleCompanies]);
 
   const model = useMemo(() => connectionsModel(connections, { archetypes }), [connections, archetypes]);
   const { ref, width } = useContainerWidth();
@@ -333,7 +344,7 @@ export function ConnectionsScreen({ initialLineId = null }: ConnectionsScreenPro
           walkTo(companyId);
         }}
       />
-      <NodeLaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} initialNodeId={null} />
+      <NodeLaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} initialNodeId={launchCategoryId} />
     </>
   );
 }

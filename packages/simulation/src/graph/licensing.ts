@@ -47,6 +47,8 @@ import { lineNodeIdOf } from './lines';
 
 /** How long a licence runs before the owner gets to say no. Three years. */
 export const LICENCE_TERM_QUARTERS = 12;
+/** Schema capacity for live licences held by one company. */
+export const MAX_NODE_LICENCES = 12;
 
 /**
  * The signing fee, as a share of what researching the node would cost.
@@ -264,7 +266,7 @@ export function grantLicence(licensee: Company, licence: NodeLicence): boolean {
     licensee.licences = held.map((entry, index) => (index === existing ? licence : entry));
     return true;
   }
-  if (held.length >= 12) return false;
+  if (held.length >= MAX_NODE_LICENCES) return false;
   licensee.licences = [...held, licence];
   return true;
 }

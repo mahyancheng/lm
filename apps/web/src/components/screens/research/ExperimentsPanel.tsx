@@ -10,9 +10,9 @@ import { useGameActions, useLlm, useQueuedActions, useResolving, useSettings } f
 import { buildInnovationInput, requestInnovation } from './innovationClient';
 import { experimentProposal, experimentReviewInput } from './experimentClient';
 
-type Props = { session: SessionState; company: Company; graph: TechGraph; onFollowUp: (idea: string) => void };
+type Props = { session: SessionState; company: Company; graph: TechGraph; onFollowUp: (idea: string) => void; onOpenNode?: (nodeId: string) => void };
 
-export function ExperimentsPanel({ session, company, graph, onFollowUp }: Props): React.JSX.Element | null {
+export function ExperimentsPanel({ session, company, graph, onFollowUp, onOpenNode }: Props): React.JSX.Element | null {
   const { queueAction, validateIntent } = useGameActions();
   const settings = useSettings();
   const llm = useLlm();
@@ -26,6 +26,8 @@ export function ExperimentsPanel({ session, company, graph, onFollowUp }: Props)
   const [compute, setCompute] = useState(Math.min(100, free.computeUnits));
   const [researchers, setResearchers] = useState(Math.min(2, free.researchersAssigned));
   const [interval, setInterval] = useState(1);
+  const [autonomous, setAutonomous] = useState(true);
+  const [spendingLimit, setSpendingLimit] = useState(Math.max(1, Math.min(800_000, company.financials.cash)));
   const [proposal, setProposal] = useState<InnovationProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -34,7 +36,7 @@ export function ExperimentsPanel({ session, company, graph, onFollowUp }: Props)
   const epoch = useRef(0);
   useEffect(() => { epoch.current += 1; setBusy(false); setProposal(null); setResult(null); return () => { epoch.current += 1; }; }, [session.sessionId, company.id, session.quarter]);
   const live = llm.available && settings.useLiveModel;
-  const planResult = ExperimentPlanSchema.safeParse({ question: question.trim(), method: method.trim() || question.trim(), budgetUsd: budget, computeUnits: compute, researchersAssigned: researchers, reviewAfterQuarters: interval });
+  const planResult = ExperimentPlanSchema.safeParse({ question: question.trim(), method: method.trim() || question.trim(), budgetUsd: budget, computeUnits: compute, researchersAssigned: researchers, reviewAfterQuarters: interval, ...(autonomous ? { autonomous: true, spendingLimitUsd: spendingLimit } : {}) });
   const plan: ExperimentPlan | null = planResult.success ? planResult.data : null;
   const experiments = session.researchProjects.filter((project) => project.companyId === company.id && project.experiment);
   if (!isNodeEconomyWorld(session)) return null;
@@ -74,7 +76,9 @@ export function ExperimentsPanel({ session, company, graph, onFollowUp }: Props)
           <label className="text-sm">Researchers<input className="field mt-1" disabled={busy} type="number" min={1} max={free.researchersAssigned} value={researchers} onChange={(event) => { setResearchers(Number(event.target.value)); setProposal(null); }} /></label>
           <label className="text-sm">Review after<select disabled={busy} className="field mt-1" value={interval} onChange={(event) => { setInterval(Number(event.target.value)); setProposal(null); }}>{[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value} quarter{value === 1 ? '' : 's'}</option>)}</select></label>
         </div>
-        <p className="text-sm text-ink-dim">Cash ceiling for this round: {formatMoney(budget * interval)}. Uses existing compute and staff; their ownership, rental and payroll costs continue. Work pauses at the checkpoint.</p>
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={autonomous} disabled={busy} onChange={(event) => { setAutonomous(event.target.checked); setProposal(null); }} />Let the team keep investigating and adapt its method as findings emerge</label>
+        {autonomous ? <label className="block text-sm">Total cash authorised for this investigation<input className="field mt-1" type="number" min={budget} max={1e12} value={spendingLimit} disabled={busy} onChange={(event) => { setSpendingLimit(Number(event.target.value)); setProposal(null); }} /><span className="mt-1 block text-xs text-ink-dim">The team reviews each checkpoint automatically during quarter resolution. It can discover several new research branches. Extra funding and a different objective need your decision.</span></label> : null}
+        <p className="text-sm text-ink-dim">Cash ceiling for this round: {formatMoney(budget * interval)}. Uses existing compute and staff; their ownership, rental and payroll costs continue. {autonomous ? 'The team reviews and adapts within the total cash limit.' : 'Work pauses at the checkpoint for your review.'}</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" className="btn btn-primary" disabled={!plan || !live || busy || resolving || !session.config.allowPlayerInnovation} onClick={() => void design()}>{busy ? 'Designing…' : 'Develop with AI'}</button>
           <button type="button" className="btn" disabled={!plan || busy || resolving || !session.config.allowPlayerInnovation} onClick={() => { if (plan) { setAiDesigned(false); setProposal(experimentProposal(plan)); setResult(null); } }}>Run as written</button>
@@ -84,17 +88,18 @@ export function ExperimentsPanel({ session, company, graph, onFollowUp }: Props)
         {proposal?.experiment ? <div className="rounded-card border border-hair p-3 space-y-2">
           {aiDesigned ? <AiLabel /> : null}<h3 className="font-semibold">{proposal.title}</h3><p className="text-sm">{proposal.experiment.method}</p>
           <p className="text-sm text-ink-dim">Private investigation · {formatMoney(proposal.experiment.budgetUsd * proposal.experiment.reviewAfterQuarters)} cash ceiling · {formatCount(proposal.experiment.computeUnits)} compute units · {formatCount(proposal.experiment.researchersAssigned)} researchers</p>
+          {proposal.experiment.autonomous ? <p className="text-sm">Automatic reviews and adaptation · {formatMoney(proposal.experiment.spendingLimitUsd ?? 0)} total authorised</p> : null}
           <button type="button" className="btn btn-primary" disabled={resolving || busy || !!alreadyQueued || preview?.status === 'rejected'} onClick={() => setResult(queueAction({ type: 'propose_innovation', proposal }).validation)}>{alreadyQueued ? 'Experiment queued' : 'Queue experiment'}</button>
           <ValidationBanner result={result ?? preview} />
         </div> : null}
       </div> : null}
       {experiments.length === 0 && !open ? <p className="mt-3 text-sm text-ink-faint">No experiments yet. An investigation can start with a question that has no entry on the technology map.</p> : null}
     </Panel>
-    {experiments.map((project) => <ExperimentCard key={`${project.id}:${project.experiment!.round}`} {...{ session, company, graph, project, onFollowUp, live, resolving }} />)}
+    {experiments.map((project) => <ExperimentCard key={`${project.id}:${project.experiment!.round}`} {...{ session, company, graph, project, onFollowUp, onOpenNode, live, resolving }} />)}
   </>;
 }
 
-function ExperimentCard({ session, company, graph, project, onFollowUp, live, resolving }: Props & { project: ResearchProject; live: boolean; resolving: boolean }) {
+function ExperimentCard({ session, company, graph, project, onFollowUp, onOpenNode, live, resolving }: Props & { project: ResearchProject; live: boolean; resolving: boolean }) {
   const { queueAction, validateIntent } = useGameActions();
   const queued = useQueuedActions();
   const experiment = project.experiment!;
@@ -131,15 +136,18 @@ function ExperimentCard({ session, company, graph, project, onFollowUp, live, re
   const output = review?.experimentReview;
   return <Panel title={title} iconName="flask" subtitle={`Round ${experiment.round} · ${project.status === 'abandoned' ? 'Closed' : experiment.awaitingReview ? finding ? 'Findings recorded' : 'Ready for review' : 'Running'}`}>
     <p className="text-sm">{experiment.mandate.method}</p>
+    {experiment.mandate.autonomous ? <p className="mt-2 text-sm text-ink-dim">Ongoing investigation · {formatMoney(Math.max(0, (experiment.mandate.spendingLimitUsd ?? 0) - project.cumulativeSpendUsd))} left in the standing cash limit. The team reviews and adapts as quarters resolve.</p> : null}
+    {(experiment.generatedNodeIds?.length ?? 0) > 0 ? <div className="mt-3 space-y-2"><p className="text-sm font-medium">Research branches discovered</p>{experiment.generatedNodeIds!.map((id) => { const node = graph.nodes.find((entry) => entry.id === id); return node ? <button key={id} type="button" className="btn w-full text-left whitespace-normal" onClick={() => onOpenNode?.(id)}>{node.title}</button> : null; })}<p className="text-xs text-ink-dim">These are costed hypotheses you can pursue. They have not been demonstrated or funded automatically.</p></div> : null}
     <p className="mt-2 text-sm text-ink-dim">{formatMoney(project.cumulativeSpendUsd)} cash used in total · {formatCount(experiment.computeUsed)} compute-unit quarters this round · {formatCount(experiment.researcherQuarters)} researcher quarters</p>
     {experiment.awaitingReview && !finding && project.status === 'paused' ? <div className="mt-3 space-y-2">
-      <p className="text-sm">Spending has stopped and resources are released. Review the work to learn what happened.</p>
+      <p className="text-sm">Spending has stopped and resources are released. {experiment.mandate.autonomous ? 'The team will review the work automatically when you resolve a quarter. You can also request a review now.' : 'Review the work to learn what happened.'}</p>
       <button type="button" className="btn btn-primary" disabled={!live || busy || resolving || pendingReview || !!output || experiment.roundQuarters === 0} onClick={() => void interpret()}>{busy ? 'Reviewing…' : 'Interpret findings with AI'}</button>
       {!live ? <p className="text-sm text-ink-faint">Enable the live model in Settings to review these findings. Your experiment can wait without spending more.</p> : null}
       {experiment.roundQuarters === 0 ? <p className="text-sm text-warn">No funded work could run. Close this investigation and start one that fits the available resources.</p> : null}
-      {output && review ? <div className="rounded-card border border-hair p-3 space-y-2"><AiLabel /><p className="font-medium">Proposed findings · {output.outcome.replaceAll('_', ' ')}</p><p className="text-sm">{output.observation}</p><p className="text-sm text-ink-dim">{output.interpretation}</p><button type="button" className="btn" disabled={pendingReview || resolving} onClick={() => setResult(queueAction({ type: 'propose_innovation', proposal: review }).validation)}>{pendingReview ? 'Findings queued' : 'Record findings next quarter'}</button></div> : null}
+      {output && review ? <div className="rounded-card border border-hair p-3 space-y-2"><AiLabel /><p className="font-medium">Proposed findings · {output.outcome.replaceAll('_', ' ')}</p><p className="text-sm">{output.observation}</p><p className="text-sm text-ink-dim">{output.interpretation}</p>{output.hypotheses?.map((hypothesis) => <p key={hypothesis.title} className="text-sm">New branch: {hypothesis.title}</p>)}<button type="button" className="btn" disabled={pendingReview || resolving} onClick={() => setResult(queueAction({ type: 'propose_innovation', proposal: review }).validation)}>{pendingReview ? 'Findings queued' : 'Record findings next quarter'}</button></div> : null}
     </div> : null}
-    {experiment.findings.map((entry) => <div key={entry.round} className="mt-3 rounded-card border border-hair p-3 space-y-2"><div className="flex items-center gap-2"><Tag>Round {entry.round}</Tag><AiLabel /></div><p className="text-sm">{entry.observation}</p><p className="text-sm text-ink-dim">{entry.interpretation}</p>{entry.capabilityGains.map((gain) => <p key={gain.area} className="text-sm">{gain.area}: +{formatPct(gain.gain)}</p>)}<div className="flex flex-col gap-2">{entry.nextDirections.map((next, index) => <button key={index} type="button" className="btn text-left whitespace-normal" onClick={() => setDirection(next)}>{next}</button>)}</div><button type="button" className="btn btn-sm" onClick={() => onFollowUp(`Based on our experiment: ${entry.observation}\nInterpretation: ${entry.interpretation}\nPropose a follow-up technology: ${entry.nextDirections[0]}`.slice(0, 1200))}>Develop a new research proposal</button></div>)}
+    {experiment.findings.map((entry) => <details key={entry.round} open={entry.round === experiment.findings.at(-1)?.round} className="mt-3 rounded-card border border-hair p-3 space-y-2"><summary className="flex cursor-pointer items-center gap-2"><Tag>Round {entry.round}</Tag><span className="text-sm">{entry.outcome.replaceAll('_', ' ')}</span><AiLabel /></summary><p className="text-sm">{entry.observation}</p><p className="text-sm text-ink-dim">{entry.interpretation}</p>{entry.capabilityGains.map((gain) => <p key={gain.area} className="text-sm">{gain.area}: +{formatPct(gain.gain)}</p>)}<div className="flex flex-col gap-2">{entry.nextDirections.map((next, index) => <button key={index} type="button" className="btn text-left whitespace-normal" onClick={() => setDirection(next)}>{next}</button>)}</div><button type="button" className="btn btn-sm" onClick={() => onFollowUp(`Based on our experiment: ${entry.observation}\nInterpretation: ${entry.interpretation}\nPropose a follow-up technology: ${entry.nextDirections[0]}`.slice(0, 1200))}>Develop a new research proposal</button></details>)}
+    {finding?.recommendation === 'ask_founder' || finding?.recommendation === 'stop' ? <p className="mt-3 text-sm text-warn">{finding.recommendation === 'stop' ? 'The team recommends ending this direction.' : 'The team needs your decision before changing direction.'}</p> : null}
     {finding && project.status === 'paused' ? <div className="mt-3 space-y-2"><label className="block text-sm">Next direction<textarea className="field mt-1" rows={3} maxLength={1200} value={direction} onChange={(event) => setDirection(event.target.value)} /></label><div className="grid grid-cols-2 gap-3">
       <label className="text-sm">Cash per quarter<input className="field mt-1" type="number" min={1} max={1e12} value={nextBudget} onChange={(event) => setNextBudget(Number(event.target.value))} /></label>
       <label className="text-sm">Compute units<input className="field mt-1" type="number" min={0} max={1e9} value={nextCompute} onChange={(event) => setNextCompute(Number(event.target.value))} /></label>

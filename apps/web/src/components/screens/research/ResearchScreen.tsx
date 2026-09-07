@@ -560,7 +560,7 @@ export function ResearchScreen(): React.JSX.Element {
           </p>
         </div>
       </Panel>
-      <ExperimentsPanel key={`${session.sessionId}:${company.id}`} session={session} company={company} graph={graph} onFollowUp={(idea) => { setFollowUpIdea(idea); setInventing(true); }} />
+      <ExperimentsPanel key={`${session.sessionId}:${company.id}`} session={session} company={company} graph={graph} onOpenNode={setSelectedId} onFollowUp={(idea) => { setFollowUpIdea(idea); setInventing(true); }} />
       {nodeEconomy && customNodes.length > 0 ? (
         <Panel title="Your discoveries and hypotheses" iconName="compass">
           <div className="space-y-2">

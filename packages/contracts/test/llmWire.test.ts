@@ -23,7 +23,7 @@ describe('model wire compatibility', () => {
   it('preserves a real experiment while omitting an unused review', () => {
     const plan = { question: 'Can agent populations discover a useful method?', method: 'Evolve variants and evaluate them on independent held-out tasks.', budgetUsd: 1000, computeUnits: 10, researchersAssigned: 1, reviewAfterQuarters: 1 };
     const proposal = { nodeType: 'player_hypothesis', title: 'An open investigation', summary: 'Investigate evolving agents without assuming a technology result.', novelty: 0.5, plausibility: 0.5, requiredCapabilities: ['agents'], estimatedCost: 1000, estimatedQuarters: 1, dependencies: [], initialVisibility: 'company_private', rationale: 'Test an unknown with a bounded allocation.', experiment: plan, experimentReview: null };
-    expect(llmWireSchema(InnovationProposalSchema).safeParse(proposal).success).toBe(true);
+    expect(llmWireSchema(InnovationProposalSchema).safeParse({ ...proposal, experiment: { ...plan, autonomous: null, spendingLimitUsd: null } }).success).toBe(true);
     const parsed = InnovationProposalSchema.parse(fromLlmWire(InnovationProposalSchema, proposal));
     expect(parsed.experiment).toEqual(plan);
     expect(Object.hasOwn(parsed, 'experimentReview')).toBe(false);

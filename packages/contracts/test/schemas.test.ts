@@ -862,7 +862,7 @@ describe('constants and invariants', () => {
   // discriminated unions rather than inserted, which is what the append-only
   // test below polices.
   it('pins the contracts version', () => {
-    expect(CONTRACTS_VERSION).toBe('1.12.0');
+    expect(CONTRACTS_VERSION).toBe('1.13.0');
   });
 
   it('ACTION_TYPES matches the discriminated union exactly', () => {

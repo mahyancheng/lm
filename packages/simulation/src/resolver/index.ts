@@ -1,3 +1,4 @@
+import { continueAutonomousExperiments } from '../research/experiments';
 /**
  * @frontier/simulation — resolver
  *
@@ -317,6 +318,7 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
             // way out of a blocked programme and cost nothing in worlds 1 and 2,
             // which never submit either action.
             applyResearchAbandonments(draft, ctx);
+            continueAutonomousExperiments(draft, ctx);
             applyDataPolicies(draft, ctx);
             subsystems.research.advanceProjects(draft, ctx);
             subsystems.research.achieveNodes(draft, ctx);

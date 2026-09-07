@@ -282,6 +282,8 @@ export function resolveActiveCompanyId(session: SessionState, candidateId: strin
 
 /** What one attempt to resolve a quarter produced, including its own failure. */
 export interface ResolveAttempt {
+  /** Exact actions used by the surviving attempt, including recorded research reviews. */
+  readonly submitted: readonly SubmittedAction[];
   /** The outcome, or null when the engine threw on both attempts. */
   readonly outcome: FrontierResolutionOutcome | null;
   /** The World Director proposal the surviving attempt actually used. */
@@ -322,16 +324,18 @@ export function resolveQuarterSafely(
     getEngine().resolver.resolveQuarter(state, actions, proposal, bundles),
 ): ResolveAttempt {
   try {
-    return { outcome: resolve(session, submitted, gmProposal, npcBundles), gmProposal, npcBundles, error: null };
+    return { outcome: resolve(session, submitted, gmProposal, npcBundles), submitted, gmProposal, npcBundles, error: null };
   } catch {
     // Anything the model contributed is discarded and the quarter resolves
     // fully offline. The game never blocks on a model.
   }
+  const offlineActions = submitted.filter((action) => action.origin !== 'research_agent');
   try {
-    return { outcome: resolve(session, submitted, null, []), gmProposal: null, npcBundles: [], error: null };
+    return { outcome: resolve(session, offlineActions, null, []), submitted: offlineActions, gmProposal: null, npcBundles: [], error: null };
   } catch (error) {
     return {
       outcome: null,
+      submitted: offlineActions,
       gmProposal: null,
       npcBundles: [],
       error: error instanceof Error ? error.message : String(error),

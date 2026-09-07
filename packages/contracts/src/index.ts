@@ -104,4 +104,4 @@ export * from './engine';
  * major when changing the shape of an existing one. `AgentRunRecord.schemaVersion`
  * records this so an old logged model output can always be interpreted.
  */
-export const CONTRACTS_VERSION = '1.12.0';
+export const CONTRACTS_VERSION = '1.13.0';

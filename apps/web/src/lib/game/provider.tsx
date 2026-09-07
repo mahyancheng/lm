@@ -1,5 +1,8 @@
 'use client';
 
+import { automaticResearchReview, dueResearchReviews } from './autonomousResearch';
+import { requestInnovation } from '@/components/screens/research/innovationClient';
+
 /**
  * The demo game store.
  *
@@ -1104,20 +1107,33 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
         const health = await llmHealth();
         modelAvailable = health.available;
         if (health.available) {
+          const investigations = dueResearchReviews(session, PLAYER_ID, submitted);
+          for (const project of investigations) {
+            const remaining = budgetDeadline - Date.now();
+            if (remaining <= 0) break;
+            setHeadline('Research teams are interpreting their experiments');
+            const row: ProgressRow = { label: 'Research team', state: 'running', startedAt: Date.now(), doneAt: null, note: null };
+            rows.push(row); startTicking(); renderProgress();
+            const review = await automaticResearchReview(session, project.id, (input) => withDeadline(requestInnovation(input), remaining));
+            if (review) submitted.push(buildSubmittedActionForCompany(session, { type: 'propose_innovation', proposal: review }, sequences.next(), project.companyId, { origin: 'research_agent', confirmedByHuman: false }));
+            row.state = review ? 'done' : 'skipped';
+            row.doneAt = Date.now(); row.note = review ? 'findings and next directions ready' : 'waiting; no further experiment spend';
+            renderProgress();
+          }
           setHeadline('Consulting the World Director');
           const directorRow: ProgressRow = { label: 'World Director', state: 'pending', startedAt: null, doneAt: null, note: null };
           rows.push(directorRow);
           const directorInput = buildWorldDirectorInput(session, current.previousWorld);
-          if (directorInput !== null) {
+          if (directorInput !== null && Date.now() < budgetDeadline) {
             directorRow.state = 'running';
             directorRow.startedAt = Date.now();
             startTicking();
             renderProgress();
-            gmProposal = await requestWorldDirector(directorInput);
-            directorRow.state = 'done';
+            gmProposal = await withDeadline(requestWorldDirector(directorInput), budgetDeadline - Date.now());
+            directorRow.state = gmProposal ? 'done' : 'skipped';
             directorRow.doneAt = Date.now();
             renderProgress();
-          }
+          } else { directorRow.state = 'skipped'; directorRow.note = 'quarter budget spent'; renderProgress(); }
 
           setHeadline('Rival strategists are planning');
           // Priority order, not the engine's plain size ordering: the rivals
@@ -1255,7 +1271,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       outcome,
       record: {
         quarter: session.quarter,
-        actions: submitted,
+        actions: [...attempt.submitted],
         gmProposal: attempt.gmProposal,
         npcBundles: [...attempt.npcBundles],
         socialTexts,

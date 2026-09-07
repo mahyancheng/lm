@@ -187,3 +187,76 @@ describe('open-ended research', () => {
     expect(InnovationProposalSchema.parse(legacy)).toEqual(legacy);
   });
 });
+
+
+describe('living investigations', () => {
+  function living(limit = 25000) {
+    const { state, company } = fixture();
+    company.balanceSheet.equity += 1_000_000_000 - company.balanceSheet.assets.cash;
+    company.balanceSheet.assets.cash = 1_000_000_000;
+    company.financials.cash = 1_000_000_000;
+    const p = proposal(); p.experiment = { ...p.experiment!, autonomous: true, spendingLimitUsd: limit };
+    const next = resolve(state, [{ type: 'propose_innovation', proposal: p }]).nextState;
+    const project = next.researchProjects.find((entry) => entry.companyId === company.id && entry.experiment)!;
+    return { state: next, project, companyId: company.id };
+  }
+  function evolvingReview(project: ReturnType<typeof started>['project'], label: string): ExperimentReview {
+    return { ...reviewFor(project), recommendation: 'continue', nextMethod: `Investigate ${label} on a newly held-out task distribution.`, hypotheses: [
+      { title: `${label} routing hypothesis`, summary: 'A new routing mechanism suggested by the observed task specialisation.', requiredCapabilities: [], estimatedCost: 1000000, estimatedQuarters: 4, novelty: 0.6, plausibility: 0.7 },
+      { title: `${label} evaluation hypothesis`, summary: 'An independent evaluation architecture to test the unexpected behaviours.', requiredCapabilities: [], estimatedCost: 1000000, estimatedQuarters: 4, novelty: 0.6, plausibility: 0.7 },
+    ] };
+  }
+
+  it('turns one idea into multiple persistent branches and adapts across rounds without founder resubmission', () => {
+    const first = living();
+    const second = resolve(first.state, [{ type: 'propose_innovation', proposal: reviewProposal(evolvingReview(first.project, 'Specialist agents')) }]).nextState;
+    const project = second.researchProjects.find((entry) => entry.id === first.project.id)!;
+    expect(project.experiment!.round).toBe(2);
+    expect(project.experiment!.mandate.method).toContain('Specialist agents');
+    expect(project.experiment!.generatedNodeIds).toHaveLength(2);
+    expect(project.cumulativeSpendUsd).toBe(20000);
+    expect(second.techGraph.edges.filter((edge) => edge.from === project.targetNodeId && edge.kind === 'informs')).toHaveLength(2);
+    const thirdOutcome = resolve(second, [{ type: 'propose_innovation', proposal: reviewProposal(evolvingReview(project, 'Cross-task transfer')) }]);
+    const third = thirdOutcome.nextState;
+    const evolved = third.researchProjects.find((entry) => entry.id === project.id)!;
+    expect(evolved.experiment!.round).toBe(3);
+    expect(evolved.experiment!.findings).toHaveLength(2);
+    expect(evolved.experiment!.generatedNodeIds).toHaveLength(4);
+    expect(evolved.experiment!.mandate.method).toContain('Cross-task transfer');
+    expect(evolved.cumulativeSpendUsd).toBe(25000);
+    const rival = third.companies.find((entry) => entry.id !== first.companyId)!;
+    const privateIds = evolved.experiment!.generatedNodeIds!;
+    expect(techGraphForCompany(third.techGraph, rival.id).nodes.some((node) => privateIds.includes(node.id))).toBe(false);
+    expect(third.companies.find((entry) => entry.id === first.companyId)!.ownedNodes!.some((id) => privateIds.includes(id))).toBe(false);
+    const restored = SessionStateSchema.parse(JSON.parse(JSON.stringify(third)));
+    expect(restored.researchProjects.find((entry) => entry.id === project.id)!.experiment).toEqual(evolved.experiment);
+    const final = resolve(restored, [{ type: 'propose_innovation', proposal: reviewProposal(evolvingReview(evolved, 'Final checks')) }]).nextState;
+    const finished = final.researchProjects.find((entry) => entry.id === project.id)!;
+    expect(finished.cumulativeSpendUsd).toBe(25000);
+    expect(finished.experiment!.round).toBe(3);
+    expect(finished.status).toBe('paused');
+  });
+
+  it.each(['ask_founder', 'stop'] as const)('honours %s instead of silently running another round', (recommendation) => {
+    const { state, project } = living();
+    const review = { ...evolvingReview(project, 'A disputed result'), recommendation };
+    const next = resolve(state, [{ type: 'propose_innovation', proposal: reviewProposal(review) }]).nextState;
+    const paused = next.researchProjects.find((entry) => entry.id === project.id)!;
+    expect(paused.status).toBe('paused'); expect(paused.cumulativeSpendUsd).toBe(10000);
+    expect(paused.experiment!.round).toBe(1);
+  });
+
+  it('does not duplicate branches or effects on replay or resubmission', () => {
+    const { state, project } = living();
+    const input = { type: 'propose_innovation' as const, proposal: reviewProposal(evolvingReview(project, 'Persistent discovery')) };
+    const a = resolve(state, [input]); const b = resolve(state, [input]);
+    expect(hashState(a.nextState)).toBe(hashState(b.nextState));
+    const replayed = resolve(a.nextState, [input]).nextState;
+    expect(replayed.researchProjects.find((entry) => entry.id === project.id)!.experiment!.generatedNodeIds).toHaveLength(2);
+  });
+
+  it('requires an explicit spending limit for automatic investigations', () => {
+    const { state } = fixture(); const p = proposal(); p.experiment!.autonomous = true;
+    expect(engine.validator.validateBatch(state, [action(state, { type: 'propose_innovation', proposal: p })])[0]!.status).toBe('rejected');
+  });
+});

@@ -169,6 +169,8 @@ export type ResearchProjectStatus = z.infer<typeof ResearchProjectStatusSchema>;
 
 /** A bounded investigation; the outcome is deliberately not specified. */
 export const ExperimentPlanSchema = z.object({
+  autonomous: z.boolean().optional().describe('Continue adapting the investigation automatically within the standing cash limit.'),
+  spendingLimitUsd: z.number().finite().min(1).max(1e12).optional().describe('Lifetime experimental cash authorised for automatic rounds. Never raised by the model.'),
   question: z.string().min(12).max(1200),
   method: z.string().min(12).max(1200),
   budgetUsd: z.number().finite().min(1).max(1e12),
@@ -178,7 +180,20 @@ export const ExperimentPlanSchema = z.object({
 });
 export type ExperimentPlan = z.infer<typeof ExperimentPlanSchema>;
 
+export const ExperimentHypothesisSchema = z.object({
+  title: z.string().min(5).max(120),
+  summary: z.string().min(20).max(1000),
+  requiredCapabilities: z.array(z.string().min(1).max(80)).max(8),
+  estimatedCost: z.number().finite().min(1).max(1e12),
+  estimatedQuarters: z.number().int().min(1).max(60),
+  novelty: z.number().min(0).max(1),
+  plausibility: z.number().min(0).max(1),
+});
+
 export const ExperimentReviewSchema = z.object({
+  hypotheses: z.array(ExperimentHypothesisSchema).max(3).optional().describe('Distinct new research branches justified by this round; empty when the evidence suggests none.'),
+  nextMethod: z.string().min(12).max(1200).optional().describe('How the ongoing investigation should adapt to its findings, within its unchanged mandate.'),
+  recommendation: z.enum(['continue', 'ask_founder', 'stop']).optional().describe('Continue within the mandate, request a founder decision, or conclude this investigation.'),
   projectId: z.string().min(1).max(200),
   round: z.number().int().min(1).max(200),
   elapsedQuarters: z.number().int().min(1).max(200),
@@ -197,9 +212,10 @@ export const ResearchExperimentSchema = z.object({
   awaitingReview: z.boolean(),
   lastRunQuarter: QuarterIndexSchema.nullable(),
   computeUsedLastRun: z.number().finite().nonnegative(),
-    cashSpentLastRun: z.number().finite().min(0),
+  cashSpentLastRun: z.number().finite().min(0),
   computeUsed: z.number().finite().min(0),
   researcherQuarters: z.number().finite().min(0),
+  generatedNodeIds: z.array(z.string().min(1)).max(600).optional(),
   findings: z.array(ExperimentReviewSchema.extend({ quarter: QuarterIndexSchema, eventId: z.string().min(1) })).max(200),
 });
 export type ResearchExperiment = z.infer<typeof ResearchExperimentSchema>;

@@ -63,3 +63,18 @@ describe('open-ended research interface', () => {
     expect(context.previousFindings).toEqual([]);
   });
 });
+
+
+it('shows automatic adaptation and several distinct branches from one investigation', () => {
+  const { session, company, graph, project } = fixture();
+  project.experiment!.mandate = { ...project.experiment!.mandate, autonomous: true, spendingLimitUsd: 50000 };
+  const template = graph.nodes[0]!;
+  graph.nodes.push({ ...template, id: 'tech_branch_a', title: 'Emergent agent specialisation' }, { ...template, id: 'tech_branch_b', title: 'Independent transfer evaluation' });
+  project.experiment!.generatedNodeIds = ['tech_branch_a', 'tech_branch_b'];
+  session.researchProjects.push(project);
+  const html = renderToStaticMarkup(<ExperimentsPanel {...{ session, company, graph }} onFollowUp={() => {}} />);
+  expect(html).toContain('The team reviews and adapts as quarters resolve.');
+  expect(html).toContain('Emergent agent specialisation');
+  expect(html).toContain('Independent transfer evaluation');
+  expect(html).toContain('Research branches discovered');
+});

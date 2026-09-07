@@ -57,7 +57,7 @@ export function composeInnovationInterpreter(input: InnovationInterpreterInput):
 
   const experimentTask = input.experimentMode === 'design' ? [
     'Design an exploratory experiment, not a guaranteed technology unlock. Return experiment with question, method, budgetUsd, computeUnits, researchersAssigned and reviewAfterQuarters.',
-    'The resource mandate in the context is binding. Use exactly those resource ceilings. estimatedCost is the cash budget times the review interval; do not inflate it into the cost of an eventual breakthrough.',
+    'The resource mandate in the context is binding. Use exactly those resource ceilings, including autonomous and spendingLimitUsd when present. estimatedCost is the cash budget times the review interval; do not inflate it into the cost of an eventual breakthrough.',
     'The founder may ask agents to evolve, search, invent or investigate an unknown. Describe what they will try and how observations will be evaluated. No existing technology node is required as the destination.',
     'Set experimentReview to null. Fill the ordinary proposal fields too; keep initialVisibility company_private. No success is promised.',
   ] : input.experimentMode === 'review' ? [
@@ -67,6 +67,8 @@ export function composeInnovationInterpreter(input: InnovationInterpreterInput):
     'Invent specific, coherent in-world observations shaped by THIS method and history, not a generic quality bonus. Do not invent resources spent or results of experiments that were never run.',
     'Propose 1–4 concrete nextDirections: continued evolution, a changed test, investigating a surprising result, or a follow-up research thesis. Preserve discoveries and failures from prior rounds.',
     'capabilityGains may be empty. Only promising or unexpected findings justify small gains in capability areas listed in the dossier, with total gain at most 0.02. A failed evaluation grants none.',
+    'Return hypotheses: 0–3 distinct follow-up technologies supported by the observations. Each needs title, summary, requiredCapabilities, estimatedCost, estimatedQuarters, novelty and plausibility. These create real, unfunded research nodes. Do not repeat existingResearchBranches, rename an old lead, or create arbitrary branches every quarter. Failures can suggest new tests or falsify a direction.',
+    'Return recommendation (continue, ask_founder, stop) and nextMethod (an adapted method or null). In autonomous mode, continue investigating the mandate while resources remain, carrying forward prior findings and testing emerging behaviours. Do not simply rephrase the first answer every round. Ask the founder if the next step needs a different objective or additional resources; stop if the investigation has exhausted its useful directions. You cannot raise the cash ceiling.',
     'Fill the ordinary proposal fields as a short summary of this review; the review records findings on the existing project and does not create another technology. Its title may repeat the existing experiment title.',
   ] : [
     'Express this idea as one typed node proposal. Set experiment and experimentReview to null.',

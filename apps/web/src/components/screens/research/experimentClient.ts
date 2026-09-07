@@ -17,13 +17,16 @@ export function experimentReviewInput(state: SessionState, company: Company, gra
   const node = graph.nodes.find((entry) => entry.id === project.targetNodeId);
   const input = buildInnovationInput(state, company, graph, experiment.mandate.question, experiment.mandate.budgetUsd, experiment.mandate.computeUnits);
   return {
-    ...input, experimentMode: 'review',
+    ...input, existingNodes: input.existingNodes.slice(-400), experimentMode: 'review',
     experimentContext: JSON.stringify({
       projectId: project.id, title: node?.title, round: experiment.round, elapsedQuarters: project.quartersElapsed,
       question: experiment.mandate.question, method: experiment.mandate.method,
       completedPeriods: experiment.roundQuarters, cumulativeCashSpentUsd: project.cumulativeSpendUsd,
       computeUnitQuartersThisRound: experiment.computeUsed, researcherQuartersThisRound: experiment.researcherQuarters,
       lastRunQuarter: experiment.lastRunQuarter,
+      autonomous: experiment.mandate.autonomous ?? false,
+      remainingCashCeilingUsd: experiment.mandate.spendingLimitUsd === undefined ? null : Math.max(0, experiment.mandate.spendingLimitUsd - project.cumulativeSpendUsd),
+      existingResearchBranches: (experiment.generatedNodeIds ?? []).slice(-12).map((id) => graph.nodes.find((node) => node.id === id)).filter(Boolean).map((node) => ({ title: node!.title, status: node!.status })),
       previousFindings: experiment.findings.slice(-3).map((finding) => ({ round: finding.round, outcome: finding.outcome, observation: finding.observation.slice(0, 700), interpretation: finding.interpretation.slice(0, 500), nextDirections: finding.nextDirections })),
     }),
   };

@@ -2,6 +2,7 @@
  * deterministic engine; no model is called here and no generated code executes. */
 import type { Company, ExperimentReview, InnovationIntegrationResult, InnovationProposal, ResearchProject, ResolverContext, SessionState, TechNode } from '@frontier/contracts';
 import { makeId, quarterToYear } from '@frontier/contracts';
+import { integrateDiscoveredInnovation } from './innovation';
 import { isNodeEconomyWorld } from '../economy/sectors';
 import { heldComputeUnits } from '../companies/products';
 import { drawPerUnitOf, lineNodeOf } from '../graph/lines';
@@ -74,8 +75,19 @@ export function integrateExperiment(state: SessionState, proposal: InnovationPro
     experiment.findings.push({ ...applied, quarter: ctx.quarter, eventId });
     const node = state.techGraph.nodes.find((entry) => entry.id === project.targetNodeId);
     if (node) node.confidenceByCompany[company.id] = unit((node.confidenceByCompany[company.id] ?? 0.5) + (positive ? 0.05 : review.outcome === 'negative' || review.outcome === 'evaluation_failure' ? -0.1 : 0));
+    for (const hypothesis of review.hypotheses ?? []) {
+      // A lead is a real, costed hypothesis, not a free demonstrated technology.
+      const discovered = integrateDiscoveredInnovation(state, {
+        ...hypothesis, nodeType: 'player_hypothesis', dependencies: [],
+        initialVisibility: 'company_private', rationale: review.interpretation,
+      }, ctx, company, submitted?.actorCharacterId ?? null);
+      if (!discovered.accepted || !discovered.nodeId) continue;
+      experiment.generatedNodeIds ??= [];
+      experiment.generatedNodeIds.push(discovered.nodeId);
+      state.techGraph.edges.push({ from: project.targetNodeId, to: discovered.nodeId, kind: 'informs', strength: 0.5 });
+    }
     bumpGraphVersion(state, ctx);
-    return result(true, project.targetNodeId, ['Findings recorded. The experiment stays paused until you approve its next direction.']);
+    return result(true, project.targetNodeId, ['Findings and new hypotheses recorded. The standing mandate determines whether work continues.']);
   }
 
   const plan = proposal.experiment;
@@ -84,6 +96,7 @@ export function integrateExperiment(state: SessionState, proposal: InnovationPro
   const free = experimentResources(state, company);
   if (plan.computeUnits > free.computeUnits || plan.researchersAssigned > free.researchersAssigned) return reject('The experiment no longer fits the company’s spare compute and researchers. Adjust its resources.');
   if (plan.budgetUsd <= 0 || plan.budgetUsd > Math.max(0, company.financials.cash)) return reject('The company cannot cover the first experiment period. Reduce its cash budget.');
+  if (plan.autonomous && (plan.spendingLimitUsd === undefined || plan.spendingLimitUsd < plan.budgetUsd)) return reject('Automatic investigations need a funded standing cash limit.');
   const year = quarterToYear(state.startYear, ctx.quarter);
   const nodeId = makeId('tech', company.id, proposal.title, ctx.quarter);
   const node: TechNode = {
@@ -120,7 +133,7 @@ export function advanceExperiment(state: SessionState, ctx: ResolverContext, pro
   const compute = Math.min(project.computeAllocated, free.computeUnits);
   const researchers = Math.min(project.talentAllocated, free.researchersAssigned);
   const alreadySpent = state.researchProjects.reduce((sum, entry) => sum + (entry.companyId === company.id && entry.experiment?.lastRunQuarter === ctx.quarter ? entry.experiment.cashSpentLastRun : 0), 0);
-  const cash = Math.min(project.budgetQuarterly, Math.max(0, company.financials.cash - alreadySpent));
+  const cash = Math.min(project.budgetQuarterly, Math.max(0, company.financials.cash - alreadySpent), Math.max(0, (experiment.mandate.spendingLimitUsd ?? Infinity) - project.cumulativeSpendUsd));
   experiment.lastRunQuarter = ctx.quarter;
   experiment.cashSpentLastRun = researchers > 0 ? money(cash) : 0;
   experiment.computeUsedLastRun = cash > 0 && researchers > 0 ? compute : 0;
@@ -131,7 +144,8 @@ export function advanceExperiment(state: SessionState, ctx: ResolverContext, pro
     experiment.computeUsed += compute;
     experiment.researcherQuarters += researchers;
   }
-  const checkpoint = experiment.roundQuarters >= experiment.mandate.reviewAfterQuarters || cash < project.budgetQuarterly || researchers < project.talentAllocated || compute < project.computeAllocated;
+  const reachedLimit = experiment.mandate.spendingLimitUsd !== undefined && project.cumulativeSpendUsd >= experiment.mandate.spendingLimitUsd;
+  const checkpoint = reachedLimit || experiment.roundQuarters >= experiment.mandate.reviewAfterQuarters || cash < project.budgetQuarterly || researchers < project.talentAllocated || compute < project.computeAllocated;
   if (checkpoint) {
     experiment.awaitingReview = true;
     project.status = 'paused';
@@ -147,4 +161,37 @@ export function advanceExperiment(state: SessionState, ctx: ResolverContext, pro
   }, 'private');
   // Completion measures work performed, never progress toward an assumed scientific success.
   project.progress = 0;
+}
+
+/** Resume only after explicit manual starts/adjustments have claimed their
+ * resources. The standing mandate authorises adaptation, never a larger spend. */
+export function continueAutonomousExperiments(state: SessionState, ctx: ResolverContext): void {
+  if (!state.config.allowPlayerInnovation) return;
+  for (const project of state.researchProjects) {
+    const experiment = project.experiment;
+    if (!experiment?.mandate.autonomous || project.status !== 'paused' || !experiment.awaitingReview) continue;
+    const finding = experiment.findings.find((entry) => entry.round === experiment.round);
+    if (!finding || finding.recommendation !== 'continue' || !finding.nextMethod) continue;
+    const company = state.companies.find((entry) => entry.id === project.companyId && entry.isActive);
+    if (!company) continue;
+    const remaining = (experiment.mandate.spendingLimitUsd ?? 0) - project.cumulativeSpendUsd;
+    if (remaining < 1 || company.financials.cash < 1 || experiment.round >= 200 || project.quartersElapsed + experiment.mandate.reviewAfterQuarters > 200) continue;
+    const free = experimentResources(state, company);
+    if (free.computeUnits < experiment.mandate.computeUnits || free.researchersAssigned < experiment.mandate.researchersAssigned) continue;
+    experiment.mandate.method = finding.nextMethod;
+    experiment.round += 1;
+    experiment.roundQuarters = 0;
+    experiment.computeUsed = 0;
+    experiment.researcherQuarters = 0;
+    experiment.awaitingReview = false;
+    project.status = 'active';
+    project.budgetQuarterly = Math.min(experiment.mandate.budgetUsd, remaining);
+    project.computeAllocated = experiment.mandate.computeUnits;
+    project.talentAllocated = experiment.mandate.researchersAssigned;
+    const eventId = emitEvent(state, ctx, 'research_progress', company.id, project.targetNodeId, {
+      kind: 'experiment_adapted', projectId: project.id, round: experiment.round,
+      method: experiment.mandate.method, remainingCashCeilingUsd: remaining,
+    }, 'private');
+    ctx.log({ phase: 'research_resolution', text: `The research team began round ${experiment.round}: ${finding.nextMethod}`, deltaLabel: 'Investigation adapted', refEventIds: [eventId], tone: 'neutral', subjectId: company.id });
+  }
 }

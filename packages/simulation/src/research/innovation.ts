@@ -136,8 +136,17 @@ export function integrateInnovationProposal(
   ctx: ResolverContext,
 ): InnovationIntegrationResult {
   if (proposal.experiment || proposal.experimentReview) return integrateExperiment(draft, proposal, ctx);
+  return integrateTechnology(draft, proposal, ctx, resolveProposer(draft, ctx, proposal));
+}
+
+/** An experiment may discover several unfunded hypotheses. Ownership comes
+ * from its validated parent project, never from model-supplied company ids. */
+export function integrateDiscoveredInnovation(draft: SessionState, proposal: InnovationProposal, ctx: ResolverContext, company: Company, characterId: string | null): InnovationIntegrationResult {
+  return integrateTechnology(draft, proposal, ctx, { company, companyId: company.id, characterId }, true);
+}
+
+function integrateTechnology(draft: SessionState, proposal: InnovationProposal, ctx: ResolverContext, proposer: Proposer, unfundedDiscovery = false): InnovationIntegrationResult {
   const reasons: string[] = [];
-  const proposer = resolveProposer(draft, ctx, proposal);
   const company = proposer.company;
 
   const knownDependencies: TechNode[] = [];
@@ -214,7 +223,7 @@ export function integrateInnovationProposal(
     return rejected();
   }
 
-  if (company !== undefined && adjustedCost > reach * INNOVATION_AFFORDABILITY_MULTIPLE) {
+  if (!unfundedDiscovery && company !== undefined && adjustedCost > reach * INNOVATION_AFFORDABILITY_MULTIPLE) {
     reasons.push(
       `The engine costs this programme at ${usdLabel(adjustedCost)}, more than ${INNOVATION_AFFORDABILITY_MULTIPLE} times everything ${company.name} could reach.`,
     );

@@ -374,6 +374,9 @@ const adjustResearchProject: Rule<'adjust_research_project'> = (intent, verdict,
   }
   if (project.experiment) {
     const experiment = project.experiment;
+    if (experiment.mandate.spendingLimitUsd !== undefined && project.cumulativeSpendUsd >= experiment.mandate.spendingLimitUsd) {
+      verdict.reject('requirement_not_met', 'This investigation has spent its standing cash limit. Start a follow-up with a new mandate.'); return;
+    }
     if (intent.budgetUsd < 1 || intent.researchersAssigned < 1) {
       verdict.reject('requirement_not_met', 'An experimental round needs a positive cash budget and at least one researcher.'); return;
     }
@@ -490,6 +493,9 @@ const proposeInnovation: Rule<'propose_innovation'> = (intent, verdict, ctx) => 
   }
   if (intent.proposal.experiment) {
     const plan = intent.proposal.experiment;
+    if (plan.autonomous && (plan.spendingLimitUsd === undefined || plan.spendingLimitUsd < plan.budgetUsd)) {
+      verdict.reject('requirement_not_met', 'Automatic investigations need a standing cash limit covering at least the first quarter.'); return;
+    }
     if (!isNodeEconomyWorld(ctx.draft)) { verdict.reject('requirement_not_met', 'Exploratory experiments require a world-3 session.'); return; }
     const freeResearchers = Math.max(0, ctx.budget.availableStaff(ctx.company, 'researchers') - researchersCommitted(ctx.draft, ctx.company.id));
     const freeCompute = Math.max(0, experimentResources(ctx.draft, ctx.company).computeUnits - ctx.budget.committedCompute(ctx.company.id));

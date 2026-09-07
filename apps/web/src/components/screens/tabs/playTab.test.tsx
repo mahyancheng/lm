@@ -9,9 +9,9 @@
  *
  * What is pinned:
  *
- * 1. **The order**, read off the tab's own source: the quarter, the queue, the
- *    notes, the seal, the Chief of Staff, last quarter, the pipeline — and the
- *    phone's sticky Resolve bar last, so it comes to rest on the tab bar.
+ * 1. **The order**, read off the tab's own source: the quarter, only the
+ *    notes that matter, the seal, then queue detail, Chief of Staff, last
+ *    quarter, the pipeline — and the phone's sticky Resolve bar last.
  * 2. **The queue is grouped by resolution phase**, in pipeline order, and a
  *    blocked row carries its own Confirm.
  * 3. **The gate is unchanged**: `ConfirmDialog` with `requireTyped="RESOLVE"`,
@@ -89,9 +89,9 @@ const queue: readonly QueuedActionEntry[] = [budget, cut];
 
 const CARDS = [
   'QuarterCard',
-  'QueueCard',
   'BeforeYouSubmitCard',
   'SealCard',
+  'QueueCard',
   'ChiefCard',
   'LastQuarterCard',
   'PipelineCard',
@@ -124,8 +124,10 @@ describe('the Play tab is the desk, in the plan’s order', () => {
     expect(sheetHref('resolution')).toBe('/play?sheet=resolution');
   });
 
-  it('carries none of the tray’s spacing hack, and no old route in its source', () => {
+  it('carries none of the tray’s spacing hack, keeps company labels public, and has no old route in its source', () => {
     expect(SOURCE).not.toContain('trayLifted');
+    expect(SOURCE).toContain('usePlayerView');
+    expect(SOURCE).not.toContain('session.companies');
     for (const route of Object.keys(LEGACY_ROUTES)) {
       if (TAB_PATHS.has(route)) continue;
       expect(SOURCE.includes(`'${route}'`), `${route} is written out in PlayTab.tsx`).toBe(false);
@@ -269,6 +271,11 @@ describe('the rest of the desk', () => {
   it('offers Resolve on the phone bar as well as the seal', () => {
     expect(restOfDesk.split('Resolve Q3 2027').length - 1).toBeGreaterThanOrEqual(1);
     expect(restOfDesk).toContain('you type the word to confirm');
+  });
+
+  it('links the readiness seal to the queue detail without changing the gate', () => {
+    expect(restOfDesk).toContain('Review queue');
+    expect(readFileSync(`${DIR}cards/play-cards.tsx`, 'utf8')).toContain("getElementById('queued-instructions')");
   });
 
   it('keeps the phone bar clear of the Chief of Staff dock', () => {

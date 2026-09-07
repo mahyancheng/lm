@@ -11,12 +11,12 @@
  * Seven cards, in the order the plan sets:
  *
  * 1. The quarter — what is about to close, and where cash lands if it does.
- * 2. Queued instructions — grouped by the phase that will consume each, with
- *    confirm and remove on the row. This absorbs the floating action-queue
- *    tray, which used to carry the same list over the top of every screen.
- * 3. Before you submit — the notes stuck to the desk, absent when there are none.
- * 4. The seal — the same gate as before: `ConfirmDialog`, the typed word, and a
+ * 2. Before you submit — only the notes that stop or endanger the quarter.
+ * 3. The seal — the same gate as before: `ConfirmDialog`, the typed word, and a
  *    blocked action still refusing the whole submission.
+ * 4. Queued instructions — grouped by the phase that will consume each, with
+ *    confirm and remove on the row. The seal links straight to this detail when
+ *    a founder needs to clear a hold.
  * 5. Ask the Chief of Staff — four questions, and the eleven instructions no
  *    other surface in the game can queue.
  * 6. Last quarter — the report's own figures, opening the full report.
@@ -45,6 +45,7 @@ import {
   useLlm,
   useOutcome,
   usePlayerCompany,
+  usePlayerView,
   useQueuedActions,
   useResolving,
   useSession,
@@ -60,6 +61,7 @@ export function PlayTab(): React.JSX.Element {
   const pathname = usePathname();
   const session = useSession();
   const company = usePlayerCompany();
+  const view = usePlayerView();
   const queue = useQueuedActions();
   const llm = useLlm();
   const settings = useSettings();
@@ -99,10 +101,12 @@ export function PlayTab(): React.JSX.Element {
   // The same queue folded by the company each instruction belongs to. A group of
   // more than one is what turns the single cash projection into one row each.
   const companyGroups = useMemo(() => groupQueueByCompany(session, queue, PLAYER_ID), [session, queue]);
+  // Queue labels may name a subsidiary or another company.  The player seat can
+  // always name its own company; every other label comes from the public view.
   const companyNameOf = useMemo(() => {
-    const names = new Map(session.companies.map((entry) => [entry.id, entry.name]));
+    const names = new Map([[company.id, company.name], ...view.visibleCompanies.map((entry) => [entry.id, entry.name] as const)]);
     return (companyId: string): string => names.get(companyId) ?? companyId;
-  }, [session.companies]);
+  }, [company.id, company.name, view.visibleCompanies]);
 
   /* --- last quarter -------------------------------------------------------- */
 
@@ -163,18 +167,6 @@ export function PlayTab(): React.JSX.Element {
         netSpendUsd={cash.outflow - cash.inflow}
       />
 
-      <QueueCard
-        groups={groups}
-        queued={queue.length}
-        startYear={session.startYear}
-        resolving={resolving}
-        companyGroups={companyGroups}
-        companyNameOf={companyNameOf}
-        onConfirm={confirmAction}
-        onRemove={unqueueAction}
-        onClear={clearQueue}
-      />
-
       <BeforeYouSubmitCard
         blocked={blocked.length}
         rejected={rejected.length}
@@ -196,6 +188,20 @@ export function PlayTab(): React.JSX.Element {
         availableUsd={available}
         onArm={() => setArming(true)}
       />
+
+      <div id="queued-instructions" className="scroll-mt-4">
+        <QueueCard
+          groups={groups}
+          queued={queue.length}
+          startYear={session.startYear}
+          resolving={resolving}
+          companyGroups={companyGroups}
+          companyNameOf={companyNameOf}
+          onConfirm={confirmAction}
+          onRemove={unqueueAction}
+          onClear={clearQueue}
+        />
+      </div>
 
       <ChiefCard prompts={quickPromptsFor(pathname, null)} />
 

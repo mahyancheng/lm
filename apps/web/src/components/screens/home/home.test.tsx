@@ -23,9 +23,8 @@
  *    wrong reason.
  * 3. **The offers card exists only when there is an offer.** A heading over an
  *    empty inbox is worse than no heading.
- * 4. **The queue is stated on Home.** The first row of "Needs deciding" says
- *    how many instructions are queued and how many are unconfirmed, and opens
- *    the Play desk — the always-visible way to advance time, from Home.
+ * 4. **The next decision leads Home.** It is mounted between company identity
+ *    and the operating figures; the queue remains a direct path to the desk.
  *
  * `HomeTab` itself reads the store and cannot be rendered here; it is checked
  * by source, which is also how the raw-legacy-href rule is enforced on it.
@@ -246,10 +245,12 @@ describe('every address on Home', () => {
       expect(source, `HomeTab links at ${route} directly`).not.toContain(`"${route}"`);
       expect(source, `HomeTab pushes ${route} directly`).not.toContain(`'${route}'`);
     }
-    // And it mounts the five cards, so the page is the page the plan describes.
+    // The next decision comes before operating detail, rather than being buried after it.
     for (const card of ['FloorCard', 'FiguresGrid', 'NeedsDeciding', 'OffersCard', 'ObjectivesCard', 'TapeStrip']) {
       expect(source).toContain(`<${card}`);
     }
+    expect(source.indexOf('<NeedsDeciding')).toBeGreaterThan(source.indexOf('<FloorCard'));
+    expect(source.indexOf('<NeedsDeciding')).toBeLessThan(source.indexOf('<FiguresGrid'));
   });
 });
 
@@ -285,13 +286,15 @@ describe('the offers card', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('needs deciding', () => {
-  it('leads with the queue and opens the desk', () => {
+  it('features the first real decision and keeps the queue as a direct desk action', () => {
     const markup = renderToStaticMarkup(<NeedsDeciding items={feed} queued={4} unconfirmed={2} />);
-    expect(markup).toContain('>4</span> queued');
-    expect(markup).toContain('>2</span> unconfirmed');
+    expect(markup).toContain('Your next decision');
+    expect(markup).toContain(feed[0]?.text ?? '');
+    expect(markup).toContain('confirmation needed');
+    expect(markup).toContain('Quarter desk');
     expect(markup).toContain(`href="${tabPath('play')}"`);
-    // The row is a thumb target, not a line of text.
-    expect(markup).toContain('tap-target');
+    // Both the priority decision and desk route are thumb targets.
+    expect(markup.match(/tap-target/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it('caps the feed and counts the rest', () => {
@@ -300,12 +303,12 @@ describe('needs deciding', () => {
     const beyond = feed[FEED_LIMIT];
     if (beyond === undefined) throw new Error('the feed shrank below the cap');
     expect(markup).not.toContain(beyond.text);
-    expect(markup).toContain(`${feed.length - FEED_LIMIT} more`);
+    expect(markup).toContain(`${feed.length - FEED_LIMIT} additional signal`);
   });
 
   it('says so when nothing is asking for an answer', () => {
     const markup = renderToStaticMarkup(<NeedsDeciding items={[]} queued={0} unconfirmed={0} />);
     expect(markup).toContain('Nothing is asking for you');
-    expect(markup).not.toContain('more · open the desk');
+    expect(markup).toContain('Quarter desk');
   });
 });

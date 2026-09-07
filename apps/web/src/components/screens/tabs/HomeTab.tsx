@@ -4,9 +4,8 @@
  * Home — my company at a glance.
  *
  * One scrolling page of cards, read straight down in the order a returning
- * founder checks things: whose company this is and what quarter it is; the six
- * figures that decide whether anything else matters; what is asking for an
- * answer; what has been offered for the company; the goals; the tape.
+ * founder checks things: whose company this is and what quarter it is; what is
+ * asking for an answer; then the six figures that explain the operating position; what has been offered for the company; the goals; the tape.
  *
  * Every card states its figures on the page — the answer is read without a tap
  * — and opens exactly one sheet over this tab. Nothing here is a menu: the
@@ -83,9 +82,9 @@ export function HomeTab(): React.JSX.Element {
         scene={<OfficeSceneCompact href={sheetHref('company')} />}
       />
 
-      <FiguresGrid company={company} metrics={metrics} marketCap={marketCap} quotes={ownQuotes} />
-
       <NeedsDeciding items={feed} queued={queued.length} unconfirmed={unconfirmed} />
+
+      <FiguresGrid company={company} metrics={metrics} marketCap={marketCap} quotes={ownQuotes} />
 
       <OffersCard offers={offers} startYear={session.startYear} />
 

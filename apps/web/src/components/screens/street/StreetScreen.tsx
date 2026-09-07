@@ -20,7 +20,8 @@
  */
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { CONTROL_DECISIVE_PCT, makeId } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
 import {
@@ -55,7 +56,11 @@ export function StreetScreen(): React.JSX.Element {
   const company = usePlayerCompany();
   const founder = usePlayerCharacter();
   const { lastOutcome } = useGame();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  // A disclosed holder on the Market tab names the institution it means to
+  // inspect; the ordinary roster keeps the same drawer interaction.
+  const requestedEntityId = searchParams?.get('entity') ?? null;
+  const [openId, setOpenId] = useState<string | null>(requestedEntityId);
 
   const report = view.economyReport;
   const entities = report?.capitalEntities ?? [];
@@ -107,6 +112,9 @@ export function StreetScreen(): React.JSX.Element {
   );
 
   const cards = useMemo(() => streetCards(report, stanceContext), [report, stanceContext]);
+  useEffect(() => {
+    if (requestedEntityId !== null && cards.some((card) => card.row.entityId === requestedEntityId)) setOpenId(requestedEntityId);
+  }, [cards, requestedEntityId]);
   const selected = openId === null ? null : (cards.find((card) => card.row.entityId === openId) ?? null);
 
   const ledgerRows = useMemo(

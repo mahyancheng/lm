@@ -37,6 +37,7 @@ import {
   DealsCard,
   FundingCard,
   PortfolioCard,
+  QuoteHistory,
   RegisterCard,
   StockCard,
   TapeCard,
@@ -184,6 +185,15 @@ describe('every address on the Market tab', () => {
   });
 });
 
+describe('the stock card uses the real close history as a compact graphic', () => {
+  it('renders a bar for each close and stays absent before a history exists', () => {
+    const markup = renderToStaticMarkup(<QuoteHistory history={[12, 10, 18]} />);
+    expect(markup).toContain('3 quarterly closes on the record');
+    expect((markup.match(/rounded-sm/g) ?? [])).toHaveLength(3);
+    expect(renderToStaticMarkup(<QuoteHistory history={[12]} />)).toBe('');
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /*  The register card                                                          */
 /* -------------------------------------------------------------------------- */
@@ -197,6 +207,15 @@ describe('the register card', () => {
   it('names the short book’s badge and the money pointed at you', () => {
     expect(page).toContain('squeeze territory');
     expect(page).toContain('Dry powder aimed at you');
+  });
+
+  it('opens the named disclosed holder, rather than the generic Street roster', () => {
+    const markup = renderRegister(0);
+    expect(hrefsIn(markup)).toContain(sheetHref('street', { entity: 'fund_a' }));
+    expect(hrefsIn(markup)).toContain(sheetHref('street', { entity: 'fund_b' }));
+    const street = readFileSync(join(SRC_ROOT, 'components/screens/street/StreetScreen.tsx'), 'utf8');
+    expect(street).toContain("searchParams?.get('entity')");
+    expect(street).toContain('setOpenId(requestedEntityId)');
   });
 
   it('says a holder is absent rather than summarising one below the threshold', () => {

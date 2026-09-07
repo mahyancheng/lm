@@ -40,6 +40,31 @@ export interface StockCardProps {
   readonly history: readonly number[];
 }
 
+/** A compact reading of the actual closes, kept deliberately free of axes or invented targets. */
+export function QuoteHistory({ history }: { readonly history: readonly number[] }): React.JSX.Element | null {
+  if (history.length < 2) return null;
+  const low = Math.min(...history);
+  const spread = Math.max(1, Math.max(...history) - low);
+  const rising = (history[history.length - 1] ?? 0) >= (history[0] ?? 0);
+  return (
+    <div className="mt-3 border-t border-hair pt-3" aria-label={`${history.length} quarterly closes on the record`}>
+      <div className="mb-1.5 flex items-center justify-between text-[10.5px] text-ink-faint">
+        <span>Quarterly closes</span>
+        <span>{history.length} on record</span>
+      </div>
+      <div className="flex h-10 items-end gap-1" aria-hidden="true">
+        {history.map((price, index) => (
+          <span
+            key={`${index}-${price}`}
+            className={rising ? 'min-w-1 flex-1 rounded-sm bg-gain/70' : 'min-w-1 flex-1 rounded-sm bg-loss/70'}
+            style={{ height: `${18 + ((price - low) / spread) * 82}%` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function StockCard({
   companyName,
   marketCapUsd,
@@ -77,9 +102,7 @@ export function StockCard({
           { label: 'Issued shares', value: formatCount(issuedShares) },
         ]}
       />
-      {history.length > 1 ? (
-        <p className="mt-2 text-[10.5px] text-ink-faint">{history.length} quarterly closes on the record.</p>
-      ) : null}
+      <QuoteHistory history={history} />
     </TabCard>
   );
 }
@@ -223,7 +246,7 @@ export function RegisterCard({
         <ul className="mt-3 flex flex-col gap-2">
           {holders.map((holder) => (
             <li key={holder.entityId}>
-              <DrillRow href={sheetHref('street')} name={holder.name} detail="disclosed holder" figure={`${holder.stakePct}%`} />
+              <DrillRow href={sheetHref('street', { entity: holder.entityId })} name={holder.name} detail="disclosed holder" figure={`${holder.stakePct}%`} />
             </li>
           ))}
         </ul>

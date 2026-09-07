@@ -48,6 +48,7 @@ import { sheetHref } from '@/lib/sheets';
 import {
   FinancialsCard,
   FloorCard,
+  floorFocusFor,
   GovernmentCard,
   GroupCard,
   LinesCard,
@@ -81,9 +82,21 @@ export function CompanyTab(): React.JSX.Element {
   const headcount = headcountOf(company);
   const marketComp = useMemo(() => blendedMarketCompUsd(session, company), [session, company]);
   const roles = useMemo(
-    () => STAFF_ROLES.map((role) => ({ role, label: ROLE_LABEL[role], count: employees[role] })),
+    () =>
+      STAFF_ROLES.map((role) => ({ role, label: ROLE_LABEL[role], count: employees[role] }))
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+        .slice(0, 3),
     [employees],
   );
+
+  // The first card should offer the pressure that matters now, rather than a
+  // generic menu. Each destination is an existing sheet control.
+  const floorFocus = floorFocusFor({
+    headroomUnits,
+    runwayQuarters: metrics?.runwayQuarters ?? null,
+    openRoles: employees.openRoles,
+    featuredLineId: lines[0]?.productId ?? null,
+  });
 
   /* --- research ------------------------------------------------------------ */
 
@@ -139,57 +152,65 @@ export function CompanyTab(): React.JSX.Element {
         morale={employees.morale}
         payrollUsd={company.financials.payroll}
         runwayQuarters={metrics?.runwayQuarters ?? null}
+        focus={floorFocus}
       />
 
-      <LinesCard
-        lineCount={active.length}
-        revenueUsd={lineRevenue}
-        grossProfitUsd={lineGrossProfit}
-        headroomUnits={headroomUnits}
-        lines={lines}
-      />
-
-      <PeopleCard
-        headcount={headcount}
-        openRoles={employees.openRoles}
-        morale={employees.morale}
-        attrition={employees.attrition}
-        avgCompUsd={employees.avgComp}
-        marketCompUsd={marketComp}
-        roles={roles}
-      />
-
-      <ResearchCard
-        programmes={programmes.length}
-        envelopeUsd={envelopeUsd}
-        researchers={employees.researchers}
-        readyToStart={readyToStart}
-      />
-
-      <GovernmentCard
-        pastPerformance={company.governmentPastPerformance}
-        openCompetitions={openCompetitions}
-        backlogUsd={backlogUsd}
-        complianceUsd={complianceUsd}
-      />
-
-      <FinancialsCard
-        revenueUsd={pnl.revenue}
-        operatingIncomeUsd={pnl.operatingIncome}
-        cashMovementUsd={company.financials.quarterlyBurn}
-        debtServiceUsd={debtService.totalUsd}
-        serviceHeadroomUsd={debtService.headroomUsd}
-      />
-
-      {groupStatement === null ? null : (
-        <GroupCard
-          companies={groupRows.length}
-          revenueUsd={groupStatement.income.revenueUsd}
-          cashUsd={groupStatement.balance.cashUsd}
-          enterpriseValueUsd={groupValueUsd}
-          headcount={groupRows.reduce((total, row) => total + row.headcount, 0)}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <LinesCard
+          lineCount={active.length}
+          revenueUsd={lineRevenue}
+          grossProfitUsd={lineGrossProfit}
+          headroomUnits={headroomUnits}
+          lines={lines}
         />
-      )}
+
+        <PeopleCard
+          headcount={headcount}
+          openRoles={employees.openRoles}
+          morale={employees.morale}
+          attrition={employees.attrition}
+          avgCompUsd={employees.avgComp}
+          marketCompUsd={marketComp}
+          roles={roles}
+          roleCount={STAFF_ROLES.length}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <ResearchCard
+          programmes={programmes.length}
+          envelopeUsd={envelopeUsd}
+          researchers={employees.researchers}
+          readyToStart={readyToStart}
+        />
+
+        <GovernmentCard
+          pastPerformance={company.governmentPastPerformance}
+          openCompetitions={openCompetitions}
+          backlogUsd={backlogUsd}
+          complianceUsd={complianceUsd}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <FinancialsCard
+          revenueUsd={pnl.revenue}
+          operatingIncomeUsd={pnl.operatingIncome}
+          cashMovementUsd={company.financials.quarterlyBurn}
+          debtServiceUsd={debtService.totalUsd}
+          serviceHeadroomUsd={debtService.headroomUsd}
+        />
+
+        {groupStatement === null ? null : (
+          <GroupCard
+            companies={groupRows.length}
+            revenueUsd={groupStatement.income.revenueUsd}
+            cashUsd={groupStatement.balance.cashUsd}
+            enterpriseValueUsd={groupValueUsd}
+            headcount={groupRows.reduce((total, row) => total + row.headcount, 0)}
+          />
+        )}
+      </div>
     </div>
   );
 }

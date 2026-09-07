@@ -29,6 +29,7 @@ import { LEGACY_ROUTES, firstSegmentOf, sheetHref } from '../../../lib/sheets';
 import {
   FinancialsCard,
   FloorCard,
+  floorFocusFor,
   GovernmentCard,
   GroupCard,
   LinesCard,
@@ -88,6 +89,7 @@ const page = [
       morale={62}
       payrollUsd={4_200_000}
       runwayQuarters={7}
+      focus={{ href: sheetHref('people', { hash: 'headcount' }), label: 'Set the hiring plan', detail: '3 roles open' }}
     />,
   ),
   renderToStaticMarkup(
@@ -111,6 +113,7 @@ const page = [
         { role: 'engineers', label: 'Engineers', count: 18 },
         { role: 'researchers', label: 'Researchers', count: 9 },
       ]}
+      roleCount={6}
     />,
   ),
   renderToStaticMarkup(<ResearchCard programmes={2} envelopeUsd={9_000_000} researchers={9} readyToStart={5} />),
@@ -172,6 +175,21 @@ describe('every address on the Company tab', () => {
     expect(hrefs).toContain(sheetHref('products', { line: 'p1' }));
     expect(hrefs).toContain(sheetHref('people', { hash: 'headcount' }));
     expect(sheetHref('people', { hash: 'headcount' })).toBe('/company?sheet=people#headcount');
+  });
+});
+
+describe('the Company floor leads with the actual operating pressure', () => {
+  it('takes a capacity shortfall to the affected line before any lower-pressure concern', () => {
+    const focus = floorFocusFor({ headroomUnits: -4, runwayQuarters: 2, openRoles: 5, featuredLineId: 'p1' });
+    expect(focus.href).toBe(sheetHref('products', { line: 'p1' }));
+    expect(focus.label).toContain('capacity shortfall');
+  });
+
+  it('takes short runway to Capital and open roles to the headcount control', () => {
+    expect(floorFocusFor({ headroomUnits: 8, runwayQuarters: 4, openRoles: 2, featuredLineId: null }).href).toBe(sheetHref('capital'));
+    expect(floorFocusFor({ headroomUnits: 8, runwayQuarters: 9, openRoles: 2, featuredLineId: null }).href).toBe(
+      sheetHref('people', { hash: 'headcount' }),
+    );
   });
 });
 

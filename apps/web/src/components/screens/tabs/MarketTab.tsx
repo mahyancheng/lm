@@ -124,25 +124,27 @@ export function MarketTab(): React.JSX.Element {
 
   return (
     <div className="flex flex-col gap-4">
-      <StockCard
-        companyName={company.name}
-        marketCapUsd={marketCapUsd}
-        lastPriceUsd={lastQuote?.price ?? null}
-        lastReturn={lastQuote?.return ?? null}
-        ownStakePct={ownStakePct}
-        issuedShares={ownTable === null ? 0 : issuedSharesOf(ownTable)}
-        instrumentId={company.instrumentId}
-        history={quotes.map((quote) => quote.price)}
-      />
+      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
+        <StockCard
+          companyName={company.name}
+          marketCapUsd={marketCapUsd}
+          lastPriceUsd={lastQuote?.price ?? null}
+          lastReturn={lastQuote?.return ?? null}
+          ownStakePct={ownStakePct}
+          issuedShares={ownTable === null ? 0 : issuedSharesOf(ownTable)}
+          instrumentId={company.instrumentId}
+          history={quotes.map((quote) => quote.price)}
+        />
 
-      <FundingCard
-        cashUsd={company.financials.cash}
-        cashMovementUsd={company.financials.quarterlyBurn}
-        runwayQuarters={metrics?.runwayQuarters ?? null}
-        debtUsd={company.financials.debt}
-        interestUsd={company.financials.interestExpense}
-        listingWindow={view.world.capitalMarkets.ipoWindow}
-      />
+        <FundingCard
+          cashUsd={company.financials.cash}
+          cashMovementUsd={company.financials.quarterlyBurn}
+          runwayQuarters={metrics?.runwayQuarters ?? null}
+          debtUsd={company.financials.debt}
+          interestUsd={company.financials.interestExpense}
+          listingWindow={view.world.capitalMarkets.ipoWindow}
+        />
+      </div>
 
       <RegisterCard
         holders={register.holders}
@@ -155,26 +157,30 @@ export function MarketTab(): React.JSX.Element {
         offers={register.offers}
       />
 
-      <TapeCard strip={<TapeStrip session={session} view={view} />} sectorLine={sectorLine} />
+      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
+        <TapeCard strip={<TapeStrip session={session} view={view} />} sectorLine={sectorLine} />
 
-      <PortfolioCard
-        netWorthUsd={netWorthUsd}
-        heldValueUsd={portfolio.totals.stakesValueUsd}
-        stakes={portfolio.stakes.length}
-        subsidiaries={portfolio.subsidiaries.length}
-        funds={portfolio.funds.length}
-        line={totalsLine(portfolio)}
-      />
+        <PortfolioCard
+          netWorthUsd={netWorthUsd}
+          heldValueUsd={portfolio.totals.stakesValueUsd}
+          stakes={portfolio.stakes.length}
+          subsidiaries={portfolio.subsidiaries.length}
+          funds={portfolio.funds.length}
+          line={totalsLine(portfolio)}
+        />
+      </div>
 
-      <DealsCard toAnswer={toAnswer} outstanding={outstanding} live={live} lapsing={lapsing} />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <DealsCard toAnswer={toAnswer} outstanding={outstanding} live={live} lapsing={lapsing} />
 
-      <BoardCard
-        seatsFilled={board === null ? null : board.directors.length}
-        seatsAuthorised={board?.seatsAuthorised ?? 0}
-        mood={mood}
-        passThreshold={rule.passThresholdFraction}
-        mattersTabled={mattersTabled}
-      />
+        <BoardCard
+          seatsFilled={board === null ? null : board.directors.length}
+          seatsAuthorised={board?.seatsAuthorised ?? 0}
+          mood={mood}
+          passThreshold={rule.passThresholdFraction}
+          mattersTabled={mattersTabled}
+        />
+      </div>
     </div>
   );
 }

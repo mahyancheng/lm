@@ -472,14 +472,13 @@ export function OfficeScene({ onOpenDrawer, onOpenCharacter, fallbackHref = shee
 /*  The compact scene                                                          */
 /* -------------------------------------------------------------------------- */
 
-/**
- * The compact stage. Sized to fit two columns of the Command Centre's stat grid
- * on a desktop without scrolling, and to pan inside its own frame below that.
- */
-const COMPACT = { width: 496, height: 112 } as const;
+/** Sized for the narrowest phone card. The full OfficeScene remains the pan-and-explore canvas. */
+const COMPACT = { width: 360, height: 128 } as const;
 /** Figures the compact scene draws, split across the four functions. */
-const COMPACT_FIGURES = 5;
+const COMPACT_FIGURES = 3;
 const COMPACT_RACKS = 3;
+const COMPACT_DESK_X = 72;
+const COMPACT_DESK_GAP = 60;
 
 export interface OfficeSceneCompactProps {
   readonly href?: string;
@@ -489,7 +488,7 @@ export interface OfficeSceneCompactProps {
 /**
  * The office at a glance, for the Home tab's floor card.
  *
- * One room rather than seven: the six drawn figures are split across the four
+ * One room rather than seven: three representative figures are split across the four
  * functions in proportion to real headcount, the faces are the same faces the
  * full scene draws (the seat ids are shared), the mouths carry the same morale
  * band, and the racks glow at the same utilisation. It is the same state,
@@ -525,6 +524,7 @@ export function OfficeSceneCompact({ href = sheetHref('company'), className }: O
   const ownedRacks = Math.min(COMPACT_RACKS, model.server.racks);
   const racks = Math.min(COMPACT_RACKS, model.server.racks + model.server.cloudRacks);
   const mood = MORALE_MOOD[model.band];
+  const founder = model.executives.find((executive) => executive.isPlayer) ?? null;
 
   return (
     <div className={cx('flex min-w-0 flex-col gap-2', className)}>
@@ -534,29 +534,29 @@ export function OfficeSceneCompact({ href = sheetHref('company'), className }: O
         className="scene-frame fc-office block bg-base hover-lift"
         aria-label={`The ${model.lobby.companyName} office: ${model.headcount} people, morale ${formatScore(model.morale)} (${mood.toLowerCase()}), ${countLabel(model.server.held)} accelerator-equivalents held. Opens the Company screen.`}
       >
-        <div className="scroll-x">
-          <svg
-            width={COMPACT.width}
-            height={COMPACT.height}
-            viewBox={`0 0 ${COMPACT.width} ${COMPACT.height}`}
-            role="presentation"
-            focusable="false"
-            aria-hidden="true"
-            className="block"
-          >
+        <svg
+          width={COMPACT.width}
+          height={COMPACT.height}
+          viewBox={`0 0 ${COMPACT.width} ${COMPACT.height}`}
+          role="presentation"
+          focusable="false"
+          aria-hidden="true"
+          className="block h-auto w-full"
+        >
             <Floor width={COMPACT.width} height={COMPACT.height} />
             <MoraleWash width={COMPACT.width} height={COMPACT.height} band={model.band} />
 
             {/* frontage */}
-            <rect x="8" y="22" width="64" height="26" rx="4" fill="var(--fc-glass)" opacity="0.85" />
-            <path d="M8 35h64" stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.8" />
-            <g transform="translate(16 70)">
-              <Worker look={seatLook(`${model.companyId}/lobby/0`)} role="ops" band={model.band} />
+            <rect x="8" y="22" width="48" height="26" rx="4" fill="var(--fc-glass)" opacity="0.85" />
+            <path d="M8 35h48" stroke="var(--color-panel)" strokeWidth="1.6" opacity="0.8" />
+            <g transform="translate(18 84)">
+              <Worker look={seatLook(founder?.seatId ?? `${model.companyId}/lobby/0`)} role="exe" band={model.band} />
             </g>
 
-            {/* the floor */}
+            {/* Garment roles show the actual staffing mix. These are three
+                representative work bays, not a second table of headcount. */}
             {figures.map((figure, index) => (
-              <g key={`${figure.seatId}:${index}`} transform={`translate(${88 + index * DESK_CELL.width} 44)`}>
+              <g key={`${figure.seatId}:${index}`} transform={`translate(${COMPACT_DESK_X + index * COMPACT_DESK_GAP} 42)`}>
                 <g transform={`translate(${(DESK_CELL.width - 24) / 2} 6)`}>
                   <Worker look={seatLook(figure.seatId)} role={ROLE_FIGURE[figure.zoneId]} band={model.band} atKeyboard />
                 </g>
@@ -564,14 +564,13 @@ export function OfficeSceneCompact({ href = sheetHref('company'), className }: O
               </g>
             ))}
 
-            {/* the racks */}
+            {/* Rack lights show real utilisation; amber is compute pressure. */}
             {Array.from({ length: racks }, (_, index) => (
-              <g key={index} transform={`translate(${COMPACT.width - 12 - (racks - index) * RACK_CELL.width} 30)`}>
+              <g key={index} transform={`translate(${COMPACT.width - 10 - (racks - index) * RACK_CELL.width} 38)`}>
                 <Rack lit={litBays} tone={rackTone} delayMs={index * 160} rented={index >= ownedRacks} />
               </g>
             ))}
-          </svg>
-        </div>
+        </svg>
       </Link>
 
       <div className="flex flex-wrap items-center gap-1.5">

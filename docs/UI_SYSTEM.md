@@ -7,7 +7,7 @@ should mostly be unaware of it.
 ## 1. Aesthetic target
 
 ```text
-Premium financial terminal  ×  Modern venture/startup dashboard
+Bright approachable business sim  ×  Legible venture dashboard
         ×  Corporate strategy game  ×  Living social network
 ```
 

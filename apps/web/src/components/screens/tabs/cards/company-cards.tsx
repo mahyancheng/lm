@@ -33,9 +33,43 @@ export interface FloorCardProps {
   readonly morale: number;
   readonly payrollUsd: number;
   readonly runwayQuarters: number | null;
+  /** The one operating decision that deserves the first tap right now. */
+  readonly focus: { readonly href: string; readonly label: string; readonly detail: string };
 }
 
-export function FloorCard({ companyName, summary, scene, headcount, morale, payrollUsd, runwayQuarters }: FloorCardProps): React.JSX.Element {
+export interface OperatingPressure {
+  readonly headroomUnits: number;
+  readonly runwayQuarters: number | null;
+  readonly openRoles: number;
+  readonly featuredLineId: string | null;
+}
+
+/**
+ * Keep the top-of-page decision deterministic and addressable. The tabs never
+ * claim to fix a problem themselves; they take the founder to the real control.
+ */
+export function floorFocusFor({ headroomUnits, runwayQuarters, openRoles, featuredLineId }: OperatingPressure): FloorCardProps['focus'] {
+  if (headroomUnits < 0) {
+    return {
+      href: sheetHref('products', featuredLineId === null ? undefined : { line: featuredLineId }),
+      label: 'Resolve the capacity shortfall',
+      detail: 'Open the affected line',
+    };
+  }
+  if (runwayQuarters !== null && runwayQuarters < 6) {
+    return { href: sheetHref('capital'), label: 'Protect the runway', detail: 'Open funding options' };
+  }
+  if (openRoles > 0) {
+    return {
+      href: sheetHref('people', { hash: 'headcount' }),
+      label: 'Set the hiring plan',
+      detail: `${openRoles} role${openRoles === 1 ? '' : 's'} open`,
+    };
+  }
+  return { href: sheetHref('people', { hash: 'headcount' }), label: 'Review the staffing plan', detail: 'Set the next-quarter team' };
+}
+
+export function FloorCard({ companyName, summary, scene, headcount, morale, payrollUsd, runwayQuarters, focus }: FloorCardProps): React.JSX.Element {
   return (
     <TabCard sheet="company" title={companyName} subtitle={summary} iconTone="brand">
       {scene}
@@ -53,6 +87,9 @@ export function FloorCard({ companyName, summary, scene, headcount, morale, payr
           },
         ]}
       />
+      <div className="mt-3 border-t border-hair pt-3">
+        <DrillRow href={focus.href} name={focus.label} detail={focus.detail} figure="Act" figureHint="next" tone="brand" />
+      </div>
     </TabCard>
   );
 }
@@ -125,6 +162,11 @@ export function LinesCard({ lineCount, revenueUsd, grossProfitUsd, headroomUnits
               />
             </li>
           ))}
+          {lineCount > lines.length ? (
+            <li>
+              <DrillRow href={sheetHref('products')} name={`View all ${formatCount(lineCount)} lines`} detail="Prices, capacity and customers" figure="Open" />
+            </li>
+          ) : null}
         </ul>
       )}
     </TabCard>
@@ -150,9 +192,11 @@ export interface PeopleCardProps {
   /** The headcount-weighted market rate this company is judged against. */
   readonly marketCompUsd: number;
   readonly roles: readonly RoleRow[];
+  /** Every role band; the card only previews the three largest. */
+  readonly roleCount: number;
 }
 
-export function PeopleCard({ headcount, openRoles, morale, attrition, avgCompUsd, marketCompUsd, roles }: PeopleCardProps): React.JSX.Element {
+export function PeopleCard({ headcount, openRoles, morale, attrition, avgCompUsd, marketCompUsd, roles, roleCount }: PeopleCardProps): React.JSX.Element {
   const competitiveness = marketCompUsd === 0 ? 1 : avgCompUsd / marketCompUsd;
   return (
     <TabCard
@@ -190,6 +234,16 @@ export function PeopleCard({ headcount, openRoles, morale, attrition, avgCompUsd
             <DrillRow href={sheetHref('people', { hash: 'headcount' })} name={row.label} figure={formatCount(row.count)} figureHint="in post" />
           </li>
         ))}
+        {roleCount > roles.length ? (
+          <li>
+            <DrillRow
+              href={sheetHref('people', { hash: 'headcount' })}
+              name={`View all ${formatCount(roleCount)} role bands`}
+              detail="Open the headcount plan"
+              figure="Plan"
+            />
+          </li>
+        ) : null}
       </ul>
     </TabCard>
   );

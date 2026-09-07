@@ -1,9 +1,10 @@
 # Art Direction
 
-Frontier Capital looks like a **bright, flat, cheerful 2D business sim** — the
-friendly mobile-management-game genre, drawn in vector, not a financial
-terminal. Off-white world, white rounded cards, soft diffuse shadows, saturated
-flat accents, round-headed cartoon people.
+Frontier Capital looks like a **bright, flat, approachable 2D business sim with
+real strategic weight** — the friendly mobile-management-game genre, drawn in
+vector, with the legible systems and consequence of a corporate strategy game.
+Off-white world, white rounded cards, soft diffuse shadows, saturated flat
+accents, round-headed cartoon people.
 
 This file is the prose half of `src/app/globals.css`. That file holds the
 values; this one says what they mean and how to use them. **Read both before

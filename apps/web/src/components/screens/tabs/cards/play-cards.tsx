@@ -202,12 +202,22 @@ export function SealCard({
           </div>
         ) : null}
 
-        <p className="text-[11.5px] leading-relaxed text-ink-dim">
-          {canSubmit
-            ? `${quarter} closes and ${nextQuarter} opens. A quarter cannot resolve twice.`
-            : `Confirm the ${blocked} blocked action${blocked === 1 ? '' : 's'} first, or remove them.`}
-        </p>
-        <p className="text-[10.5px] text-ink-faint">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[12px] leading-relaxed text-ink-dim">
+            {canSubmit
+              ? `${quarter} closes and ${nextQuarter} opens. A quarter cannot resolve twice.`
+              : `Confirm the ${blocked} blocked action${blocked === 1 ? '' : 's'} first, or remove them.`}
+          </p>
+          <button
+            type="button"
+            className="btn btn-ghost tap-target shrink-0 gap-1 px-2"
+            onClick={() => document.getElementById('queued-instructions')?.scrollIntoView({ block: 'start' })}
+          >
+            {blocked > 0 ? 'Review confirmations' : 'Review queue'}
+            <Icon name="chevronDown" size={14} accent="current" />
+          </button>
+        </div>
+        <p className="text-[11px] text-ink-faint">
           {queued} instruction{queued === 1 ? '' : 's'} · {formatPct(Math.min(share, 9.99))} of cash on hand committed
         </p>
       </div>

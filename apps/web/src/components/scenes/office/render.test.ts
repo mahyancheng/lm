@@ -107,6 +107,14 @@ describe('office scene: source discipline', () => {
     expect(scene).not.toMatch(/visibleCompanies/);
     expect(scene).not.toMatch(/researchProjects/);
   });
+
+  it('fits the compact summary to its phone card instead of making the whole link pan', () => {
+    const scene = SOURCES.find((source) => source.name === 'OfficeScene.tsx')?.code ?? '';
+    const compact = scene.slice(scene.indexOf('export function OfficeSceneCompact'));
+    expect(scene).toContain('const COMPACT = { width: 360, height: 128 }');
+    expect(compact).toContain('className="block h-auto w-full"');
+    expect(compact).not.toContain('scroll-x');
+  });
 });
 
 describe('office scene: motion', () => {

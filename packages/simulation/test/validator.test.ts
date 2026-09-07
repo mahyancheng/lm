@@ -951,13 +951,19 @@ describe('deals and introductions', () => {
     gets: [{ kind: 'cash_payment' as const, amount: 2_000_000 }],
     confidentiality: 'private' as const,
     expiresQuarter: 2,
-    binding: true,
+    binding: false,
     intentStatements: [],
     summary: 'Licence our retrieval grounding work to Nexus for four quarters against a two million dollar fee.',
   };
 
   it('accepts a deal to a counterparty that exists', () => {
     expect(run(act({ type: 'propose_deal', proposal: draft })).status).toBe('accepted');
+  });
+
+  it('refuses a binding label when the resolver cannot settle the obligations', () => {
+    const result = run(act({ type: 'propose_deal', proposal: { ...draft, binding: true } }));
+    expect(result.status).toBe('rejected');
+    expect(codes(result)).toContain('requirement_not_met');
   });
 
   it('refuses a deal to nobody, to yourself, or naming a security that does not exist', () => {

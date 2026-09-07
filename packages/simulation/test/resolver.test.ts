@@ -632,6 +632,24 @@ describe('action collection', () => {
     expect(observed.every((action) => action.actorCharacterId === DEMO_CHARACTERS.kenji)).toBe(true);
   });
 
+  it('records valid NPC messages privately and makes them deterministic replay input', () => {
+    const state = createDemoSession();
+    const bundle: NpcActionBundle = {
+      companyId: DEMO_COMPANIES.meridian,
+      strategySummary: 'Open a private channel while maintaining our research lead.',
+      posture: 'research_first', actions: [],
+      rationale: 'A low-cost private enquiry can surface a partnership without claiming any commitment.',
+      outgoingMessages: [{ recipientCompanyId: DEMO_COMPANIES.nexus, purpose: 'proposal', text: 'Would you discuss a narrowly scoped research partnership next quarter?' }],
+    };
+    const outcome = resolve(state, makeStubs(), null, [], [bundle]);
+    expect(outcome.nextState.companyMessages).toEqual([
+      expect.objectContaining({ senderCompanyId: DEMO_COMPANIES.meridian, recipientCompanyId: DEMO_COMPANIES.nexus, purpose: 'proposal' }),
+    ]);
+    expect(outcome.events.some((event) => event.type === 'company_message_sent' && event.visibility === 'private')).toBe(true);
+    const replay = resolve(state, makeStubs(), null, [], [bundle]);
+    expect(replay.nextState.companyMessages).toEqual(outcome.nextState.companyMessages);
+  });
+
   /** A well-formed bundle for whichever company it names. */
   const bundleFor = (companyId: string, budgetUsd = 1_000_000): NpcActionBundle => ({
     companyId,

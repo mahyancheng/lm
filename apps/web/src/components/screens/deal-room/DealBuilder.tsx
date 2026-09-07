@@ -31,7 +31,7 @@ import { formatCount, formatMoney, formatQuarterCount } from '@frontier/shared';
 import { CashAfter, ConfirmDialog, Icon, SectionHeading, SliderField, Tag, ValidationBanner, cx, openCeiling, roundStep } from '@/components/ui';
 import { useGameActions } from '@/lib/game';
 import { AccordFields, type AccordContext } from './AccordFields';
-import { canExecuteNegotiatedDraft } from '../network/negotiation';
+import { canExecuteNegotiatedDraft, EXECUTABLE_NEGOTIATION_KINDS } from '../network/negotiation';
 import {
   OBLIGATION_HINTS,
   BUILDABLE_OBLIGATION_KINDS,
@@ -65,6 +65,8 @@ export interface DealBuilderProps {
   readonly company: Company;
   /** Chat-launched offers are limited to obligations with a resolver path. */
   readonly negotiationOnly?: boolean;
+  /** Called only after the human-reviewed offer passed validation into the queue. */
+  readonly onProposalQueued?: (draft: DealProposalDraft) => void;
   /**
    * What a price accord needs to know about the sector it would cover.
    *
@@ -89,6 +91,7 @@ export function DealBuilder({
   startYear,
   company,
   negotiationOnly = false,
+  onProposalQueued,
 }: DealBuilderProps): React.JSX.Element {
   const { queueAction, validateIntent } = useGameActions();
 
@@ -125,6 +128,10 @@ export function DealBuilder({
     summary: summary.trim() || 'pending terms',
   });
   const effectiveBinding = binding && bindingSupported;
+  // A conversation can only send a proposal the resolver can actually settle.
+  // Keep unsupported terms out of this surface instead of letting an NPC's
+  // prose make an intent statement look like an executable transaction.
+  const executableDraft = !negotiationOnly || bindingSupported;
 
   const intent: ActionIntent | null = useMemo(() => {
     if (counterparty === null) return null;
@@ -224,6 +231,12 @@ export function DealBuilder({
         </span>
       </div>
 
+      {negotiationOnly ? (
+        <p className="rounded-card border border-hair bg-raised/60 px-3 py-2 text-[12px] leading-relaxed text-ink-dim sm:text-[10px]">
+          Conversation can send only cash terms or a node licence with cash. Private-share purchases and company acquisitions need their own ownership and approval path; a CEO discussion does not transfer a cap table.
+        </p>
+      ) : null}
+
       {/* --- obligations --------------------------------------------------- */}
       <div className="grid gap-4 lg:grid-cols-2">
         <ObligationColumn
@@ -240,6 +253,7 @@ export function DealBuilder({
           products={products}
           quarter={quarter}
           accord={accord}
+          allowedKinds={negotiationOnly ? EXECUTABLE_NEGOTIATION_KINDS : BUILDABLE_OBLIGATION_KINDS}
         />
         <ObligationColumn
           side="gets"
@@ -255,6 +269,7 @@ export function DealBuilder({
           products={products}
           quarter={quarter}
           accord={accord}
+          allowedKinds={negotiationOnly ? EXECUTABLE_NEGOTIATION_KINDS : BUILDABLE_OBLIGATION_KINDS}
         />
       </div>
 
@@ -331,7 +346,7 @@ export function DealBuilder({
           <button
             type="button"
             className="btn btn-primary btn-sm tap-target w-full lg:w-auto lg:min-h-0"
-            disabled={!ready || queued || intent === null}
+            disabled={!ready || !executableDraft || queued || intent === null}
             onClick={() => setPending(intent)}
           >
             {queued ? 'Queued' : 'Propose the deal'}
@@ -339,6 +354,11 @@ export function DealBuilder({
           {!ready ? (
             <span className="col-span-2 text-[11px] text-ink-faint lg:col-span-1 lg:text-[10px]">
               A counterparty, a summary and at least one obligation.
+            </span>
+          ) : null}
+          {ready && !executableDraft ? (
+            <span className="col-span-2 text-[11px] text-ink-faint lg:col-span-1 lg:text-[10px]">
+              These terms do not have a settlement route, so conversation cannot send them as a deal.
             </span>
           ) : null}
         </div>
@@ -363,6 +383,7 @@ export function DealBuilder({
             const outcome = queueAction(pending, { confirmed: true });
             setResult(outcome.validation);
             setQueued(outcome.validation.status !== 'rejected');
+            if (outcome.validation.status !== 'rejected' && pending.type === 'propose_deal') onProposalQueued?.(pending.proposal);
           }
           setPending(null);
         }}
@@ -386,6 +407,7 @@ interface ColumnProps {
   readonly products: readonly NamedOption[];
   readonly quarter: number;
   readonly accord: AccordContext | undefined;
+  readonly allowedKinds: readonly ObligationKind[];
 }
 
 function ObligationColumn({
@@ -399,8 +421,9 @@ function ObligationColumn({
   products,
   quarter,
   accord,
+  allowedKinds,
 }: ColumnProps): React.JSX.Element {
-  const [adding, setAdding] = useState<ObligationKind>('cash_payment');
+  const [adding, setAdding] = useState<ObligationKind>(allowedKinds[0] ?? 'cash_payment');
 
   function replace(index: number, next: DealObligation): void {
     onChange(obligations.map((entry, position) => (position === index ? next : entry)));
@@ -448,7 +471,7 @@ function ObligationColumn({
           value={adding}
           onChange={(event) => setAdding(event.target.value as ObligationKind)}
         >
-          {BUILDABLE_OBLIGATION_KINDS.map((kind) => (
+          {allowedKinds.map((kind) => (
             <option key={kind} value={kind}>
               {OBLIGATION_LABELS[kind]}
             </option>

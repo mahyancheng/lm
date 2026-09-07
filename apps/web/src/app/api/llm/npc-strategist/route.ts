@@ -64,7 +64,7 @@ const BodySchema = z.object({
 export async function POST(request: Request): Promise<Response> {
   const admission = await admit(request);
   if (!admission.ok) return admission.response;
-  const { finish } = admission.admission;
+  const { finish, conversationKey } = admission.admission;
 
   const parsed = await parseBody(request, BodySchema);
   if (!parsed.ok) return finish(parsed.response);
@@ -74,10 +74,11 @@ export async function POST(request: Request): Promise<Response> {
 
   return finish(
     await runRole(async () => {
+      // A company gets one opaque Claude Code session per game. The client supplies identifiers, never a resumable handle.
+      const companyAgentKey = conversationKey('npc', { gameSessionId: input.sessionId, playerId: input.companyId, conversationId: input.companyId });
       const result = await gateway().roles.npcStrategist.plan(input, resolved, {
-        sessionId: input.sessionId,
-        quarter: input.quarter,
-      });
+        sessionId: input.sessionId, quarter: input.quarter,
+      }, companyAgentKey);
       return { output: result.output, fallbackUsed: result.fallbackUsed };
     }),
   );

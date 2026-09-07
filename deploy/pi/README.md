@@ -395,9 +395,17 @@ started. Three consequences:
 `/home/node/.claude` (`CLAUDE_CONFIG_DIR`):
 
 - Claude Code session transcripts, which the Agent SDK writes and which a
-  Chief-of-Staff thread or a character conversation is resumed from. Strategic
-  calls — the World Director and every NPC strategist — deliberately open a
-  *fresh* session each quarter, so they never touch it.
+  Chief-of-Staff thread, character conversation, or company agent resumes
+  from. The World Director deliberately opens a *fresh* session each quarter,
+  so it never touches them.
+- `frontier-capital/claude-session-map.json`, the owner-only, atomically
+  written map from opaque server conversation keys to SDK session ids. It is
+  the companion to those transcripts: after the app server restarts it lets
+  Chief-of-Staff, character, and company-agent sessions find the same SDK
+  transcript again. Entries expire after 90 days; an SDK resume rejection
+  drops only that entry and the following turn starts fresh. The Pi runs one
+  Node process, which owns this map; a multi-process deployment needs a shared
+  database-backed mapping rather than this local file.
 - The AI credential, at `frontier-capital/credential.enc.json` inside it
   (`LLM_STATE_DIR`, set in the image). The token the in-app **Connect with
   Claude** flow issues is a one-year token; it is sealed with AES-256-GCM under

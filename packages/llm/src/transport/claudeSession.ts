@@ -316,10 +316,17 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
   const store = config.sessionStore;
   const repairOnce = config.repairOnce ?? true;
   const sleep = config.sleep ?? defaultSleep;
+  const sessionLocks = createSessionKeyLocks();
 
   return {
     kind: 'claude-session',
     async complete<T>(req: LlmCompletionRequest<T>): Promise<LlmCompletion<T>> {
+      // Two concurrent calls with one stable key would otherwise both resume
+      // the same Claude turn and race to replace its id. The lock is local to
+      // this transport and keyed by the opaque conversation key, so separate
+      // companies and conversations continue in parallel.
+      const release = req.sessionKey === null ? null : await sessionLocks.acquire(req.sessionKey);
+      try {
       const started = nowMs();
       const finish = (partial: Omit<LlmCompletion<T>, 'latencyMs'>): LlmCompletion<T> => ({ ...partial, latencyMs: nowMs() - started });
 
@@ -374,7 +381,12 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
           outcome = await collectAttempt(queryFn({ prompt, options }));
         } catch (error) {
           const issues = [taggedIssue(classifyThrown(error), describe(error)), ...firstIssues];
-          await remember(store, req.sessionKey, claudeSessionId);
+          // A resume handle can disappear when Claude's local transcript cache
+          // is pruned or a credential changes. Do not keep retrying a known-bad
+          // handle on every later turn; the deterministic role fallback still
+          // answers this turn and the next one starts a fresh SDK session.
+          if (resume !== null) await forget(store, req.sessionKey);
+          else await remember(store, req.sessionKey, claudeSessionId);
           return finish({ output: null, raw, validation: validationFailed(req.schemaName, issues, attempt > 0), modelId, tokens, claudeSessionId });
         }
 
@@ -382,6 +394,13 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
         modelId = outcome.modelId ?? modelId;
         tokens = outcome.tokens ?? tokens;
         claudeSessionId = outcome.claudeSessionId ?? claudeSessionId;
+
+        // SDK-stream errors after a resume are another form of rejected
+        // handle. Clear it before a repair or later call can reuse it.
+        if (resume !== null && outcome.errors.length > 0) {
+          await forget(store, req.sessionKey);
+          claudeSessionId = null;
+        }
 
         // The schema is the arbiter of which balanced object in the reply is
         // the answer, so a thinking aside that happens to contain JSON cannot
@@ -430,6 +449,9 @@ export function createClaudeSessionTransport(config: ClaudeSessionTransportConfi
       // Defensive tail: every path through the loop above returns.
       await remember(store, req.sessionKey, claudeSessionId);
       return finish({ output: null, raw, validation: validationFailed(req.schemaName, firstIssues), modelId, tokens, claudeSessionId });
+      } finally {
+        release?.();
+      }
     },
   };
 }
@@ -444,10 +466,40 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
+/** A FIFO lock per opaque session key; no lock is held for fresh strategic calls. */
+function createSessionKeyLocks(): { acquire(key: string): Promise<() => void> } {
+  const tails = new Map<string, Promise<void>>();
+  return {
+    async acquire(key: string): Promise<() => void> {
+      const previous = tails.get(key) ?? Promise.resolve();
+      let releaseGate: (() => void) | null = null;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      const tail = previous.then(() => gate);
+      tails.set(key, tail);
+      await previous;
+      return () => {
+        releaseGate?.();
+        if (tails.get(key) === tail) tails.delete(key);
+      };
+    },
+  };
+}
+
 async function remember(store: LlmSessionStore | undefined, sessionKey: string | null, claudeSessionId: string | null): Promise<void> {
   if (store === undefined || sessionKey === null || claudeSessionId === null) return;
   try {
     await store.set(sessionKey, claudeSessionId);
+  } catch {
+    /* continuity is a nicety; never a failure */
+  }
+}
+
+async function forget(store: LlmSessionStore | undefined, sessionKey: string | null): Promise<void> {
+  if (store === undefined || sessionKey === null || store.invalidate === undefined) return;
+  try {
+    await store.invalidate(sessionKey);
   } catch {
     /* continuity is a nicety; never a failure */
   }

@@ -141,6 +141,24 @@ export function collectActions(
       draft.characters.find((character) => character.companyId === bundle.companyId)?.id ??
       makeId('chr', 'unassigned', bundle.companyId);
 
+    // Messages are intentionally a separate, non-binding channel: a model can
+    // initiate fictional conversations but cannot turn prose into a deal or a
+    // state mutation. Recipient existence and control are checked here, then
+    // the committed inbox and private ledger become the next-quarter evidence.
+    for (let index = 0; index < (bundle.outgoingMessages ?? []).length; index += 1) {
+      const message = bundle.outgoingMessages?.[index];
+      if (message === undefined || message.recipientCompanyId === bundle.companyId) continue;
+      const recipient = draft.companies.find((candidate) => candidate.id === message.recipientCompanyId);
+      if (recipient === undefined || !recipient.isActive) continue;
+      const id = makeId('msg', draft.sessionId, draft.quarter, bundle.companyId, message.recipientCompanyId, index);
+      const history = draft.companyMessages ?? [];
+      draft.companyMessages = [...history, { ...message, id, senderCompanyId: bundle.companyId, quarter: draft.quarter }].slice(-240);
+      ctx?.emit({
+        sessionId: draft.sessionId, quarter: ctx.quarter, type: 'company_message_sent', actorId: bundle.companyId,
+        targetId: message.recipientCompanyId, payload: { messageId: id, purpose: message.purpose }, visibility: 'private',
+      });
+    }
+
     for (let index = 0; index < bundle.actions.length; index += 1) {
       const intent = bundle.actions[index];
       if (intent === undefined) continue;

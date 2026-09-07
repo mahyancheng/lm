@@ -84,6 +84,7 @@ import { rebuildLeaderboards } from './leaderboards';
 import { ENGINE_INVARIANTS, InvariantViolationError, runInvariantGate } from './invariants';
 import { resolveControlChanges } from '../companies/control';
 import { updateStrategistMemory } from '../companies/strategistMemory';
+import { resolveComputeSeller } from '../companies/sellers';
 
 export { ResolutionRecorder, chainRowHash, rowFingerprint } from './ledger';
 export { buildFallbackBatch, canMaterialise, clampGmBatch, impactBudgetFor } from './gm';
@@ -222,9 +223,19 @@ export function createQuarterResolver(subsystems: Subsystems, options: ResolverO
       }
 
       /* --- the draft -------------------------------------------------------- */
+      const quoteReceipts = new Map<string, { readonly actorCompanyId: string; readonly sellerCompanyId: string; readonly units: number; readonly unitPriceUsd: number }>();
+      for (const action of submittedActions) {
+        if (action.sessionId !== state.sessionId || action.quarter !== state.quarter || action.intent.type !== 'buy_accelerators') continue;
+        const intent = action.intent;
+        if (intent.quotedUnitPriceUsd === undefined || intent.quotedUnitPriceUsd === null || intent.sellerCompanyId === null) continue;
+        const seller = resolveComputeSeller(state, 'accelerators', intent.sellerCompanyId, action.actorCompanyId, intent.units);
+        if (seller !== null && seller.company.id === intent.sellerCompanyId && seller.unitPriceUsd === intent.quotedUnitPriceUsd) {
+          quoteReceipts.set(action.actionId, { actorCompanyId: action.actorCompanyId, sellerCompanyId: seller.company.id, units: intent.units, unitPriceUsd: seller.unitPriceUsd });
+        }
+      }
       const draft = cloneState(state);
       draft.status = 'resolving';
-      const recorder = new ResolutionRecorder(draft, hash, preResolutionHash);
+      const recorder = new ResolutionRecorder(draft, hash, preResolutionHash, quoteReceipts);
       const rootRng = engine.createRng(String(draft.seed)).fork(`quarter:${quarter}`);
 
       recorder.beginPhase('world_events');

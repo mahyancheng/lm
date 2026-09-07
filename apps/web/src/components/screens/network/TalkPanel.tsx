@@ -21,13 +21,15 @@
  *   commitment. The panel says which of the two the player is reading.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import type { Character, CharacterUtteranceContext, DealProposalDraft, Memory, Relationship, SessionState } from '@frontier/contracts';
-import { Icon, SectionHeading, Tag, cx } from '@/components/ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AcceleratorPurchaseDraft, Character, CharacterUtteranceContext, DealProposalDraft, Memory, MemoryDraft, Relationship, SessionState } from '@frontier/contracts';
+import { AiLabel, Icon, SectionHeading, Tag, cx } from '@/components/ui';
 import { DealBuilder } from '../deal-room/DealBuilder';
-import { negotiationDraft, negotiationFacts } from './negotiation';
-import { PLAYER_ID, useActiveCompany, usePlayerView } from '@/lib/game';
-import { requestCharacterReply } from '@/lib/llm/client';
+import { BuyAccelerators } from '../company/BuyAccelerators';
+import { acceleratorPurchaseDraft, acceleratorPurchaseQuoteStatus, negotiationDraft, negotiationFacts, proposalStatusSummary } from './negotiation';
+import { PLAYER_ID, useActiveCompany, useGame, useGameActions, usePlayerView, useQueuedActions } from '@/lib/game';
+import { requestCharacterReply, requestCompanyDialogue } from '@/lib/llm/client';
+import { sellersFor } from '@frontier/simulation';
 import { offlineReply, publicFactsFor, type DialogueTurn } from './actions';
 
 /** Turns kept on screen and sent as history. Enough for the thread to have a memory. */
@@ -39,6 +41,18 @@ const PROMPTS: readonly string[] = [
   'What do you make of where this market is going?',
   'Who else should I be talking to?',
 ];
+
+/** Context for a company CEO: historic chats follow the employer at each turn. */
+export function companyDialogueHistory(
+  thread: SessionState['conversationThreads'] extends readonly (infer T)[] | undefined ? T | undefined : never,
+  targetCompanyId: string,
+  current: DialogueTurn,
+): readonly DialogueTurn[] {
+  const prior = thread === undefined ? [] : thread.turns
+    .filter((turn) => turn.targetCompanyId === targetCompanyId || (turn.targetCompanyId === undefined && thread.targetCompanyId === targetCompanyId))
+    .map((turn) => ({ speakerId: turn.speakerId, text: turn.text }));
+  return [...prior, current].slice(-MAX_TURNS);
+}
 
 export interface TalkPanelProps {
   readonly session: SessionState;
@@ -65,29 +79,67 @@ export function TalkPanel({
 }: TalkPanelProps): React.JSX.Element {
   const company = useActiveCompany();
   const view = usePlayerView();
+  const { recordConversationTurn } = useGameActions();
+  const { ledger } = useGame();
+  const queuedActions = useQueuedActions();
   const counterparty = view.visibleCompanies.find((entry) => entry.id === target.companyId && entry.id !== company.id && entry.isActive !== false);
+  const companyDialogue = target.companyId !== null && target.companyId === counterparty?.id && target.id === counterparty?.ceoCharacterId;
   const [deal, setDeal] = useState<DealProposalDraft | undefined>();
+  // Keep the quoted draft visible across a quarter boundary. Re-validate it
+  // against live published capacity before offering the human an order ticket.
+  const [acceleratorQuote, setAcceleratorQuote] = useState<AcceleratorPurchaseDraft | undefined>();
   const [showDeal, setShowDeal] = useState(false);
   const [dealRevision, setDealRevision] = useState(0);
-  const scope = `${session.sessionId}:${session.quarter}:${company.id}:${target.id}`;
+  // Quarter is deliberately absent: this is one durable thread for exactly
+  // this session, player company and character. It cannot bleed into another NPC.
+  const scope = `${session.sessionId}:${company.id}:${selfId}:${target.id}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+  const quarterRef = useRef(session.quarter);
+  quarterRef.current = session.quarter;
+  const storedThread = (session.conversationThreads ?? []).find(
+    (thread) => thread.sessionId === session.sessionId && thread.playerCompanyId === company.id && thread.playerCharacterId === selfId && thread.targetCharacterId === target.id,
+  );
+  const pendingProposalSummary = useMemo(
+    () => proposalStatusSummary(session, queuedActions, company.id, counterparty?.id, ledger),
+    [session, queuedActions, company.id, counterparty?.id, ledger],
+  );
+  const acceleratorOrder = useMemo(
+    () => acceleratorPurchaseDraft(acceleratorQuote, session, company, counterparty?.id),
+    [acceleratorQuote, session, company, counterparty?.id],
+  );
+  const acceleratorQuoteStatus = useMemo(
+    () => acceleratorQuote === undefined ? null : acceleratorPurchaseQuoteStatus(acceleratorQuote, session, company),
+    [acceleratorQuote, session, company],
+  );
+  const incomingCompanyMessages = useMemo(
+    () => (session.companyMessages ?? [])
+      .filter((message) => message.recipientCompanyId === company.id && message.senderCompanyId === target.companyId)
+      .slice(-6),
+    [session.companyMessages, company.id, target.companyId],
+  );
   const [turns, setTurns] = useState<readonly DialogueTurn[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [offline, setOffline] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  // A new person is a new thread. The drawer keys this panel on the character
-  // id as well, so this only fires when the same mounted panel changes subject.
+  // A new person/company is a new thread and may discard local reply cards.
   useEffect(() => {
     setDeal(undefined);
+    setAcceleratorQuote(undefined);
     setShowDeal(false);
     setSending(false);
-    setTurns([]);
+    setTurns((storedThread?.turns ?? []).map((turn) => ({ speakerId: turn.speakerId, text: turn.text })));
     setDraft('');
     setOffline(false);
   }, [scope]);
+
+  // Recording a completed exchange updates this exact thread. Hydrate only the
+  // transcript: quote/deal cards came from that exchange and must stay visible.
+  useEffect(() => {
+    setTurns((storedThread?.turns ?? []).map((turn) => ({ speakerId: turn.speakerId, text: turn.text })));
+  }, [storedThread?.nextTurnSequence]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'nearest' });
@@ -102,6 +154,12 @@ export function TalkPanel({
     setDraft('');
     setSending(true);
 
+    // A company CEO's shared agent must never receive chats from a prior
+    // employer. The personal transcript can show them; the company context may
+    // include only turns recorded under this immutable company scope.
+    const companyHistory = companyDialogue
+      ? companyDialogueHistory(storedThread, target.companyId!, asked)
+      : history;
     const context: CharacterUtteranceContext = {
       character: target,
       relationship: inbound,
@@ -109,32 +167,58 @@ export function TalkPanel({
       memories: theirMemories.slice(0, 6),
       topic: message.slice(0, 200),
       gameFacts: negotiationFacts(session, target, company, view.techGraph, counterparty?.id),
-      conversationHistory: history.map((turn) => ({ speakerId: turn.speakerId, text: turn.text.slice(0, 600) })),
+      conversationHistory: companyHistory.map((turn) => ({ speakerId: turn.speakerId, text: turn.text.slice(0, 600) })),
       accessBasis,
-      pendingProposalSummary: null,
+      pendingProposalSummary,
     };
 
+    const requestQuarter = session.quarter;
     let reply: string | null = null;
+    let memory: MemoryDraft | null = null;
     try {
-      const result = await requestCharacterReply(context, {
+      // A company CEO shares the company agent's server-derived Claude
+      // identity. Everyone else keeps a character-scoped conversation.
+      const result = await (companyDialogue ? requestCompanyDialogue : requestCharacterReply)(context, {
         sessionId: session.sessionId,
         playerId: PLAYER_ID,
-        conversationId: target.id,
+        conversationId: companyDialogue ? target.companyId! : `${company.id}:${target.id}`,
       });
-      if (scopeRef.current !== scope) return;
+      if (scopeRef.current !== scope || quarterRef.current !== requestQuarter) {
+        if (scopeRef.current === scope) setSending(false);
+        return;
+      }
       const offered = negotiationDraft(result?.dealDraft, counterparty?.id, session.quarter, company.id);
+      const verifiedAcceleratorOrder = acceleratorPurchaseDraft(result?.acceleratorPurchaseDraft, session, company, counterparty?.id);
       setDeal(offered);
+      // Store only a quote that matched canonical availability when received;
+      // later state changes render this same quote as expired rather than hiding it.
+      setAcceleratorQuote(verifiedAcceleratorOrder);
       setShowDeal(offered !== undefined);
       setDealRevision((value) => value + 1);
       reply = result?.text ?? null;
+      // The store accepts only the LLM contract's bounded memory draft and
+      // converts it to a factual, non-binding conversation memory.
+      memory = result?.memoryToStore ?? null;
     } catch {
       // The client never throws at a screen. A model failure is a degraded
       // conversation, not a broken one.
       reply = null;
     }
 
-    if (scopeRef.current !== scope) return;
+    if (scopeRef.current !== scope || quarterRef.current !== requestQuarter) {
+        if (scopeRef.current === scope) setSending(false);
+        return;
+      }
     const spoken = reply ?? offlineReply(target, inbound?.trust ?? null, inbound?.hostility ?? null, message.slice(0, 120));
+    recordConversationTurn({
+      playerCompanyId: company.id,
+      playerCharacterId: selfId,
+      targetCharacterId: target.id,
+      playerText: message,
+      replyText: spoken,
+      quarter: requestQuarter,
+      memory: memory === null ? null : { kind: memory.kind, summary: memory.summary, sentiment: memory.sentiment },
+    });
     setOffline(reply === null);
     setTurns((current) => [...current, { speakerId: target.id, text: spoken }].slice(-MAX_TURNS));
     setSending(false);
@@ -143,6 +227,18 @@ export function TalkPanel({
   return (
     <div>
       <SectionHeading rule>Conversation</SectionHeading>
+
+      {incomingCompanyMessages.length > 0 ? <section className="mt-2">
+        <div className="label-caps-faint mb-1">Recent company outreach</div>
+        <ul className="flex flex-col gap-2">
+        {incomingCompanyMessages.map((message) => (
+          <li key={message.id} className="mr-6 rounded-card raised-surface px-3 py-2 text-[12.5px] leading-relaxed text-ink-dim">
+            <div className="label-caps-faint mb-1 flex items-center gap-1">{target.name} · Q{message.quarter} · {message.purpose.replaceAll('_', ' ')} <AiLabel /></div>
+            {message.text}
+          </li>
+        ))}
+        </ul>
+      </section> : null}
 
       {turns.length === 0 ? (
         <p className="mt-2 text-[12.5px] leading-relaxed text-ink-dim">
@@ -223,7 +319,22 @@ export function TalkPanel({
             opportunities={view.opportunities.filter((entry) => entry.status === 'open').map((entry) => ({ id: entry.id, label: entry.programme }))}
             techNodes={view.techGraph.nodes.map((node) => ({ id: node.id, label: node.title }))}
             products={company.products.map((product) => ({ id: product.id, label: product.name }))}
-            quarter={session.quarter} startYear={session.startYear} company={company} negotiationOnly />
+            quarter={session.quarter} startYear={session.startYear} company={company} negotiationOnly
+            onProposalQueued={(draft) => {
+              setDeal(draft);
+              setShowDeal(true);
+              setDealRevision((value) => value + 1);
+            }} />
+        </div> : null}
+        {acceleratorQuote !== undefined ? <div className="mt-3 rounded-card raised-surface px-3 py-2 text-xs leading-relaxed text-ink-dim">
+          <SectionHeading rule>Purchase from this company</SectionHeading>
+          {acceleratorQuoteStatus === 'expired' || acceleratorOrder === undefined ? <>
+            <Tag tone="warn">Quote expired — do not submit</Tag>
+            <p className="mt-1">The published capacity, seller, or price has changed. Ask for a current quote before queuing an order.</p>
+          </> : <>
+            <p className="mt-1">Review this published capacity and price order. The confirmed order is what enters the resolver.</p>
+            <div className="mt-2"><BuyAccelerators session={session} company={company} sellerCompanyId={acceleratorOrder.sellerCompanyId} initialUnits={acceleratorOrder.units} quotedUnitPriceUsd={acceleratorOrder.unitPriceUsd} /></div>
+          </>}
         </div> : null}
       </div> : null}
       {offline && turns.length > 0 ? (

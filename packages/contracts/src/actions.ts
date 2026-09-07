@@ -422,6 +422,7 @@ export const ActionIntentSchema = z
           .string()
           .nullable()
           .describe('The manufacturer sold from, or null to take the cheapest seller with capacity. Every purchase in this economy has a counterparty: somebody books the revenue.'),
+        quotedUnitPriceUsd: usd('A verified manufacturer quote locked for this order, or null for an ordinary market order.').nullable().optional(),
       })
       .describe(
         'Buy accelerators outright from a company that makes them. Owned capacity is capital: it depreciates instead of renting, it is immune to the spot price, and it is paid for in cash the quarter it is bought.',
@@ -933,6 +934,26 @@ export type ActionValidationResult = z.infer<typeof ActionValidationResultSchema
 /*  NPC action bundles (LLM-facing)                                            */
 /* -------------------------------------------------------------------------- */
 
+export const NPC_MESSAGE_PURPOSES = ['introduction', 'proposal', 'warning', 'information_request'] as const;
+export const NpcMessagePurposeSchema = z.enum(NPC_MESSAGE_PURPOSES);
+export type NpcMessagePurpose = z.infer<typeof NpcMessagePurposeSchema>;
+
+/** A non-binding, private message a company agent may send during its quarter. */
+export const NpcOutgoingMessageSchema = z.object({
+  recipientCompanyId: z.string().min(1),
+  purpose: NpcMessagePurposeSchema,
+  text: z.string().min(1).max(600),
+}).describe('A private fictional-world message. It is recorded for sender and recipient but never changes economic state or creates a deal.');
+export type NpcOutgoingMessage = z.infer<typeof NpcOutgoingMessageSchema>;
+
+/** A message the engine accepted into the private company inbox. */
+export const CompanyAgentMessageSchema = NpcOutgoingMessageSchema.extend({
+  id: z.string().min(1),
+  senderCompanyId: z.string().min(1),
+  quarter: QuarterIndexSchema,
+});
+export type CompanyAgentMessage = z.infer<typeof CompanyAgentMessageSchema>;
+
 export const NpcActionBundleSchema = z
   .object({
     companyId: z.string().min(1).describe('The company you are running. Every action in this bundle is taken on its behalf.'),
@@ -947,6 +968,7 @@ export const NpcActionBundleSchema = z
       .max(8)
       .describe('At most eight actions for the quarter. Fewer, coherent actions beat many scattered ones. The engine decides whether each attempt succeeds; you are choosing what to attempt with the information this company could reasonably have.'),
     rationale: z.string().min(20).max(1000).describe('Why these actions, given what this company knows. Used for the designer log and for post-hoc explanation.'),
+    outgoingMessages: z.array(NpcOutgoingMessageSchema).max(3).optional().describe('Up to three private, non-binding conversations the company initiates. The engine records valid messages; free text never creates an obligation.'),
   })
   .describe('One quarter of decisions for one NPC company, produced by an NPC strategist that sees only what that company could reasonably know.');
 export type NpcActionBundle = z.infer<typeof NpcActionBundleSchema>;

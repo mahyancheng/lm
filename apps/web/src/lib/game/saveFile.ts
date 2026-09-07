@@ -524,7 +524,13 @@ export function buildSaveFile(input: {
   readonly now?: () => string;
 }): SaveFile {
   const previous = input.previous ?? null;
-  const due = input.session.quarter > 0 && input.session.quarter % CHECKPOINT_INTERVAL === 0;
+  // Dialogue is planning-phase state rather than an input to F. Once a session
+  // has retained a thread, snapshot the currently open state so replay cannot
+  // erase a conversation that happened after the previous resolved quarter.
+  // The transcript is bounded by its schema (80 threads × 30 turns).
+  const due =
+    (input.session.quarter > 0 && input.session.quarter % CHECKPOINT_INTERVAL === 0) ||
+    input.session.conversationThreads !== undefined;
   const carried = previous?.checkpoint ?? null;
   const checkpoint: SaveCheckpoint | null = due
     ? { quarter: input.session.quarter, state: input.session }

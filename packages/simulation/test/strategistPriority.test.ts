@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { DealProposal, SessionState, StoredGovernmentBid } from '@frontier/contracts';
 import { createWorld2Session } from '../src/scenario/world2';
 import { W2_COMPANIES } from '../src/scenario/world2/seeds';
-import { MAX_LIVE_STRATEGISTS, strategistCompanyIds, strategistPriority } from '../src/companies/strategists';
+import { strategistCompanyIds, strategistPriority } from '../src/companies/strategists';
 
 /** The default world-2 session: player is enterprise_software / north_america. */
 function session(): SessionState {
@@ -85,12 +85,23 @@ describe('strategistPriority', () => {
     expect(ranked).toHaveLength(eligible.size);
   });
 
-  it('is capped at the given limit, defaulting to MAX_LIVE_STRATEGISTS', () => {
+  it('plans the complete eligible set by default and supports an explicit limit', () => {
     const state = session();
     const playerId = playerIdOf(state);
-    expect(strategistPriority(state, playerId).length).toBeLessThanOrEqual(MAX_LIVE_STRATEGISTS);
+    expect(strategistPriority(state, playerId)).toHaveLength(strategistCompanyIds(state).length);
     expect(strategistPriority(state, playerId, 2)).toHaveLength(2);
     expect(strategistPriority(state, playerId, 0)).toHaveLength(0);
+  });
+
+  it('includes every active nonmajor NPC while excluding the player company', () => {
+    const state = session();
+    const playerId = playerIdOf(state);
+    const ids = strategistCompanyIds(state);
+    const eligible = state.companies.filter((company) => company.isActive && company.controllerPlayerId === null);
+    expect(ids).toHaveLength(eligible.length);
+    expect(ids).toEqual(expect.arrayContaining(eligible.map((company) => company.id)));
+    expect(ids).not.toContain(playerId);
+    expect(eligible.some((company) => company.tier !== 'major')).toBe(true);
   });
 
   it('is pure and deterministic: two calls against the same state agree exactly', () => {
@@ -205,7 +216,7 @@ describe('strategistPriority', () => {
     const playerId = playerIdOf(state);
     const ineligibleIds = new Set(
       state.companies
-        .filter((company) => !company.isActive || company.controllerPlayerId !== null || company.tier !== 'major')
+        .filter((company) => !company.isActive || company.controllerPlayerId !== null)
         .map((company) => company.id),
     );
     const ranked = strategistPriority(state, playerId, Number.POSITIVE_INFINITY);

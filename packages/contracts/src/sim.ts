@@ -40,6 +40,7 @@ export const SIM_EVENT_TYPES = [
   'action_accepted',
   'action_clamped',
   'action_rejected',
+  'company_message_sent',
   // governance
   'board_proposal_submitted',
   'board_vote_resolved',

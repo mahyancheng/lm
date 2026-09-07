@@ -95,6 +95,8 @@ export interface ResolverContext {
    * break replay.
    */
   readonly costCache?: NodeCostCache;
+  /** Resolver-minted quotes checked against the immutable state before phases run. */
+  readonly acceleratorQuoteReceipts?: ReadonlyMap<string, { readonly actorCompanyId: string; readonly sellerCompanyId: string; readonly units: number; readonly unitPriceUsd: number }>;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -414,4 +416,3 @@ export const EnginePhaseTimingSchema = z
   })
   .describe('Per-phase diagnostics. Never an input to the simulation; timing must not influence any outcome.');
 export type EnginePhaseTiming = z.infer<typeof EnginePhaseTimingSchema>;
-

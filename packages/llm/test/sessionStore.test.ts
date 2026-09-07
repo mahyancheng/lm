@@ -74,4 +74,100 @@ describe('store failures never fail a call', () => {
     expect(stub.calls[0]?.options?.resume).toBeUndefined();
     expect(completion.claudeSessionId).toBe('session-new');
   });
+
+  it('forgets a rejected resume id so the next turn starts fresh', async () => {
+    const store = createInMemorySessionStore({ 'npc:stable': 'session-gone' });
+    async function* rejected() {
+      throw new Error('resume session not found');
+    }
+    const transport = createClaudeSessionTransport({ queryFn: rejected, sessionStore: store, env: {} });
+
+    const completion = await transport.complete({
+      role: 'npc_strategist', system: 's', prompt: 'p', schema: TinySchema, schemaName: 'TinySchema', sessionKey: 'npc:stable',
+    });
+
+    expect(completion.output).toBeNull();
+    expect(store.peek('npc:stable')).toBeNull();
+  });
+});
+
+describe('same-key Claude session serialization', () => {
+  it('waits for one turn to record its new SDK id before resuming the next', async () => {
+    const values = new Map<string, string>();
+    let unlockFirstWrite: (() => void) | undefined;
+    const firstWrite = new Promise<void>((resolve) => {
+      unlockFirstWrite = resolve;
+    });
+    let writes = 0;
+    const store = {
+      async get(key: string): Promise<string | null> {
+        return values.get(key) ?? null;
+      },
+      async set(key: string, value: string): Promise<void> {
+        values.set(key, value);
+        writes += 1;
+        if (writes === 1) await firstWrite;
+      },
+    };
+    const stub = stubQuery([
+      { text: '{"a":1}', sessionId: 'sdk-first' },
+      { text: '{"a":2}', sessionId: 'sdk-second' },
+    ]);
+    const transport = createClaudeSessionTransport({ queryFn: stub.fn, sessionStore: store, env: {} });
+    const request = (prompt: string) => ({ role: 'npc_strategist' as const, system: 's', prompt, schema: TinySchema, schemaName: 'TinySchema', sessionKey: 'npc:company-seat' });
+
+    const first = transport.complete(request('first'));
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    const second = transport.complete(request('second'));
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(stub.calls).toHaveLength(1);
+
+    unlockFirstWrite?.();
+    await Promise.all([first, second]);
+    expect(stub.calls).toHaveLength(2);
+    expect(stub.calls[1]?.options?.resume).toBe('sdk-first');
+  });
+
+  it('does not block independent company keys behind a slow write', async () => {
+    let unlockWrite: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      unlockWrite = resolve;
+    });
+    const store = {
+      async get(): Promise<string | null> {
+        return null;
+      },
+      async set(): Promise<void> {
+        await blocked;
+      },
+    };
+    const stub = stubQuery([
+      { text: '{"a":1}', sessionId: 'sdk-a' },
+      { text: '{"a":2}', sessionId: 'sdk-b' },
+    ]);
+    const transport = createClaudeSessionTransport({ queryFn: stub.fn, sessionStore: store, env: {} });
+    const request = (key: string) => ({ role: 'npc_strategist' as const, system: 's', prompt: key, schema: TinySchema, schemaName: 'TinySchema', sessionKey: key });
+
+    const a = transport.complete(request('npc:a'));
+    const b = transport.complete(request('npc:b'));
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(stub.calls).toHaveLength(2);
+    unlockWrite?.();
+    await Promise.all([a, b]);
+  });
+
+  it('releases the key after a failed turn so a later turn can start fresh', async () => {
+    const store = createInMemorySessionStore({ 'npc:failed': 'sdk-gone' });
+    const stub = stubQuery([
+      { text: '', sessionId: 'sdk-gone', throws: new Error('resume missing') },
+      { text: '{"a":3}', sessionId: 'sdk-fresh' },
+    ]);
+    const transport = createClaudeSessionTransport({ queryFn: stub.fn, sessionStore: store, env: {} });
+    const request = (prompt: string) => ({ role: 'npc_strategist' as const, system: 's', prompt, schema: TinySchema, schemaName: 'TinySchema', sessionKey: 'npc:failed' });
+
+    const [failed, fresh] = await Promise.all([transport.complete(request('first')), transport.complete(request('second'))]);
+    expect(failed.output).toBeNull();
+    expect(fresh.output).toEqual({ a: 3 });
+    expect(stub.calls[1]?.options?.resume).toBeUndefined();
+  });
 });

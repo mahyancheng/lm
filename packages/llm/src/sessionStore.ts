@@ -49,6 +49,8 @@ export interface LlmSessionStore {
   get(sessionKey: string): Promise<string | null>;
   /** Record the Claude Code session id for this conversation. Last write wins. Never throws. */
   set(sessionKey: string, claudeSessionId: string): Promise<void>;
+  /** Forget a stale SDK session id. Optional so existing safe stores remain compatible. */
+  invalidate?(sessionKey: string): Promise<void>;
 }
 
 /** An in-memory store with inspection helpers, for demo mode and tests. */
@@ -80,6 +82,9 @@ export function createInMemorySessionStore(initial: Readonly<Record<string, stri
     async set(sessionKey: string, claudeSessionId: string): Promise<void> {
       map.set(sessionKey, claudeSessionId);
     },
+    async invalidate(sessionKey: string): Promise<void> {
+      map.delete(sessionKey);
+    },
     peek(sessionKey: string): string | null {
       return map.get(sessionKey) ?? null;
     },
@@ -99,6 +104,9 @@ export function createNullSessionStore(): LlmSessionStore {
       return null;
     },
     async set(): Promise<void> {
+      /* intentionally empty */
+    },
+    async invalidate(): Promise<void> {
       /* intentionally empty */
     },
   };

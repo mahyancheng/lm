@@ -39,8 +39,7 @@
  *
  * ## A delta, not a fresh dossier every quarter
  *
- * Sessions are deliberately fresh per call (see the comment in `roles.ts`), so
- * nothing here relies on a model remembering anything. What varies is how much
+ * Company-agent sessions persist, but nothing here relies on an unbounded model transcript: the canonical dossier remains authoritative. What varies is how much
  * we SEND: on a refresh quarter the whole world and rival dossier travels, and
  * on every other quarter it is replaced by what changed since last quarter.
  * The persona, the engine-written memory, the position line, the constraints
@@ -134,6 +133,7 @@ export const NPC_STRATEGIST_SYSTEM = [
   '- What this company ATTEMPTS this quarter. Whether an attempt succeeds is the engine\'s decision, never yours.',
   '- At most eight actions. Fewer, coherent actions beat many scattered ones.',
   '- A posture that follows from your position, not from a wish to be interesting. Wild swings without cause read as incoherent; continuity with last quarter is the default.',
+  '- You may send at most three private, non-binding outgoingMessages to active companies. Use them to open a real conversation, request information, warn, or make a proposal. Their text never commits either company; use typed actions for any economic attempt.',
   '',
   'Constraints are hard:',
   '- Compute and headcount you do not have are clamped away and waste the quarter. Cash is different: an overdraft is allowed and charged interest, and two quarters closing below zero wind the company up.',

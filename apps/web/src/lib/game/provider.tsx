@@ -41,6 +41,7 @@ import type {
   ActionIntent,
   ActionValidationResult,
   Character,
+  ConversationRecordInput,
   Company,
   CompanyQuarterMetrics,
   GmProposalBatch,
@@ -58,14 +59,13 @@ import type {
   WorldVersion,
   SimEvent,
 } from '@frontier/contracts';
-import { LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
+import { ConversationRecordInputSchema, LEGACY_WORLD_VERSION, NewGameSetupSchema } from '@frontier/contracts';
 import type { FrontierResolutionOutcome } from '@frontier/simulation';
 import {
   applySocialTextOverrides,
   audienceFor,
   controlledCompaniesOf,
   isEventVisibleTo,
-  MAX_LIVE_STRATEGISTS,
   projectResolutionOutcomeForPlayer,
   selectPostsForAuthoring,
   strategistPriority,
@@ -292,6 +292,8 @@ export interface GameStoreActions {
   dismissNotice(): void;
   /** Re-check whether a live model is configured. */
   refreshLlmHealth(): Promise<void>;
+  /** Store one validated, bounded NPC dialogue turn. This records no deal or economic outcome. */
+  recordConversationTurn(record: ConversationRecordInput): void;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -339,7 +341,8 @@ type Action =
   | { type: 'settings'; partial: Partial<GameSettings> }
   | { type: 'llm'; health: LlmHealth }
   | { type: 'notice'; notice: string | null }
-  | { type: 'set_active_company'; companyId: string };
+  | { type: 'set_active_company'; companyId: string }
+  | { type: 'conversation_recorded'; record: ConversationRecordInput };
 
 const DEFAULT_SETTINGS: GameSettings = {
   seed: DEMO_SEED,
@@ -604,6 +607,69 @@ function reducer(state: GameStoreState, action: Action): GameStoreState {
       // company passes through.
       return { ...state, activeCompanyId: resolveActiveCompanyId(state.session, action.companyId) };
 
+    case 'conversation_recorded': {
+      // The component and the model are both untrusted here. A dialogue turn is
+      // allowed to retain words and a *non-binding* memory cue only; this path
+      // cannot create a deal, a commitment, a relationship delta, or an event.
+      const parsed = ConversationRecordInputSchema.safeParse(action.record);
+      if (!parsed.success) return state;
+      const record = parsed.data;
+      if (record.quarter !== state.session.quarter) return state;
+      const company = state.session.companies.find((entry) => entry.id === record.playerCompanyId);
+      const player = state.session.characters.find((entry) => entry.id === record.playerCharacterId);
+      const target = state.session.characters.find((entry) => entry.id === record.targetCharacterId);
+      if (company === undefined || player === undefined || target === undefined || !target.isActive || player.id === target.id) return state;
+      if (player.companyId !== company.id && company.ceoCharacterId !== player.id) return state;
+
+      const id = `npc:${state.session.sessionId}:${company.id}:${player.id}:${target.id}`;
+      const threads = state.session.conversationThreads ?? [];
+      const existing = threads.find((thread) => thread.id === id);
+      // An exact scope match is mandatory: a player company and NPC can never
+      // inherit another company's conversation, even in the same session.
+      if (existing !== undefined && (existing.sessionId !== state.session.sessionId || existing.playerCompanyId !== company.id || existing.playerCharacterId !== player.id || existing.targetCharacterId !== target.id)) return state;
+      const nextTurnSequence = (existing?.nextTurnSequence ?? 0) + 2;
+      const nextTurns = [
+        ...(existing?.turns ?? []),
+        { speakerId: player.id, text: record.playerText, quarter: record.quarter, targetCompanyId: target.companyId },
+        { speakerId: target.id, text: record.replyText, quarter: record.quarter, targetCompanyId: target.companyId },
+      ].slice(-30);
+      const thread = {
+        id,
+        sessionId: state.session.sessionId,
+        playerCompanyId: company.id,
+        playerCharacterId: player.id,
+        targetCharacterId: target.id,
+        // A conversation belongs to the person. Its initial employer stays as
+        // legacy fallback; each new turn carries its own immutable employer.
+        targetCompanyId: existing?.targetCompanyId ?? target.companyId,
+        turns: nextTurns,
+        nextTurnSequence,
+        lastMessageQuarter: record.quarter,
+      };
+      const conversationThreads = existing === undefined
+        ? [...threads, thread].slice(-80)
+        : threads.map((entry) => entry.id === id ? thread : entry);
+
+      // A model may suggest salience and sentiment, but never the factual
+      // result of the negotiation. The retained memory is deliberately worded
+      // from recorded reality: discussion is not acceptance or execution.
+      const memory = record.memory === null ? null : {
+        id: `mem:${id}:${nextTurnSequence}`,
+        ownerCharacterId: target.id,
+        aboutId: player.id,
+        quarter: record.quarter,
+        kind: 'negotiation' as const,
+        summary: `Discussed potential terms with ${company.name}; no agreement was recorded.`,
+        sentiment: record.memory.sentiment,
+        decayRate: 0.14,
+        strength: 1,
+      };
+      const memories = memory === null || state.session.memories.some((entry) => entry.id === memory.id)
+        ? state.session.memories
+        : [...state.session.memories, memory];
+      return { ...state, session: { ...state.session, conversationThreads, memories } };
+    }
+
     default:
       return state;
   }
@@ -843,7 +909,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       return;
     }
     const player = playerCompanyOf(state.session);
-    const strategistCap = Math.max(0, Math.min(LLM_STRATEGISTS_PER_QUARTER, MAX_LIVE_STRATEGISTS));
+    const strategistCap = Math.max(0, LLM_STRATEGISTS_PER_QUARTER);
     const ids = strategistPriority(state.session, player.id, strategistCap);
     startStrategistPrefetch(state.session, ids, { previousWorld: state.previousWorld });
   }, [state.session, state.previousWorld, state.hydrated, state.loading, state.settings.useLiveModel]);
@@ -1072,6 +1138,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
     };
     /** Stop waiting for `promise` once `msRemaining` passes, without cancelling it — a queued call is never refused, only stopped being waited on. */
     const withDeadline = <T,>(promise: Promise<T | null>, msRemaining: number): Promise<T | null> => {
+      if (!Number.isFinite(msRemaining)) return promise;
       if (msRemaining <= 0) return Promise.resolve(null);
       return new Promise<T | null>((resolve) => {
         let settled = false;
@@ -1142,7 +1209,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
           // the budget runs out it is the least-relevant rival that falls back
           // to policy, never whichever one happened to be asked first.
           const player = playerCompanyOf(session);
-          const strategistCap = Math.max(0, Math.min(LLM_STRATEGISTS_PER_QUARTER, MAX_LIVE_STRATEGISTS));
+          const strategistCap = Math.max(0, LLM_STRATEGISTS_PER_QUARTER);
           const ids = strategistPriority(session, player.id, strategistCap);
           const companyName = (companyId: string): string => session.companies.find((entry) => entry.id === companyId)?.name ?? companyId;
           const strategistRows = new Map<string, ProgressRow>(
@@ -1580,6 +1647,10 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
 
   const dismissNotice = useCallback(() => dispatch({ type: 'notice', notice: null }), []);
 
+  const recordConversationTurn = useCallback((record: ConversationRecordInput) => {
+    dispatch({ type: 'conversation_recorded', record });
+  }, []);
+
   const refreshLlmHealth = useCallback(async () => {
     const health = await llmHealth(true);
     dispatch({ type: 'llm', health });
@@ -1606,6 +1677,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       importSave: importSaveText,
       updateSettings,
       dismissNotice,
+      recordConversationTurn,
       refreshLlmHealth,
     }),
     [
@@ -1628,6 +1700,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       importSaveText,
       updateSettings,
       dismissNotice,
+      recordConversationTurn,
       refreshLlmHealth,
     ],
   );

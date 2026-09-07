@@ -47,6 +47,7 @@ import {
   type LlmMemoryStore,
   type LlmTransportKind,
 } from '@frontier/llm';
+import { createConfiguredSessionStore } from './_sessionStore';
 import { getRouteClient, isSupabaseAdminConfigured } from '@/lib/supabase/server';
 import {
   ANONYMOUS_ID_COOKIE,
@@ -142,16 +143,15 @@ export function limiterSnapshot(): LimiterSnapshot {
  * key is a monotonic counter rather than a timestamp, which keeps this free of
  * the clock and correct for two changes inside one millisecond.
  *
- * A rebuild takes the dialogue session store with it, and that is the right
- * answer rather than an oversight: the stored ids name Claude sessions opened
- * under the *previous* credential, and resuming one of those on a new account
- * is at best a failed call. A changed credential starts fresh threads.
+ * The dialogue session store is process-wide (and durable on the Pi), so it
+ * survives a gateway rebuild. A Claude SDK resume rejected after a credential
+ * change invalidates just that opaque mapping and the next turn opens fresh.
  *
  * What a rebuild does **not** take with it is the concurrency bound: that one
  * is handed in from the process singleton above and survives every rebuild.
  */
 const cachedGateway = createGenerationCache<LlmGateway>(() =>
-  createGateway(llmEnv(), { concurrencyLimiter }),
+  createGateway(llmEnv(), { concurrencyLimiter, sessionStore: processSingleton('llm.sessionStore', () => createConfiguredSessionStore(process.env)) }),
 );
 
 export function gateway(): LlmGateway {

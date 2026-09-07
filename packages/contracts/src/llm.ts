@@ -1321,9 +1321,20 @@ export const RelationshipDeltasSchema = z
   .describe('How this exchange changed the speaker\'s feelings. Small numbers: a single conversation rarely transforms a relationship.');
 export type RelationshipDeltas = z.infer<typeof RelationshipDeltasSchema>;
 
+/** A reviewable order against a manufacturer offer supplied in the dialogue dossier. */
+export const AcceleratorPurchaseDraftSchema = z
+  .object({
+    sellerCompanyId: z.string().min(1),
+    units: intCount('Accelerators requested for outright ownership.'),
+    unitPriceUsd: usd('The published unit price quoted by the named manufacturer.'),
+  })
+  .describe('A proposed outright accelerator order. It is only actionable when the client verifies the seller, quantity and quote against current canonical availability, then the human confirms the existing buy_accelerators action.');
+export type AcceleratorPurchaseDraft = z.infer<typeof AcceleratorPurchaseDraftSchema>;
+
 export const CharacterReplySchema = z
   .object({
     dealDraft: DealProposalDraftSchema.optional().describe("A reviewable offer from the player company perspective; gives is what the player provides. Never executes from dialogue."),
+    acceleratorPurchaseDraft: AcceleratorPurchaseDraftSchema.optional().describe('A reviewable order for accelerators owned outright. Never executes from dialogue.'),
     text: z
       .string()
       .min(1)

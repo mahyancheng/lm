@@ -351,13 +351,19 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
     // rent, so the units land here and the *cash* lands in the financial phase:
     // this phase stages the order, phase eleven pays for it and moves it into
     // property, plant and equipment. Nothing here touches cash.
-    for (const { intent } of intentsOfType(actions, 'buy_accelerators')) {
+    for (const { action, intent } of intentsOfType(actions, 'buy_accelerators')) {
       if (!isMultiSectorWorld(draft)) continue;
       const seller = resolveComputeSeller(draft, 'accelerators', intent.sellerCompanyId, company.id, intent.units);
       const units = seller === null ? 0 : Math.min(count(intent.units), seller.sellableUnits);
-      const unitPrice = seller === null ? 0 : seller.unitPriceUsd;
+      // A dialogue quote is validated against the named seller when submitted,
+      // then remains the agreed price through this resolution. Ordinary market
+      // orders keep the live clearing-price behaviour.
+      const receipt = ctx.acceleratorQuoteReceipts?.get(action.actionId);
+      const quoted = intent.quotedUnitPriceUsd !== undefined && intent.quotedUnitPriceUsd !== null;
+      const quoteValid = !quoted || (receipt !== undefined && receipt.actorCompanyId === company.id && receipt.sellerCompanyId === intent.sellerCompanyId && receipt.units === intent.units && receipt.unitPriceUsd === intent.quotedUnitPriceUsd);
+      const unitPrice = seller === null ? 0 : quoteValid && receipt !== undefined ? receipt.unitPriceUsd : seller.unitPriceUsd;
 
-      if (seller === null || units <= 0 || unitPrice > intent.maxPricePerUnitUsd) {
+      if (seller === null || units <= 0 || !quoteValid || unitPrice > intent.maxPricePerUnitUsd) {
         const eventId = emitEvent(
           draft,
           ctx,
@@ -370,7 +376,7 @@ export function resolveComputeOrders(draft: SessionState, ctx: ResolverContext):
             clearingPriceUsd: unitPrice,
             maxPricePerUnitUsd: money(intent.maxPricePerUnitUsd),
             sellerCompanyId: seller === null ? null : seller.company.id,
-            reason: seller === null ? 'no_seller' : units <= 0 ? 'no_capacity' : 'above_limit',
+            reason: seller === null ? 'no_seller' : units <= 0 ? 'no_capacity' : !quoteValid ? 'quote_unverified' : 'above_limit',
           },
           'company',
         );

@@ -44,14 +44,27 @@ export const PRICE_CEILING_MARGIN = 1.1;
 export interface BuyAcceleratorsProps {
   readonly session: SessionState;
   readonly company: Company;
+  /**
+   * A conversation with a manufacturer can open its actual published offer.
+   * This locks the ticket to that seller; it never falls back to a different
+   * company and therefore cannot turn dialogue into invented consent.
+   */
+  readonly sellerCompanyId?: string;
+  /** A verified dialogue draft may prefill, never exceed, the live offer. */
+  readonly initialUnits?: number;
+  /** A verified quote is an exact ceiling; no silent price headroom is added. */
+  readonly quotedUnitPriceUsd?: number;
 }
 
-export function BuyAccelerators({ session, company }: BuyAcceleratorsProps): React.JSX.Element | null {
+export function BuyAccelerators({ session, company, sellerCompanyId, initialUnits, quotedUnitPriceUsd }: BuyAcceleratorsProps): React.JSX.Element | null {
   const { validateIntent, queueAction } = useGameActions();
-  const sellers = useMemo(() => sellersFor(session, 'accelerators', company.id), [session, company.id]);
-  const [sellerId, setSellerId] = useState<string>(() => sellers[0]?.company.id ?? '');
-  const seller = sellers.find((entry) => entry.company.id === sellerId) ?? sellers[0] ?? null;
-  const [units, setUnits] = useState(0);
+  const sellers = useMemo(() => {
+    const available = sellersFor(session, 'accelerators', company.id);
+    return sellerCompanyId === undefined ? available : available.filter((entry) => entry.company.id === sellerCompanyId);
+  }, [session, company.id, sellerCompanyId]);
+  const [sellerId, setSellerId] = useState<string>(() => sellerCompanyId ?? sellers[0]?.company.id ?? '');
+  const seller = sellers.find((entry) => entry.company.id === sellerId) ?? (sellerCompanyId === undefined ? sellers[0] : undefined) ?? null;
+  const [units, setUnits] = useState(initialUnits ?? 0);
   const [pending, setPending] = useState<ActionIntent | null>(null);
   const [queued, setQueued] = useState(false);
 
@@ -63,10 +76,11 @@ export function BuyAccelerators({ session, company }: BuyAcceleratorsProps): Rea
     return {
       type: 'buy_accelerators',
       units: wanted,
-      maxPricePerUnitUsd: Math.round(seller.unitPriceUsd * PRICE_CEILING_MARGIN),
+      maxPricePerUnitUsd: quotedUnitPriceUsd ?? Math.round(seller.unitPriceUsd * PRICE_CEILING_MARGIN),
       sellerCompanyId: seller.company.id,
+      ...(quotedUnitPriceUsd === undefined ? {} : { quotedUnitPriceUsd }),
     };
-  }, [seller, wanted]);
+  }, [seller, wanted, quotedUnitPriceUsd]);
 
   const preCheck = useMemo(() => (intent === null ? null : validateIntent(intent)), [intent, validateIntent]);
   const solvency = cashAfterOf(company, costUsd);
@@ -79,8 +93,8 @@ export function BuyAccelerators({ session, company }: BuyAcceleratorsProps): Rea
     return (
       <EmptyState
         icon="building"
-        title="Nobody is selling accelerators"
-        message="No manufacturer has capacity to ship this quarter. Reserved capacity and on-demand cloud are still open."
+        title={sellerCompanyId === undefined ? 'Nobody is selling accelerators' : 'This manufacturer has no accelerators to sell'}
+        message={sellerCompanyId === undefined ? 'No manufacturer has capacity to ship this quarter. Reserved capacity and on-demand cloud are still open.' : 'Their published capacity is unavailable this quarter, so no order can be queued from this conversation.'}
       />
     );
   }
@@ -98,24 +112,30 @@ export function BuyAccelerators({ session, company }: BuyAcceleratorsProps): Rea
         Buy accelerators
       </SectionHeading>
 
-      <label className="block">
-        <span className="label-caps-faint">Seller</span>
-        <select
-          className="field tap-target mt-1 w-full"
-          value={seller.company.id}
-          onChange={(event) => {
-            setSellerId(event.target.value);
-            setUnits(0);
-            setQueued(false);
-          }}
-        >
-          {sellers.map((entry) => (
-            <option key={entry.company.id} value={entry.company.id}>
-              {`${entry.company.name} — ${formatMoney(entry.unitPriceUsd)} each, ${formatCount(entry.sellableUnits)} available`}
-            </option>
-          ))}
-        </select>
-      </label>
+      {sellerCompanyId === undefined ? (
+        <label className="block">
+          <span className="label-caps-faint">Seller</span>
+          <select
+            className="field tap-target mt-1 w-full"
+            value={seller.company.id}
+            onChange={(event) => {
+              setSellerId(event.target.value);
+              setUnits(0);
+              setQueued(false);
+            }}
+          >
+            {sellers.map((entry) => (
+              <option key={entry.company.id} value={entry.company.id}>
+                {`${entry.company.name} — ${formatMoney(entry.unitPriceUsd)} each, ${formatCount(entry.sellableUnits)} available`}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <p className="rounded-card border border-hair bg-raised/60 px-3 py-2 text-[12px] text-ink-dim sm:text-[10px]">
+          {seller.company.name} is offering {formatCount(seller.sellableUnits)} accelerators at {formatMoney(seller.unitPriceUsd)} each this quarter. This is a published supply offer, not a promise inferred from the conversation.
+        </p>
+      )}
 
       <SliderField
         label="Accelerators"
@@ -183,7 +203,7 @@ export function BuyAccelerators({ session, company }: BuyAcceleratorsProps): Rea
           { label: 'Seller', value: seller.company.name },
           { label: 'Units', value: formatCount(wanted), emphasis: true },
           { label: 'Price each', value: formatMoney(seller.unitPriceUsd) },
-          { label: 'Price ceiling', value: formatMoney(Math.round(seller.unitPriceUsd * PRICE_CEILING_MARGIN)) },
+          { label: 'Price ceiling', value: formatMoney(quotedUnitPriceUsd ?? Math.round(seller.unitPriceUsd * PRICE_CEILING_MARGIN)) },
           { label: 'Cost now', value: formatMoney(costUsd), emphasis: true },
           { label: 'Owned after', value: formatCount(ownedAfter) },
           { label: 'Depreciation a quarter', value: formatMoney(depreciationAfter) },

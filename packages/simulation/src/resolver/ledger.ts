@@ -136,6 +136,7 @@ export class ResolutionRecorder {
     private readonly draft: SessionState,
     private readonly hash: (value: unknown) => string,
     preResolutionHash: string,
+    private readonly acceleratorQuoteReceipts: ReadonlyMap<string, { readonly actorCompanyId: string; readonly sellerCompanyId: string; readonly units: number; readonly unitPriceUsd: number }> = new Map(),
   ) {
     this.lastHash = preResolutionHash;
     this.lastRowHash = preResolutionHash;
@@ -192,6 +193,7 @@ export class ResolutionRecorder {
       quarter: this.resolutionQuarter,
       rng,
       costCache: this.costCache,
+      acceleratorQuoteReceipts: this.acceleratorQuoteReceipts,
       emit: (draft: SimEventDraft) => this.emit(draft, phase),
       log: (line: ResolutionLineDraft) => this.log(line, phase),
     };

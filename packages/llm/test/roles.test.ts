@@ -314,3 +314,13 @@ describe('call metadata', () => {
     expect(result.output?.companyId).toBe(NEXUS_ID);
   });
 });
+
+describe('company-agent session identity', () => {
+  it('keeps one supplied server-derived key across quarterly strategist calls', async () => {
+    const transport = createMockTransport(() => VALID_NPC_BUNDLE);
+    const roles = createLlmRoles(transport, ROLES_OPTIONS);
+    await roles.npcStrategist.plan(npcStrategistInput(), undefined, undefined, 'npc:opaque-company-agent');
+    await roles.npcStrategist.plan(npcStrategistInput({ quarter: 2 }), undefined, undefined, 'npc:opaque-company-agent');
+    expect(transport.calls.map((call) => call.sessionKey)).toEqual(['npc:opaque-company-agent', 'npc:opaque-company-agent']);
+  });
+});

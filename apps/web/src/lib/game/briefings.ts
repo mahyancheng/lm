@@ -14,6 +14,7 @@ import type {
   Company,
   ChiefOfStaffInput,
   LookupResult,
+  Memory,
   NpcMemoryView,
   NpcPersona,
   NpcRelationshipView,
@@ -219,6 +220,22 @@ export interface StrategistBriefingOptions {
 }
 
 const NO_PRIOR_CONTEXT: StrategistBriefingOptions = { previousWorld: null };
+/** Mirrors the route boundary, so locally assembled briefs never fail after a long lived company inbox. */
+const MAX_NPC_COMPANY_BRIEFING_CHARS = 20_000;
+/** Conversation memories are client-side current-quarter writes; engine and seed memories remain opening facts. */
+export function isCurrentQuarterDialogueMemory(memory: Memory, quarter: number): boolean {
+  return memory.quarter === quarter && memory.id.startsWith('mem:npc:');
+}
+function recentLinesWithin(lines: readonly string[], maxChars: number): string {
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of [...lines].reverse()) {
+    if (length + line.length + (kept.length === 0 ? 0 : 1) > maxChars) break;
+    kept.push(line);
+    length += line.length + (kept.length === 1 ? 0 : 1);
+  }
+  return kept.reverse().join('\n');
+}
 
 /** The two-line position summary a delta call carries in place of the full dossier. */
 function companyPositionLine(session: SessionState, company: Company): string {
@@ -298,7 +315,7 @@ function memoryViews(session: SessionState, ceoId: string | null): NpcMemoryView
     session.companies.find((entry) => entry.id === id)?.name ?? session.characters.find((entry) => entry.id === id)?.name ?? id;
 
   return session.memories
-    .filter((memory) => memory.ownerCharacterId === ceoId && memory.strength >= MEMORY_RECALL_THRESHOLD)
+    .filter((memory) => memory.ownerCharacterId === ceoId && memory.strength >= MEMORY_RECALL_THRESHOLD && !isCurrentQuarterDialogueMemory(memory, session.quarter))
     .slice()
     .sort((a, b) => b.strength - a.strength || b.quarter - a.quarter || a.id.localeCompare(b.id))
     .slice(0, MAX_STRATEGIST_MEMORIES)
@@ -417,6 +434,23 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
     : '';
 
   const cash = company.financials.cash;
+  // Only this company's inbox enters its dossier. Messages remain private facts
+  // between the sender and recipient; a rival never learns them from this feed.
+  const inbox = (session.companyMessages ?? [])
+    .filter((message) => message.recipientCompanyId === companyId)
+    .slice(-12)
+    .map((message) => `${message.senderCompanyId} (${message.purpose}): ${message.text.slice(0, 600)}`);
+  // A strategist plans from the committed opening-of-quarter brief. A player
+  // conversation during this quarter is recorded immediately for dialogue, but
+  // reaches this planner next quarter so it cannot invalidate a live prefetch.
+  // Each turn carries its employer at the moment of the exchange. The legacy
+  // thread-level field is only a fallback for saves created before turn scope,
+  // so a later job move can never move an old employer's transcript.
+  const conversationBrief = (session.conversationThreads ?? [])
+    .flatMap((thread) => thread.turns
+      .filter((turn) => turn.quarter < session.quarter && (turn.targetCompanyId ?? thread.targetCompanyId) === companyId)
+      .map((turn) => `${turn.speakerId}: ${turn.text.slice(0, 600)}`))
+    .slice(-32);
   const constraints = [
     `Available cash ${formatMoney(cash)}.`,
     `Held compute ${company.compute.ownedAccelerators + company.compute.reservedAccelerators} accelerator-equivalents at ${formatPct(company.compute.computeUtilisation)} utilisation.`,
@@ -424,6 +458,9 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
       ? 'No board: financing, buybacks, share issuance and acquisitions are not available.'
       : 'Financing, buybacks, share issuance and acquisitions require a board proposal.',
   ];
+  const inboxLines = recentLinesWithin(inbox.map((line) => `- ${line}`), 7_500);
+  const conversationLines = recentLinesWithin(conversationBrief.map((line) => `- ${line}`), 7_500);
+  const companyDossier = `${(full ? companyBriefing(session, company) : companyPositionLine(session, company)).slice(0, 4_500)}${inboxLines.length === 0 ? '' : `\n\nPrivate company inbox (messages are non-binding):\n${inboxLines}`}${conversationLines.length === 0 ? '' : `\n\nCompleted CEO conversations known to this company (non-binding):\n${conversationLines}`}`;
 
   return {
     sessionId: session.sessionId,
@@ -432,7 +469,7 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
     companyName: company.name,
     // The delta path sends the position line instead of the full dossier. Both
     // are built from the same committed state; only the width differs.
-    companyBriefing: full ? companyBriefing(session, company) : companyPositionLine(session, company),
+    companyBriefing: companyDossier.slice(0, MAX_NPC_COMPANY_BRIEFING_CHARS),
     worldBriefing: full ? worldBriefing(session) : '',
     rivalBriefing,
     openOpportunities: session.procurementOpportunities
@@ -465,17 +502,9 @@ export function buildNpcStrategistInput(session: SessionState, companyId: string
  * Which companies get a live strategist this quarter.
  *
  * Delegated to the engine's own selector, which is the only place that decides
- * it: major tier, not player-directed, ranked by trailing revenue then market
- * capitalisation then id, and **capped** at `MAX_LIVE_STRATEGISTS`.
- *
- * The cap is the whole point. This function used to return every active
- * major-tier rival, which was fine when the world held seven companies and is
- * a bill when it holds twenty-five across six sectors: each id here becomes one
- * model call per quarter, and each `claude-session` call spawns a Claude Code
- * subprocess on the operator's own subscription. Six keeps the per-quarter cost
- * flat however large the world grows; the rivals below the line run the
- * deterministic archetype policy, which is what the three-tier design says
- * should happen to them anyway.
+ * it: every active NPC controlled company, ranked by trailing revenue then market
+ * capitalisation then id. A finite limit can be supplied by the live dispatcher
+ * when an operator explicitly enables a model budget.
  *
  * The ranking is pure and total, so the same state always names the same
  * companies — a replayed quarter asks for exactly the strategists the live

@@ -137,7 +137,7 @@ export function isPlausibleAnonymousId(value: string): boolean {
 /* -------------------------------------------------------------------------- */
 
 /** The two conversational roles. Each gets its own key namespace. */
-export type ConversationRole = 'cos' | 'chr';
+export type ConversationRole = 'cos' | 'chr' | 'npc';
 
 /** The parts of a conversation a client is allowed to name. */
 export interface ConversationParts {
@@ -168,7 +168,7 @@ export function seatFor(principal: Principal, parts: ConversationParts): string 
  * `<role>:<hmac-sha256(role, principal, game session, seat, thread)>`. The
  * digest is one-way, so the key discloses nothing; the role is inside both the
  * prefix and the signed material, so a `cos:` thread can never be resumed
- * through the character route; and no part of it can be supplied directly.
+ * through a character or company-agent route; and no part of it can be supplied directly.
  */
 export function deriveConversationKey(role: ConversationRole, principal: Principal, parts: ConversationParts, secret: string): string {
   const material = [role, principal.kind, principal.id, parts.gameSessionId, seatFor(principal, parts), parts.conversationId]
@@ -176,6 +176,7 @@ export function deriveConversationKey(role: ConversationRole, principal: Princip
     .join(':');
   return `${role}:${createHmac('sha256', secret).update(material).digest('hex')}`;
 }
+
 
 /* -------------------------------------------------------------------------- */
 /*  Rate limiting                                                              */

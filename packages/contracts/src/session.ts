@@ -32,11 +32,11 @@ import { MarketBeliefSchema, MarketInstrumentSchema, PublicDisclosureSchema, Quo
 import { BoardProposalSchema, BoardSchema, StoredCommitmentSchema } from './governance';
 import { AgencySchema, ContractorReputationSchema, GovernmentContractSchema, ProcurementOpportunitySchema, StoredGovernmentBidSchema } from './government';
 import { ResearchProjectSchema, TechGraphSchema } from './tech';
-import { AccessOverrideSchema, CharacterSchema, ConversationMetadataSchema, MemorySchema, RelationshipSchema } from './people';
+import { AccessOverrideSchema, CharacterSchema, ConversationMetadataSchema, ConversationThreadSchema, MemorySchema, RelationshipSchema } from './people';
 import { MediaStorySchema, SocialAccountSchema, SocialPostSchema } from './social';
 import { DealProposalSchema } from './deals';
 import { ActivistCampaignSchema, CapitalEntitySchema, CapitalOrderSchema, MAX_CAPITAL_ENTITIES, ShortPositionSchema } from './capital';
-import { SubmittedActionSchema } from './actions';
+import { CompanyAgentMessageSchema, SubmittedActionSchema } from './actions';
 import { LeaderboardSchema, QuarterSnapshotSchema, SessionObjectiveSchema } from './sim';
 
 /* -------------------------------------------------------------------------- */
@@ -727,6 +727,9 @@ export const SessionStateSchema = z
     memories: z.array(MemorySchema).default([]).describe('What characters remember, with salience already decayed.'),
     accessOverrides: z.array(AccessOverrideSchema).default([]).describe('Active bypasses of the connection gap rule.'),
     conversations: z.array(ConversationMetadataSchema).default([]).describe('Conversation metadata only. Message bodies live in Supabase and stream over Realtime.'),
+    // Optional: old worlds and saves did not retain NPC dialogue. New saves retain only a bounded, seat-scoped local transcript.
+    conversationThreads: z.array(ConversationThreadSchema).max(80).optional().describe('Bounded private NPC dialogue transcripts keyed by session, player company and target character.'),
+    companyMessages: z.array(CompanyAgentMessageSchema).max(240).optional().describe('Bounded private inboxes for fictional company-agent messages. Only sender and recipient receive a message in their next-quarter dossier.'),
 
     // --- governance ---
     boards: z.array(BoardSchema).default([]),

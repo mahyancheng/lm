@@ -598,12 +598,12 @@ describe('strategist selection', () => {
     }
   });
 
-  it('holds the per-quarter model bill flat as the world grows', () => {
+  it('plans every active NPC company across tiers as the world grows', () => {
     const state = createWorld2Session();
-    const widened: SessionState = {
-      ...state,
-      companies: state.companies.map((company) => ({ ...company, tier: 'major' as const, controllerPlayerId: null })),
-    };
-    expect(strategistCompanyIds(widened).length).toBeLessThanOrEqual(6);
+    const backgroundId = state.companies.find((company) => company.isActive && company.controllerPlayerId === null)!.id;
+    const widened: SessionState = { ...state, companies: state.companies.map((company) => company.id === backgroundId ? { ...company, tier: 'background' as const } : company) };
+    const ids = strategistCompanyIds(widened);
+    expect(ids).toHaveLength(widened.companies.filter((company) => company.isActive && company.controllerPlayerId === null).length);
+    expect(ids).toContain(backgroundId);
   });
 });

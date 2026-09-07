@@ -28,16 +28,41 @@
 
 import { hashState } from '@frontier/shared';
 import type { NpcActionBundle, SessionState } from '@frontier/contracts';
-import { buildNpcStrategistInput, type StrategistBriefingOptions } from './briefings';
+import { buildNpcStrategistInput, isCurrentQuarterDialogueMemory, type StrategistBriefingOptions } from './briefings';
 import { requestNpcBundle } from '@/lib/llm/client';
+
+
+/**
+ * A strategist plans from the committed opening-of-quarter brief. Player
+ * dialogue and its CEO memory are visible to the dialogue system immediately,
+ * then enter the strategist dossier next quarter. Excluding current-quarter
+ * thread/memory writes prevents a chat from aborting and re-running an
+ * in-flight strategist call; company-agent inboxes remain in the fingerprint.
+ */
+export function strategistStateHash(session: SessionState): string {
+  const { conversationThreads: _conversationThreads, ...withoutThreads } = session;
+  const strategistState = { ...withoutThreads, memories: session.memories.filter((memory) => !isCurrentQuarterDialogueMemory(memory, session.quarter)) };
+  return hashState(strategistState as SessionState);
+}
 
 interface PrefetchEntry {
   readonly controller: AbortController;
   readonly promise: Promise<NpcActionBundle | null>;
+  /** Settles a job that never reached the client request. Safe after dispatch too. */
+  readonly cancel: () => void;
 }
 
 /** Replaced wholesale on every `startStrategistPrefetch` call — never grows past one quarter. */
 let cache = new Map<string, PrefetchEntry>();
+let prefetchRunning = false;
+const prefetchQueue: { readonly run: () => void; readonly cancel: () => void }[] = [];
+function dispatchNextPrefetch(): void {
+  if (prefetchRunning) return;
+  const next = prefetchQueue.shift();
+  if (next === undefined) return;
+  prefetchRunning = true;
+  next.run();
+}
 
 /*
  * The key is the state, the quarter and the company — not the briefing shape.
@@ -62,7 +87,7 @@ function keyOf(stateHash: string, quarter: number, companyId: string): string {
  * aborted, and the cache is replaced with exactly the new set.
  */
 export function startStrategistPrefetch(session: SessionState, companyIds: readonly string[], options: StrategistBriefingOptions = { previousWorld: null }): void {
-  const stateHash = hashState(session);
+  const stateHash = strategistStateHash(session);
   const next = new Map<string, PrefetchEntry>();
 
   for (const companyId of companyIds) {
@@ -75,19 +100,34 @@ export function startStrategistPrefetch(session: SessionState, companyIds: reado
     const input = buildNpcStrategistInput(session, companyId, options);
     if (input === null) continue;
     const controller = new AbortController();
-    const promise = requestNpcBundle(input, undefined, controller.signal).catch(() => null);
-    next.set(key, { controller, promise });
+    let cancel = (): void => undefined;
+    const promise = new Promise<NpcActionBundle | null>((resolve) => {
+      let settled = false;
+      const settle = (value: NpcActionBundle | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      cancel = () => settle(null);
+      prefetchQueue.push({ cancel, run: () => {
+        if (controller.signal.aborted) { prefetchRunning = false; settle(null); dispatchNextPrefetch(); return; }
+        void requestNpcBundle(input, undefined, controller.signal)
+          .catch(() => null).then((value) => { prefetchRunning = false; settle(value); dispatchNextPrefetch(); });
+      }});
+      dispatchNextPrefetch();
+    });
+    next.set(key, { controller, promise, cancel });
   }
 
   for (const [key, entry] of cache) {
-    if (!next.has(key)) entry.controller.abort();
+    if (!next.has(key)) { entry.controller.abort(); entry.cancel(); }
   }
   cache = next;
 }
 
 /** True when a prefetch — in flight or already settled — exists for this exact state and company. */
 export function hasStrategistPrefetch(session: SessionState, companyId: string): boolean {
-  return cache.has(keyOf(hashState(session), session.quarter, companyId));
+  return cache.has(keyOf(strategistStateHash(session), session.quarter, companyId));
 }
 
 /**
@@ -99,7 +139,7 @@ export function hasStrategistPrefetch(session: SessionState, companyId: string):
  * times out, matching every other transport promise in the codebase.
  */
 export function takeStrategistPrefetch(session: SessionState, companyId: string): Promise<NpcActionBundle | null> {
-  const entry = cache.get(keyOf(hashState(session), session.quarter, companyId));
+  const entry = cache.get(keyOf(strategistStateHash(session), session.quarter, companyId));
   return entry === undefined ? Promise.resolve(null) : entry.promise;
 }
 
@@ -112,6 +152,7 @@ export function takeStrategistPrefetch(session: SessionState, companyId: string)
  * subprocess alive or resolve into a cache nothing will ever read.
  */
 export function clearStrategistPrefetch(): void {
-  for (const entry of cache.values()) entry.controller.abort();
+  for (const entry of cache.values()) { entry.controller.abort(); entry.cancel(); }
   cache = new Map();
+  for (const entry of prefetchQueue.splice(0)) entry.cancel();
 }

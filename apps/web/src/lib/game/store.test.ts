@@ -13,6 +13,7 @@ import {
 import { projectPlayerView, buildAlerts, marketCapOf, founderNetWorth } from './playerView';
 import { buildWorldDirectorInput, buildNpcStrategistInput, strategistCompanies, buildChiefOfStaffInput } from './briefings';
 import { replay } from './persistence';
+import { BoundedNpcStrategistInputSchema } from '../../app/api/llm/_bounds';
 
 describe('demo store surfaces', () => {
   it('creates the demo session', () => {
@@ -143,6 +144,17 @@ describe('demo store surfaces', () => {
     for (const view of input.memories) expect(view.strength).toBeGreaterThan(0);
   });
 
+  it('keeps seeded opening memories but defers only current-quarter dialogue memories', () => {
+    const s = createSession();
+    const id = strategistCompanies(s)[0]!;
+    const ceoId = s.characters.find((character) => character.companyId === id && character.role === 'founder_ceo')!.id;
+    const seeded = { ...s.memories[0]!, id: 'mem_seeded_opening_fact', ownerCharacterId: ceoId, quarter: 0, strength: 0.9 };
+    const chat = { ...seeded, id: 'mem:npc:session:company:player:target:2', summary: 'Current conversation must wait for the next strategist turn.' };
+    const input = buildNpcStrategistInput({ ...s, memories: [...s.memories, seeded, chat] }, id)!;
+    expect(input.memories.map((memory) => memory.summary)).toContain(seeded.summary);
+    expect(input.memories.map((memory) => memory.summary)).not.toContain(chat.summary);
+  });
+
   it('sends a delta once there is a prior quarter to compress against, and never another company\'s memory', () => {
     const engine = getEngine();
     const opening = createSession();
@@ -174,6 +186,34 @@ describe('demo store surfaces', () => {
     for (const input of [full, delta]) {
       expect(JSON.stringify(input)).not.toContain(PRIVATE);
     }
+  });
+
+  it('keeps a long-lived company briefing within the route bound while retaining strategist memory', () => {
+    const opening = createSession();
+    const companyId = strategistCompanies(opening)[0]!;
+    const ceoId = opening.characters.find((entry) => entry.companyId === companyId && entry.role === 'founder_ceo')?.id!;
+    const session = {
+      ...opening,
+      quarter: 1,
+      companies: opening.companies.map((entry) => entry.id === companyId ? {
+        ...entry,
+        strategistMemory: { standingStrategy: 'Protect the durable supply advantage.', standingStrategyQuarter: 0, grudges: [], attempts: [] },
+      } : entry),
+      companyMessages: Array.from({ length: 12 }, (_, index) => ({
+        id: `message-${index}`, senderCompanyId: 'cmp_sender', recipientCompanyId: companyId, quarter: 0,
+        purpose: 'proposal' as const, text: 'm'.repeat(600),
+      })),
+      conversationThreads: [{
+        id: 'company-thread', sessionId: opening.sessionId, playerCompanyId: 'cmp_player_ventures', playerCharacterId: 'chr_player', targetCharacterId: ceoId, targetCompanyId: companyId,
+        turns: Array.from({ length: 40 }, (_, index) => ({ speakerId: index % 2 === 0 ? 'chr_player' : ceoId, text: `turn-${index}-${'c'.repeat(1_000)}`, quarter: 0, targetCompanyId: companyId })),
+        nextTurnSequence: 40, lastMessageQuarter: 0,
+      }],
+    };
+    const input = buildNpcStrategistInput(session, companyId)!;
+    expect(input.companyBriefing.length).toBeLessThanOrEqual(20_000);
+    expect(input.companyBriefing).toContain('m'.repeat(600));
+    expect(input.memory.standingStrategy).toBe('Protect the durable supply advantage.');
+    expect(BoundedNpcStrategistInputSchema.safeParse(input).success).toBe(true);
   });
 });
 

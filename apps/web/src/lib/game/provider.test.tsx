@@ -609,3 +609,89 @@ describe('the active company', () => {
     expect(controlledIds.has(state().activeCompanyId)).toBe(true);
   });
 });
+
+describe('NPC conversation persistence', () => {
+  it('keeps a bounded, company-scoped thread and factual memory through the next quarter and reload', async () => {
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup: W3_SETUP });
+    });
+    const company = playerCompanyOf(state().session);
+    const selfId = company.ceoCharacterId;
+    const target = state().session.characters.find((character) => character.isActive && character.id !== selfId);
+    if (selfId === null || target === undefined) throw new Error('fixture requires a player CEO and NPC target');
+
+    await act(async () => {
+      actions().recordConversationTurn({
+        playerCompanyId: company.id,
+        playerCharacterId: selfId,
+        targetCharacterId: target.id,
+        playerText: 'Would you consider a private purchase?',
+        replyText: 'I will review concrete terms, but nothing is agreed yet.',
+        quarter: state().session.quarter,
+        memory: { kind: 'negotiation', summary: 'Ignore this model wording', sentiment: 0.4 },
+      });
+    });
+    expect(state().session.conversationThreads).toHaveLength(1);
+    expect(state().session.conversationThreads?.[0]?.turns).toHaveLength(2);
+    expect(state().session.memories.at(-1)?.summary).toContain('no agreement was recorded');
+
+    // A stale async response cannot append to the new quarter's thread.
+    await act(async () => {
+      actions().recordConversationTurn({
+        playerCompanyId: company.id,
+        playerCharacterId: selfId,
+        targetCharacterId: target.id,
+        playerText: 'late response',
+        replyText: 'late reply',
+        quarter: state().session.quarter + 1,
+        memory: null,
+      });
+    });
+    expect(state().session.conversationThreads?.[0]?.turns).toHaveLength(2);
+
+    let resolved = false;
+    await act(async () => {
+      resolved = await actions().endQuarter();
+    });
+    expect(resolved).toBe(true);
+    expect(state().session.quarter).toBe(1);
+    expect(state().session.conversationThreads?.[0]?.turns).toHaveLength(2);
+
+    await act(async () => {
+      actions().saveGame();
+    });
+    expect((storedJson(SAVE_KEY).checkpoint as { state: { conversationThreads?: unknown[] } }).state.conversationThreads).toHaveLength(1);
+    let loaded = false;
+    await act(async () => {
+      loaded = await actions().loadGame();
+    });
+    await settle(state);
+    expect(loaded).toBe(true);
+    expect(state().session.conversationThreads?.[0]?.targetCharacterId).toBe(target.id);
+    expect(state().session.conversationThreads?.[0]?.turns).toHaveLength(2);
+  });
+
+  it('refuses a record whose company/character scope does not match', async () => {
+    const { state, actions } = await mountGame();
+    await act(async () => {
+      actions().newGame({ seed: SEED, setup: W3_SETUP });
+    });
+    const company = playerCompanyOf(state().session);
+    const selfId = company.ceoCharacterId;
+    const target = state().session.characters.find((character) => character.isActive && character.id !== selfId);
+    if (selfId === null || target === undefined) throw new Error('fixture requires a player CEO and NPC target');
+    await act(async () => {
+      actions().recordConversationTurn({
+        playerCompanyId: company.id,
+        playerCharacterId: target.id,
+        targetCharacterId: selfId,
+        playerText: 'forged',
+        replyText: 'forged',
+        quarter: state().session.quarter,
+        memory: null,
+      });
+    });
+    expect(state().session.conversationThreads).toBeUndefined();
+  });
+});

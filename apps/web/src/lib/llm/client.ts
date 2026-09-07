@@ -199,26 +199,23 @@ export const QUARTER_ROLE_TIMEOUT_MS = 90_000;
  * unbounded one.
  */
 export function resolveQuarterBudgetMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return Number.POSITIVE_INFINITY;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 90_000;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Number.POSITIVE_INFINITY;
 }
 
 export const LLM_QUARTER_BUDGET_MS = resolveQuarterBudgetMs(process.env.NEXT_PUBLIC_LLM_QUARTER_BUDGET_MS);
 
 /**
- * How many rivals get a live strategist call in one quarter, at most.
+ * How many NPC companies get a live strategist call in one quarter.
  *
- * Independent of, and no larger a number than, `MAX_LIVE_STRATEGISTS` in
- * `@frontier/simulation` (the engine's own selection cap): that constant picks
- * *which* rivals are eligible at all — major tier, largest first — and this one
- * further trims how many of the eligible set actually get a model call before
- * the quarter's own `LLM_QUARTER_BUDGET_MS` is spent on them. Four is the Pi's
- * own budget divided by a genuine call's measured 4-10s with room for queueing
- * behind the World Director; a bigger host can raise it.
+ * Unset (or `all`) means every active NPC company. Hosts with a constrained
+ * model budget can set a non-negative integer to rank and trim the batch.
  */
 export function resolveStrategistsPerQuarter(raw: string | undefined): number {
+  if (raw === undefined || raw.trim().toLowerCase() === 'all' || raw.trim().toLowerCase() === 'unlimited') return Number.POSITIVE_INFINITY;
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 4;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : Number.POSITIVE_INFINITY;
 }
 
 export const LLM_STRATEGISTS_PER_QUARTER = resolveStrategistsPerQuarter(process.env.NEXT_PUBLIC_LLM_STRATEGISTS_PER_QUARTER);
@@ -226,7 +223,7 @@ export const LLM_STRATEGISTS_PER_QUARTER = resolveStrategistsPerQuarter(process.
 async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT_MS, signal?: AbortSignal): Promise<T | null> {
   if (typeof window === 'undefined') return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = Number.isFinite(timeoutMs) ? setTimeout(() => controller.abort(), timeoutMs) : null;
   const onExternalAbort = (): void => controller.abort();
   signal?.addEventListener('abort', onExternalAbort);
   try {
@@ -243,7 +240,7 @@ async function postRole<T>(path: string, body: unknown, timeoutMs = ROLE_TIMEOUT
   } catch {
     return null;
   } finally {
-    clearTimeout(timer);
+    if (timer !== null) clearTimeout(timer);
     signal?.removeEventListener('abort', onExternalAbort);
   }
 }
@@ -409,7 +406,7 @@ async function chiefOfStaffAttemptOnce(body: unknown, timeoutMs: number, externa
     // own abort — is transient by nature, which is exactly what one retry is for.
     return { kind: 'network_error' };
   } finally {
-    clearTimeout(timer);
+    if (timer !== null) clearTimeout(timer);
     external?.removeEventListener('abort', onExternalAbort);
   }
 }
@@ -486,8 +483,14 @@ export function requestNpcBundle(
   input: NpcStrategistInput,
   evidence?: unknown,
   signal?: AbortSignal,
+  timeoutMs: number = QUARTER_ROLE_TIMEOUT_MS,
 ): Promise<NpcActionBundle | null> {
-  return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, QUARTER_ROLE_TIMEOUT_MS, signal);
+  return postRole<NpcActionBundle>('/api/llm/npc-strategist', { input, evidence: evidence ?? null }, timeoutMs, signal);
+}
+
+/** Speak to a company CEO through the company's persistent outward-facing agent. */
+export function requestCompanyDialogue(context: CharacterUtteranceContext, conversation: ConversationRef): Promise<CharacterReply | null> {
+  return postRole<CharacterReply>('/api/llm/company-dialogue', { context, conversation: conversationBody(conversation) });
 }
 
 /**

@@ -1319,6 +1319,8 @@ const buyAccelerators: Rule<'buy_accelerators'> = (intent, verdict, ctx) => {
       `${intent.sellerCompanyId} is not selling accelerators this quarter; the order goes to ${seller.company.name} at ${money(seller.unitPriceUsd)} a unit.`,
     );
   }
+  // A quoted order is authenticated against the immutable opening state by
+  // the resolver receipt. The mutable draft has already passed macro phases.
 
   // This action exists in world 2 only (rejected above in world 1), so there is
   // no frozen hash to keep: what a manufacturer can ship is availability, not a
@@ -2285,6 +2287,24 @@ const respondCrisis: Rule<'respond_crisis'> = (intent, verdict, ctx) => {
 /*  Deals and people                                                           */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Binding is a promise the resolver must be able to discharge, not a label a
+ * caller may attach to an otherwise unimplemented obligation. Keep this at
+ * the engine boundary as well as the chat surface: saved games and other UI
+ * surfaces can submit actions without passing through TalkPanel.
+ */
+function hasBindingSettlementRoute(proposal: Extract<ActionIntent, { type: 'propose_deal' }>['proposal']): boolean {
+  const obligations = [...proposal.gives, ...proposal.gets];
+  if (obligations.length === 0) return false;
+  const licences = obligations.filter((obligation) => obligation.kind === 'node_licence');
+  if (licences.length > 0) {
+    return licences.length === 1 && proposal.gets.filter((obligation) => obligation.kind === 'node_licence').length === 1 && obligations.every(
+      (obligation) => obligation.kind === 'node_licence' || obligation.kind === 'cash_payment',
+    );
+  }
+  return obligations.every((obligation) => obligation.kind === 'cash_payment');
+}
+
 const proposeDeal: Rule<'propose_deal'> = (intent, verdict, ctx) => {
   const { counterpartyId, counterpartyKind } = intent.proposal;
   const exists =
@@ -2303,6 +2323,10 @@ const proposeDeal: Rule<'propose_deal'> = (intent, verdict, ctx) => {
   }
   if (intent.proposal.expiresQuarter < ctx.draft.quarter) {
     verdict.reject('illegal_value', 'The offer expires before the quarter it was made in.');
+    return;
+  }
+  if (intent.proposal.binding && !hasBindingSettlementRoute(intent.proposal)) {
+    verdict.reject('requirement_not_met', 'These obligations do not have a deterministic settlement route. Send them as non-binding intent or use the specific transaction action.');
     return;
   }
 

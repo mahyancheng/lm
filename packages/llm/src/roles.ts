@@ -9,10 +9,10 @@
  *    information boundary; nothing reaches a model that did not pass through it.
  * 2. **Call** the transport with the role's schema from
  *    `AGENT_OUTPUT_SCHEMA_NAMES`, so a role can never be wired to the wrong
- *    schema by accident. Strategic roles pass `sessionKey: null` — their calls
- *    are ALWAYS fresh sessions. Only the two dialogue roles pass a conversation
- *    key, which is what gives a Chief of Staff thread or a negotiation genuine
- *    multi-turn memory.
+ *    schema by accident. Every company strategist receives a server-derived
+ *    per-company session key, so it resumes one Claude Code identity across
+ *    quarters. Other strategic roles remain fresh. Dialogue roles pass their
+ *    conversation keys for multi-turn memory.
  * 3. **Fall back** deterministically when nothing schema-valid came back. Every
  *    fallback is pure from its inputs: no RNG, no clock, no state.
  * 4. **Post-process** where the contract demands it — the confirmation policy on
@@ -68,6 +68,7 @@ import {
 import { fnv1a64, stableStringify } from '@frontier/shared';
 import type { z } from 'zod';
 import { composeCharacterDialogue } from './compose/characterDialogue';
+import { composeCompanyDialogue } from './compose/companyDialogue';
 import { composeChiefOfStaff, enforceInterpretationPolicy } from './compose/chiefOfStaff';
 import { composeInnovationInterpreter } from './compose/innovationInterpreter';
 import { composeNarrator } from './compose/narrator';
@@ -133,10 +134,15 @@ export interface LlmRoles {
     interpret(input: ChiefOfStaffInput, conversationKey: string, meta?: RoleCallMeta): Promise<RoleResult<ChiefOfStaffInterpretation>>;
   };
   readonly npcStrategist: {
-    plan(input: NpcStrategistInput, evidence?: NpcStrategistEvidence, meta?: RoleCallMeta): Promise<RoleResult<NpcActionBundle>>;
+    /** `companyAgentKey` is server-derived and stable for this game/company identity. */
+    plan(input: NpcStrategistInput, evidence?: NpcStrategistEvidence, meta?: RoleCallMeta, companyAgentKey?: string): Promise<RoleResult<NpcActionBundle>>;
   };
   readonly character: {
     converse(context: CharacterUtteranceContext, conversationKey: string, meta?: RoleCallMeta): Promise<RoleResult<CharacterReply>>;
+  };
+  /** CEO/company outward dialogue using its persistent company-agent SDK session. */
+  readonly companyDialogue: {
+    converse(context: CharacterUtteranceContext, companyAgentKey: string, meta?: RoleCallMeta): Promise<RoleResult<CharacterReply>>;
   };
   readonly innovation: {
     interpret(input: InnovationInterpreterInput, meta?: RoleCallMeta): Promise<RoleResult<InnovationProposal>>;
@@ -303,14 +309,17 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
     },
 
     npcStrategist: {
-      async plan(input, evidence, meta) {
+      async plan(input, evidence, meta, companyAgentKey) {
         const scope = resolveMeta(meta, input.sessionId, input.quarter);
         return run({
           role: 'npc_strategist',
           schema: NpcActionBundleSchema,
           schemaName: AGENT_OUTPUT_SCHEMA_NAMES.npc_strategist,
           composed: composeNpcStrategist(input, evidence),
-          sessionKey: null,
+          // The route derives this opaque key from the verified principal, game
+          // session and company id. Library callers may omit it to preserve
+          // deterministic fresh-session behaviour in offline/test contexts.
+          sessionKey: companyAgentKey ?? null,
           ...scope,
           // The engine runs the deterministic archetype policy for this
           // company's posture — the same policy background companies use.
@@ -329,6 +338,17 @@ export function createLlmRoles(transport: LlmTransport, opts: LlmRolesOptions): 
           composed: composeCharacterDialogue(context),
           sessionKey: conversationKey,
           ...scope,
+          fallback: () => ({ output: fallbackCharacterReply(context), declineReason: null }),
+        });
+      },
+    },
+
+    companyDialogue: {
+      async converse(context, companyAgentKey, meta) {
+        const scope = resolveMeta(meta, undefined, undefined);
+        return run({ role: 'character_dialogue', schema: CharacterReplySchema,
+          schemaName: AGENT_OUTPUT_SCHEMA_NAMES.character_dialogue,
+          composed: composeCompanyDialogue(context), sessionKey: companyAgentKey, ...scope,
           fallback: () => ({ output: fallbackCharacterReply(context), declineReason: null }),
         });
       },

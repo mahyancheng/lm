@@ -13,9 +13,10 @@ import { createDemoSession } from '@frontier/simulation';
 const requestNpcBundle = vi.fn();
 vi.mock('@/lib/llm/client', () => ({
   requestNpcBundle: (...args: unknown[]) => requestNpcBundle(...args),
+  LLM_QUARTER_BUDGET_MS: Number.POSITIVE_INFINITY,
 }));
 
-const { clearStrategistPrefetch, hasStrategistPrefetch, startStrategistPrefetch, takeStrategistPrefetch } = await import(
+const { clearStrategistPrefetch, hasStrategistPrefetch, startStrategistPrefetch, strategistStateHash, takeStrategistPrefetch } = await import(
   './strategistPrefetch'
 );
 
@@ -33,12 +34,14 @@ function bundle(companyId: string): NpcActionBundle {
   };
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (reason?: unknown) => void;
+  const controlled = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise: controlled, resolve, reject };
 }
 
 beforeEach(() => {
@@ -115,26 +118,51 @@ describe('startStrategistPrefetch / takeStrategistPrefetch', () => {
     expect(hasStrategistPrefetch(after, 'cmp_orbit')).toBe(false);
   });
 
+  it('dispatches the tail only after the prior result, preserving the requested order', async () => {
+    const state = session();
+    const first = deferred<NpcActionBundle | null>();
+    requestNpcBundle.mockReturnValueOnce(first.promise).mockResolvedValueOnce(bundle('cmp_helix'));
+
+    startStrategistPrefetch(state, ['cmp_orbit', 'cmp_helix']);
+    expect(requestNpcBundle).toHaveBeenCalledTimes(1);
+    expect(requestNpcBundle.mock.calls[0]?.[0]).toMatchObject({ companyId: 'cmp_orbit' });
+
+    first.resolve(bundle('cmp_orbit'));
+    await expect(takeStrategistPrefetch(state, 'cmp_helix')).resolves.toEqual(bundle('cmp_helix'));
+    expect(requestNpcBundle).toHaveBeenCalledTimes(2);
+    expect(requestNpcBundle.mock.calls[1]?.[0]).toMatchObject({ companyId: 'cmp_helix' });
+  });
+
+  it('dispatches the tail after a prior request fails', async () => {
+    const state = session();
+    const first = deferred<NpcActionBundle | null>();
+    requestNpcBundle.mockReturnValueOnce(first.promise).mockResolvedValueOnce(bundle('cmp_helix'));
+
+    startStrategistPrefetch(state, ['cmp_orbit', 'cmp_helix']);
+    first.reject(new Error('network'));
+    await expect(takeStrategistPrefetch(state, 'cmp_helix')).resolves.toEqual(bundle('cmp_helix'));
+    expect(requestNpcBundle).toHaveBeenCalledTimes(2);
+  });
+
   it('replacing the prefetch set aborts entries that are no longer wanted', async () => {
     const state = session();
     const controllerSignals: AbortSignal[] = [];
     requestNpcBundle.mockImplementation((_input: unknown, _evidence: unknown, signal?: AbortSignal) => {
       if (signal !== undefined) controllerSignals.push(signal);
-      return new Promise(() => {
-        /* never settles on its own — only an abort ends it */
+      return new Promise<NpcActionBundle | null>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       });
     });
 
     startStrategistPrefetch(state, ['cmp_orbit', 'cmp_helix']);
-    expect(controllerSignals).toHaveLength(2);
-    expect(controllerSignals.every((signal) => signal.aborted)).toBe(false);
+    expect(controllerSignals).toHaveLength(1);
 
-    // Drop cmp_helix from the next call: its entry must be aborted, cmp_orbit's must not.
+    // Drop queued cmp_helix before it reaches the client: no stale HTTP POST.
     startStrategistPrefetch(state, ['cmp_orbit']);
     expect(controllerSignals[0]?.aborted).toBe(false);
-    expect(controllerSignals[1]?.aborted).toBe(true);
     expect(hasStrategistPrefetch(state, 'cmp_helix')).toBe(false);
     expect(hasStrategistPrefetch(state, 'cmp_orbit')).toBe(true);
+    clearStrategistPrefetch();
   });
 
   it('clearStrategistPrefetch aborts everything in flight and empties the cache', async () => {
@@ -142,7 +170,7 @@ describe('startStrategistPrefetch / takeStrategistPrefetch', () => {
     let signal: AbortSignal | undefined;
     requestNpcBundle.mockImplementation((_input: unknown, _evidence: unknown, s?: AbortSignal) => {
       signal = s;
-      return new Promise(() => undefined);
+      return new Promise<NpcActionBundle | null>((_resolve, reject) => s?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     });
 
     startStrategistPrefetch(state, ['cmp_orbit']);
@@ -157,5 +185,59 @@ describe('startStrategistPrefetch / takeStrategistPrefetch', () => {
     const state = session();
     startStrategistPrefetch(state, []);
     expect(requestNpcBundle).not.toHaveBeenCalled();
+  });
+
+  it('never posts a queued job after its cache entry was invalidated', async () => {
+    const state = session();
+    const first = deferred<NpcActionBundle | null>();
+    requestNpcBundle.mockReturnValueOnce(first.promise).mockResolvedValueOnce(bundle('cmp_vectorworks'));
+    startStrategistPrefetch(state, ['cmp_orbit', 'cmp_helix']);
+    startStrategistPrefetch(state, ['cmp_orbit', 'cmp_vectorworks']);
+
+    first.resolve(bundle('cmp_orbit'));
+    await expect(takeStrategistPrefetch(state, 'cmp_vectorworks')).resolves.toEqual(bundle('cmp_vectorworks'));
+    expect(requestNpcBundle.mock.calls.map(([input]) => (input as { companyId: string }).companyId)).toEqual(['cmp_orbit', 'cmp_vectorworks']);
+  });
+
+  it('settles an invalidated queued entry without posting it, then waits for the active abort before a replacement starts', async () => {
+    const state = session();
+    const active = deferred<NpcActionBundle | null>();
+    requestNpcBundle.mockReturnValueOnce(active.promise).mockResolvedValueOnce(bundle('cmp_vectorworks'));
+    startStrategistPrefetch(state, ['cmp_orbit', 'cmp_helix']);
+    const queued = takeStrategistPrefetch(state, 'cmp_helix');
+    clearStrategistPrefetch();
+    await expect(queued).resolves.toBeNull();
+    startStrategistPrefetch(state, ['cmp_vectorworks']);
+    expect(requestNpcBundle).toHaveBeenCalledTimes(1);
+    active.resolve(null);
+    await expect(takeStrategistPrefetch(state, 'cmp_vectorworks')).resolves.toEqual(bundle('cmp_vectorworks'));
+    expect(requestNpcBundle.mock.calls.map(([input]) => (input as { companyId: string }).companyId)).toEqual(['cmp_orbit', 'cmp_vectorworks']);
+  });
+});
+
+describe('strategistStateHash', () => {
+  it('keeps opening and engine memories in the strategist fingerprint while ignoring a current dialogue write', () => {
+    const before = session();
+    const seedMemory = { ...before.memories[0]!, id: 'mem_seed_fact', quarter: before.quarter };
+    const dialogueMemory = { ...seedMemory, id: 'mem:npc:session:company:player:target:2' };
+    expect(strategistStateHash({ ...before, memories: [...before.memories, dialogueMemory] })).toBe(strategistStateHash(before));
+    expect(strategistStateHash({ ...before, memories: [...before.memories, seedMemory] })).not.toBe(strategistStateHash(before));
+  });
+
+  it('does not invalidate a quarter plan when only player dialogue transcript changes', async () => {
+    const before = session();
+    requestNpcBundle.mockResolvedValue(bundle('cmp_orbit'));
+    startStrategistPrefetch(before, ['cmp_orbit']);
+
+    const after: SessionState = {
+      ...before,
+      conversationThreads: [{
+        id: 'thread_1', sessionId: before.sessionId, playerCompanyId: 'cmp_player', playerCharacterId: 'chr_player', targetCharacterId: 'chr_target', targetCompanyId: null,
+        turns: [{ speakerId: 'chr_player', text: 'Can we talk terms?', quarter: before.quarter }], nextTurnSequence: 1, lastMessageQuarter: before.quarter,
+      }],
+    };
+    expect(hasStrategistPrefetch(after, 'cmp_orbit')).toBe(true);
+    await expect(takeStrategistPrefetch(after, 'cmp_orbit')).resolves.toEqual(bundle('cmp_orbit'));
+    expect(requestNpcBundle).toHaveBeenCalledTimes(1);
   });
 });

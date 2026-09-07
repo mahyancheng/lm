@@ -15,7 +15,7 @@ import type { NpcBundleInput } from '@frontier/simulation';
 export const GAME_SESSION_DIR_ENV = 'GAME_SESSION_DIR';
 const COMPANY_COMMAND_TYPES = new Set<ActionIntent['type']>(['propose_deal', 'accept_deal', 'reject_deal', 'cancel_deal', 'submit_board_proposal']);
 
-type StoredDialogue = { readonly playerText: string; readonly replyText: string; readonly output?: import('@frontier/contracts').CharacterReply | { readonly text: string; readonly commands: readonly never[] }; readonly receipts: readonly import('@frontier/contracts').ConversationReceipt[]; readonly fallbackUsed: boolean };
+type StoredDialogue = { readonly companyId?: string; readonly quarter?: number; readonly playerText: string; readonly replyText: string; readonly output?: import('@frontier/contracts').CharacterReply | { readonly text: string; readonly commands: readonly never[] }; readonly receipts: readonly import('@frontier/contracts').ConversationReceipt[]; readonly fallbackUsed: boolean };
 type Receipt = { readonly fingerprint: string; readonly commandId: string; readonly revision: number; readonly action: SubmittedAction | null; readonly status: 'queued' | 'rejected'; readonly dialogue?: StoredDialogue };
 type ResolutionEnvelope = { readonly requestId: string; readonly outcome: import('@frontier/contracts').QuarterResolutionOutcome };
 type StoredGame = { readonly version: 1; readonly ownerId: string; readonly revision: number; readonly file: SaveFile; readonly receipts: readonly Receipt[]; readonly resolutions?: readonly ResolutionEnvelope[] };
@@ -56,13 +56,59 @@ export async function appendCanonicalDialogueTurn(input: { readonly sessionId: s
   const prior = (state.conversationThreads ?? []).find((thread) => thread.id === id);
   // Exact turn idempotency is encoded as a paired turn marker in the first text line.
   if (stored.receipts.some((receipt) => receipt.commandId === `dialogue_${input.turnId}`)) return stored.revision;
-  const playerTurn = { speakerId: input.playerCharacterId, text: input.playerText, quarter: state.quarter, targetCompanyId: input.companyId };
-  const replyTurn = { speakerId: ceo, text: input.replyText, quarter: state.quarter, targetCompanyId: input.companyId, ...(input.receipts === undefined ? {} : { receipts: input.receipts.slice(0, 2) }) };
+  const playerTurn = { turnId: input.turnId, speakerId: input.playerCharacterId, text: input.playerText, quarter: state.quarter, targetCompanyId: input.companyId };
+  const proposedCommands = input.output?.commands?.slice(0, 2) ?? [];
+  const replyTurn = { turnId: input.turnId, speakerId: ceo, text: input.replyText, quarter: state.quarter, targetCompanyId: input.companyId, ...(proposedCommands.length === 0 ? {} : { proposedCommands }), ...(input.receipts === undefined ? {} : { receipts: input.receipts.slice(0, 2) }) };
   const thread = prior === undefined ? { id, sessionId: state.sessionId, playerCompanyId: input.playerCompanyId, playerCharacterId: input.playerCharacterId, targetCharacterId: ceo, targetCompanyId: input.companyId, turns: [playerTurn, replyTurn], nextTurnSequence: 2, lastMessageQuarter: state.quarter } : { ...prior, turns: [...prior.turns, playerTurn, replyTurn].slice(-30), nextTurnSequence: prior.nextTurnSequence + 2, lastMessageQuarter: state.quarter };
   const threads = prior === undefined ? [...(state.conversationThreads ?? []), thread] : (state.conversationThreads ?? []).map((candidate) => candidate.id === id ? thread : candidate);
   const nextState = { ...state, conversationThreads: threads.slice(-80) };
   const file = { ...stored.file, checkpoint: { quarter: nextState.quarter, state: nextState }, savedQuarter: nextState.quarter };
-  const revision = stored.revision + 1; const dialogueReceipt: Receipt = { fingerprint: fingerprint({ turnId: input.turnId, text: input.playerText, reply: input.replyText }), commandId: `dialogue_${input.turnId}`, revision, action: null, status: 'queued', dialogue: { playerText: input.playerText, replyText: input.replyText, ...(input.output === undefined ? {} : { output: input.output }), receipts: input.receipts ?? [], fallbackUsed: input.fallbackUsed ?? false } }; return writeGame(root, input.sessionId, { ...stored, revision, file, receipts: [...stored.receipts, dialogueReceipt] }) ? revision : null;
+  const revision = stored.revision + 1; const dialogueReceipt: Receipt = { fingerprint: fingerprint({ turnId: input.turnId, text: input.playerText, reply: input.replyText }), commandId: `dialogue_${input.turnId}`, revision, action: null, status: 'queued', dialogue: { companyId: input.companyId, quarter: state.quarter, playerText: input.playerText, replyText: input.replyText, ...(input.output === undefined ? {} : { output: input.output }), receipts: input.receipts ?? [], fallbackUsed: input.fallbackUsed ?? false } }; return writeGame(root, input.sessionId, { ...stored, revision, file, receipts: [...stored.receipts, dialogueReceipt] }) ? revision : null;
+}); }
+
+/** Resolve an exact server-persisted CEO draft. Client requests name the draft;
+ * they never carry editable terms across the authority boundary. */
+export function canonicalCompanyDialogueProposal(input: { readonly sessionId: string; readonly ownerId: string; readonly companyId: string; readonly turnId: string; readonly proposalIndex: number }, root = authorityRoot()): { readonly status: 'ready'; readonly revision: number; readonly command: ActionIntent } | { readonly status: 'missing' | 'forbidden' | 'stale' } {
+  if (!root || !validId(input.sessionId) || !validId(input.companyId) || !validId(input.turnId) || !Number.isInteger(input.proposalIndex) || input.proposalIndex < 0 || input.proposalIndex > 1) return { status: 'missing' };
+  let stored = readGame(root, input.sessionId);
+  if (stored !== null && stored !== undefined) stored = upgradeCanonicalStoredGame(root, input.sessionId, stored);
+  if (stored === null) return { status: 'missing' };
+  if (stored === undefined || stored.ownerId !== input.ownerId) return { status: 'forbidden' };
+  const receipt = stored.receipts.find((candidate) => candidate.commandId === `dialogue_${input.turnId}`);
+  const dialogue = receipt?.dialogue;
+  if (dialogue === undefined || dialogue.companyId !== input.companyId) return { status: 'stale' };
+  const candidate = dialogue.output?.commands?.[input.proposalIndex];
+  const command = ActionIntentSchema.safeParse(candidate);
+  if (!command.success || !COMPANY_COMMAND_TYPES.has(command.data.type)) return { status: 'forbidden' };
+  // A network retry may arrive after resolution advanced the quarter. Let the
+  // command service return its exact idempotent receipt; never revalidate it as
+  // a new action in the later quarter.
+  const priorCommand = stored.receipts.find((entry) => entry.commandId === `dialogue_${input.turnId}_${input.proposalIndex}`);
+  if (priorCommand !== undefined && priorCommand.fingerprint === fingerprint(command.data)) return { status: 'ready', revision: stored.revision, command: command.data };
+  const state = replay(stored.file);
+  if (state === null || dialogue.quarter !== state.quarter) return { status: 'stale' };
+  const company = state.companies.find((entry) => entry.id === input.companyId);
+  if (company === undefined || !company.isActive || company.controllerPlayerId !== null) return { status: 'forbidden' };
+  return { status: 'ready', revision: stored.revision, command: command.data };
+}
+
+/** Attach the authoritative queue outcome to both durable representations of
+ * the CEO turn so reloads show the draft and its result together. */
+export async function recordCompanyDialogueProposalReceipt(input: { readonly sessionId: string; readonly ownerId: string; readonly companyId: string; readonly turnId: string; readonly proposalIndex: number; readonly receipt: import('@frontier/contracts').ConversationReceipt }, root = authorityRoot()): Promise<number | null> { return locked(input.sessionId, async () => {
+  if (!root || !validId(input.sessionId) || !validId(input.companyId) || !validId(input.turnId)) return null;
+  let stored = readGame(root, input.sessionId); if (stored !== null && stored !== undefined) stored = upgradeCanonicalStoredGame(root, input.sessionId, stored);
+  if (stored === null || stored === undefined || stored.ownerId !== input.ownerId) return null;
+  const dialogueIndex = stored.receipts.findIndex((entry) => entry.commandId === `dialogue_${input.turnId}` && entry.dialogue?.companyId === input.companyId);
+  const state = replay(stored.file); if (dialogueIndex < 0 || state === null) return null;
+  const dialogueReceipt = stored.receipts[dialogueIndex]!; const dialogue = dialogueReceipt.dialogue!;
+  const linkedReceipt = { ...input.receipt, proposalIndex: input.proposalIndex };
+  const receipts = [...dialogue.receipts.filter((entry) => entry.proposalIndex !== input.proposalIndex), linkedReceipt].slice(-2);
+  const authorityReceipts = stored.receipts.map((entry, index) => index === dialogueIndex ? { ...entry, dialogue: { ...dialogue, receipts } } : entry);
+  const threads = (state.conversationThreads ?? []).map((thread) => thread.targetCompanyId !== input.companyId ? thread : { ...thread, turns: thread.turns.map((turn) => turn.turnId === input.turnId && turn.speakerId === thread.targetCharacterId ? { ...turn, receipts } : turn) });
+  const nextState = { ...state, conversationThreads: threads };
+  const file = { ...stored.file, checkpoint: { quarter: nextState.quarter, state: nextState }, savedQuarter: nextState.quarter };
+  const revision = stored.revision + 1;
+  return writeGame(root, input.sessionId, { ...stored, revision, file, receipts: authorityReceipts }) ? revision : null;
 }); }
 
 const gameLocks = new Map<string, Promise<void>>();

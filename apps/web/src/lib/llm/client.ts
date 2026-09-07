@@ -490,6 +490,8 @@ export function requestNpcBundle(
 }
 
 export interface CompanyCommandReceipt {
+  /** Index of the persisted CEO command this outcome belongs to. */
+  readonly proposalIndex?: number;
   readonly status: 'queued' | 'duplicate' | 'stale' | 'forbidden' | 'rejected' | 'session_not_registered';
   readonly revision: number | null;
   readonly intent: ActionIntent | null;
@@ -498,6 +500,8 @@ export interface CompanyCommandReceipt {
 
 export interface CompanyDialogueReply {
   readonly output: CharacterReply | null;
+  /** Opaque id for this CEO turn; required to approve one proposed command. */
+  readonly turnId: string;
   readonly receipts: readonly CompanyCommandReceipt[];
   readonly revision: number | null;
 }
@@ -513,14 +517,46 @@ export async function requestCompanyDialogue(context: CharacterUtteranceContext,
   try {
     const response = await fetch('/api/llm/company-dialogue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: conversation.sessionId, companyId: conversation.conversationId, turnId, message: context.topic }), cache: 'no-store' });
     if (!response.ok) return null;
-    const body = await response.json() as { output?: CharacterReply | null; revision?: unknown; receipts?: readonly { status?: unknown; revision?: unknown; queuedAction?: { intent?: ActionIntent } | null; validation?: { reasons?: readonly { message?: unknown }[] } | null }[] };
+    const body = await response.json() as { output?: CharacterReply | null; revision?: unknown; receipts?: readonly { proposalIndex?: unknown; status?: unknown; revision?: unknown; intent?: ActionIntent | null; reason?: unknown; queuedAction?: { intent?: ActionIntent } | null; validation?: { reasons?: readonly { message?: unknown }[] } | null }[] };
     const receipts: CompanyCommandReceipt[] = (body.receipts ?? []).map((receipt) => ({
+      ...(typeof receipt.proposalIndex === 'number' && Number.isInteger(receipt.proposalIndex) ? { proposalIndex: receipt.proposalIndex } : {}),
       status: receipt.status === 'queued' || receipt.status === 'duplicate' || receipt.status === 'stale' || receipt.status === 'forbidden' || receipt.status === 'rejected' || receipt.status === 'session_not_registered' ? receipt.status : 'rejected',
       revision: typeof receipt.revision === 'number' && Number.isInteger(receipt.revision) ? receipt.revision : null,
-      intent: receipt.queuedAction?.intent ?? null,
-      reason: receipt.validation?.reasons?.map((reason) => typeof reason.message === 'string' ? reason.message : '').filter(Boolean).join(' ') || null,
+      intent: receipt.intent ?? receipt.queuedAction?.intent ?? null,
+      reason: typeof receipt.reason === 'string' ? receipt.reason : (receipt.validation?.reasons?.map((reason) => typeof reason.message === 'string' ? reason.message : '').filter(Boolean).join(' ') || null),
     }));
-    return { output: body.output ?? null, receipts, revision: typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null };
+    return { output: body.output ?? null, turnId, receipts, revision: typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null };
+  } catch { return null; }
+}
+
+/** Submit one CEO-proposed command after the player has reviewed its exact terms. */
+export async function queueCompanyDialogueCommand(
+  conversation: ConversationRef,
+  turnId: string,
+  proposalIndex: number,
+  command: ActionIntent,
+): Promise<CompanyCommandReceipt | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const response = await fetch('/api/llm/company-dialogue/queue', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: conversation.sessionId, companyId: conversation.conversationId, turnId, proposalIndex, command }),
+      cache: 'no-store',
+    });
+    const body = await response.json() as { receipt?: { proposalIndex?: unknown; status?: unknown; revision?: unknown; intent?: ActionIntent | null; reason?: unknown }; revision?: unknown };
+    const receipt = body.receipt;
+    // The canonical service returns a typed receipt for stale and authority
+    // failures too. Read it even when HTTP communicates that it was not queued,
+    // so the chat can distinguish a refresh from a generic transport failure.
+    if (receipt === undefined) return null;
+    return {
+      ...(typeof receipt.proposalIndex === 'number' && Number.isInteger(receipt.proposalIndex) ? { proposalIndex: receipt.proposalIndex } : {}),
+      status: receipt.status === 'queued' || receipt.status === 'duplicate' || receipt.status === 'stale' || receipt.status === 'forbidden' || receipt.status === 'rejected' || receipt.status === 'session_not_registered' ? receipt.status : 'rejected',
+      revision: typeof receipt.revision === 'number' && Number.isInteger(receipt.revision) ? receipt.revision : (typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null),
+      intent: receipt.intent ?? command,
+      reason: typeof receipt.reason === 'string' ? receipt.reason : null,
+    };
   } catch { return null; }
 }
 

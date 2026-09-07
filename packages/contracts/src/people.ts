@@ -271,6 +271,8 @@ export type ConversationKind = z.infer<typeof ConversationKindSchema>;
 
 /** A canonical company-command outcome tied to the NPC turn that requested it. */
 export const ConversationReceiptSchema = z.object({
+  /** Position in the persisted CEO draft list, for exact card association. */
+  proposalIndex: z.number().int().min(0).max(1).optional(),
   status: z.enum(['queued', 'duplicate', 'stale', 'forbidden', 'rejected', 'session_not_registered']),
   revision: z.number().int().min(0).nullable(),
   intent: ActionIntentSchema.nullable(),
@@ -280,6 +282,8 @@ export type ConversationReceipt = z.infer<typeof ConversationReceiptSchema>;
 
 /** A bounded, private transcript used only to continue one player-company ↔ NPC thread. */
 export const ConversationTurnSchema = z.object({
+  /** Idempotency key shared by the player line and CEO reply. */
+  turnId: z.string().min(1).optional(),
   speakerId: z.string().min(1),
   text: z.string().min(1).max(1200),
   quarter: QuarterIndexSchema,
@@ -287,6 +291,8 @@ export const ConversationTurnSchema = z.object({
   targetCompanyId: z.string().min(1).nullable().optional(),
   /** Server command receipts, present only on company-agent replies. */
   receipts: z.array(ConversationReceiptSchema).max(2).optional(),
+  /** Exact CEO-owned drafts offered for in-chat review. Never applied directly. */
+  proposedCommands: z.array(ActionIntentSchema).max(2).optional(),
 });
 export type ConversationTurn = z.infer<typeof ConversationTurnSchema>;
 

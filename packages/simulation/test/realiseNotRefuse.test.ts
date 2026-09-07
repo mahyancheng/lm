@@ -171,6 +171,8 @@ describe('the validator table: availability is accepted and noted, not refused',
     const state = staged();
     const company = state.companies.find((entry) => entry.isPublic && entry.ceoCharacterId !== null);
     if (company === undefined) throw new Error('no public company with a chief executive');
+    const ceoCharacterId = company.ceoCharacterId;
+    if (ceoCharacterId === null) throw new Error('public company lost its chief executive');
     // This action creates public float; a private player company must use a
     // financing round. Use the listed issuer's own CEO, not player authority.
     company.boardId = null;
@@ -182,7 +184,7 @@ describe('the validator table: availability is accepted and noted, not refused',
         state,
         { type: 'issue_shares', shareClassId: security.shareClassId, shares: 50_000_000_000, minPricePerShareUsd: 1 },
         company.id,
-        company.ceoCharacterId,
+        ceoCharacterId,
         null,
       ),
     ]);

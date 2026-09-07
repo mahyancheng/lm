@@ -28,7 +28,7 @@ import { DealBuilder } from '../deal-room/DealBuilder';
 import { BuyAccelerators } from '../company/BuyAccelerators';
 import { acceleratorPurchaseDraft, acceleratorPurchaseQuoteStatus, negotiationDraft, negotiationFacts, proposalStatusSummary } from './negotiation';
 import { PLAYER_ID, useActiveCompany, useGame, useGameActions, usePlayerView, useQueuedActions } from '@/lib/game';
-import { requestCharacterReply, requestCompanyDialogue } from '@/lib/llm/client';
+import { queueCompanyDialogueCommand, requestCharacterReply, requestCompanyDialogue, type CompanyCommandReceipt } from '@/lib/llm/client';
 import { noteCanonicalSessionRevision } from '@/lib/game/canonicalSession';
 import { sellersFor } from '@frontier/simulation';
 import { offlineReply, publicFactsFor, type DialogueTurn } from './actions';
@@ -44,7 +44,9 @@ const PROMPTS: readonly string[] = [
 ];
 
 
-function receiptLabel(status: ConversationReceipt['status']): string {
+type CommandProposal = { readonly turnId: string; readonly index: number; readonly quarter: number; readonly command: ActionIntent; readonly receipt: CompanyCommandReceipt | null; readonly submitting: boolean; readonly error?: string };
+
+function receiptLabel(status: ConversationReceipt['status'] | CompanyCommandReceipt['status']): string {
   switch (status) {
     case 'queued': return 'Submitted for quarter — see current terms below';
     case 'duplicate': return 'Already queued';
@@ -55,8 +57,34 @@ function receiptLabel(status: ConversationReceipt['status']): string {
   }
 }
 
-function receiptTone(status: ConversationReceipt['status']): 'gain' | 'warn' | 'loss' | 'neutral' {
+function receiptTone(status: ConversationReceipt['status'] | CompanyCommandReceipt['status']): 'gain' | 'warn' | 'loss' | 'neutral' {
   return status === 'queued' || status === 'duplicate' ? 'gain' : status === 'stale' || status === 'session_not_registered' ? 'warn' : 'loss';
+}
+
+function persistedCommandProposals(turns: readonly { readonly turnId?: string; readonly quarter: number; readonly proposedCommands?: readonly ActionIntent[]; readonly receipts?: readonly ConversationReceipt[] }[]): readonly CommandProposal[] {
+  return turns.flatMap((turn) => {
+    if (turn.turnId === undefined || (turn.proposedCommands?.length ?? 0) === 0) return [];
+    const commands = turn.proposedCommands ?? [];
+    const receipts = turn.receipts ?? [];
+    return commands.map((command, index) => {
+      const indexed = receipts.find((receipt) => receipt.proposalIndex === index);
+      const exact = receipts.find((receipt) => receipt.intent !== null && JSON.stringify(receipt.intent) === JSON.stringify(command));
+      const sameType = receipts.filter((receipt) => receipt.intent?.type === command.type);
+      const receipt = indexed ?? exact ?? (sameType.length === 1 ? sameType[0] : null);
+      return { turnId: turn.turnId!, index, quarter: turn.quarter, command, receipt: receipt ?? null, submitting: false };
+    });
+  });
+}
+
+function proposalLabel(intent: ActionIntent): string {
+  switch (intent.type) {
+    case 'propose_deal': return 'CEO offer';
+    case 'accept_deal': return 'CEO acceptance';
+    case 'reject_deal': return 'CEO rejection';
+    case 'cancel_deal': return 'CEO cancellation';
+    case 'submit_board_proposal': return 'CEO board proposal';
+    default: return 'CEO proposed action';
+  }
 }
 
 function commandTerms(intent: ActionIntent | null): readonly string[] {
@@ -172,6 +200,8 @@ export function TalkPanel({
   const storedReceipts = useMemo(() => (storedThread?.turns ?? []).flatMap((turn) => turn.receipts ?? []), [storedThread?.nextTurnSequence]);
   const conversationDeals = useMemo(() => target.companyId === null ? [] : session.deals.filter((deal) => (deal.proposerId === company.id && deal.counterpartyId === target.companyId) || (deal.proposerId === target.companyId && deal.counterpartyId === company.id)), [session.deals, company.id, target.companyId]);
   const [pendingDealAction, setPendingDealAction] = useState<{ readonly type: 'accept_deal' | 'reject_deal' | 'cancel_deal'; readonly deal: DealProposal } | null>(null);
+  const [commandProposals, setCommandProposals] = useState<readonly CommandProposal[]>([]);
+  const [pendingCommand, setPendingCommand] = useState<CommandProposal | null>(null);
 
   // A new person/company is a new thread and may discard local reply cards.
   useEffect(() => {
@@ -182,6 +212,8 @@ export function TalkPanel({
     setTurns((storedThread?.turns ?? []).map((turn) => ({ speakerId: turn.speakerId, text: turn.text })));
     setDraft('');
     setOffline(false);
+    setCommandProposals(persistedCommandProposals(storedThread?.turns ?? []));
+    setPendingCommand(null);
   }, [scope]);
 
   // Recording a completed exchange updates this exact thread. Hydrate only the
@@ -225,6 +257,7 @@ export function TalkPanel({
     let reply: string | null = null;
     let memory: MemoryDraft | null = null;
     let receipts: ConversationReceipt[] | undefined;
+    let ceoTurnId: string | null = null;
     try {
       // A company CEO shares the company agent's server-derived Claude
       // identity. Everyone else keeps a character-scoped conversation.
@@ -233,11 +266,12 @@ export function TalkPanel({
           const companyResult = await requestCompanyDialogue(context, { sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: target.companyId! });
           // Old deterministic adapters return CharacterReply directly; the
           // actual route returns an envelope with receipts and a revision.
-          const wire = companyResult as unknown as { output?: CharacterReply | null; receipts?: readonly ConversationReceipt[]; revision?: number | null; text?: string } | null;
+          const wire = companyResult as unknown as { output?: CharacterReply | null; turnId?: string; receipts?: readonly ConversationReceipt[]; revision?: number | null; text?: string } | null;
           if (wire !== null && Array.isArray(wire.receipts)) {
             noteCanonicalSessionRevision(session.sessionId, wire.revision ?? null);
             receipts = [...wire.receipts];
           }
+          ceoTurnId = typeof wire?.turnId === 'string' ? wire.turnId : null;
           return wire?.output ?? (wire?.text === undefined ? null : wire as unknown as CharacterReply);
         })()
         : await requestCharacterReply(context, { sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: `${company.id}:${target.id}` });
@@ -253,6 +287,9 @@ export function TalkPanel({
       setAcceleratorQuote(verifiedAcceleratorOrder);
       setShowDeal(offered !== undefined);
       setDealRevision((value) => value + 1);
+      if (companyDialogue && ceoTurnId !== null) {
+        setCommandProposals((entries) => [...entries, ...(output?.commands ?? []).map((command, index) => ({ turnId: ceoTurnId!, index, quarter: requestQuarter, command, receipt: null, submitting: false }))]);
+      }
       reply = output?.text ?? null;
       // The store accepts only the LLM contract's bounded memory draft and
       // converts it to a factual, non-binding conversation memory.
@@ -309,6 +346,23 @@ export function TalkPanel({
             {receipt.reason === null ? null : <div className="mt-1 text-warn">{receipt.reason}</div>}
           </li>)}
         </ul>
+      </section> : null}
+
+      {commandProposals.length > 0 ? <section className="mt-3 flex flex-col gap-2">
+        <SectionHeading rule>CEO proposal</SectionHeading>
+        <p className="text-xs leading-relaxed text-ink-dim">These are proposed company actions, not completed deals. Review the exact terms, then queue one for quarter resolution.</p>
+        {commandProposals.map((proposal) => {
+          const receipt = proposal.receipt;
+          const expired = proposal.quarter !== session.quarter;
+          const pending = receipt?.status === 'queued' || receipt?.status === 'duplicate';
+          return <article key={`${proposal.turnId}:${proposal.index}`} className="rounded-card raised-surface px-3 py-2 text-xs text-ink-dim">
+            <div className="flex flex-wrap items-center gap-2"><Tag tone={receipt === null ? (expired ? 'warn' : 'warn') : receiptTone(receipt.status)}>{receipt === null ? (expired ? 'Draft expired — refresh terms' : 'Awaiting your approval') : pending && expired ? `Submitted in Q${proposal.quarter}` : receiptLabel(receipt.status)}</Tag><span>{proposalLabel(proposal.command)}</span></div>
+            {commandTerms(proposal.command).map((term) => <div key={term} className="mt-1">{term}</div>)}
+            {receipt?.reason === null || receipt === null ? null : <div className="mt-1 text-warn">{receipt.reason}</div>}
+            {proposal.error === undefined ? null : <div className="mt-1 text-warn">{proposal.error}</div>}
+            {receipt === null && !expired ? <button type="button" className="btn btn-primary mt-2" disabled={proposal.submitting} onClick={() => setPendingCommand(proposal)}>{proposal.submitting ? 'Queuing…' : 'Queue for resolution'}</button> : receipt === null ? <p className="mt-2">This draft was from an earlier quarter. Ask the CEO for current terms before queuing anything.</p> : pending && expired ? <p className="mt-2">Submitted in Q{proposal.quarter} — check the quarter outcome and current company terms. This is a historical submission, not a pending action.</p> : pending ? <p className="mt-2">Queued for resolution. It is not accepted, binding, or delivered until the resolver records that outcome.</p> : null}
+          </article>;
+        })}
       </section> : null}
 
       {conversationDeals.length > 0 ? <section className="mt-2 flex flex-col gap-2">
@@ -429,6 +483,18 @@ export function TalkPanel({
           <Tag tone="neutral">Deterministic reply — no model available</Tag>
         </div>
       ) : null}
+      <ConfirmDialog open={pendingCommand !== null} title="Queue this CEO proposal" actionType={pendingCommand?.command.type ?? 'propose_deal'} body="This submits the reviewed company action for quarter resolution. It does not mean the deal is accepted, binding, or delivered yet." terms={pendingCommand === null ? [] : commandTerms(pendingCommand.command).map((value) => ({ label: 'Term', value }))} confirmLabel="Queue for resolution" onCancel={() => setPendingCommand(null)} onConfirm={() => {
+        if (pendingCommand === null || target.companyId === null) return;
+        const proposed = pendingCommand;
+        setPendingCommand(null);
+        setCommandProposals((entries) => entries.map((entry) => entry.turnId === proposed.turnId && entry.index === proposed.index ? { ...entry, submitting: true } : entry));
+        void queueCompanyDialogueCommand({ sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: target.companyId }, proposed.turnId, proposed.index, proposed.command).then((receipt) => {
+          // Do not let a late response update a different CEO thread or a new quarter.
+          if (scopeRef.current !== scope || quarterRef.current !== proposed.quarter) return;
+          if (receipt !== null) noteCanonicalSessionRevision(session.sessionId, receipt.revision);
+          setCommandProposals((entries) => entries.map((entry) => entry.turnId === proposed.turnId && entry.index === proposed.index ? receipt === null ? { ...entry, submitting: false, error: 'Could not contact the queue. You can try again.' } : { ...entry, submitting: false, receipt, error: undefined } : entry));
+        });
+      }} />
       <ConfirmDialog open={pendingDealAction !== null} title={pendingDealAction === null ? '' : pendingDealAction.type === 'accept_deal' ? 'Accept these company terms' : pendingDealAction.type === 'reject_deal' ? 'Reject these company terms' : 'Cancel future deliveries'} actionType={pendingDealAction?.type ?? 'accept_deal'} body={pendingDealAction?.type === 'cancel_deal' ? 'This cancels only future owned-hardware deliveries. Settled deliveries remain recorded.' : 'This queues your company’s response for quarter resolution; it is not an immediate outcome.'} terms={pendingDealAction === null ? [] : [{ label: 'Deal', value: pendingDealAction.deal.summary }, ...hardwareTerms(pendingDealAction.deal).map((value) => ({ label: 'Term', value }))]} confirmLabel={pendingDealAction?.type === 'accept_deal' ? 'Queue acceptance' : pendingDealAction?.type === 'reject_deal' ? 'Queue rejection' : 'Queue cancellation'} onCancel={() => setPendingDealAction(null)} onConfirm={() => { if (pendingDealAction === null) return; const intent = pendingDealAction.type === 'accept_deal' ? { type: 'accept_deal' as const, dealId: pendingDealAction.deal.id } : pendingDealAction.type === 'reject_deal' ? { type: 'reject_deal' as const, dealId: pendingDealAction.deal.id, reason: 'Declined in CEO conversation.' } : { type: 'cancel_deal' as const, dealId: pendingDealAction.deal.id, reason: 'Cancelled in CEO conversation.' }; queueAction(intent, { confirmed: true }); setPendingDealAction(null); }} />
     </div>
   );

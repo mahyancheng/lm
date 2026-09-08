@@ -1,7 +1,7 @@
 # Frontier Capital on a Raspberry Pi
 
 A tailnet-only deployment: demo mode (no Supabase, no accounts) with **live
-AI** through Claude Code sessions on the operator's subscription.
+AI** through Codex app-server using managed ChatGPT authentication.
 
 Reachable at `http://<pi>:8110`. There is no public URL, no reverse proxy, no
 domain and no TLS in this deployment — every one of those is deliberate, and
@@ -23,9 +23,9 @@ concurrency bound, the port — is a promise to those other tenants.
 | Port | `8110` on the host → `3000` in the container |
 | Memory | `mem_limit 1g` / `memswap_limit 2g` are declared but **inert on this kernel** (no memory cgroup controller) — the bound that holds is `LLM_MAX_CONCURRENCY=1` + `NODE_OPTIONS=--max-old-space-size=384`; see *Memory* below |
 | Layout on the Pi | a git checkout at `/home/ycmah/frontier-capital`; compose files, `update.sh` and `.env` live in its `deploy/pi/` |
-| Server-side state | two named volumes: `claude-home` → `/home/node/.claude` (Agent SDK sessions + the sealed credential) and `saves` → `/data` (game saves, `SAVE_DIR=/data/saves`) |
+| Server-side state | two named volumes: `codex-home` → `/home/node/.codex` (managed login + Codex threads) and `saves` → `/data` (game saves, `SAVE_DIR=/data/saves`) |
 | Game saves | **on the Pi**, keyed by a profile name the player picks — the browser keeps an offline cache; see *Saves* below |
-| Credentials | none in the image, none in the repository; connected through Settings → AI (no unlock secret on the tailnet: `LLM_TOKEN_SETUP=local`) and sealed to the volume |
+| Credentials | none in the image or repository; one supported Codex CLI login writes managed state to `codex-home` |
 
 ---
 
@@ -43,7 +43,7 @@ git clone --depth 1 --branch claude/opus5-agents-vercel-supabase-kz1ehf \
   https://github.com/mahyancheng/lm /home/ycmah/frontier-capital
 cd /home/ycmah/frontier-capital/deploy/pi
 cp .env.example .env && chmod 600 .env
-$EDITOR .env          # LLM_KEY_SECRET (long, random); keep LLM_TOKEN_SETUP=local; the rest as in the example
+$EDITOR .env          # set LLM_TRANSPORT=codex-app-server; do not add a ChatGPT token
 ```
 
 `.env` lives **beside the compose file** (`deploy/pi/.env`): compose resolves
@@ -66,24 +66,30 @@ see *Updating*), starts the service through the GHCR overlay, waits for
 
 ```sh
 curl -s http://localhost:8110/api/llm/health
-# {"available":true,"transportKind":"claude-session","model":"sonnet"}
+# {"available":false,"transportKind":"codex-app-server","signedIn":false,"setup":"Run `codex login` as the game service user."}
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml ps   # "healthy" within ~90s
 ```
 
-`available: true` means the transport is *configured and can run here*. It does
-not mean a credential has been accepted yet — that is step 4.
+`available: true` means the Codex CLI is installed and its managed ChatGPT
+login is ready. Before step 4 the response reports `signedIn: false` and the
+exact login command; it never exposes account or token data.
 
-### 4. Connect the AI
+### 4. Log in to Codex once
 
-Open `http://<pi>:8110` on the tailnet. The **Set up AI** button in the
-masthead (or **Settings → AI · Claude** inside the game) offers **Connect with
-Claude** directly — no unlock secret, because `LLM_TOKEN_SETUP=local` in
-`.env` tells the gate that everything reaching a tailnet-only host is the
-household. The token it issues is sealed to the `claude-home` volume under
-`LLM_KEY_SECRET` and restored on every boot, so this is done once.
+Run the supported managed ChatGPT login as the container's `node` user:
 
-(`LLM_SETUP_SECRET` is the gate for a host the public can reach; it is ignored
-while `LLM_TOKEN_SETUP=local` is set, and may be left empty here.)
+```sh
+docker compose run --rm --user 0 --entrypoint sh app \
+  -c 'install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace'
+docker compose exec -u node app codex login --device-auth
+docker compose exec -u node app codex --version
+```
+
+Complete the browser or device-code ceremony printed by the CLI. The managed
+state stays in `codex-home` across image upgrades. The first command is needed
+once because Docker creates a new named volume as root and the login user must
+be able to write it. Do not paste API keys or ChatGPT tokens into the settings
+screen or `.env`.
 
 ### Alternative: build on a Mac and ship by hand
 
@@ -97,9 +103,8 @@ docker save frontier-capital:pi | ssh ycvps 'docker load'
 cd /home/ycmah/frontier-capital/deploy/pi && docker compose up -d   # base file only: pull_policy never
 ```
 
-The build ends by executing the Claude Code binary it packaged and asserting
-`2.1.251`; if that fails the image would have started and then failed at the
-first role call — read HANDOFF.md.
+The build executes the pinned Codex CLI and verifies its version before the
+image can ship. See `docs/CODEX_APP_SERVER.md` for migration and upgrade rules.
 
 ---
 
@@ -180,7 +185,7 @@ mounted. Limitation discarded.` and `docker stats` shows `0B / 0B`. The
 `mem_limit: 1g` / `memswap_limit: 2g` lines stay in the compose file because
 they are correct and take effect the moment the kernel supports them, but
 **there is no second net under the application today**: what bounds memory is
-`LLM_MAX_CONCURRENCY=1` (one ~213 MB Claude Code subprocess at a time) plus
+`LLM_MAX_CONCURRENCY=1` (one Codex app-server turn at a time) plus
 `NODE_OPTIONS=--max-old-space-size=384` on the Next process.
 
 **Enabling the controller is an operator step, and a reboot.** Append
@@ -216,8 +221,8 @@ credential survives the rollback (it lives on the volume).
 
 ## What a quarter costs
 
-Every role call spawns a Claude Code subprocess, and the gateway runs
-**one at a time** (`LLM_MAX_CONCURRENCY=1`). Ending a quarter therefore blocks
+Every role call is served through the local Codex app-server, and the gateway
+runs **one turn at a time** (`LLM_MAX_CONCURRENCY=1`). Ending a quarter therefore blocks
 on the World Director, then up to `NEXT_PUBLIC_LLM_STRATEGISTS_PER_QUARTER`
 (default 4) rival strategists — the ones whose plan actually bears on the
 player's next move: mid-deal with the player, head-to-head on a bid, same
@@ -299,9 +304,9 @@ never blocking the game.
   write, so a single bad save is always undoable — and `profile.json`.
 - Files are `0600`, directories `0700`, and every write is a temp file plus
   `rename`, so a crash mid-write leaves the previous file rather than a torn one.
-- `claude-home` is untouched by any of this. Saves are the player's own record
+- `codex-home` is untouched by any of this. Saves are the player's own record
   and a model cache is disposable; they do not share a volume, and deleting
-  `claude-home` to reclaim space costs no saves.
+  `codex-home` to reclaim space costs no saves.
 
 ### Caps
 
@@ -391,32 +396,12 @@ started. Three consequences:
 - Clearing a browser's site data loses that browser's copies. With server saves
   on, the host still has them and the next load brings them back.
 
-**`claude-home` holds two things**, and no saves. It is mounted at
-`/home/node/.claude` (`CLAUDE_CONFIG_DIR`):
-
-- Claude Code session transcripts, which the Agent SDK writes and which a
-  Chief-of-Staff thread, character conversation, or company agent resumes
-  from. The World Director deliberately opens a *fresh* session each quarter,
-  so it never touches them.
-- `frontier-capital/claude-session-map.json`, the owner-only, atomically
-  written map from opaque server conversation keys to SDK session ids. It is
-  the companion to those transcripts: after the app server restarts it lets
-  Chief-of-Staff, character, and company-agent sessions find the same SDK
-  transcript again. Entries expire after 90 days; an SDK resume rejection
-  drops only that entry and the following turn starts fresh. The Pi runs one
-  Node process, which owns this map; a multi-process deployment needs a shared
-  database-backed mapping rather than this local file.
-- The AI credential, at `frontier-capital/credential.enc.json` inside it
-  (`LLM_STATE_DIR`, set in the image). The token the in-app **Connect with
-  Claude** flow issues is a one-year token; it is sealed with AES-256-GCM under
-  `LLM_KEY_SECRET` and restored on the next boot, so a restart, a new image, or
-  a `docker compose down && up` comes back **already connected**. Disconnecting
-  in Settings deletes the file. Rotating `LLM_KEY_SECRET` makes the file
-  unreadable (by design) — connect once more afterwards.
-
-Deleting `claude-home` costs conversational memory and the connection, nothing
-else; threads start again and the player connects again. Saves are in the other
-volume and are unaffected.
+**`codex-home` holds managed ChatGPT login state, Codex thread rollouts, and
+`frontier-capital/codex-thread-map.json`; it is mounted at `/home/node/.codex`.
+The map contains opaque `codex:` conversation keys and Codex thread ids only.
+It never reads the legacy Claude map. Deleting this volume requires a new
+`codex login --device-auth` and starts fresh Codex threads; saves are in the
+other volume and are unaffected.
 
 ---
 

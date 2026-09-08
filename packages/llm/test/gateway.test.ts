@@ -10,15 +10,31 @@ import { LLM_GATEWAY_VERSION, createGateway, resolveTransportKind } from '../src
 import { createInMemorySessionStore } from '../src/sessionStore';
 import { createMemoryRunSink } from '../src/runSink';
 import { SESSION_ID, narratorInput, stubQuery, VALID_NARRATION } from './fixtures';
+import type { CodexAppServerProcess } from '../src/transport/codexProtocol';
+
+function codexProcess(reply: unknown): CodexAppServerProcess {
+  const queue: string[] = []; let wake: (() => void) | undefined;
+  const push = (value: unknown) => { queue.push(`${JSON.stringify(value)}\n`); wake?.(); wake = undefined; };
+  return { kill() {}, exited: new Promise(() => undefined), write(line) {
+    const message = JSON.parse(line) as { id?: number; method?: string; params?: Record<string, unknown> };
+    if (message.id === undefined) return;
+    if (message.method === 'initialize') push({ id: message.id, result: {} });
+    if (message.method === 'thread/start') push({ id: message.id, result: { model: 'test-codex', thread: { id: 'thread-1' } } });
+    if (message.method === 'turn/start') { const threadId = message.params?.['threadId']; push({ id: message.id, result: { turn: { id: 'turn-1' } } }); queueMicrotask(() => {
+      push({ method: 'item/completed', params: { threadId, turnId: 'turn-1', item: { type: 'agentMessage', text: JSON.stringify(reply) } } });
+      push({ method: 'turn/completed', params: { threadId, turnId: 'turn-1', turn: { id: 'turn-1', status: 'completed' } } });
+    }); }
+  }, stdout: { async *[Symbol.asyncIterator]() { while (true) { if (queue.length === 0) await new Promise<void>((resolve) => { wake = resolve; }); const line = queue.shift(); if (line) yield line; } } } };
+}
 
 describe('transport selection', () => {
-  it('defaults to claude-session, including for an unknown value', () => {
-    expect(resolveTransportKind(undefined)).toBe('claude-session');
-    expect(resolveTransportKind('')).toBe('claude-session');
-    expect(resolveTransportKind('claude-session')).toBe('claude-session');
-    expect(resolveTransportKind('something-else')).toBe('claude-session');
-    expect(createGateway({}).transportKind).toBe('claude-session');
-    expect(createGateway({ LLM_TRANSPORT: 'claude-session' }).transport.kind).toBe('claude-session');
+  it('defaults to Codex and migrates the legacy Claude spelling', () => {
+    expect(resolveTransportKind(undefined)).toBe('codex-app-server');
+    expect(resolveTransportKind('')).toBe('codex-app-server');
+    expect(resolveTransportKind('claude-session')).toBe('codex-app-server');
+    expect(resolveTransportKind('something-else')).toBe('codex-app-server');
+    expect(createGateway({}, { codexSpawn: () => codexProcess({}) }).transportKind).toBe('codex-app-server');
+    expect(createGateway({ LLM_TRANSPORT: 'claude-session' }, { codexSpawn: () => codexProcess({}) }).transport.kind).toBe('codex-app-server');
   });
 
   it('selects the api transport', () => {
@@ -39,14 +55,12 @@ describe('transport selection', () => {
 });
 
 describe('gateway wiring', () => {
-  it('runs a full role call through the default transport with an injected query()', async () => {
+  it('runs a full role call through the default Codex transport with an injected subprocess', async () => {
     const store = createInMemorySessionStore();
     const sink = createMemoryRunSink();
-    const stub = stubQuery([{ text: JSON.stringify(VALID_NARRATION), sessionId: 'sess-1', model: 'claude-sonnet-5' }]);
-
     const gateway = createGateway(
-      { LLM_TRANSPORT: 'claude-session', LLM_MODEL: 'sonnet', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token' },
-      { sessionStore: store, runSink: sink, queryFn: stub.fn, roles: { sessionId: SESSION_ID, quarter: 1 } },
+      {},
+      { sessionStore: store, runSink: sink, codexSpawn: () => codexProcess(VALID_NARRATION), roles: { sessionId: SESSION_ID, quarter: 1 } },
     );
 
     const result = await gateway.roles.narrator.narrate(narratorInput());
@@ -54,8 +68,6 @@ describe('gateway wiring', () => {
     expect(result.output?.headline).toBe(VALID_NARRATION.headline);
     expect(result.fallbackUsed).toBe(false);
     expect(sink.runs).toHaveLength(1);
-    expect(stub.calls[0]?.options?.env?.['CLAUDE_CODE_OAUTH_TOKEN']).toBe('oauth-token');
-    expect(stub.calls[0]?.options?.settingSources).toEqual([]);
     // A strategic call never records a session.
     expect(store.size).toBe(0);
   });

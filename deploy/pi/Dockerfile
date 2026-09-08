@@ -8,24 +8,13 @@
 #
 # ## The one thing this image is really about
 #
-# `LLM_TRANSPORT=claude-session` does not make an HTTP call. It spawns the
-# Claude Code CLI — `@anthropic-ai/claude-agent-sdk-linux-arm64/claude`, a
-# single ~213 MB Bun-compiled executable — as a child process, once per role
-# call. Three consequences shape every decision below:
+# `LLM_TRANSPORT=codex-app-server` starts the Codex CLI as a local stdio
+# app-server. Its authenticated ChatGPT state and persisted threads live in a
+# dedicated `CODEX_HOME` volume; it never reuses the old Claude profile.
 #
-# 1. **The install must run on linux/arm64.** The binary is an
-#    `optionalDependency` gated by `os`/`cpu`/`libc`, so an install performed on
-#    any other platform simply does not contain it. Never `--ignore-scripts`,
-#    never `--no-optional`, and never copy a `node_modules` built elsewhere.
-# 2. **`output: "standalone"` is not usable here.** Next's file tracing follows
-#    static `require`/`import` graphs; it has no way to know that a 213 MB file
-#    which is never imported is going to be *executed*. A standalone bundle
-#    builds green and then dies at the first role call. So this image ships a
-#    real, pruned `node_modules` tree with pnpm's symlink layout intact.
-# 3. **The SDK finds that binary relative to its own file.** Which is why
-#    `next.config.ts` marks it `serverExternalPackages` — see the comment there
-#    — and why the last step of this build actually *runs* the binary. A build
-#    that cannot execute an agent turn should fail here, not on the Pi.
+# The image pins the CLI package rather than accepting a moving global install.
+# The runtime gate executes `codex --version`; login is deliberately a separate
+# one-time host operation, never part of an image build or environment file.
 
 # ## The build stamp
 #
@@ -134,17 +123,16 @@ RUN printf '%s\n' \
 
 FROM --platform=linux/arm64 node:22-bookworm-slim AS runtime
 
-# `HOME` and `CLAUDE_CONFIG_DIR` both matter. The Agent SDK's config directory
-# is `CLAUDE_CONFIG_DIR` when set and `~/.claude` otherwise; it is where the CLI
-# writes session transcripts, and resuming a Chief-of-Staff or character thread
-# reads them back. Naming it explicitly means the compose volume has one
-# unambiguous path to mount, instead of depending on how `os.homedir()` resolves
-# for whichever uid the container ends up running as.
+# Verified against the app-server protocol used by this integration. Bump only
+# after regenerating/validating its app-server schema and smoke-testing a turn.
+ARG CODEX_CLI_VERSION=0.151.0-alpha.2
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOME=/home/node \
-    CLAUDE_CONFIG_DIR=/home/node/.claude \
-    LLM_STATE_DIR=/home/node/.claude/frontier-capital \
+    CODEX_HOME=/home/node/.codex \
+    CODEX_WORKDIR=/home/node/.codex/workspace \
+    LLM_STATE_DIR=/home/node/.codex/frontier-capital \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
@@ -157,31 +145,20 @@ ARG BUILD_TIME
 ENV BUILD_SHA=${GIT_SHA} \
     BUILD_TIME=${BUILD_TIME}
 
-# `node` (uid 1000) already exists in this image and owns /home/node.
-RUN install -d -o node -g node -m 0700 /home/node/.claude
+# `node` (uid 1000) already exists in this image and owns /home/node. Install
+# the pinned arm64 CLI before dropping privileges, then keep its state private.
+RUN npm install --global --omit=dev "@openai/codex@${CODEX_CLI_VERSION}" \
+ && install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace
 
 COPY --from=build --chown=node:node /app /app
 
 USER node
 WORKDIR /app/apps/web
 
-# The build gate. Resolve the platform binary exactly the way the SDK does at
-# runtime — `createRequire(<sdk.mjs>).resolve(...)` — and execute it. This fails
-# the build for every way the packaging can be wrong: the optional dependency
-# missing (wrong build platform, `--no-optional`, `--ignore-scripts`), the
-# symlink layout flattened by a careless copy, the executable bit lost, or a
-# glibc/musl mismatch. `2.1.251` is the `claudeCodeVersion` pinned by
-# @anthropic-ai/claude-agent-sdk 0.3.251; if this assertion fails after a
-# dependency bump, read the new version out of the SDK's package.json rather
-# than deleting the check.
-RUN set -eu; \
-    binary="$(node -e "const { createRequire } = require('node:module'); \
-      const sdk = require.resolve('@anthropic-ai/claude-agent-sdk', { paths: [process.cwd()] }); \
-      process.stdout.write(createRequire(sdk).resolve('@anthropic-ai/claude-agent-sdk-linux-arm64/claude'));")"; \
-    echo "platform binary: ${binary}"; \
-    version="$("${binary}" --version)"; \
-    echo "claude --version: ${version}"; \
-    case "${version}" in 2.1.251*) ;; *) echo "unexpected Claude Code version" >&2; exit 1 ;; esac
+# Build gate: confirms the pinned arm64 CLI is executable. It never starts
+# login and never reaches a model service.
+RUN set -eu; version="$(codex --version)"; echo "codex --version: ${version}"; \
+    case "${version}" in *"${CODEX_CLI_VERSION}"*) ;; *) echo "unexpected Codex CLI version" >&2; exit 1 ;; esac
 
 EXPOSE 3000
 

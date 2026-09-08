@@ -316,8 +316,11 @@ const UNCONFIGURED: CredentialStatus = { configured: false, source: 'none', kind
  * would use, so an `ANTHROPIC_API_KEY` left in a dotfile is not reported as the
  * live credential while the process is running on `claude-session`.
  */
-export function credentialStatus(base: LlmEnv, transport: 'claude-session' | 'api' | 'none'): CredentialStatus {
+export function credentialStatus(base: LlmEnv, transport: 'codex-app-server' | 'claude-session' | 'api' | 'none'): CredentialStatus {
   restoreRuntimeCredential();
+  // Managed Codex login lives only in CODEX_HOME and is intentionally not a
+  // browser-editable credential descriptor.
+  if (transport === 'codex-app-server') return UNCONFIGURED;
   const held = store().credential;
   if (held !== null) {
     return { configured: true, source: 'runtime', kind: held.kind, masked: held.descriptor.masked, setAt: held.descriptor.setAt };
@@ -615,8 +618,8 @@ export function checkSetupSecret(presented: string | null, configured: string | 
 /**
  * The variable a serverless platform sets on its function runtime.
  *
- * `VERCEL=1` on Vercel. It is the signal that `claude-session` cannot work
- * here: that transport spawns the Claude Code CLI as a subprocess, which a
+ * `VERCEL=1` on Vercel. It is the signal that `codex-app-server` cannot work
+ * here: that transport starts a local CLI subprocess, which a
  * serverless function may not do. A normal Node process — `pnpm start` on a
  * server, a container — never sets it, which is exactly where the subscription
  * transport does work.
@@ -631,13 +634,13 @@ export function isServerless(env: LlmEnv): boolean {
 /**
  * True when the resolved transport cannot actually reach a model on this host.
  *
- * The one case today: `claude-session` on a serverless function, which would
+ * The one case today: `codex-app-server` on a serverless function, which would
  * spawn a subprocess it is not allowed to spawn. Saying so up front is both
  * more honest than a green light and cheaper than discovering it once per role
  * call by burning the whole timeout.
  */
 export function transportCannotRunHere(transport: LlmTransportKind, env: LlmEnv): boolean {
-  return transport === 'claude-session' && isServerless(env);
+  return transport === 'codex-app-server' && isServerless(env);
 }
 
 /** Reading the descriptor and writing the credential are gated by the same rule, with one difference. */

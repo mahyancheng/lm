@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { probeCodexAppServerAccount } from '@frontier/llm';
 import { serverBuildStamp } from '@/lib/version';
 import { gateway, limiterSnapshot, modelName, transportAvailable, transportKind } from '../_gateway';
 
@@ -24,11 +27,26 @@ export const dynamic = 'force-dynamic';
  * already polls; it is the same stamp `GET /api/version` returns, and the
  * fields above it are unchanged.
  */
-export function GET(): NextResponse {
+export async function GET(): Promise<NextResponse> {
   const kind = transportKind();
   let ready = transportAvailable();
+  let cliAvailable: boolean | null = null;
+  let signedIn: boolean | null = null;
 
-  if (ready) {
+  if (ready && kind === 'codex-app-server') {
+    const env = process.env;
+    const cwd = env['CODEX_WORKDIR']?.trim() || (env['CODEX_HOME']?.trim() ? join(env['CODEX_HOME'].trim(), 'workspace') : undefined);
+    if (cwd !== undefined) mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    const account = await probeCodexAppServerAccount({
+      env,
+      command: env['CODEX_COMMAND'],
+      codexHome: env['CODEX_HOME'],
+      cwd,
+    });
+    cliAvailable = account.cliAvailable;
+    signedIn = account.signedIn;
+    ready = account.cliAvailable && account.signedIn;
+  } else if (ready) {
     try {
       // Constructing the gateway proves the transport can be built at all.
       ready = gateway().transportKind !== 'none';
@@ -47,6 +65,9 @@ export function GET(): NextResponse {
       model: ready ? modelName() : null,
       queueDepth: snapshot.queued,
       runningRole: snapshot.runningRole,
+      cliAvailable,
+      signedIn,
+      setup: kind === 'codex-app-server' && signedIn === false ? 'Run `codex login` as the game service user.' : null,
       build: { sha: build.sha, shortSha: build.shortSha, builtAt: build.builtAt },
     },
     { headers: { 'cache-control': 'no-store, no-cache, must-revalidate' } },

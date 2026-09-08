@@ -35,7 +35,7 @@ import type {
 export interface LlmHealth {
   /** True when a transport other than `none` is configured. */
   readonly available: boolean;
-  readonly transportKind: 'claude-session' | 'api' | 'none';
+  readonly transportKind: 'codex-app-server' | 'claude-session' | 'api' | 'none';
   readonly model: string | null;
   /**
    * How many calls the shared concurrency limiter is holding right now, across

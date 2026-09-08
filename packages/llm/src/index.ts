@@ -79,6 +79,9 @@ export {
 export type { ApiTransportConfig } from './transport/api';
 export { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFormatFor } from './transport/api';
 
+export type { CodexAppServerAccountStatus, CodexAppServerProcess, CodexAppServerSpawn, CodexAppServerTransport, CodexAppServerTransportConfig } from './transport/codexAppServer';
+export { DEFAULT_CODEX_APP_SERVER_MODEL, DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS, createCodexAppServerTransport, probeCodexAppServerAccount } from './transport/codexAppServer';
+
 export type { NullTransportConfig } from './transport/none';
 export { createNullTransport } from './transport/none';
 
@@ -186,8 +189,9 @@ export {
 import type Anthropic from '@anthropic-ai/sdk';
 import { type LlmRoles, type LlmRolesOptions, createLlmRoles } from './roles';
 import { type LlmSessionStore, createInMemorySessionStore } from './sessionStore';
-import { type ClaudeQueryFn, createClaudeSessionTransport } from './transport/claudeSession';
+import { type ClaudeQueryFn } from './transport/claudeSession';
 import { createApiTransport } from './transport/api';
+import { createCodexAppServerTransport, type CodexAppServerSpawn } from './transport/codexAppServer';
 import { createNullTransport } from './transport/none';
 import { type ConcurrencyLimiter, resolveMaxConcurrency, withConcurrencyLimit } from './transport/limited';
 import type { LlmTransport, LlmTransportKind } from './transport/types';
@@ -197,6 +201,10 @@ import type { RunSink } from './runSink';
 export interface GatewayEnv {
   readonly [key: string]: string | undefined;
   readonly LLM_TRANSPORT?: string | undefined;
+  readonly CODEX_MODEL?: string | undefined;
+  readonly CODEX_HOME?: string | undefined;
+  readonly CODEX_COMMAND?: string | undefined;
+  readonly CODEX_WORKDIR?: string | undefined;
   readonly LLM_MODEL?: string | undefined;
   readonly CLAUDE_CODE_OAUTH_TOKEN?: string | undefined;
   readonly ANTHROPIC_API_KEY?: string | undefined;
@@ -214,6 +222,8 @@ export interface GatewayOptions {
   readonly roles?: LlmRolesOptions;
   /** Injected Agent SDK `query()`, for tests. */
   readonly queryFn?: ClaudeQueryFn;
+  /** Injected Codex app-server subprocess factory, for tests and managed hosts. */
+  readonly codexSpawn?: CodexAppServerSpawn;
   /** Injected Anthropic client for the `api` transport, for tests. */
   readonly anthropicClient?: Anthropic;
   /**
@@ -241,12 +251,13 @@ export interface LlmGateway {
   createRoles(rolesOptions: LlmRolesOptions): LlmRoles;
 }
 
-/** Resolve `LLM_TRANSPORT` to a transport kind. Anything unrecognised is the default. */
+/** Resolve `LLM_TRANSPORT` to the Codex default. Claude values are a compatible
+ * migration spelling: the old credential and session ids are not reused. */
 export function resolveTransportKind(value: string | undefined): LlmTransportKind {
   const normalised = (value ?? '').trim().toLowerCase();
   if (normalised === 'none' || normalised === 'off' || normalised === 'disabled') return 'none';
   if (normalised === 'api') return 'api';
-  return 'claude-session';
+  return 'codex-app-server';
 }
 
 /**
@@ -276,21 +287,18 @@ export function createGateway(env: GatewayEnv = {}, options: GatewayOptions = {}
     transport = createNullTransport();
   } else if (kind === 'api') {
     transport = withConcurrencyLimit(
-      createApiTransport({
-        model: env.ANTHROPIC_MODEL,
-        apiKey: env.ANTHROPIC_API_KEY,
-        client: options.anthropicClient,
-        env,
-      }),
+      createApiTransport({ model: env.ANTHROPIC_MODEL, apiKey: env.ANTHROPIC_API_KEY, client: options.anthropicClient, env }),
       limiter ?? maxConcurrency,
     );
   } else {
     transport = withConcurrencyLimit(
-      createClaudeSessionTransport({
-        model: env.LLM_MODEL,
-        oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+      createCodexAppServerTransport({
+        model: env.CODEX_MODEL,
         sessionStore,
-        queryFn: options.queryFn,
+        command: env.CODEX_COMMAND,
+        codexHome: env.CODEX_HOME,
+        spawn: options.codexSpawn,
+        cwd: env.CODEX_WORKDIR,
         env,
       }),
       limiter ?? maxConcurrency,

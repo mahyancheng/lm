@@ -181,6 +181,7 @@ export function pasteFieldLabel(mode: PasteMode): string {
 
 /** How the transport is named to a player, who has never read `LLM_TRANSPORT`. */
 export function transportLabel(kind: LlmTransportKind): string {
+  if (kind === 'codex-app-server') return 'Codex app-server';
   if (kind === 'api') return 'Anthropic API';
   if (kind === 'none') return 'No transport';
   return 'Claude Code session';
@@ -253,6 +254,11 @@ export function statusHeadline(status: TokenStatus | null): string {
   if (!status.available) return isServerlessClaudeSession(status) ? 'Subscription connected' : 'Offline';
   const model = isFullStatus(status) ? status.model : null;
   return model === null ? 'Live' : `Live · ${model}`;
+}
+
+/** Codex readiness comes from its managed-auth health probe, never token status. */
+export function codexStatusHeadline(codexReady: boolean, status: TokenStatus | null): string {
+  return codexReady ? statusHeadline(status) : 'Codex sign-in needed';
 }
 
 /** The dot beside the headline: a live model, a caveat to read, or plain idle. */

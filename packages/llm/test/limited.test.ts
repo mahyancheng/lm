@@ -477,10 +477,10 @@ describe('resolveMaxConcurrency', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('gateway concurrency', () => {
-  it('bounds the claude-session transport at one call by default', () => {
+  it('bounds the Codex transport at one call by default and migrates the Claude spelling', () => {
     const gateway = createGateway({ LLM_TRANSPORT: 'claude-session' });
     expect(gateway.maxConcurrency).toBe(1);
-    expect(gateway.transport.kind).toBe('claude-session');
+    expect(gateway.transport.kind).toBe('codex-app-server');
   });
 
   it('reads LLM_MAX_CONCURRENCY, and falls back to one when it is nonsense', () => {

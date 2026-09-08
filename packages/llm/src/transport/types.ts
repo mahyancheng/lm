@@ -142,7 +142,7 @@ export interface LlmCompletion<T> {
   readonly claudeSessionId: string | null;
 }
 
-export type LlmTransportKind = 'claude-session' | 'api' | 'none';
+export type LlmTransportKind = 'codex-app-server' | 'claude-session' | 'api' | 'none';
 
 export interface LlmTransport {
   /** Which transport this is, for run records and for `createGateway` diagnostics. */

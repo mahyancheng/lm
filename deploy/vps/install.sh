@@ -8,7 +8,7 @@
 #
 # What it does: installs Node 22 + pnpm + git, clones this repo, builds the
 # game, and runs it as a systemd service on port 80 — always on, no idle
-# spin-down, so the in-app "Connect with Claude" subscription session persists
+# spin-down, so managed Codex login and thread state persist
 # until the process restarts. Re-running the script updates to the latest
 # commit on the branch. It prints the game URL and the AI unlock secret at the
 # end; the secret is kept in /etc/frontier-capital.env.
@@ -44,20 +44,17 @@ else
   git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
 fi
 
-# Secrets are generated once and kept across updates. LLM_SETUP_SECRET unlocks
-# the in-game AI panel; LLM_KEY_SECRET protects stored credentials. Optionally
-# add CLAUDE_CODE_OAUTH_TOKEN=... to this file to pre-connect the subscription
-# without using the in-app flow.
+# Codex uses a managed ChatGPT login in a dedicated writable home. No API key
+# or ChatGPT credential is generated or written to this file.
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "==> Generating ${ENV_FILE}"
-  SETUP_SECRET="fc-$(head -c 18 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24)"
   KEY_SECRET="$(head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \n')"
   cat > "${ENV_FILE}" <<EOF
 NODE_ENV=production
 NEXT_PUBLIC_DEMO_MODE=true
-LLM_TRANSPORT=claude-session
-LLM_MODEL=sonnet
-LLM_SETUP_SECRET=${SETUP_SECRET}
+LLM_TRANSPORT=codex-app-server
+CODEX_HOME=/var/lib/frontier-capital/codex-home
+CODEX_WORKDIR=/var/lib/frontier-capital/codex-workspace
 LLM_KEY_SECRET=${KEY_SECRET}
 LLM_STATE_DIR=/var/lib/frontier-capital
 EOF
@@ -67,13 +64,21 @@ fi
 # into this directory so it survives restarts and updates. Older env files
 # get the line appended so an update turns persistence on too.
 grep -q '^LLM_STATE_DIR=' "${ENV_FILE}" || echo 'LLM_STATE_DIR=/var/lib/frontier-capital' >> "${ENV_FILE}"
-install -d -o www-data -g www-data -m 0700 /var/lib/frontier-capital
+grep -q '^CODEX_HOME=' "${ENV_FILE}" || echo 'CODEX_HOME=/var/lib/frontier-capital/codex-home' >> "${ENV_FILE}"
+grep -q '^CODEX_WORKDIR=' "${ENV_FILE}" || echo 'CODEX_WORKDIR=/var/lib/frontier-capital/codex-workspace' >> "${ENV_FILE}"
+# Existing installs used Claude as the default. Preserve an operator's explicit
+# API/none choice, but migrate that old default spelling to Codex.
+if grep -q '^LLM_TRANSPORT=claude-session$' "${ENV_FILE}"; then sed -i 's/^LLM_TRANSPORT=claude-session$/LLM_TRANSPORT=codex-app-server/' "${ENV_FILE}"; fi
+install -d -o www-data -g www-data -m 0700 /var/lib/frontier-capital /var/lib/frontier-capital/codex-home /var/lib/frontier-capital/codex-workspace
 
 echo "==> Installing workspace and building (a few minutes on a small VPS)"
 cd "${APP_DIR}"
 corepack prepare --activate >/dev/null 2>&1 || true
 pnpm install --frozen-lockfile
 pnpm --filter @frontier/web build
+npm install --global --omit=dev @openai/codex@0.151.0-alpha.2
+CODEX_VERSION="$(codex --version)"
+case "${CODEX_VERSION}" in *0.151.0-alpha.2*) ;; *) echo "unexpected Codex CLI version: ${CODEX_VERSION}" >&2; exit 1 ;; esac
 
 echo "==> Installing systemd service ${SERVICE} on port ${PORT}"
 cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
@@ -105,8 +110,7 @@ IP="$(curl -fsS -4 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print 
 echo
 echo "======================================================================"
 echo " Frontier Capital is up:  http://${IP}$( [[ "${PORT}" != "80" ]] && echo ":${PORT}" )"
-echo " AI unlock secret:        $(grep '^LLM_SETUP_SECRET=' "${ENV_FILE}" | cut -d= -f2)"
-echo " (In the game: Settings -> AI -> enter the secret -> Connect with Claude)"
+echo " Codex login once:        sudo -u www-data CODEX_HOME=/var/lib/frontier-capital/codex-home codex login --device-auth"
 echo " Update later:            re-run this same script"
 echo " Logs:                    journalctl -u ${SERVICE} -f"
 echo "======================================================================"

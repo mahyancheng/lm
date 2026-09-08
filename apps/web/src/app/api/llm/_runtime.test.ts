@@ -499,8 +499,8 @@ describe('serverless honesty', () => {
     expect(isServerless({})).toBe(false);
   });
 
-  it('knows claude-session cannot spawn on a serverless host, and that nothing else is affected', () => {
-    expect(transportCannotRunHere('claude-session', { VERCEL: '1' })).toBe(true);
+  it('knows Codex app-server cannot spawn on a serverless host, and that nothing else is affected', () => {
+    expect(transportCannotRunHere('codex-app-server', { VERCEL: '1' })).toBe(true);
     // The API transport is a plain HTTP call and runs fine on a function.
     expect(transportCannotRunHere('api', { VERCEL: '1' })).toBe(false);
     // A normal Node process (self-hosted) can spawn the subprocess.

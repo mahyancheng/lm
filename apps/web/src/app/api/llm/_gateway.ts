@@ -35,7 +35,6 @@ import { NextResponse } from 'next/server';
 import type { z, ZodTypeAny } from 'zod';
 import {
   DEFAULT_API_MODEL,
-  DEFAULT_CLAUDE_SESSION_MODEL,
   createConcurrencyLimiter,
   createGateway,
   createInMemoryMemoryStore,
@@ -182,7 +181,7 @@ export function modelName(): string | null {
   const kind = resolveTransportKind(env['LLM_TRANSPORT']);
   if (kind === 'none') return null;
   if (kind === 'api') return env['ANTHROPIC_MODEL'] ?? DEFAULT_API_MODEL;
-  return env['LLM_MODEL'] ?? DEFAULT_CLAUDE_SESSION_MODEL;
+  return hasValue(env['CODEX_MODEL']) ? env['CODEX_MODEL']!.trim() : null;
 }
 
 function hasValue(value: string | undefined): boolean {
@@ -206,14 +205,10 @@ export function transportAvailable(): boolean {
   const env = llmEnv();
   const kind = resolveTransportKind(env['LLM_TRANSPORT']);
   if (kind === 'none') return false;
-  // A credential can be configured and still be unable to run on this host: the
-  // Claude-session transport spawns the CLI as a subprocess, which a serverless
-  // function cannot do. Report *unavailable* there rather than let every role
-  // call discover it by burning a spawn timeout, and rather than claim live AI
-  // the deployment cannot deliver.
+  // Codex app-server is a local subprocess, unavailable on a serverless host.
   if (transportCannotRunHere(kind, env)) return false;
   if (kind === 'api') return hasValue(env['ANTHROPIC_API_KEY']);
-  return hasValue(env['CLAUDE_CODE_OAUTH_TOKEN']) || hasValue(env['LLM_TRANSPORT']);
+  return hasValue(env['LLM_TRANSPORT']) || env['LLM_TRANSPORT'] === undefined;
 }
 
 export interface RolePayload<T> {

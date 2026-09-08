@@ -49,12 +49,13 @@ import {
   testToken,
   tokenDraftIssue,
 } from '@/lib/llm/token';
-import { resetLlmHealth } from '@/lib/llm/client';
+import { resetLlmHealth, type LlmHealth } from '@/lib/llm/client';
 import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import type { SettingsSection } from './settingsBus';
 import {
   NO_SERVER_LINE,
   credentialLine,
+  codexStatusHeadline,
   oauthFailureLine,
   pasteFieldLabel,
   pasteMode,
@@ -346,9 +347,11 @@ function ConnectWithClaude({
 function ClaudeSection({
   focus,
   onChanged,
+  health,
 }: {
   readonly focus: boolean;
   readonly onChanged: () => void;
+  readonly health: LlmHealth;
 }): React.JSX.Element {
   const [fetched, setFetched] = useState<TokenFetch<TokenStatus> | null>(null);
   const [draft, setDraft] = useState('');
@@ -510,9 +513,31 @@ function ClaudeSection({
   const dotTone = statusDotTone(status);
   const dotClass = dotTone === 'live' ? 'bg-gain pulse-dot' : dotTone === 'caution' ? 'bg-warn' : 'bg-ink-faint';
 
+  if (status?.transportKind === 'codex-app-server') {
+    const codexReady = health.available && health.transportKind === 'codex-app-server';
+    const codexDotClass = codexReady ? 'bg-gain pulse-dot' : 'bg-ink-faint';
+    return (
+      <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
+        <div className="label-caps">AI · Codex</div>
+        <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
+          <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
+            <span aria-hidden="true" className={cx('inline-block size-1.5 rounded-full', codexDotClass)} />
+            {panel.phase === 'loading' ? 'Checking Codex…' : codexStatusHeadline(codexReady, status)}
+          </span>
+          <p className="text-[10.5px] leading-relaxed text-ink-dim">
+            Codex uses the managed ChatGPT login on this host. Run <span className="figure">codex login</span> once as the game service user; no API key or browser-pasted token is used.
+          </p>
+        </div>
+        <button type="button" className="btn btn-sm self-start" disabled={busy !== null} onClick={() => void load()}>
+          Re-check
+        </button>
+      </section>
+    );
+  }
+
   return (
     <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
-      <div className="label-caps">AI · Claude</div>
+      <div className="label-caps">AI · Legacy Claude</div>
 
       {/* --- what is in force -------------------------------------------- */}
       <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
@@ -686,10 +711,10 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
   }, [open, notice]);
 
   return (
-    <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Claude, preferences and the save file">
+    <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Codex, preferences and the save file">
       <div className="flex flex-col gap-4">
         {/* --- the credential ----------------------------------------------- */}
-        {open ? <ClaudeSection focus={focus === 'ai'} onChanged={() => void refreshLlmHealth()} /> : null}
+        {open ? <ClaudeSection focus={focus === 'ai'} health={llm} onChanged={() => void refreshLlmHealth()} /> : null}
 
         {/* --- preferences ------------------------------------------------- */}
         <section className="flex flex-col gap-2 border-t border-hair pt-3.5">

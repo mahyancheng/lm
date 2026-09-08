@@ -42,7 +42,7 @@ export type CredentialSource = 'runtime' | 'env' | 'none';
  */
 export type TokenAuthGate = 'admin' | 'open-local' | 'secret' | 'disabled';
 
-export type LlmTransportKind = 'claude-session' | 'api' | 'none';
+export type LlmTransportKind = 'codex-app-server' | 'claude-session' | 'api' | 'none';
 
 /**
  * Shortest credential accepted. Both real tokens are far longer; this only has

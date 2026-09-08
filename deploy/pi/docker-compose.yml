@@ -12,7 +12,7 @@
 # Reachable on the tailnet only, at http://<pi>:8110. There is no public URL,
 # no reverse proxy and no TLS in this deployment, by design.
 
-# The project name fixes the volume names (frontier-capital_claude-home, and
+# The project name fixes the volume names (frontier-capital_codex-home, and
 # the saves volume) regardless of which directory compose is run from — run
 # from deploy/pi/ the default would be "pi", orphaning the real volumes.
 name: frontier-capital
@@ -44,11 +44,20 @@ services:
     environment:
       # Canonical game command records on the existing persistent /data volume.
       GAME_SESSION_DIR: ${GAME_SESSION_DIR:-/data/games}
+      # Compose must override values inherited from a pre-migration `.env`;
+      # these paths are the mounted, dedicated Codex profile.
+      CODEX_HOME: /home/node/.codex
+      CODEX_WORKDIR: /home/node/.codex/workspace
+      # Ignore a pre-migration `LLM_STATE_DIR=/home/node/.claude/...` in .env.
+      # `CODEX_STATE_DIR` is the explicit supported override and stays inside
+      # the mounted Codex home by default.
+      LLM_STATE_DIR: ${CODEX_STATE_DIR:-/home/node/.codex/frontier-capital}
 
     # Memory is the whole reason this deployment needed thought.
     #
-    # A quarter runs the World Director and one strategist per rival, and each
-    # `claude-session` call spawns a ~213 MB Claude Code process. The gateway
+    # A quarter runs the World Director and one strategist per rival. The Codex
+    # app-server gateway serializes turns through one local CLI process at a
+    # time; the gateway
     # serialises them (LLM_MAX_CONCURRENCY=1), so the steady-state ceiling is
     # one Next server plus one agent subprocess.
     #
@@ -86,15 +95,13 @@ services:
       retries: 3
 
     volumes:
-      # The Agent SDK's config directory: the Claude Code session transcripts
-      # that let a Chief-of-Staff thread or a conversation with a director be
-      # resumed instead of restarted. Losing it costs conversational memory and
-      # nothing else.
-      - claude-home:/home/node/.claude
+      # Managed ChatGPT login state and persisted Codex thread rollouts. This
+      # is intentionally distinct from any old Claude profile volume.
+      - codex-home:/home/node/.codex
 
       # Server-side saves. `SAVE_DIR=/data/saves` in .env turns them on.
       #
-      # Its own volume, deliberately NOT claude-home: a save is the player's
+      # Its own volume, deliberately separate from codex-home: a save is the player's
       # record of their own game and must survive anything done to the SDK's
       # cache, including deleting that volume to reclaim space. Demo mode still
       # keeps no world on the server — what is stored here is the same save file
@@ -118,5 +125,5 @@ services:
       - saves:/data
 
 volumes:
-  claude-home:
+  codex-home:
   saves:

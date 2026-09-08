@@ -27,6 +27,7 @@ import {
   LOCKED_LINE,
   NO_SERVER_LINE,
   credentialLine,
+  codexStatusHeadline,
   isServerlessClaudeSession,
   runtimeServerlessCaveat,
   oauthFailureLine,
@@ -284,6 +285,11 @@ describe('pasting a replacement', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('labels', () => {
+  it('uses managed-health readiness for Codex instead of the legacy token descriptor', () => {
+    const codex = status({ available: true, transportKind: 'codex-app-server', model: 'approved-model' });
+    expect(codexStatusHeadline(false, codex)).toBe('Codex sign-in needed');
+    expect(codexStatusHeadline(true, codex)).toBe('Live · approved-model');
+  });
   it('names the transport in words a player has met', () => {
     expect(transportLabel('claude-session')).toBe('Claude Code session');
     expect(transportLabel('api')).toBe('Anthropic API');

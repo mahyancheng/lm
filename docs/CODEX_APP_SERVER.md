@@ -24,8 +24,12 @@ The app-server runs only against its dedicated empty workspace. Use the same `CO
 For Docker on the Pi, `CODEX_HOME=/home/node/.codex` is the persistent `codex-home` volume:
 
 ```sh
+docker compose exec -u 0 app install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace
 docker compose exec -u node app codex login --device-auth
 ```
+
+Run the first command once after the app starts: Docker creates a new named
+volume as root, while the game itself runs as `node`.
 
 The image pins `@openai/codex@0.151.0-alpha.2`; upgrade only after checking the published package for `linux-arm64`, reviewing its app-server schema, and validating a real login and game turn. `codex --version` is the deployment check. The image never attempts login during its build.
 

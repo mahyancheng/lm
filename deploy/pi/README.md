@@ -79,17 +79,16 @@ exact login command; it never exposes account or token data.
 Run the supported managed ChatGPT login as the container's `node` user:
 
 ```sh
-docker compose run --rm --user 0 --entrypoint sh app \
-  -c 'install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace'
+docker compose exec -u 0 app install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace
 docker compose exec -u node app codex login --device-auth
 docker compose exec -u node app codex --version
 ```
 
 Complete the browser or device-code ceremony printed by the CLI. The managed
 state stays in `codex-home` across image upgrades. The first command is needed
-once because Docker creates a new named volume as root and the login user must
-be able to write it. Do not paste API keys or ChatGPT tokens into the settings
-screen or `.env`.
+once after the app is running because Docker creates a new named volume as root
+and the login user must be able to write it. Do not paste API keys or ChatGPT
+tokens into the settings screen or `.env`.
 
 ### Alternative: build on a Mac and ship by hand
 

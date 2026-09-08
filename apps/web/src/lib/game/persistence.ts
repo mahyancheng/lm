@@ -48,7 +48,7 @@
  * engine-free, and therefore importable by a server route that has to validate a
  * save a browser uploaded. This module is what remains once the storage medium
  * is taken into account: `localStorage`'s keys, its quota, and the replay that
- * needs the engine. The format is unchanged and still v5.
+ * needs the engine. The current format is v6.
  */
 
 import type {
@@ -423,7 +423,7 @@ function* replaySteps(file: SaveFile): Generator<ReplayProgress, LoadedGame, voi
   const usable = candidate !== null && (after.length === 0 || after[0]?.quarter === candidate.quarter) ? candidate : null;
   let session =
     usable === null
-      ? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine, setup: file.setup ?? undefined })
+      ? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine, setup: file.setup ?? undefined, sessionId: file.gameSessionId ?? undefined })
       : usable.state;
   const replayedFrom = usable === null ? 0 : usable.quarter;
 

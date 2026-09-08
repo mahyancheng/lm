@@ -392,6 +392,20 @@ function initialState(): GameStoreState {
   };
 }
 
+/** A run id is generated only for an explicit New Game, then lives in its save. */
+let fallbackGameIdSequence = 0;
+function freshGameSessionId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid !== undefined) return `game_${uuid}`;
+  const bytes = new Uint32Array(4);
+  if (globalThis.crypto?.getRandomValues !== undefined) {
+    globalThis.crypto.getRandomValues(bytes);
+    return `game_${[...bytes].map((part) => part.toString(16).padStart(8, '0')).join('')}`;
+  }
+  fallbackGameIdSequence += 1;
+  return `game_${Date.now().toString(36)}_${fallbackGameIdSequence.toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
 /**
  * The outcome as this seat may be handed it.
  *
@@ -1440,7 +1454,9 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       difficulty: settings.difficulty,
       autoExecuteRoutine: settings.autoExecuteRoutine,
       setup: setup ?? undefined,
+      sessionId: freshGameSessionId(),
     });
+    clearStrategistPrefetch();
     // A timer armed by the previous game must not fire after the founding save
     // lands and rewrite it with the world that was just left.
     cancelPendingPersist();

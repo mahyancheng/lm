@@ -119,6 +119,7 @@ function fileOf(log: readonly QuarterRecord[], checkpoint: SaveFile['checkpoint'
   return {
     version: SAVE_VERSION,
     seed: SEED,
+    gameSessionId: checkpoint?.state.sessionId ?? createSession({ seed: SEED }).sessionId,
     difficulty: 'standard',
     autoExecuteRoutine: false,
     setup: null,
@@ -174,7 +175,7 @@ describe('a quarter the model wrote words for', () => {
   });
 
   function w2File(log: readonly QuarterRecord[]): SaveFile {
-    return { ...fileOf(log), setup: W2_SETUP, worldVersion: 3 };
+    return { ...fileOf(log), gameSessionId: createSession({ seed: SEED, setup: W2_SETUP }).sessionId, setup: W2_SETUP, worldVersion: 3 };
   }
 
   it('replays to the same words, and without the record to the engine\'s own', () => {
@@ -531,6 +532,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
       JSON.stringify({
         version: SAVE_VERSION,
         seed: SEED,
+        gameSessionId: 'game_queue_parse',
         difficulty: 'standard',
         setup: W3_SETUP,
         log: [],
@@ -546,7 +548,7 @@ describe('a v4 file carries the open queue and the advisory timestamp', () => {
   it('reads a queue that is not an array as empty', () => {
     globals.window?.localStorage.setItem(
       SAVE_KEY,
-      JSON.stringify({ version: SAVE_VERSION, seed: SEED, difficulty: 'standard', setup: W3_SETUP, log: [], queue: 'oops' }),
+      JSON.stringify({ version: SAVE_VERSION, seed: SEED, gameSessionId: 'game_queue_shape', difficulty: 'standard', setup: W3_SETUP, log: [], queue: 'oops' }),
     );
     expect(readSaveFile()?.queue).toEqual([]);
   });
@@ -706,8 +708,8 @@ describe('files from other builds of the save format', () => {
     expect(inspectSave().file?.worldVersion).toBe(3);
   });
 
-  it('treats versions on either side of [1..5] as unsupported and never writes over them', () => {
-    for (const version of [0, 6]) {
+  it('treats versions on either side of [1..6] as unsupported and never writes over them', () => {
+    for (const version of [0, 7]) {
       globals.window = { localStorage: fakeStorage() };
       const alien = JSON.stringify({ version, seed: SEED, log: [] });
       globals.window.localStorage.setItem(SAVE_KEY, alien);
@@ -729,6 +731,7 @@ describe('the write path is cheap without changing a byte of the format', () => 
     return {
       version: SAVE_VERSION,
       seed: SEED,
+      gameSessionId: start.sessionId,
       difficulty: 'standard',
       autoExecuteRoutine: true,
       setup: NewGameSetupSchema.parse({ companyName: 'Byte Compat AI', founderName: 'Ida Verse', backgroundId: 'consumer_ai', worldVersion: 3 }),

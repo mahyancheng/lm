@@ -201,6 +201,39 @@ function playerCompanyName(state: GameStoreState): string | undefined {
 /* -------------------------------------------------------------------------- */
 
 describe('newGame founds a company that survives a refresh', () => {
+  it('gives repeated same-seed games distinct run identities and reloads the saved identity', async () => {
+    const firstMount = await mountGame();
+    await act(async () => firstMount.actions().newGame({ seed: SEED, setup: W3_SETUP }));
+    const firstId = firstMount.state().session.sessionId;
+    const firstCompanies = firstMount.state().session.companies;
+
+    await act(async () => firstMount.actions().newGame({ seed: SEED, setup: W3_SETUP }));
+    const secondId = firstMount.state().session.sessionId;
+    expect(secondId).not.toBe(firstId);
+    expect(firstMount.state().session.companies).toEqual(firstCompanies);
+    expect((storedJson(SAVE_KEY) as { gameSessionId: string }).gameSessionId).toBe(secondId);
+    expect(storedJson(SAVE_KEY).checkpoint).toBeNull();
+
+    await act(async () => firstMount.actions().saveToSlot(1));
+    await act(async () => firstMount.actions().newGame({ seed: SEED, setup: W3_SETUP }));
+    expect(firstMount.state().session.sessionId).not.toBe(secondId);
+    await act(async () => { await firstMount.actions().loadFromSlot(1); });
+    expect(firstMount.state().session.sessionId).toBe(secondId);
+  });
+
+  it('keeps run ids unique without Web Crypto, even inside one clock tick', async () => {
+    vi.stubGlobal('crypto', undefined);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+    const mounted = await mountGame();
+    await act(async () => mounted.actions().newGame({ seed: SEED, setup: W3_SETUP }));
+    const firstId = mounted.state().session.sessionId;
+    await act(async () => mounted.actions().newGame({ seed: SEED, setup: W3_SETUP }));
+    expect(mounted.state().session.sessionId).not.toBe(firstId);
+    now.mockRestore();
+    random.mockRestore();
+  });
+
   it('writes the founding save synchronously, before any quarter resolves', async () => {
     const { state, actions } = await mountGame();
     expect(storedRaw(SAVE_KEY)).toBeNull();
@@ -489,6 +522,7 @@ describe('the active company', () => {
     return {
       version: SAVE_VERSION,
       seed: SEED,
+      gameSessionId: session.sessionId,
       difficulty: 'standard',
       autoExecuteRoutine: false,
       setup: GROUP_SETUP,

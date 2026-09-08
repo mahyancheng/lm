@@ -15,6 +15,16 @@ function npc(session: ReturnType<typeof createSession>) { return session.compani
 function playerAction(session: ReturnType<typeof createSession>, id = 'player_action') { const companyId = session.players[0]!.companyId; const characterId = session.characters.find((character) => character.companyId === companyId && character.role === 'founder_ceo')!.id; return { actionId: id, sessionId: session.sessionId, quarter: session.quarter, sequence: 0, actorPlayerId: PLAYER_ID, actorCompanyId: companyId, actorCharacterId: characterId, origin: 'player_ui' as const, confirmedByHuman: true, intent: { type: 'set_research_budget' as const, budgetUsd: 1 } }; }
 
 describe('Pi canonical session authority', () => {
+  it('registers two same-seed runs independently when their run identities differ', () => {
+    const r = root();
+    const setup = { companyName: 'Authority Labs', founderName: 'Avery', backgroundId: 'consumer_ai' as const, sector: 'ai' as const, region: 'north_america' as const, worldVersion: 3 as const };
+    const sessions = ['game_first', 'game_second'].map((sessionId) => createSession({ seed: 8123, setup, sessionId }));
+    expect(sessions.map((session) => session.sessionId)).toEqual(['game_first', 'game_second']);
+    const files = sessions.map((session) => buildSaveFile({ seed: 8123, difficulty: 'standard', autoExecuteRoutine: false, setup, log: [], queue: [], session }));
+    expect(registerGame(files[0]!, 'owner_a', r).reason).toBe(null);
+    expect(registerGame(files[1]!, 'owner_a', r).reason).toBe(null);
+  });
+
   it('binds registration to owner and reloads a durable record', () => { const r = root(); const { session, file } = fixture(); expect(inspectSaveValue(file).status).toBe('ok'); expect(session.sessionId).toMatch(/^[A-Za-z0-9:_-]{1,200}$/); expect(registerGame(file, 'owner_a', r).reason).toBe(null); expect(registerGame(file, 'owner_a', r).reason).toBe('already_registered'); expect(registerGame(file, 'owner_b', r).reason).toBe('forbidden'); expect(session.sessionId).toBeTruthy(); });
   it('fails closed on a corrupt canonical record', () => { const r = root(); const { session, file } = fixture(); expect(registerGame(file, 'owner_a', r).ok).toBe(true); writeFileSync(join(r, `${session.sessionId}.json`), '{bad'); expect(registerGame(file, 'owner_a', r).reason).toBe('corrupt_server_record'); });
   it('queues an NPC party’s cancellable owned-hardware contract and rejects a foreign deal', async () => {

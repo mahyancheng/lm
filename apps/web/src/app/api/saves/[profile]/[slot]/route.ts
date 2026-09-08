@@ -9,7 +9,7 @@
  *
  * ## What a `PUT` promises
  *
- * The body is `{ file, ifRevision?, displayName? }`. `file` is a v5 save file,
+ * The body is `{ file, ifRevision?, displayName? }`. `file` is a v6 save file,
  * unchanged: **no format version bump**, so every save already in a browser's
  * `localStorage` uploads as it stands. The server validates its *shape* with
  * the same pure parser the browser uses and then stores it **verbatim** — the

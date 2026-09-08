@@ -12,7 +12,7 @@
  * from `@frontier/contracts`, which is the contract layer both sides already
  * share.
  *
- * The format is unchanged and stays v5. Splitting where the storage medium
+ * The current format is v6. Splitting where the storage medium
  * begins is a refactor, not a version bump: `persistence.ts` re-exports every
  * name it used to export and writes byte-identical files.
  */
@@ -43,7 +43,7 @@ import {
   worldVersionIsSupported,
 } from '@frontier/contracts';
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** A strategist reply paired with the company whose dossier it answered. */
 export interface RecordedNpcBundle {
@@ -57,10 +57,10 @@ export interface RecordedNpcBundle {
  * actions; v2 added agent proposals and checkpoints; v3 added the new-game
  * setup; v4 added the unresolved action queue and an advisory timestamp; v5
  * records which world the session was built from. A v5 file may also carry
- * `socialTexts` per quarter; a v5 file without them is not older, it is a
- * session that was played with no model attached.
+ * `socialTexts` per quarter; v6 gives each deliberate New Game its own opaque
+ * run identity instead of deriving that external namespace from the seed.
  */
-export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5];
+export const SUPPORTED_SAVE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6];
 
 /** Manual save slots, beside the autosave. */
 export const SAVE_SLOT_COUNT = 3;
@@ -110,6 +110,8 @@ export interface SaveCheckpoint {
 export interface SaveFile {
   readonly version: number;
   readonly seed: number;
+  /** Opaque identity of this run; unlike the seed, a new game never reuses it. */
+  readonly gameSessionId?: string | null;
   readonly difficulty: SessionDifficulty;
   /** Part of the starting state, so a replay must restore it too. */
   readonly autoExecuteRoutine: boolean;
@@ -303,6 +305,18 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
     : 'standard';
   const log = version === 1 ? migrateV1(parsed.actionLog) : parseRecords(parsed.log);
   const checkpoint = version === 1 ? null : parseCheckpoint(parsed.checkpoint ?? null);
+  const suppliedGameSessionId =
+    typeof parsed.gameSessionId === 'string' && parsed.gameSessionId.length > 0 && parsed.gameSessionId.length <= 200
+      ? parsed.gameSessionId
+      : null;
+  // v6 has one authority namespace. A checkpoint carrying another identity is
+  // internally contradictory and must never be partly loaded under either id.
+  if (version >= 6 && (suppliedGameSessionId === null || (checkpoint !== null && checkpoint.state.sessionId !== suppliedGameSessionId))) {
+    return { status: 'unreadable', version, file: null, reason: null };
+  }
+  // Legacy checkpoints already contain their campaign identity. Files without
+  // one retain the historic seed-derived behavior when replay constructs them.
+  const gameSessionId = version >= 6 ? suppliedGameSessionId : checkpoint?.state.sessionId ?? null;
   // The setup arrives with v3. A v1/v2 file has none, so it replays as the
   // default Player Ventures world.
   const setup = parseSetup(parsed.setup);
@@ -327,6 +341,7 @@ export function inspectSaveValue(value: unknown, options: SaveParseOptions = {})
     file: {
       version: SAVE_VERSION,
       seed,
+      gameSessionId,
       difficulty,
       autoExecuteRoutine: parsed.autoExecuteRoutine === true,
       setup,
@@ -491,6 +506,7 @@ export function saveFileBody(file: SaveFile): string {
   return (
     `{"version":${JSON.stringify(file.version)}` +
     `,"seed":${JSON.stringify(file.seed)}` +
+    (Object.prototype.hasOwnProperty.call(file, 'gameSessionId') ? `,"gameSessionId":${JSON.stringify(file.gameSessionId)}` : '') +
     `,"difficulty":${JSON.stringify(file.difficulty)}` +
     `,"autoExecuteRoutine":${JSON.stringify(file.autoExecuteRoutine)}` +
     `,"setup":${JSON.stringify(file.setup)}` +
@@ -507,7 +523,7 @@ export function saveFileBody(file: SaveFile): string {
 
 /**
  * The file exactly as `JSON.stringify(file)` writes it — same fields, same
- * order, same bytes — assembled from the cached chunks. The format is v5
+ * order, same bytes — assembled from the cached chunks. The format is v6
  * either way; only the cost of producing it changes.
  */
 export function serializeSaveFile(file: SaveFile): string {
@@ -566,6 +582,7 @@ export function buildSaveFile(input: {
   return {
     version: SAVE_VERSION,
     seed: input.seed,
+    gameSessionId: input.session.sessionId,
     difficulty: input.difficulty,
     autoExecuteRoutine: input.autoExecuteRoutine,
     setup: input.setup,

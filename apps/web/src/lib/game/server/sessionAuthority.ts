@@ -141,7 +141,7 @@ function upgradeCanonicalStoredGame(root: string, sessionId: string, stored: Sto
 
 function replay(file: SaveFile): SessionState | null {
   try {
-    let state = file.checkpoint?.state ?? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine, setup: file.setup ?? undefined });
+    let state = file.checkpoint?.state ?? createSession({ seed: file.seed, difficulty: file.difficulty, autoExecuteRoutine: file.autoExecuteRoutine, setup: file.setup ?? undefined, sessionId: file.gameSessionId ?? undefined });
     for (const record of file.log.filter((entry) => entry.quarter >= state.quarter)) { const outcome = getEngine().resolver.resolveQuarter(state, [...record.actions], record.gmProposal, [...record.npcBundles]); if (!outcome.committed) return null; state = outcome.nextState; }
     return state;
   } catch { return null; }

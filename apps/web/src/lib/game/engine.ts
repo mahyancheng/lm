@@ -65,6 +65,8 @@ export interface NewGameOptions {
   readonly autoExecuteRoutine?: boolean;
   /** Company name, founder name, background, sector and region. Omit for the default world. */
   readonly setup?: NewGameSetupInput;
+  /** Opaque identity of this particular run. The seed still controls simulation. */
+  readonly sessionId?: string;
 }
 
 /**
@@ -81,11 +83,28 @@ export function createSession(options: NewGameOptions = {}): SessionState {
   const difficulty = options.difficulty ?? 'standard';
   const autoExecute = options.autoExecuteRoutine ?? false;
 
-  return SessionStateSchema.parse({
+  const session = {
     ...input,
     config: { ...input.config, difficulty, autoExecuteRoutineDefault: autoExecute },
     players: (input.players ?? []).map((player) => ({ ...player, autoExecuteRoutine: autoExecute })),
-  });
+  };
+  return SessionStateSchema.parse(options.sessionId === undefined ? session : replaceSessionIdentity(session, options.sessionId));
+}
+
+/**
+ * Give one deterministic opening world a run identity. `sessionId` is repeated
+ * on session-scoped records, so replace those fields together before parsing.
+ * Entity ids remain seed-derived: they are names inside this run, while the
+ * opaque session id is the namespace that separates runs everywhere outside F.
+ */
+function replaceSessionIdentity<T>(value: T, sessionId: string): T {
+  if (Array.isArray(value)) return value.map((entry) => replaceSessionIdentity(entry, sessionId)) as T;
+  if (value === null || typeof value !== 'object') return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    result[key] = key === 'sessionId' ? sessionId : replaceSessionIdentity(entry, sessionId);
+  }
+  return result as T;
 }
 
 /** The seed of a session, as a number, for display and for the save file. */

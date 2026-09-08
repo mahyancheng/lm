@@ -22,7 +22,7 @@
  *
  * ## What is stored
  *
- * The save file itself is **untouched**: still v5, still the bytes the client
+ * The save file itself is **untouched**: currently v6, still the bytes the client
  * built. The server wraps it in an envelope carrying who and where it belongs,
  * a server-assigned `revision`, and the few scalars a slot picker shows, so
  * listing four slots never costs four full parses. The client is not

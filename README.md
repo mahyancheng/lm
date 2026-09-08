@@ -37,10 +37,10 @@ and every screen live — no Supabase project or Anthropic key needed.
 
 ### Turning on the live model
 
-Run the supported one-time `codex login` ceremony on the self-hosted game
-machine or container. Managed ChatGPT login and Codex thread rollouts stay in
-the dedicated persistent `CODEX_HOME`; the game does not use a browser-pasted
-token or API key. See [Codex backend setup](docs/CODEX_APP_SERVER.md).
+Open **Settings → Connect ChatGPT** in the self-hosted game and complete the
+browser device-code ceremony. Managed ChatGPT login and Codex thread rollouts
+stay in the dedicated persistent `CODEX_HOME`; the game does not use a
+browser-pasted token or API key. See [Codex backend setup](docs/CODEX_APP_SERVER.md).
 
 **The game is self-hosted on purpose.** Codex app-server runs as a local
 subprocess, so deployment is one always-on Node process (the Raspberry Pi kit
@@ -50,8 +50,8 @@ or generic VPS service), not a serverless function.
 
 1. **Supabase**: create a project, then `supabase db push` (or apply
    `supabase/migrations/*.sql` in order) and load `supabase/seed.sql`.
-2. **Codex**: follow [Codex backend setup](docs/CODEX_APP_SERVER.md) and run
-   the supported CLI login once under the persistent `CODEX_HOME`.
+2. **Codex**: follow [Codex backend setup](docs/CODEX_APP_SERVER.md), then use
+   **Settings → Connect ChatGPT** after the app starts.
 3. **Env**: copy `.env.example` to `apps/web/.env.local`, set
    `LLM_TRANSPORT=codex-app-server`, fill in Supabase keys, and set
    `NEXT_PUBLIC_DEMO_MODE=false`.

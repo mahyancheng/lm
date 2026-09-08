@@ -257,6 +257,9 @@ export function withConcurrencyLimit(transport: LlmTransport, max: number | Conc
 
   return {
     ...transport,
+    // Do not let a concurrency wrapper keep an authenticated app-server alive
+    // after its owning gateway is invalidated.
+    close: transport.close === undefined ? undefined : () => transport.close?.(),
     complete<T>(req: LlmCompletionRequest<T>): Promise<LlmCompletion<T>> {
       return limiter.run(() => transport.complete(req), { priority: req.priority ?? 'batch', role: req.role });
     },

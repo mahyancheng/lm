@@ -13,9 +13,8 @@ curl -fsSL https://raw.githubusercontent.com/mahyancheng/lm/claude/opus5-agents-
 ```
 
 That is the whole install. At the end it prints the game's URL (your server's
-IP on port 80) and the exact one-time `codex login --device-auth` command.
-Complete that supported managed ChatGPT login as `www-data`; no API key or
-in-app credential flow is used.
+IP on port 80). Open **Settings → Connect ChatGPT** in the game to complete
+the supported managed login; no API key or pasted credential is used.
 
 ## Updating
 

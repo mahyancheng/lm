@@ -25,7 +25,7 @@ concurrency bound, the port — is a promise to those other tenants.
 | Layout on the Pi | a git checkout at `/home/ycmah/frontier-capital`; compose files, `update.sh` and `.env` live in its `deploy/pi/` |
 | Server-side state | two named volumes: `codex-home` → `/home/node/.codex` (managed login + Codex threads) and `saves` → `/data` (game saves, `SAVE_DIR=/data/saves`) |
 | Game saves | **on the Pi**, keyed by a profile name the player picks — the browser keeps an offline cache; see *Saves* below |
-| Credentials | none in the image or repository; one supported Codex CLI login writes managed state to `codex-home` |
+| Credentials | none in the image or repository; the in-app ChatGPT connection writes managed state to `codex-home` |
 
 ---
 
@@ -66,28 +66,19 @@ see *Updating*), starts the service through the GHCR overlay, waits for
 
 ```sh
 curl -s http://localhost:8110/api/llm/health
-# {"available":false,"transportKind":"codex-app-server","signedIn":false,"setup":"Run `codex login` as the game service user."}
+# {"available":false,"transportKind":"codex-app-server","signedIn":false,"setup":"Open Settings, then connect ChatGPT."}
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml ps   # "healthy" within ~90s
 ```
 
 `available: true` means the Codex CLI is installed and its managed ChatGPT
 login is ready. Before step 4 the response reports `signedIn: false` and the
-exact login command; it never exposes account or token data.
+in-app connection step; it never exposes account or token data.
 
-### 4. Log in to Codex once
+### 4. Connect ChatGPT once
 
-Run the supported managed ChatGPT login as the container's `node` user:
-
-```sh
-docker compose exec -u 0 app install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace
-docker compose exec -u node app codex login --device-auth
-docker compose exec -u node app codex --version
-```
-
-Complete the browser or device-code ceremony printed by the CLI. The managed
-state stays in `codex-home` across image upgrades. The first command is needed
-once after the app is running because Docker creates a new named volume as root
-and the login user must be able to write it. Do not paste API keys or ChatGPT
+Open the app at `http://<pi-tailnet-ip>:8110`, choose **Settings → Connect
+ChatGPT**, and complete the browser device-code ceremony. The managed state
+stays in `codex-home` across image upgrades. Do not paste API keys or ChatGPT
 tokens into the settings screen or `.env`.
 
 ### Alternative: build on a Mac and ship by hand
@@ -399,8 +390,8 @@ started. Three consequences:
 `frontier-capital/codex-thread-map.json`; it is mounted at `/home/node/.codex`.
 The map contains opaque `codex:` conversation keys and Codex thread ids only.
 It never reads the legacy Claude map. Deleting this volume requires a new
-`codex login --device-auth` and starts fresh Codex threads; saves are in the
-other volume and are unaffected.
+**Settings → Connect ChatGPT** ceremony and starts fresh Codex threads; saves
+are in the other volume and are unaffected.
 
 ---
 

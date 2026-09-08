@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { probeCodexAppServerAccount } from '@frontier/llm';
 import { serverBuildStamp } from '@/lib/version';
 import { gateway, limiterSnapshot, modelName, transportAvailable, transportKind } from '../_gateway';
+import { refreshCodexAccount } from '../_codexLogin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,15 +32,9 @@ export async function GET(): Promise<NextResponse> {
   let signedIn: boolean | null = null;
 
   if (ready && kind === 'codex-app-server') {
-    const env = process.env;
-    const cwd = env['CODEX_WORKDIR']?.trim() || (env['CODEX_HOME']?.trim() ? join(env['CODEX_HOME'].trim(), 'workspace') : undefined);
-    if (cwd !== undefined) mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    const account = await probeCodexAppServerAccount({
-      env,
-      command: env['CODEX_COMMAND'],
-      codexHome: env['CODEX_HOME'],
-      cwd,
-    });
+    // The manager owns this read so it cannot race a device-login process.
+    // It reports only capability/auth mode, never an account identifier.
+    const account = await refreshCodexAccount();
     cliAvailable = account.cliAvailable;
     signedIn = account.signedIn;
     ready = account.cliAvailable && account.signedIn;
@@ -67,7 +59,7 @@ export async function GET(): Promise<NextResponse> {
       runningRole: snapshot.runningRole,
       cliAvailable,
       signedIn,
-      setup: kind === 'codex-app-server' && signedIn === false ? 'Run `codex login` as the game service user.' : null,
+      setup: kind === 'codex-app-server' && signedIn === false ? 'Open Settings, then connect ChatGPT.' : null,
       build: { sha: build.sha, shortSha: build.shortSha, builtAt: build.builtAt },
     },
     { headers: { 'cache-control': 'no-store, no-cache, must-revalidate' } },

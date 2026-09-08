@@ -36,12 +36,12 @@ export interface CodexAppServerAccountStatus {
 
 /** Short, read-only readiness probe. It never returns account identifiers or tokens. */
 export async function probeCodexAppServerAccount(config: CodexAppServerTransportConfig = {}): Promise<CodexAppServerAccountStatus> {
-  const env = config.env ?? ambientEnv();
+  const env = config.env ?? ambientCodexEnv();
   let process: CodexAppServerProcess | null = null;
   try {
     if (config.spawn === undefined) await assertIsolatedCodexHome(config.codexHome);
     process = (config.spawn ?? spawnCodexAppServer)({
-      command: config.command ?? env['CODEX_COMMAND'] ?? 'codex', args: codexArgs(), cwd: config.cwd,
+      command: config.command ?? env['CODEX_COMMAND'] ?? 'codex', args: codexAppServerArgs(), cwd: config.cwd,
       env: codexProcessEnv(env, config.codexHome),
     });
     const client = new CodexRpcClient(process, Math.min(config.timeoutMs ?? 3_000, 3_000));
@@ -73,7 +73,7 @@ interface TurnOutcome {
 }
 
 export function createCodexAppServerTransport(config: CodexAppServerTransportConfig = {}): CodexAppServerTransport {
-  const env = config.env ?? ambientEnv();
+  const env = config.env ?? ambientCodexEnv();
   const configuredModel = config.model ?? env['CODEX_MODEL'];
   const model = configuredModel ?? DEFAULT_CODEX_APP_SERVER_MODEL;
   const timeoutMs = config.timeoutMs ?? DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS;
@@ -89,7 +89,7 @@ export function createCodexAppServerTransport(config: CodexAppServerTransportCon
       const processEnv = codexProcessEnv(env, config.codexHome);
       const process = (config.spawn ?? spawnCodexAppServer)({
         command: config.command ?? env['CODEX_COMMAND'] ?? 'codex',
-        args: codexArgs(), cwd: config.cwd,
+        args: codexAppServerArgs(), cwd: config.cwd,
         env: processEnv,
       });
       const client = new CodexRpcClient(process, timeoutMs);
@@ -306,11 +306,11 @@ function classifyError(error: unknown): LlmFailureReason {
   return 'api_error';
 }
 
-function ambientEnv(): Readonly<Record<string, string | undefined>> {
+export function ambientCodexEnv(): Readonly<Record<string, string | undefined>> {
   const holder = globalThis as { process?: { env?: Record<string, string | undefined> } };
   return holder.process?.env ?? {};
 }
-function codexArgs(): readonly string[] { return ['app-server', '-c', 'forced_login_method="chatgpt"']; }
+export function codexAppServerArgs(): readonly string[] { return ['app-server', '-c', 'forced_login_method="chatgpt"']; }
 
 export async function assertIsolatedCodexHome(codexHome: string | undefined): Promise<void> {
   if (codexHome === undefined || codexHome.trim().length === 0) {
@@ -335,7 +335,7 @@ export async function assertIsolatedCodexHome(codexHome: string | undefined): Pr
   }
 }
 const CODEX_ENV_ALLOWLIST = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'] as const;
-function codexProcessEnv(env: Readonly<Record<string, string | undefined>>, codexHome: string | undefined): Readonly<Record<string, string | undefined>> {
+export function codexProcessEnv(env: Readonly<Record<string, string | undefined>>, codexHome: string | undefined): Readonly<Record<string, string | undefined>> {
   const safe: Record<string, string | undefined> = {};
   for (const key of CODEX_ENV_ALLOWLIST) if (env[key] !== undefined) safe[key] = env[key];
   if (codexHome !== undefined) safe['CODEX_HOME'] = codexHome;

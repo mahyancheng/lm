@@ -148,6 +148,8 @@ export interface LlmTransport {
   /** Which transport this is, for run records and for `createGateway` diagnostics. */
   readonly kind: LlmTransportKind;
   complete<T>(req: LlmCompletionRequest<T>): Promise<LlmCompletion<T>>;
+  /** Release an optional persistent subprocess/client when its auth changes. */
+  close?(): void;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -204,6 +204,15 @@ describe('withConcurrencyLimit', () => {
     expect(withConcurrencyLimit(gated.transport, 1).kind).toBe('claude-session');
   });
 
+  it('forwards close to a persistent wrapped transport', () => {
+    const gated = gatedTransport();
+    let closes = 0;
+    const close = () => { closes += 1; };
+    const limited = withConcurrencyLimit({ ...gated.transport, close }, 1);
+    limited.close?.();
+    expect(closes).toBe(1);
+  });
+
   /**
    * The bug this guards against is silent and permanent: a permit released only
    * on the success path means one thrown call narrows the gateway forever, and

@@ -2,36 +2,26 @@
 
 Frontier Capital uses the Codex CLI app-server over its default stdio JSONL transport. It is a local, long-lived backend integration, not a Responses API client and it does not accept browser-pasted ChatGPT credentials.
 
-## One-time host login
+## In-app managed login
 
-Install the exact CLI version in the deployment image, then run this once in the running container or service account with the same `CODEX_HOME` that the game uses:
-
-```sh
-codex login --device-auth
-codex app-server --help
-codex --version
-```
-
-Use the supported ChatGPT device-code ceremony printed by the CLI. Do not copy credentials into environment variables, files, or the game settings UI. The app-server reads managed login state from `CODEX_HOME` and refreshes it there when needed.
+After the app starts, open **Settings → Connect ChatGPT**. The game starts the
+supported device-code ceremony inside its managed app-server integration and
+opens the browser verification page. Do not run a CLI login or copy credentials
+into environment variables, files, or the game settings UI. The app-server
+stores managed login state in `CODEX_HOME` and refreshes it there when needed.
 
 `CODEX_HOME` is a clean, integration-specific directory, not the operator's
 usual Codex profile. Start it without inherited configuration, extensions,
 MCP servers, custom skills, or project instructions. Codex may generate its
 own bundled system skills under `.system`; leave those CLI-owned files intact.
-The app-server runs only against its dedicated empty workspace. Use the same `CODEX_HOME` for `codex login
---device-auth`, the health probe, and the running game service.
+The app-server runs only against its dedicated empty workspace. The game health
+probe and the running service use the same `CODEX_HOME`.
 
-For Docker on the Pi, `CODEX_HOME=/home/node/.codex` is the persistent `codex-home` volume:
+For Docker on the Pi, `CODEX_HOME=/home/node/.codex` is the persistent
+`codex-home` volume. The image seeds that directory for the unprivileged `node`
+user, and the app creates any missing workspace directory when Connect is used.
 
-```sh
-docker compose exec -u 0 app install -d -o node -g node -m 0700 /home/node/.codex /home/node/.codex/workspace
-docker compose exec -u node app codex login --device-auth
-```
-
-Run the first command once after the app starts: Docker creates a new named
-volume as root, while the game itself runs as `node`.
-
-The image pins `@openai/codex@0.151.0-alpha.2`; upgrade only after checking the published package for `linux-arm64`, reviewing its app-server schema, and validating a real login and game turn. `codex --version` is the deployment check. The image never attempts login during its build.
+The image pins `@openai/codex@0.151.0-alpha.2`; upgrade only after checking the published package for `linux-arm64`, reviewing its app-server schema, and validating an in-app login and game turn. `codex --version` is an optional deployment diagnostic. The image never attempts login during its build.
 
 ## State and migration
 

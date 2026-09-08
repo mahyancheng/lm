@@ -70,6 +70,7 @@ import {
   type LlmEnv,
   TOKEN_WRITE_RATE_LIMIT,
   createGenerationCache,
+  invalidateManagedCodexAuth,
   processSingleton,
   resolveLlmEnv,
   transportCannotRunHere,
@@ -149,12 +150,21 @@ export function limiterSnapshot(): LimiterSnapshot {
  * What a rebuild does **not** take with it is the concurrency bound: that one
  * is handed in from the process singleton above and survives every rebuild.
  */
-const cachedGateway = createGenerationCache<LlmGateway>(() =>
-  createGateway(llmEnv(), { concurrencyLimiter, sessionStore: processSingleton('llm.sessionStore', () => createConfiguredSessionStore(process.env)) }),
+const cachedGateway = createGenerationCache<LlmGateway>(
+  () => createGateway(llmEnv(), { concurrencyLimiter, sessionStore: processSingleton('llm.sessionStore', () => createConfiguredSessionStore(process.env)) }),
+  (previous) => (previous.transport as { close?: () => void }).close?.(),
 );
 
 export function gateway(): LlmGateway {
   return cachedGateway();
+}
+
+/** Stop a stale authenticated app-server before the next inference request. */
+export function invalidateGatewayForManagedCodexAuth(): void {
+  invalidateManagedCodexAuth();
+  // Re-enter the cache immediately so its disposer closes the old app-server
+  // process instead of leaving it authenticated until another role is called.
+  void cachedGateway();
 }
 
 /**

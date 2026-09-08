@@ -110,7 +110,7 @@ IP="$(curl -fsS -4 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print 
 echo
 echo "======================================================================"
 echo " Frontier Capital is up:  http://${IP}$( [[ "${PORT}" != "80" ]] && echo ":${PORT}" )"
-echo " Codex login once:        sudo -u www-data CODEX_HOME=/var/lib/frontier-capital/codex-home codex login --device-auth"
+echo " Connect ChatGPT:         Open Settings → Connect ChatGPT in the game"
 echo " Update later:            re-run this same script"
 echo " Logs:                    journalctl -u ${SERVICE} -f"
 echo "======================================================================"

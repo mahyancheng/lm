@@ -81,6 +81,8 @@ export { DEFAULT_API_MAX_TOKENS, DEFAULT_API_MODEL, createApiTransport, outputFo
 
 export type { CodexAppServerAccountStatus, CodexAppServerProcess, CodexAppServerSpawn, CodexAppServerTransport, CodexAppServerTransportConfig } from './transport/codexAppServer';
 export { DEFAULT_CODEX_APP_SERVER_MODEL, DEFAULT_CODEX_APP_SERVER_TIMEOUT_MS, createCodexAppServerTransport, probeCodexAppServerAccount } from './transport/codexAppServer';
+export type { CodexLoginManager, CodexLoginManagerConfig, CodexLoginPrompt, CodexLoginStatus } from './transport/codexAuth';
+export { DEFAULT_CODEX_LOGIN_EXPIRY_MS, DEFAULT_CODEX_LOGIN_RPC_TIMEOUT_MS, createCodexLoginManager, getCodexLoginManager } from './transport/codexAuth';
 
 export type { NullTransportConfig } from './transport/none';
 export { createNullTransport } from './transport/none';

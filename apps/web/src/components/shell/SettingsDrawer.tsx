@@ -50,12 +50,12 @@ import {
   tokenDraftIssue,
 } from '@/lib/llm/token';
 import { resetLlmHealth, type LlmHealth } from '@/lib/llm/client';
+import { cancelCodexLogin, codexEffectiveReady, codexLoginFailureLine, createCodexLoginLifecycle, logoutCodex, pollCodexLogin, startCodexLogin, type CodexLoginStart, type CodexLoginState } from '@/lib/llm/codexAuth';
 import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import type { SettingsSection } from './settingsBus';
 import {
   NO_SERVER_LINE,
   credentialLine,
-  codexStatusHeadline,
   oauthFailureLine,
   pasteFieldLabel,
   pasteMode,
@@ -254,6 +254,221 @@ function UnlockField({
 interface OAuthFlow {
   readonly flowId: string;
   readonly authorizeUrl: string;
+}
+
+type CodexFlow = CodexLoginStart;
+
+function CodexSection({
+  focus,
+  onChanged,
+  health,
+}: {
+  readonly focus: boolean;
+  readonly onChanged: () => void;
+  readonly health: LlmHealth;
+}): React.JSX.Element {
+  const [flow, setFlow] = useState<CodexFlow | null>(null);
+  const [state, setState] = useState<CodexLoginState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [statusFetch, setStatusFetch] = useState<TokenFetch<TokenStatus> | null>(null);
+  const [secretDraft, setSecretDraft] = useState('');
+  const anchor = useRef<HTMLDivElement | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deadline = useRef<number | null>(null);
+  const pollFailures = useRef(0);
+  const lifecycle = useRef(createCodexLoginLifecycle());
+
+  useEffect(() => {
+    if (focus) anchor.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [focus]);
+
+  useEffect(() => {
+    void fetchTokenStatus().then(setStatusFetch);
+  }, []);
+
+  const panel = tokenPanelState(statusFetch);
+
+  const stopPolling = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+
+  useEffect(() => () => {
+    lifecycle.current.dispose();
+    stopPolling();
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+  }, [stopPolling]);
+
+  const check = useCallback(async (loginId: string, generation: number): Promise<void> => {
+    if (!lifecycle.current.current(generation)) return;
+    if (deadline.current !== null && Date.now() >= deadline.current) {
+      stopPolling();
+      setState('expired');
+      setError('This sign-in code expired.');
+      void cancelCodexLogin(loginId);
+      return;
+    }
+    const result = await pollCodexLogin(loginId);
+    if (!lifecycle.current.current(generation)) return;
+    if (result.kind !== 'ok') {
+      pollFailures.current += 1;
+      setError(result.kind === 'refused' ? codexLoginFailureLine(result.reason) : 'Could not check the sign-in. Try again.');
+      if (pollFailures.current >= 3) {
+        stopPolling();
+        setState('error');
+        return;
+      }
+      timer.current = setTimeout(() => void check(loginId, generation), 2500);
+      return;
+    }
+    pollFailures.current = 0;
+    setState(result.value.state);
+    if (result.value.state === 'pending') {
+      timer.current = setTimeout(() => void check(loginId, generation), 1500);
+    } else if (result.value.state === 'connected') {
+      stopPolling();
+      setFlow(null);
+      onChanged();
+    } else {
+      stopPolling();
+      setError(result.value.error ?? (result.value.state === 'expired' ? 'This sign-in code expired.' : 'Sign-in was cancelled.'));
+    }
+  }, [onChanged, stopPolling]);
+
+  async function begin(): Promise<void> {
+    if (busy || !panel.canWrite) return;
+    stopPolling();
+    const generation = lifecycle.current.begin();
+    setBusy(true); setError(null); setState(null); deadline.current = null;
+    pollFailures.current = 0;
+    const result = await startCodexLogin();
+    if (!lifecycle.current.current(generation)) return;
+    if (result.kind === 'ok' && result.value.ok) {
+      setFlow(result.value);
+      setState('pending');
+      deadline.current = Date.parse(result.value.expiresAt);
+      timer.current = setTimeout(() => void check(result.value.loginId, generation), 700);
+    } else setError(result.kind === 'refused' ? codexLoginFailureLine(result.reason) : 'Could not start ChatGPT sign-in. Try again.');
+    setBusy(false);
+  }
+
+  async function unlock(): Promise<void> {
+    const secret = secretDraft.trim();
+    if (!secret || busy) return;
+    const generation = lifecycle.current.begin();
+    setBusy(true);
+    setSetupSecret(secret);
+    const next = await fetchTokenStatus();
+    if (!lifecycle.current.current(generation)) return;
+    setStatusFetch(next);
+    if (next.kind === 'ok' && tokenPanelState(next).phase !== 'locked') setSecretDraft('');
+    else {
+      clearSetupSecret();
+      setError('That setup secret was not accepted. Check it and try again.');
+    }
+    setBusy(false);
+  }
+
+  async function cancel(): Promise<void> {
+    if (flow === null) return;
+    lifecycle.current.dispose();
+    stopPolling();
+    const generation = lifecycle.current.begin();
+    const result = await cancelCodexLogin(flow.loginId);
+    if (!lifecycle.current.current(generation)) return;
+    if (result.kind === 'ok' && result.value.ok) {
+      setFlow(null);
+      setState(null);
+      setError(null);
+      return;
+    }
+    setState('pending');
+    setError('Could not cancel this sign-in yet. It will expire automatically.');
+    timer.current = setTimeout(() => void check(flow.loginId, generation), 1500);
+  }
+
+  async function signOut(): Promise<void> {
+    if (busy) return;
+    lifecycle.current.dispose();
+    stopPolling();
+    const generation = lifecycle.current.begin();
+    setBusy(true); setError(null);
+    const result = await logoutCodex();
+    if (!lifecycle.current.current(generation)) return;
+    if (result.kind === 'ok' && result.value.ok) {
+      setState('cancelled');
+      onChanged();
+    } else setError('Could not sign out of ChatGPT. Try again.');
+    setBusy(false);
+  }
+
+  async function copyCode(): Promise<void> {
+    if (flow === null) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) await navigator.clipboard.writeText(flow.userCode);
+      else throw new Error('clipboard unavailable');
+      setCopied(true);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // HTTP tailnet pages commonly cannot use Clipboard API. The code field
+      // remains selectable so the person can use the browser's Copy command.
+      document.getElementById('codex-login-code')?.focus();
+    }
+  }
+
+  const ready = codexEffectiveReady(health.available && health.transportKind === 'codex-app-server', state);
+  const headline = state === 'connected' || ready ? 'ChatGPT connected' : state === 'pending' ? 'Waiting for approval…' : 'ChatGPT sign-in needed';
+  const gateClosed = panel.phase === 'locked' || panel.phase === 'restricted' || panel.phase === 'disabled' || panel.phase === 'no-server';
+  return (
+    <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2" data-testid="codex-section">
+      <div className="label-caps">AI · ChatGPT</div>
+      <div className="raised-surface flex flex-col gap-2 px-3.5 py-3">
+        <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
+          <span aria-hidden="true" className={cx('inline-block size-1.5 rounded-full', ready ? 'bg-gain pulse-dot' : 'bg-ink-faint')} />
+          {headline}
+        </span>
+        {panel.phase === 'loading' ? <p className="text-[10.5px] text-ink-faint">Checking whether this deployment allows account connections…</p> : panel.phase === 'locked' ? (
+          <>
+            <p className="text-[10.5px] leading-relaxed text-ink-dim">{panel.message}</p>
+            <UnlockField draft={secretDraft} busy={busy} onDraft={setSecretDraft} onSubmit={() => void unlock()} />
+          </>
+        ) : gateClosed ? (
+          <p className="text-[10.5px] leading-relaxed text-ink-dim">{panel.message}</p>
+        ) : flow === null && ready ? (
+          <>
+            <p className="text-[10.5px] leading-relaxed text-ink-dim">Your ChatGPT account powers the game’s company bots on this server.</p>
+            <button type="button" className="btn btn-sm self-start" disabled={busy} onClick={() => void signOut()}>{busy ? 'Signing out…' : 'Sign out'}</button>
+          </>
+        ) : flow === null ? (
+          <>
+            <p className="text-[10.5px] leading-relaxed text-ink-dim">Connect this game to your ChatGPT account with a short code. Your account powers the game’s company bots on this server.</p>
+            <button type="button" className="btn btn-primary tap-target w-full justify-center" disabled={busy || !panel.canWrite} onClick={() => void begin()}>
+              {busy ? 'Preparing sign-in…' : 'Connect ChatGPT'}
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-[10.5px] leading-relaxed text-ink-dim">Open the official ChatGPT sign-in page, enter this code, then leave this sheet open while it checks.</p>
+            <a href={flow.verificationUrl} target="_blank" rel="noopener noreferrer" className="btn btn-primary tap-target w-full justify-center">Open ChatGPT sign-in</a>
+            <div className="flex items-center justify-between gap-2 rounded-card border border-hair bg-raised px-3 py-2">
+              <input id="codex-login-code" readOnly value={flow.userCode} onFocus={(event) => event.currentTarget.select()} aria-label={`Sign-in code ${flow.userCode}`} className="field min-w-0 border-0 bg-transparent p-0 font-mono text-[18px] font-bold tracking-[0.18em] text-ink" />
+              <button type="button" className="btn btn-sm" onClick={() => void copyCode()}>{copied ? 'Copied' : 'Copy code'}</button>
+            </div>
+            <p className="text-[10px] text-ink-faint">{state === 'pending' ? 'Waiting for approval…' : error ?? 'Sign-in complete.'}</p>
+            <div className="flex items-center gap-1.5">
+              <button type="button" className="btn btn-sm" onClick={() => void cancel()}>Cancel</button>
+              {state === 'expired' || state === 'error' ? <button type="button" className="btn btn-sm" onClick={() => { setFlow(null); setError(null); void begin(); }}>Try again</button> : null}
+            </div>
+          </>
+        )}
+      </div>
+      {error !== null && flow === null ? <p className="rounded-card border border-loss/25 bg-loss-wash px-3.5 py-2.5 text-[10.5px] text-loss">{error}</p> : null}
+    </section>
+  );
 }
 
 /**
@@ -513,28 +728,6 @@ function ClaudeSection({
   const dotTone = statusDotTone(status);
   const dotClass = dotTone === 'live' ? 'bg-gain pulse-dot' : dotTone === 'caution' ? 'bg-warn' : 'bg-ink-faint';
 
-  if (status?.transportKind === 'codex-app-server') {
-    const codexReady = health.available && health.transportKind === 'codex-app-server';
-    const codexDotClass = codexReady ? 'bg-gain pulse-dot' : 'bg-ink-faint';
-    return (
-      <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
-        <div className="label-caps">AI · Codex</div>
-        <div className="raised-surface flex flex-col gap-1.5 px-3.5 py-3">
-          <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
-            <span aria-hidden="true" className={cx('inline-block size-1.5 rounded-full', codexDotClass)} />
-            {panel.phase === 'loading' ? 'Checking Codex…' : codexStatusHeadline(codexReady, status)}
-          </span>
-          <p className="text-[10.5px] leading-relaxed text-ink-dim">
-            Codex uses the managed ChatGPT login on this host. Run <span className="figure">codex login</span> once as the game service user; no API key or browser-pasted token is used.
-          </p>
-        </div>
-        <button type="button" className="btn btn-sm self-start" disabled={busy !== null} onClick={() => void load()}>
-          Re-check
-        </button>
-      </section>
-    );
-  }
-
   return (
     <section ref={anchor} className="flex flex-col gap-2 scroll-mt-2">
       <div className="label-caps">AI · Legacy Claude</div>
@@ -714,7 +907,13 @@ export function SettingsDrawer({ open, onClose, focus = null }: SettingsDrawerPr
     <Drawer open={open} onClose={onClose} title="Session settings" subtitle="Codex, preferences and the save file">
       <div className="flex flex-col gap-4">
         {/* --- the credential ----------------------------------------------- */}
-        {open ? <ClaudeSection focus={focus === 'ai'} health={llm} onChanged={() => void refreshLlmHealth()} /> : null}
+        {open ? (
+          llm.transportKind === 'codex-app-server' ? (
+            <CodexSection focus={focus === 'ai'} health={llm} onChanged={() => void refreshLlmHealth()} />
+          ) : (
+            <ClaudeSection focus={focus === 'ai'} health={llm} onChanged={() => void refreshLlmHealth()} />
+          )
+        ) : null}
 
         {/* --- preferences ------------------------------------------------- */}
         <section className="flex flex-col gap-2 border-t border-hair pt-3.5">

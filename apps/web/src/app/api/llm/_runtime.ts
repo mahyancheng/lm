@@ -189,6 +189,18 @@ export function runtimeGeneration(): number {
   return store().generation;
 }
 
+/**
+ * Invalidate process-local clients after the managed Codex account changes.
+ *
+ * A Codex app-server connection authenticates when it starts.  Login and
+ * logout therefore must not leave an already-open inference client alive.  A
+ * generation bump rebuilds that client on its next use without touching an
+ * explicit runtime API/OAuth credential.
+ */
+export function invalidateManagedCodexAuth(): void {
+  store().generation += 1;
+}
+
 export interface SetCredentialOptions {
   /** Injected so a test never depends on the wall clock. */
   readonly now?: () => string;
@@ -259,11 +271,14 @@ export function resetRuntimeCredential(): void {
  * without constructing a real gateway — and so that "rebuilds when the
  * credential changes" is a property of code rather than of a comment.
  */
-export function createGenerationCache<T>(build: () => T): () => T {
+export function createGenerationCache<T>(build: () => T, dispose?: (value: T) => void): () => T {
   let held: { readonly value: T; readonly generation: number } | null = null;
   return (): T => {
     const current = store().generation;
-    if (held === null || held.generation !== current) held = { value: build(), generation: current };
+    if (held === null || held.generation !== current) {
+      if (held !== null) dispose?.(held.value);
+      held = { value: build(), generation: current };
+    }
     return held.value;
   };
 }

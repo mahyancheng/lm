@@ -85,10 +85,10 @@ function isTabAddress(href: string): boolean {
 /*  The page                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const CARDS = ['PaperCard', 'SocialCard', 'PeopleCard', 'StandingCard', 'EconomyCard', 'WorldReadingsCard'] as const;
+const CARDS = ['PaperCard', 'EconomyCard', 'PeopleCard', 'StandingCard', 'SocialCard', 'WorldReadingsCard'] as const;
 
-describe('the World tab is six cards in the plan’s order', () => {
-  it('renders them in that order and mounts each exactly once', () => {
+describe('the World workspace leads with contextual signals', () => {
+  it('puts news and the industry economy before progressive detail', () => {
     const positions = CARDS.map((name) => ({ name, at: SOURCE.indexOf(`<${name}`) }));
     for (const entry of positions) expect(entry.at, `${entry.name} is not mounted`).toBeGreaterThan(-1);
     for (let index = 1; index < positions.length; index += 1) {
@@ -107,6 +107,13 @@ describe('the World tab is six cards in the plan’s order', () => {
       expect(SOURCE.includes(`"${route}"`), `${route} is written out in WorldTab.tsx`).toBe(false);
     }
   });
+  it('pairs visible competitors and real opportunities with actions', () => {
+    expect(SOURCE).toContain('view.visibleCompanies');
+    expect(SOURCE).toContain('setPendingNetworkCharacter(rival.ceoCharacterId)');
+    expect(SOURCE).toContain('opportunity.programme');
+    expect(SOURCE).toContain("sheetHref('government')");
+  });
+
 });
 
 /* -------------------------------------------------------------------------- */

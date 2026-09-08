@@ -25,6 +25,7 @@
  * are about the founding company's own register and the founder's own wealth.
  */
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import { DEFAULT_QUORUM_RULE } from '@frontier/contracts';
 import { formatMoney } from '@frontier/shared';
@@ -33,6 +34,8 @@ import { TapeStrip } from '@/components/screens/command-centre/TapeStrip';
 import { registerRows, sectorRollups } from '@/components/screens/reporting/register';
 import { capTableRows, issuedSharesOf } from '@/components/screens/reporting/util';
 import { totalsLine } from '@/components/screens/portfolio/rows';
+import { buildDirectory } from '@/components/screens/network/directory';
+import { sheetHref } from '@/lib/sheets';
 import {
   useActiveCompany,
   useCompanyMetrics,
@@ -43,6 +46,7 @@ import {
   usePlayerView,
   useQuotes,
   useSession,
+  setPendingNetworkCharacter,
 } from '@/lib/game';
 import {
   BoardCard,
@@ -122,65 +126,58 @@ export function MarketTab(): React.JSX.Element {
       : board.directors.reduce((total, seat) => total + seat.relationshipWithCeo, 0) / board.directors.length;
   const mattersTabled = view.boardProposals.filter((proposal) => proposal.status === 'tabled' || proposal.status === 'draft').length;
 
+  const counterpartCompanyId = deals.find((deal) => deal.status === 'proposed' && deal.expiresQuarter <= session.quarter && (deal.counterpartyId === company.id || deal.proposerId === company.id))?.proposerId
+    ?? deals.find((deal) => deal.status === 'proposed' && deal.counterpartyId === company.id)?.proposerId
+    ?? null;
+  const directory = useMemo(() => buildDirectory(session, view, founder.id), [session, view, founder.id]);
+  const counterpart = counterpartCompanyId === null ? null : directory.find((entry) => entry.character.companyId === counterpartCompanyId && entry.character.role === 'founder_ceo') ?? null;
+  const counterpartCompany = counterpart === null ? null : view.visibleCompanies.find((entry) => entry.id === counterpart.character.companyId) ?? null;
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
-        <StockCard
-          companyName={company.name}
-          marketCapUsd={marketCapUsd}
-          lastPriceUsd={lastQuote?.price ?? null}
-          lastReturn={lastQuote?.return ?? null}
-          ownStakePct={ownStakePct}
-          issuedShares={ownTable === null ? 0 : issuedSharesOf(ownTable)}
-          instrumentId={company.instrumentId}
-          history={quotes.map((quote) => quote.price)}
-        />
+    <div className="flex flex-col gap-5">
+      <header className="px-1 pt-1">
+        <p className="label-caps text-brand">Power</p>
+        <h1 className="mt-1 font-serif text-3xl leading-none text-ink sm:text-4xl">Move people. Move capital.</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">Relationships, live deals, financing, and the governance that decides what you can do next.</p>
+      </header>
 
-        <FundingCard
-          cashUsd={company.financials.cash}
-          cashMovementUsd={company.financials.quarterlyBurn}
-          runwayQuarters={metrics?.runwayQuarters ?? null}
-          debtUsd={company.financials.debt}
-          interestUsd={company.financials.interestExpense}
-          listingWindow={view.world.capitalMarkets.ipoWindow}
-        />
-      </div>
+      <section className="rounded-card border border-brand/30 bg-brand-wash p-4 sm:p-5" aria-labelledby="power-conversation">
+        <p className="label-caps text-brand">Direct line</p>
+        <h2 id="power-conversation" className="mt-1 font-serif text-2xl text-ink">Talk to a counterpart</h2>
+        {counterpart === null ? (
+          <p className="mt-2 text-sm text-ink-dim">Open your network to find a reachable founder, investor, director, or official.</p>
+        ) : (
+          <p className="mt-2 text-sm text-ink-dim">{counterpart.character.name}{counterpartCompany === null ? '' : ` at ${counterpartCompany.name}`} is tied to a proposal awaiting attention.</p>
+        )}
+        <Link href={sheetHref('network')} onClick={() => { if (counterpart) setPendingNetworkCharacter(counterpart.character.id); }} className="btn btn-primary tap-target mt-4 inline-flex min-w-40 justify-center">
+          {counterpart === null ? 'Open network' : 'Open conversation'}
+        </Link>
+      </section>
 
-      <RegisterCard
-        holders={register.holders}
-        ownStakePct={register.ownStakePct}
-        shortInterestPct={register.shortInterestPct}
-        shortBadge={register.shortBadge}
-        liveCampaigns={register.liveCampaigns}
-        dryPowderAimedAtYouUsd={register.dryPowderAimedAtYouUsd}
-        answerable={register.answerable}
-        offers={register.offers}
-      />
+      <section aria-labelledby="power-live">
+        <h2 id="power-live" className="mb-2 px-1 font-serif text-xl text-ink">Live situations</h2>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <DealsCard toAnswer={toAnswer} outstanding={outstanding} live={live} lapsing={lapsing} />
+          <RegisterCard holders={register.holders} ownStakePct={register.ownStakePct} shortInterestPct={register.shortInterestPct} shortBadge={register.shortBadge} liveCampaigns={register.liveCampaigns} dryPowderAimedAtYouUsd={register.dryPowderAimedAtYouUsd} answerable={register.answerable} offers={register.offers} />
+        </div>
+      </section>
 
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
-        <TapeCard strip={<TapeStrip session={session} view={view} />} sectorLine={sectorLine} />
+      <section aria-labelledby="power-capital">
+        <h2 id="power-capital" className="mb-2 px-1 font-serif text-xl text-ink">Capital position</h2>
+        <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
+          <StockCard companyName={company.name} marketCapUsd={marketCapUsd} lastPriceUsd={lastQuote?.price ?? null} lastReturn={lastQuote?.return ?? null} ownStakePct={ownStakePct} issuedShares={ownTable === null ? 0 : issuedSharesOf(ownTable)} instrumentId={company.instrumentId} history={quotes.map((quote) => quote.price)} />
+          <FundingCard cashUsd={company.financials.cash} cashMovementUsd={company.financials.quarterlyBurn} runwayQuarters={metrics?.runwayQuarters ?? null} debtUsd={company.financials.debt} interestUsd={company.financials.interestExpense} listingWindow={view.world.capitalMarkets.ipoWindow} />
+        </div>
+      </section>
 
-        <PortfolioCard
-          netWorthUsd={netWorthUsd}
-          heldValueUsd={portfolio.totals.stakesValueUsd}
-          stakes={portfolio.stakes.length}
-          subsidiaries={portfolio.subsidiaries.length}
-          funds={portfolio.funds.length}
-          line={totalsLine(portfolio)}
-        />
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <DealsCard toAnswer={toAnswer} outstanding={outstanding} live={live} lapsing={lapsing} />
-
-        <BoardCard
-          seatsFilled={board === null ? null : board.directors.length}
-          seatsAuthorised={board?.seatsAuthorised ?? 0}
-          mood={mood}
-          passThreshold={rule.passThresholdFraction}
-          mattersTabled={mattersTabled}
-        />
-      </div>
+      <details className="rounded-card border border-hair bg-panel p-3">
+        <summary className="tap-target cursor-pointer font-semibold text-ink">Governance and holdings</summary>
+        <div className="mt-3 grid gap-4 xl:grid-cols-2">
+          <BoardCard seatsFilled={board === null ? null : board.directors.length} seatsAuthorised={board?.seatsAuthorised ?? 0} mood={mood} passThreshold={rule.passThresholdFraction} mattersTabled={mattersTabled} />
+          <PortfolioCard netWorthUsd={netWorthUsd} heldValueUsd={portfolio.totals.stakesValueUsd} stakes={portfolio.stakes.length} subsidiaries={portfolio.subsidiaries.length} funds={portfolio.funds.length} line={totalsLine(portfolio)} />
+        </div>
+        <div className="mt-4"><TapeCard strip={<TapeStrip session={session} view={view} />} sectorLine={sectorLine} /></div>
+      </details>
     </div>
   );
 }

@@ -19,17 +19,18 @@
  * Leaderboard and Network all read.
  */
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import type { LeaderboardBoard } from '@frontier/contracts';
 import { quarterLabel, regionTollRowFor, sectorRowFor } from '@frontier/contracts';
 import { projectEditionIndex, projectPublicRecord } from '@frontier/simulation';
-import { regionLabel, regionOf, sectorLabel, sectorOf, sectorsPresent } from '@/components/ui';
+import { Panel, Tag, regionLabel, regionOf, sectorLabel, sectorOf, sectorsPresent } from '@/components/ui';
 import { PAPER_NAME } from '@/components/screens/news/Masthead';
 import { filterFeed, topByReach } from '@/components/screens/feed/filters';
 import { buildDirectory } from '@/components/screens/network/directory';
 import { groupByRing, type Ring } from '@/components/screens/network/rings';
 import { tollCaption } from '@/components/screens/sector/model';
-import { companyNameOf } from '@/components/screens/reporting/util';
+import { archetypeLabel, companyNameOf } from '@/components/screens/reporting/util';
 import {
   PLAYER_ID,
   useConnection,
@@ -39,8 +40,10 @@ import {
   usePlayerCompany,
   usePlayerView,
   useSession,
+  setPendingNetworkCharacter,
 } from '@/lib/game';
 import { EconomyCard, PaperCard, PeopleCard, SocialCard, StandingCard, WorldReadingsCard, type StandingRow } from './cards/world-cards';
+import { sheetHref } from '@/lib/sheets';
 
 /** Items pulled from the newest edition: the lead plus enough for three briefs. */
 const EDITION_ITEMS = 6;
@@ -167,46 +170,67 @@ export function WorldTab(): React.JSX.Element {
   const controllerName =
     tollRow === null || tollRow.dominantControllerId === null ? null : companyNameOf(view, tollRow.dominantControllerId);
 
+  const competitors = view.visibleCompanies
+    .filter((candidate) => candidate.id !== company.id && candidate.isActive !== false)
+    .slice(0, 4);
+  const openOpportunities = view.opportunities
+    .filter((opportunity) => opportunity.status === 'open' && opportunity.closeQuarter >= session.quarter)
+    .slice(0, 3);
+
   return (
-    <div className="flex flex-col gap-4">
-      <PaperCard
-        masthead={masthead}
-        lead={frontPage[0] ?? null}
-        briefs={frontPage.slice(1)}
-        narrative={view.world.media.dominantNarrative}
-        controversy={view.world.media.controversyIntensity}
-      />
+    <div className="flex flex-col gap-5">
+      <header className="px-1 pt-1">
+        <p className="label-caps text-brand">World</p>
+        <h1 className="mt-1 font-serif text-3xl leading-none text-ink sm:text-4xl">Read the board.</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">The signals, rivals, and openings that can change your plan this quarter.</p>
+      </header>
 
-      <SocialCard
-        narrative={view.world.media.dominantNarrative}
-        attention={view.world.media.attentionLevel}
-        controversy={view.world.media.controversyIntensity}
-        trending={trending}
-        lastPost={lastPost}
-        followers={followers}
-      />
+      <section aria-labelledby="world-signals">
+        <div className="mb-2 flex items-end justify-between gap-3 px-1">
+          <h2 id="world-signals" className="font-serif text-xl text-ink">What changed around you</h2>
+          <Tag tone={sectorRow !== null && sectorRow.shortage > 0 ? 'warn' : 'neutral'}>{sectorLabel(sector)}</Tag>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+          <PaperCard masthead={masthead} lead={frontPage[0] ?? null} briefs={frontPage.slice(1)} narrative={view.world.media.dominantNarrative} controversy={view.world.media.controversyIntensity} />
+          <EconomyCard sectorLabel={sectorLabel(sector)} regionLabel={regionLabel(region)} multiSector={multiSector} priceIndex={sectorRow?.priceIndex ?? null} shortage={sectorRow?.shortage ?? null} supplyUsd={sectorRow?.supplyUsd ?? null} tollPct={tollRow?.tollPct ?? null} tollCaption={tollRow === null ? null : tollCaption(tollRow.tollPct, tollRow.dominantSharePct, controllerName)} />
+        </div>
+      </section>
 
-      <PeopleCard connection={connection} reach={reach} people={people} />
+      <section className="grid gap-4 xl:grid-cols-2" aria-label="Competition and opportunities">
+        <Panel title="Competitors" subtitle="Active companies visible from your seat, with the operating model they are playing.">
+          {competitors.length === 0 ? <p className="text-sm text-ink-faint">No active competitor is visible yet.</p> : (
+            <ul className="flex flex-col gap-2">{competitors.map((rival) => (
+              <li key={rival.id} className="raised-surface flex min-h-11 items-center justify-between gap-3 px-3 py-2">
+                <span><span className="block font-semibold text-ink">{rival.name}</span><span className="text-xs text-ink-faint">{sectorLabel(sectorOf(rival))}{rival.archetype === undefined ? '' : ` · ${archetypeLabel(rival.archetype)}`}</span></span>
+                <Link href={sheetHref('network')} onClick={() => { if (rival.ceoCharacterId) setPendingNetworkCharacter(rival.ceoCharacterId); }} className="btn btn-ghost tap-target">Engage</Link>
+              </li>
+            ))}</ul>
+          )}
+        </Panel>
+        <Panel title="Open opportunities" subtitle="Awards still open in the current world. Why it matters: each can add backlog, credibility, and delivery commitments.">
+          {openOpportunities.length === 0 ? <p className="text-sm text-ink-faint">There are no open competitions within their closing quarter.</p> : (
+            <ul className="flex flex-col gap-2">{openOpportunities.map((opportunity) => (
+              <li key={opportunity.id} className="raised-surface flex min-h-11 items-center justify-between gap-3 px-3 py-2">
+                <span className="min-w-0"><span className="block truncate font-semibold text-ink">{opportunity.programme}</span><span className="text-xs text-ink-faint">Closes {quarterLabel(session.startYear, opportunity.closeQuarter)}</span></span>
+                <Link href={sheetHref('government')} className="btn btn-ghost tap-target">Review</Link>
+              </li>
+            ))}</ul>
+          )}
+        </Panel>
+      </section>
 
-      <StandingCard
-        founderIndex={standing.founderIndex}
-        companyValue={standing.companyValue}
-        wealth={standing.wealth}
-        network={standing.network}
-      />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <PeopleCard connection={connection} reach={reach} people={people} />
+        <StandingCard founderIndex={standing.founderIndex} companyValue={standing.companyValue} wealth={standing.wealth} network={standing.network} />
+      </div>
 
-      <EconomyCard
-        sectorLabel={sectorLabel(sector)}
-        regionLabel={regionLabel(region)}
-        multiSector={multiSector}
-        priceIndex={sectorRow?.priceIndex ?? null}
-        shortage={sectorRow?.shortage ?? null}
-        supplyUsd={sectorRow?.supplyUsd ?? null}
-        tollPct={tollRow?.tollPct ?? null}
-        tollCaption={tollRow === null ? null : tollCaption(tollRow.tollPct, tollRow.dominantSharePct, controllerName)}
-      />
-
-      <WorldReadingsCard world={session.world} previous={previousWorld} />
+      <details className="rounded-card border border-hair bg-panel p-3">
+        <summary className="tap-target cursor-pointer font-semibold text-ink">Media climate and world readings</summary>
+        <div className="mt-3 grid gap-4 xl:grid-cols-2">
+          <SocialCard narrative={view.world.media.dominantNarrative} attention={view.world.media.attentionLevel} controversy={view.world.media.controversyIntensity} trending={trending} lastPost={lastPost} followers={followers} />
+          <WorldReadingsCard world={session.world} previous={previousWorld} />
+        </div>
+      </details>
     </div>
   );
 }

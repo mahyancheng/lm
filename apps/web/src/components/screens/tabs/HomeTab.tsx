@@ -1,111 +1,67 @@
 'use client';
 
-/**
- * Home — my company at a glance.
- *
- * One scrolling page of cards, read straight down in the order a returning
- * founder checks things: whose company this is and what quarter it is; what is
- * asking for an answer; then the six figures that explain the operating position; what has been offered for the company; the goals; the tape.
- *
- * Every card states its figures on the page — the answer is read without a tap
- * — and opens exactly one sheet over this tab. Nothing here is a menu: the
- * world readings live on World, the quarter clock on Play, and the tab bar is
- * the only "go to" this game has.
- */
-
 import { useMemo } from 'react';
-import { quarterLabel } from '@frontier/contracts';
 import Link from 'next/link';
-import { Icon, Panel } from '@/components/ui';
-import {
-  useCompanyMetrics,
-  useMarketCap,
-  useOutcome,
-  usePlayerCompany,
-  usePlayerView,
-  useQueuedActions,
-  useQuotes,
-  useSession,
-} from '@/lib/game';
-import { sheetHref } from '@/lib/sheets';
-import { OfficeSceneCompact } from '@/components/scenes/office';
-import { TapeStrip } from '@/components/screens/command-centre/TapeStrip';
+import { quarterLabel } from '@frontier/contracts';
+import { formatMoney, formatQuarterCount } from '@frontier/shared';
+import { researchProjectsForCompany } from '@frontier/simulation';
+import { Icon, Tag } from '@/components/ui';
 import { buildFeed } from '@/components/screens/command-centre/feed';
-import { offerInbox } from '@/components/screens/street/model';
-import { FiguresGrid } from '@/components/screens/home/FiguresGrid';
-import { FloorCard } from '@/components/screens/home/FloorCard';
+import { askChief } from '@/components/screens/chief-of-staff/composerBus';
 import { NeedsDeciding } from '@/components/screens/home/NeedsDeciding';
-import { ObjectivesCard } from '@/components/screens/home/ObjectivesCard';
-import { OffersCard } from '@/components/screens/home/OffersCard';
+import { sheetHref, tabPath } from '@/lib/sheets';
+import { useCompanyMetrics, useOutcome, usePlayerCompany, usePlayerView, useQueuedActions, useSession } from '@/lib/game';
 
-/**
- * Listed names beside your own on Home. The full tape is one tap away on the
- * Market tab, which carries the same strip at its own length — Home is a
- * glance, and four rows of somebody else's prices is not a glance.
- */
-const TAPE_LIMIT = 2;
-
+/** The founder's daily desk: position, decisions, and work already in motion. */
 export function HomeTab(): React.JSX.Element {
   const session = useSession();
   const view = usePlayerView();
   const company = usePlayerCompany();
   const metrics = useCompanyMetrics();
-  const marketCap = useMarketCap();
-  const queued = useQueuedActions();
-  const lastOutcome = useOutcome();
-  // With no instrument id `useQuotes()` returns the whole tape, so a private
-  // company is given an empty series rather than everyone else's prices.
-  const tape = useQuotes(company.instrumentId ?? undefined);
-  const ownQuotes = company.instrumentId === null ? [] : tape;
+  const queue = useQueuedActions();
+  const outcome = useOutcome();
+  const blocked = queue.filter((entry) => entry.blocked).length;
+  const feed = useMemo(() => buildFeed(session, view, outcome, blocked), [session, view, outcome, blocked]);
+  const projects = useMemo(() => researchProjectsForCompany(session, company.id).filter((project) => project.companyId === company.id && project.status === 'active'), [session, company.id]);
+  const products = company.products.filter((product) => product.isActive);
 
-  const unconfirmed = queued.filter((entry) => entry.blocked).length;
-  const feed = useMemo(() => buildFeed(session, view, lastOutcome, unconfirmed), [session, view, lastOutcome, unconfirmed]);
+  return <div className="flex flex-col gap-5">
+    <section className="panel-surface relative overflow-hidden px-5 py-6 sm:px-7 sm:py-8">
+      <div className="absolute inset-y-0 right-0 w-1/3 bg-gain-wash/40" aria-hidden="true" />
+      <div className="relative max-w-3xl">
+        <div className="flex flex-wrap items-center gap-2"><Tag tone="brand">{quarterLabel(session.startYear, session.quarter)}</Tag><span className="label-caps-faint">Founder briefing</span></div>
+        <h1 className="mt-3 font-serif text-4xl leading-[1.02] tracking-tight text-ink sm:text-5xl">{company.name}</h1>
+        <p className="mt-3 max-w-xl text-[14px] leading-relaxed text-ink-dim">{feed[0]?.text ?? 'The quarter is open. Choose where the company should move next.'}</p>
+        <div className="mt-5 flex flex-wrap gap-x-8 gap-y-3">
+          <div><div className="label-caps-faint">Cash</div><div className="figure mt-1 text-xl text-ink">{formatMoney(company.financials.cash)}</div></div>
+          <div><div className="label-caps-faint">Runway</div><div className="figure mt-1 text-xl text-ink">{metrics === null ? 'Not yet measured' : formatQuarterCount(metrics.runwayQuarters)}</div></div>
+          <div><div className="label-caps-faint">Plan</div><div className="figure mt-1 text-xl text-ink">{queue.length} move{queue.length === 1 ? '' : 's'}{blocked > 0 ? ` · ${blocked} held` : ''}</div></div>
+        </div>
+      </div>
+    </section>
 
-  // Capital offered to this company, and approaches made for it — the same
-  // committed deals and campaigns The Street reads.
-  const offers = useMemo(
-    () =>
-      offerInbox({
-        deals: view.deals,
-        campaigns: session.activistCampaigns ?? [],
-        companyIds: new Set([company.id]),
-        quarter: session.quarter,
-      }),
-    [view.deals, session.activistCampaigns, session.quarter, company.id],
-  );
+    <NeedsDeciding items={feed.slice(0, 3)} queued={queue.length} unconfirmed={blocked} />
 
-  return (
-    <>
-      <FloorCard
-        company={company}
-        quarter={quarterLabel(session.startYear, session.quarter)}
-        scene={<OfficeSceneCompact href={sheetHref('company')} />}
-      />
+    <section className="rounded-card border border-brand/30 bg-panel px-4 py-4 shadow-card sm:px-5" aria-labelledby="chief-prompt-title">
+      <div className="flex items-start gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-pill bg-gain-wash text-brand"><Icon name="chat" size={20} accent="current" /></span>
+        <div className="min-w-0 flex-1"><h2 id="chief-prompt-title" className="font-serif text-2xl text-ink">What do you want to do?</h2>
+          <p className="mt-1 text-[12.5px] text-ink-dim">Tell your Chief of Staff in your own words. You will review every proposed move before it enters the plan.</p>
+          <button type="button" onClick={() => askChief('What should we do this quarter?')} className="btn btn-primary tap-target mt-3 px-4">Start a conversation</button>
+        </div>
+      </div>
+    </section>
 
-      <NeedsDeciding items={feed} queued={queued.length} unconfirmed={unconfirmed} />
 
-      <FiguresGrid company={company} metrics={metrics} marketCap={marketCap} quotes={ownQuotes} />
-
-      <OffersCard offers={offers} startYear={session.startYear} />
-
-      <ObjectivesCard objectives={view.objectives} />
-
-      <Panel
-        title="Tape"
-        iconName="chart"
-        subtitle="Your company and the largest listed names."
-        actions={
-          <Link href={sheetHref('exchange')} className="btn btn-ghost tap-target gap-1.5 px-2">
-            <Icon name="chart" size={15} accent="current" />
-            Open markets
-          </Link>
-        }
-        flush
-      >
-        {/* No closing line: the anchor it states is already the hint on Home's
-            own Market cap figure, three cards above. */}
-        <TapeStrip session={session} view={view} limit={TAPE_LIMIT} footnote={false} />
-      </Panel>
-    </>
-  );
+    <div className="grid gap-4 lg:grid-cols-2">
+      <section className="panel-surface p-4">
+        <div className="flex items-center justify-between gap-3"><h2 className="font-serif text-2xl text-ink">In motion</h2><Link href={sheetHref('products')} className="btn btn-ghost tap-target">Open Build</Link></div>
+        <div className="mt-3 grid grid-cols-2 gap-3"><div className="raised-surface p-3"><div className="label-caps-faint">Products serving</div><div className="figure mt-1 text-2xl text-ink">{products.length}</div></div><div className="raised-surface p-3"><div className="label-caps-faint">Research active</div><div className="figure mt-1 text-2xl text-ink">{projects.length}</div></div></div>
+      </section>
+      <section className="panel-surface p-4">
+        <div className="flex items-center justify-between gap-3"><div><h2 className="font-serif text-2xl text-ink">Quarter plan</h2><p className="text-[11.5px] text-ink-faint">Moves that run when you advance.</p></div><Link href={tabPath('play')} className="btn btn-primary tap-target">Review plan</Link></div>
+        {queue.length === 0 ? <p className="mt-4 text-[13px] text-ink-dim">No moves queued yet. Explore Build, Power, or ask your Chief of Staff.</p> : <ul className="mt-3 flex flex-col gap-2">{queue.slice(0, 3).map((entry) => <li key={entry.action.actionId} className="flex min-h-11 items-center justify-between gap-3 rounded-chip border border-hair px-3"><span className="truncate text-[12.5px] capitalize text-ink">{entry.action.intent.type.replaceAll('_', ' ')}</span><Tag tone={entry.validation.status === 'rejected' ? 'loss' : entry.blocked ? 'warn' : 'gain'}>{entry.validation.status === 'rejected' ? 'Will not run' : entry.blocked ? 'Review' : 'Ready'}</Tag></li>)}</ul>}
+      </section>
+    </div>
+  </div>;
 }

@@ -1,7 +1,7 @@
 /**
  * Navigation configuration — data, not markup.
  *
- * Five tabs, and nothing else. Each is one scrolling page of cards; every
+ * Four primary rooms, and one persistent planning action. Each room is one scrolling page; every
  * drill-down is a sheet over it, addressed by `?sheet=` and registered in
  * `lib/sheets.ts`. There is no sub-tab strip, no hamburger and no group: the
  * bottom bar is the whole navigation, so a thumb is never more than one tap
@@ -21,7 +21,7 @@ export interface Tab {
   /** Route path, e.g. `/home`. */
   readonly href: string;
   readonly label: string;
-  /** Two or three words for the bottom bar, where `label` would be too long. */
+  /** One or two words for compact navigation, where `label` would be too long. */
   readonly short: string;
   /** The flat mark drawn everywhere this tab is offered. */
   readonly icon: IconName;
@@ -33,24 +33,24 @@ export const TABS: readonly Tab[] = [
   {
     id: 'home',
     href: tabPath('home'),
-    label: 'Home',
-    short: 'Home',
+    label: 'Today',
+    short: 'Today',
     icon: 'gauge',
     blurb: 'Your company at a glance: cash, revenue, runway, and what needs deciding.',
   },
   {
     id: 'company',
     href: tabPath('company'),
-    label: 'Company',
-    short: 'Company',
+    label: 'Build',
+    short: 'Build',
     icon: 'building',
     blurb: 'What you operate: the floor, the lines, the people, research, government, the books.',
   },
   {
     id: 'market',
     href: tabPath('market'),
-    label: 'Market',
-    short: 'Market',
+    label: 'Power',
+    short: 'Power',
     icon: 'chart',
     blurb: 'Your stock, your funding, your register, the tape, deals and the board.',
   },
@@ -62,22 +62,24 @@ export const TABS: readonly Tab[] = [
     icon: 'globe',
     blurb: 'The paper, the social feed, the people you know, the standings and the economy.',
   },
-  {
-    id: 'play',
-    href: tabPath('play'),
-    label: 'Play',
-    short: 'Play',
-    icon: 'playMark',
-    blurb: 'The desk: queued instructions, the seal that ends the quarter, and the Chief of Staff.',
-  },
 ] as const;
+
+/** The founder's persistent action. It is intentionally outside the subject navigation. */
+export const PLAN_ACTION: Tab = {
+  id: 'play',
+  href: tabPath('play'),
+  label: 'Plan quarter',
+  short: 'Plan',
+  icon: 'playMark',
+  blurb: 'Review your instructions and move the quarter forward.',
+};
 
 /** The screen a session lands on. */
 export const HOME_ROUTE = tabPath('home');
 
-/** The tab a pathname is on, or null off the five. */
+/** The room or Plan page a pathname is on, or null outside the game. */
 export function tabFor(pathname: string): Tab | null {
-  return TABS.find((tab) => pathname === tab.href || pathname.startsWith(`${tab.href}/`)) ?? null;
+  return [...TABS, PLAN_ACTION].find((tab) => pathname === tab.href || pathname.startsWith(`${tab.href}/`)) ?? null;
 }
 
 /**

@@ -195,7 +195,7 @@ function Dock(): React.JSX.Element | null {
         open={open}
         onClose={() => setOpen(false)}
         title="Chief of Staff"
-        subtitle={`Speaking for ${company.name} · asking about ${screenLabel} · nothing here executes`}
+        subtitle={`Speaking for ${company.name} · drafting for ${screenLabel} · review every move in Plan`}
         width={460}
       >
         <div className="flex min-h-0 flex-col gap-3">
@@ -240,7 +240,7 @@ function Dock(): React.JSX.Element | null {
                   }
                 >
                   <p className="text-[12.5px] leading-relaxed text-ink-dim">
-                    Ask me anything about {screenLabel}. I read your company in full, including what the engine would and would not let you do
+                    Ask me anything about {screenLabel}. I read your company in full, including which moves are available
                     right now — so if something is not possible I will say so rather than propose it.
                   </p>
                 </SpeechCard>

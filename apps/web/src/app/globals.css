@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Frontier Capital — design tokens
-   Bright, flat, cheerful 2D business-sim. Off-white world, white cards, soft
-   diffuse shadows, friendly saturated accents. Colour carries meaning and
-   nothing else; the cartoon comes from shape, radius and motion.
+   Founder's Desk — design tokens
+   Warm paper, deep forest ink and restrained emerald and amber accents.
+   Serif display type gives decisions weight; clear sans text keeps the working
+   layer quick to scan.
 
    Every token NAME here is load-bearing: eighteen screens and thirty
    components style themselves exclusively through these. Change values, never
@@ -19,14 +19,14 @@
        raised — a row, a chip, a hover, a track (soft blue-grey tint)
      `raised` is *tinted*, not darker-or-lighter dogma: it is simply the
      surface that must separate itself from a white card.                    */
-  --color-base: #f2f5f9;
-  --color-panel: #ffffff;
-  --color-raised: #eef2f7;
-  --color-overlay: #ffffff;
+  --color-base: #f3eddf;
+  --color-panel: #fffdf7;
+  --color-raised: #e8e0d0;
+  --color-overlay: #fffdf7;
 
   /* --- hairlines ---------------------------------------------------------- */
-  --color-hair: #e4e9f0;
-  --color-hair-strong: #d2dbe6;
+  --color-hair: #d8ceba;
+  --color-hair-strong: #bfb39c;
 
   /* --- text hierarchy -----------------------------------------------------
      Dark slate ink ramp. The faint tier carries the app's whole explanatory
@@ -34,36 +34,36 @@
      than the large-text one: 4.5:1 against every surface it sits on
      (4.79 on base, 5.24 on panel, 4.66 on raised). `interaction.test.ts`
      recomputes these from this file on every run.                           */
-  --color-ink: #1e293b;
-  --color-ink-dim: #4b5a70;
-  --color-ink-faint: #5f6d84;
+  --color-ink: #17251f;
+  --color-ink-dim: #46564d;
+  --color-ink-faint: #58655c;
 
   /* --- flat accents -------------------------------------------------------
      One value per tone, because `text-gain` and `bg-gain` are the same token
      in fifty places each. Each is deep enough to read as 11px text on white
      (3.4:1 or better) and saturated enough to read as a flat fill.          */
-  --color-gain: #059669;
+  --color-gain: #16815b;
   --color-loss: #ef4444;
-  --color-warn: #c2740a;
-  --color-info: #0284c7;
-  --color-brand: #3b82f6;
+  --color-warn: #a56816;
+  --color-info: #247665;
+  --color-brand: #1f7a55;
 
   /* --- solid variants -----------------------------------------------------
      For a filled control or badge that carries WHITE text: every one of these
-     clears 4.5:1 against #ffffff. Use these, never the plain tone, whenever
+     clears 4.5:1 against #fffdf7. Use these, never the plain tone, whenever
      white sits on top of the colour.                                        */
-  --color-brand-strong: #2563eb;
-  --color-gain-strong: #047857;
+  --color-brand-strong: #12613f;
+  --color-gain-strong: #116342;
   --color-loss-strong: #dc2626;
-  --color-warn-strong: #b45309;
-  --color-info-strong: #0369a1;
+  --color-warn-strong: #8a5010;
+  --color-info-strong: #1d6555;
 
   /* --- accent washes (light tints for chips, banners, highlights) --------- */
-  --color-gain-wash: #e8f7f1;
+  --color-gain-wash: #e2f0e6;
   --color-loss-wash: #fdecec;
-  --color-warn-wash: #fdf2e0;
-  --color-info-wash: #e6f4fc;
-  --color-brand-wash: #eaf1fe;
+  --color-warn-wash: #f5e8c9;
+  --color-info-wash: #e2eee8;
+  --color-brand-wash: #dfede5;
 
   /* --- flat pastels -------------------------------------------------------
      The supporting set for categorical tags, multi-series charts and
@@ -121,18 +121,18 @@
      white cards. Headlines are set in `ink`, bodies in `ink-dim`, so a neutral
      headline never shares the body's colour. Rules are two weights: the
      hairline between briefs, and the heavy rule under the masthead.          */
-  --color-paper: #fbfbf8;
-  --color-rule: #cfd6df;
-  --color-rule-heavy: #1e293b;
-  --color-kicker: #4b5a70;
-  --color-headline: #1e293b;
-  --color-body: #4b5a70;
+  --color-paper: #f8f1e2;
+  --color-rule: #d2c6af;
+  --color-rule-heavy: #17251f;
+  --color-kicker: #46564d;
+  --color-headline: #17251f;
+  --color-body: #46564d;
 
   /* --- geometry ----------------------------------------------------------- */
-  --radius-panel: 14px;
-  --radius-card: 12px;
-  --radius-chip: 8px;
-  --radius-field: 10px;
+  --radius-panel: 10px;
+  --radius-card: 8px;
+  --radius-chip: 6px;
+  --radius-field: 7px;
   --radius-pill: 999px;
 
   /* --- soft diffuse shadows ----------------------------------------------
@@ -144,9 +144,9 @@
   --shadow-sheet: 0 12px 48px rgba(15, 23, 42, 0.18);
 
   /* --- shell metrics ------------------------------------------------------ */
-  --spacing-rail: 232px;
-  --spacing-statusbar: 56px;
-  --spacing-bottombar: 60px;
+  --spacing-rail: 248px;
+  --spacing-statusbar: 64px;
+  --spacing-bottombar: 68px;
 }
 
 /* ==========================================================================
@@ -156,11 +156,11 @@
 @layer base {
   :root {
     color-scheme: light;
-    --rail-width: 232px;
-    --statusbar-height: 56px;
+    --rail-width: 248px;
+    --statusbar-height: 64px;
     /* The mobile quick-nav's fixed height. Anything else pinned to the bottom
        of a phone viewport clears it by this much. */
-    --bottombar-height: 60px;
+    --bottombar-height: 68px;
     /* The smallest a tap target may be. Scenes and controls both read it. */
     --tap: 44px;
     /* The one accent detail inside every flat icon. A filled surface overrides
@@ -170,14 +170,14 @@
   }
 
   html {
-    background-color: #f2f5f9;
+    background-color: #f3eddf;
     -webkit-text-size-adjust: 100%;
   }
 
   /* The body background is explicit: nothing borrows a host theme. */
   body {
-    background-color: #f2f5f9;
-    color: #1e293b;
+    background-color: #f3eddf;
+    color: #17251f;
     font-family: var(--font-sans);
     font-size: 13px;
     line-height: 1.5;
@@ -220,14 +220,14 @@
 
   /* --- focus rings: visible, never decorative --------------------------- */
   :focus-visible {
-    outline: 2px solid #2563eb;
+    outline: 2px solid #12613f;
     outline-offset: 2px;
     border-radius: 6px;
   }
 
   ::selection {
     background: #dbeafe;
-    color: #1e293b;
+    color: #17251f;
   }
 
   /* --- scrollbars: light, quiet, still grabbable ------------------------ */
@@ -297,7 +297,7 @@
     color: var(--color-ink-faint);
   }
 
-  /* A white card with a hairline and a soft diffuse shadow. */
+  /* A paper card with a warm hairline and restrained desk shadow. */
   .panel-surface {
     background-color: var(--color-panel);
     border: 1px solid var(--color-hair);
@@ -316,7 +316,7 @@
   }
 
   /* Buttons -------------------------------------------------------------
-     Rounded, roomy and bouncy. Heights clear a comfortable tap; icon-only
+     Roomy, tactile controls. Heights clear a comfortable tap; icon-only
      controls get a square minimum so they never fall under 28px either way. */
   .btn {
     display: inline-flex;
@@ -356,7 +356,7 @@
   .btn-primary {
     background-color: var(--color-brand-strong);
     border-color: var(--color-brand-strong);
-    color: #ffffff;
+    color: #fffdf7;
     font-weight: 700;
     box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(37, 99, 235, 0.28);
   }
@@ -369,7 +369,7 @@
   .btn-danger {
     background-color: var(--color-loss-strong);
     border-color: var(--color-loss-strong);
-    color: #ffffff;
+    color: #fffdf7;
     font-weight: 700;
     box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 8px rgba(220, 38, 38, 0.24);
   }
@@ -483,7 +483,7 @@
     height: 26px;
     margin-top: -8px;
     border-radius: 50%;
-    background-color: #ffffff;
+    background-color: #fffdf7;
     border: 2px solid var(--color-brand-strong);
     box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
   }
@@ -506,7 +506,7 @@
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    background-color: #ffffff;
+    background-color: #fffdf7;
     border: 2px solid var(--color-brand-strong);
     box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06), 0 2px 6px rgba(37, 99, 235, 0.28);
   }
@@ -1030,4 +1030,29 @@
   .press-pop:active {
     scale: none !important;
   }
+}
+
+/* Founder's Desk — tactile strategy surface */
+@layer base {
+  body {
+    background-image: radial-gradient(circle at 15% 5%, rgba(255,255,255,.72), transparent 32%), linear-gradient(115deg, rgba(108,83,40,.035) 1px, transparent 1px);
+    background-size: auto, 24px 24px;
+    font-size: 14px;
+  }
+  h1, h2, h3 { font-family: var(--font-serif); letter-spacing: -.025em; }
+  :focus-visible { outline-color: var(--color-warn); outline-width: 3px; }
+}
+@layer components {
+  .display-title { font-family: var(--font-serif); font-weight: 700; letter-spacing: -.035em; text-wrap: balance; }
+  .founders-desk .panel-surface { box-shadow: 0 1px 0 rgba(67,49,22,.08), 0 10px 28px rgba(67,49,22,.07); }
+  .founders-desk .panel-surface > header { background: linear-gradient(180deg, rgba(255,255,255,.48), transparent); }
+  .founders-desk .label-caps, .founders-desk .label-caps-faint { letter-spacing: .12em; }
+  .founders-desk .btn { min-height: 44px; border-color: var(--color-hair-strong); box-shadow: 0 1px 0 rgba(60,43,18,.08); }
+  .founders-desk .btn-primary { background: var(--color-brand-strong); box-shadow: 0 3px 0 #0a422b, 0 8px 16px rgba(18,97,63,.16); }
+  .founders-desk .field { min-height: 44px; }
+  .founders-desk .data-table thead th { background: #f6efe1; }
+  .founders-desk .sheet-grip { background: var(--color-hair-strong); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }

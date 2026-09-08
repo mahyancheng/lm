@@ -158,6 +158,7 @@ export function SheetHost(): React.JSX.Element | null {
       open
       onClose={close}
       height="full"
+      width={640}
       title={meta.title}
       subtitle={meta.blurb}
       leading={

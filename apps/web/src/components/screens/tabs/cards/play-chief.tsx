@@ -71,7 +71,7 @@ export function ChiefCard({ prompts }: ChiefCardProps): React.JSX.Element {
       title="Ask the Chief of Staff"
       iconName="briefcase"
       iconTone="brand"
-      subtitle="Interpreted by a model, validated by the engine, approved by you."
+      subtitle="Describe the move in your own words, then approve it before it joins the plan."
       actions={
         <Link href={sheetHref('chief-of-staff')} className="btn btn-ghost tap-target gap-1 px-2">
           Open the full thread

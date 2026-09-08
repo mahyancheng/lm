@@ -1,10 +1,10 @@
 # Screen Guide
 
-The contract between the application shell, the five tabs and the sheet bodies.
+The contract between the application shell, its four rooms, the Plan action and the sheet bodies.
 
 Everything in this document is built and green: the engine runs in the browser,
-the store wraps it, the primitives are written, and every tab and sheet renders.
-Your job is to write one surface — a tab's cards, or one sheet body.
+the store wraps it, the primitives are written, and every room, Plan and sheet renders.
+Your job is to write one surface — a room, Plan, or one sheet body.
 
 **Read this whole file before writing a surface.** Half of it is rules that stop
 a surface from leaking private state or inventing a number, and those are
@@ -14,32 +14,32 @@ invariants, not style preferences.
 
 ## 1. What you own
 
-The game is **five tabs**. Each is one scrolling page of cards; every
-drill-down is a **sheet** over the tab that owns it, addressed by `?sheet=<id>`
-and opened by `SheetHost` in the shell. There is no sub-tab strip, no hamburger
-and no second row of navigation: the bottom bar is the whole of it.
+The game has **four primary rooms** and one persistent **Plan** action. Each
+room is a scrolling decision surface; every drill-down is a **sheet** over the
+room that owns it. Plan is the review-and-advance step rather than a fifth
+subject.
 
-| Tab | Route file | Body |
+| Place | Route file | Body |
 |---|---|---|
-| Home | `src/app/(game)/home/page.tsx` | `components/screens/tabs/HomeTab.tsx` |
-| Company | `src/app/(game)/company/page.tsx` | `components/screens/tabs/CompanyTab.tsx` |
-| Market | `src/app/(game)/market/page.tsx` | `components/screens/tabs/MarketTab.tsx` |
+| Today | `src/app/(game)/home/page.tsx` | `components/screens/tabs/HomeTab.tsx` |
+| Build | `src/app/(game)/company/page.tsx` | `components/screens/tabs/CompanyTab.tsx` |
+| Power | `src/app/(game)/market/page.tsx` | `components/screens/tabs/MarketTab.tsx` |
 | World | `src/app/(game)/world/page.tsx` | `components/screens/tabs/WorldTab.tsx` |
-| Play | `src/app/(game)/play/page.tsx` | `components/screens/tabs/PlayTab.tsx` |
+| Plan action | `src/app/(game)/play/page.tsx` | `components/screens/tabs/PlayTab.tsx` |
 
 Every subject that used to be a route of its own is now a **sheet body** under
 `src/components/screens/<subject>/<Subject>Screen.tsx`, named in
 `src/lib/sheets.ts` and switched on by `components/shell/SheetHost.tsx`:
 
-| Tab | Sheets |
+| Place | Sheets |
 |---|---|
-| Company | Company, Group, Products, People, Research, Government, Financials |
-| Market | Markets, Capital, Portfolio, The Street, Deal Room, Boardroom |
+| Build | Company, Group, Products, People, Research, Government, Financials |
+| Power | Markets, Capital, Portfolio, The Street, Deal Room, Boardroom |
 | World | News, Social, Network, Leaderboard, Sector |
-| Play | Quarter Resolution, Chief of Staff |
+| Plan | Quarter Resolution, Chief of Staff |
 
-Home owns no sheet: it is the company at a glance, and every card on it opens a
-sheet on one of the other four tabs.
+Today owns no sheet. It briefs the player and routes each decision to the room
+or sheet where it can be resolved.
 
 All twenty-two old addresses still resolve. `app/(game)/[...legacy]/page.tsx`
 looks the first segment up in `LEGACY_ROUTES` and replaces onto the new one;
@@ -61,18 +61,25 @@ exists rather than editing the primitive — three agents share those files.
 
 ## 2. Page skeleton
 
-**A tab is a page of cards.** One scrolling column: each card states its
-figures on the page — so the answer is read without a tap — and opens exactly
-one sheet. A card that states nothing and only links is a menu entry, and menus
-are what this shape exists to remove.
+**A room is a page of decisions.** Today leads with priorities, Build with work
+and constraints, Power with live situations, and World with signals and
+consequences. State the useful figures before a tap, explain why a matter needs
+attention, and give it one clear next action. Plan previews every queued move
+and its known effect before the quarter can advance.
+
+Use progressive detail: the default surface says what matters and what to do;
+an expansion shows drivers and trade-offs; a sheet carries the full table or
+graph; an audit drawer carries ledger rows and diagnostics. Do not lead copy
+with validators, invariants, transport kinds, phase counts, hashes or row counts.
 
 **A sheet body renders no `PageHeader`.** The sheet's own header carries the
 title and the Back control; a body that drew a second one drew it twice. What
 used to be the header's `actions` becomes the first flex-wrap row of the body.
 
-Both return a **fragment**. The shell supplies the status bar, the bottom bar,
-`SheetHost`, the Chief of Staff dock and the resolving overlay; neither a tab
-nor a sheet body renders chrome or a page background.
+The shell supplies the status bar, the bottom bar, `SheetHost`, the Chief of
+Staff dock and the resolving overlay; neither a room nor a sheet body renders
+chrome or a page background. A room may use a single layout wrapper. A sheet
+body normally returns a fragment because the sheet host already owns its frame.
 
 ```tsx
 'use client';
@@ -258,7 +265,7 @@ form that will actually be tabled. Use it rather than writing your own copy.
 ### 5.1 `ResolutionReport` (Quarter Resolution)
 
 ```ts
-const outcome = useOutcome();            // null before the first resolve in this tab
+const outcome = useOutcome();            // null before the first resolved quarter
 outcome.committed                        // false => nothing changed; show the report and the invariants
 outcome.report.headline
 outcome.report.phases                    // [{ phase, lines, durationMs }], in pipeline order
@@ -601,17 +608,17 @@ palette.
 
 ## 9. Design language
 
-Premium financial terminal × venture dashboard. Dark, dense, information first.
+Warm paper tabletop strategy game × legible venture dashboard. Calm, tactile
+and information rich, with the next decision easy to find.
 
 - **Backgrounds** layer: `bg-base` (page) → `bg-panel` (panel) → `bg-raised`
   (rows, chips, hover). Hairlines are `border-hair`, emphasis `border-hair-strong`.
 - **Text**: `text-ink` (figures and headings) → `text-ink-dim` (labels, prose)
   → `text-ink-faint` (captions, hints).
-- **Accents carry meaning and nothing else**: `gain` #3fdc97, `loss` #ff5d5d,
-  `warn` #ffb454, `info` #4cc9f0, `brand` #7aa2ff. No decorative gradient behind
-  data. No colour that does not mean something.
-- **Type scale**: 10px small caps labels (`label-caps`), 11px captions, 12px
-  body, 13px emphasis, 19px page titles and headline figures.
+- **Accents carry meaning and nothing else**. Use semantic tokens from
+  `globals.css`; do not copy their values into components.
+- **Type**: serif display headings establish place and hierarchy; sans-serif
+  text carries controls and explanation; `.figure` keeps comparable numbers tabular.
 - **Buttons**: `.btn`, `.btn-primary`, `.btn-danger`, `.btn-ghost`, `.btn-sm`.
   **Inputs**: `.field` (works on `input`, `select`, `textarea`).
 - **No chatbot look.** Even the Chief of Staff screen is a control surface: the
@@ -624,8 +631,8 @@ Responsive: **the phone is primary** — 390×844, portrait, one thumb. Desktop
 gets the same page with the rail beside it, and every surface needs a
 single-column layout under `lg`.
 
-- **Chrome is 116 points** at 390: the status bar (56) and the bottom bar (60).
-  There is no sub-tab strip and no hamburger; a tab has 728 points of body.
+- **Chrome is 132 points** at 390: the status bar (64) and the bottom bar (68).
+  Four rooms and the highlighted Plan action share the phone bar.
 - **A sheet is 95dvh with a Back control** in its header (`Drawer height="full"`,
   `leading`). It is opened by `?sheet=` and closed by Back — the browser's or
   the header's.

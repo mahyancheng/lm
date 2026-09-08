@@ -1,10 +1,10 @@
 # Art Direction
 
-Frontier Capital looks like a **bright, flat, approachable 2D business sim with
-real strategic weight** — the friendly mobile-management-game genre, drawn in
-vector, with the legible systems and consequence of a corporate strategy game.
-Off-white world, white rounded cards, soft diffuse shadows, saturated flat
-accents, round-headed cartoon people.
+Frontier Capital looks like a **warm paper tabletop strategy game with real
+strategic weight**: tactile cream surfaces, a deep forest rail, restrained
+emerald and amber accents, expressive serif headings, and legible business
+figures. Illustrations keep the world approachable without turning decisions
+into decoration.
 
 This file is the prose half of `src/app/globals.css`. That file holds the
 values; this one says what they mean and how to use them. **Read both before
@@ -19,14 +19,12 @@ adding a surface.** Nothing in the interface is styled with a literal colour.
 
 ## 1. The look, in one paragraph
 
-A page is an **off-white ground** carrying **white rounded cards**. Cards have a
-hairline border and a shadow so soft you would not call it a shadow. Type is
-dark slate, headings are heavy and slightly tight, and every figure keeps
-tabular monospace numerals because money has to line up. Colour appears in
-small, confident, flat quantities: a green number, an amber chip, a blue
-button, a cartoon skyline. Nothing is glassy, nothing is a gradient over data,
-nothing is dark. Motion is a bob, a pop and a settle — never a loop, never a
-canvas, never physics.
+A page is a warm cream ground carrying paper panels with quiet rules and soft
+shadows. Large serif headings establish the room and moment; sans-serif copy
+explains the decision; every figure keeps tabular numerals. The desktop rail is
+the one deep forest anchor. Emerald marks ownership and interaction, amber
+marks attention, and status colours keep their semantic meaning. Texture and
+gradients may establish the desk, but never obscure or encode data.
 
 ---
 
@@ -40,10 +38,10 @@ each `--color-x` into `bg-x` / `text-x` / `border-x`, and CSS can read
 
 | Token | Value | What it is |
 |---|---|---|
-| `base` | `#f2f5f9` | The page behind everything |
-| `panel` | `#ffffff` | A card |
-| `raised` | `#eef2f7` | A row, a chip, a hover, a track, an inset |
-| `overlay` | `#ffffff` | Reserved for a floating surface |
+| `base` | `#f3eddf` | The page behind everything |
+| `panel` | `#fffdf7` | A card |
+| `raised` | `#e8e0d0` | A row, a chip, a hover, a track, an inset |
+| `overlay` | `#fffdf7` | Reserved for a floating surface |
 
 The stack is not "darker is deeper". `raised` is **tinted**: it is simply the
 surface whose job is to separate itself from a white card. A segmented control's
@@ -52,7 +50,7 @@ selected thing rises, it does not sink.
 
 ### 2.2 Hairlines
 
-`hair` `#e4e9f0` for every divider; `hair-strong` `#d2dbe6` for a control border
+`hair` `#d8ceba` for every divider; `hair-strong` `#bfb39c` for a control border
 or a dashed empty state. Do not use an alpha variant (`border-hair/50`) on a
 light ground — it disappears.
 
@@ -60,26 +58,25 @@ light ground — it disappears.
 
 | Token | Value | Use |
 |---|---|---|
-| `ink` | `#1e293b` | Figures, headings, primary text |
-| `ink-dim` | `#4b5a70` | Labels, prose, secondary text |
-| `ink-faint` | `#5f6d84` | Captions, hints, provenance — the explanatory layer |
+| `ink` | `#17251f` | Figures, headings, primary text |
+| `ink-dim` | `#46564d` | Labels, prose, secondary text |
+| `ink-faint` | `#66736b` | Captions, hints, provenance — the explanatory layer |
 
 `ink-faint` carries hundreds of 10–11px spans, so it is held to the **4.5:1
-body-text floor on every surface**, not the 3:1 large-text one: 4.79 on `base`,
-5.24 on `panel`, 4.66 on `raised`. `src/components/ui/interaction.test.ts`
-re-derives those numbers from `globals.css` on every test run and fails the
-build if a palette change drops one below 4.5. If you move an ink value, run
+body-text floor on every surface**, not the 3:1 large-text one.
+`src/components/ui/interaction.test.ts` re-derives contrast from `globals.css`
+on every test run and fails the build if a palette change drops below 4.5. If you move an ink value, run
 `pnpm -C apps/web exec vitest run` before you move on.
 
 ### 2.4 Accents — colour means something
 
 | Token | Value | Meaning |
 |---|---|---|
-| `gain` | `#059669` | Up, good, achieved |
+| `gain` | `#16815b` | Up, good, achieved |
 | `loss` | `#ef4444` | Down, bad, rejected |
-| `warn` | `#c2740a` | Needs attention, clamped, unmet |
-| `info` | `#0284c7` | Neutral-but-notable, informational |
-| `brand` | `#3b82f6` | Interactive, yours, selected |
+| `warn` | `#a56816` | Needs attention, clamped, unmet |
+| `info` | `#247665` | Neutral-but-notable, informational |
+| `brand` | `#1f7a55` | Interactive, yours, selected |
 
 There is exactly **one value per tone** because `text-gain` and `bg-gain` are the
 same token in fifty places each. Each is therefore deep enough to read as 11px
@@ -90,9 +87,9 @@ for that reason — the bright amber still exists, as `pop-4`, for illustration.
 **Washes** — `gain-wash`, `loss-wash`, `warn-wash`, `info-wash`, `brand-wash` —
 are the pale tints behind chips, banners and highlighted rows.
 
-**Solids** — `brand-strong` `#2563eb`, `gain-strong` `#047857`, `loss-strong`
-`#dc2626`, `warn-strong` `#b45309`, `info-strong` `#0369a1`. Every one clears
-4.5:1 against white. **Whenever white text sits on a colour, use a `-strong`
+**Solids** — `brand-strong` `#12613f`, `gain-strong` `#116342`, `loss-strong`
+`#dc2626`, `warn-strong` `#8a5010`, `info-strong` `#1d6555`. Every one clears
+4.5:1 against the light panel. **Whenever light text sits on a colour, use a `-strong`
 token, never the plain tone.** `TONE_SOLID` in `components/ui/tokens.ts` is the
 class-map for exactly this.
 
@@ -123,10 +120,10 @@ world:
 
 | Token | Value | Where |
 |---|---|---|
-| `--radius-panel` | 14px | Cards, modals, drawers, scene frames |
-| `--radius-card` | 12px | Callouts, insets, empty states |
-| `--radius-chip` | 8px | Small buttons, icon squares, nav items |
-| `--radius-field` | 10px | Buttons and inputs |
+| `--radius-panel` | 10px | Cards, modals, drawers, scene frames |
+| `--radius-card` | 8px | Callouts, insets, empty states |
+| `--radius-chip` | 6px | Small buttons, icon squares, nav items |
+| `--radius-field` | 7px | Buttons and inputs |
 | `--radius-pill` | 999px | Tags, badges, meters, bars, dots |
 
 As Tailwind classes: `rounded-panel`, `rounded-card`, `rounded-chip`,
@@ -224,7 +221,7 @@ to that block.
   volume, no more.
 - **Flat icons beat letter monograms — always.** There are no two-letter
   monograms left in the interface, and there is a drawn mark for every screen,
-  every tab, every sheet and every common control. Do not invent one inline: use the
+  every room, every sheet and every common control. Do not invent one inline: use the
   set, documented in **§10**. A bespoke illustration is still welcome; a
   bespoke *icon* is a fork.
 - Give every illustration `role="img"` and a real `aria-label` that says what is
@@ -258,12 +255,11 @@ const skin = SKINS[pickIndex(character.id, 'skin', SKINS.length)] ?? 'skin-1';
 
 ## 7. Touch, keyboard and containment
 
-- **Navigation is five bottom tabs and nothing else.** Home, Company, Market,
-  World, Play; no sub-tab strip, no hamburger, no floating queue tray. Every
-  drill-down is a sheet over the tab that owns it, so Back closes it. Chrome at
-  390 is 116 points — status bar 56, bottom bar 60 — and the phone's
-  quarter/cash block in the status bar is a link to Play, which makes advancing
-  time visible from every tab at no extra pixels.
+- **Navigation is four rooms plus Plan.** Today, Build, Power and World are
+  peers. Plan is a persistent highlighted action at the end of the phone bar
+  and foot of the desktop rail. There is no sub-tab strip or hamburger. Every
+  drill-down is a sheet over its owning room, so Back closes it. Chrome at 390
+  is 132 points: status bar 64, bottom bar 68.
 - **Every interactive zone is at least 44×44 CSS px.** `.tap-target` sets that
   floor and composes with `.btn` (whose `height` loses to a larger
   `min-height`). Dialog closers, a card's whole row, the settings button and a
@@ -286,7 +282,7 @@ const skin = SKINS[pickIndex(character.id, 'skin', SKINS.length)] ?? 'skin-1';
 
 Use these before writing a surface of your own. Props are documented in
 `SCREEN_GUIDE.md`, which remains the contract; prop APIs are additive only,
-because every tab and every sheet body depends on them.
+because every room and every sheet body depends on them.
 
 | Class / component | Notes |
 |---|---|
@@ -320,12 +316,12 @@ because every tab and every sheet body depends on them.
       no emoji, no one-off inline glyph.
 - [ ] On a filled or tinted surface the mark carries an `icon-knockout-*`
       class (or comes from `IconChip`, which does it for you).
-- [ ] The phone layout came first: the five bottom tabs are not covered,
+- [ ] The phone layout came first: the four rooms and Plan are not covered,
       tables that do not fit are `cardMode="auto"`, and a side drawer is a
       bottom sheet under `sm`.
 - [ ] No hex literal anywhere in the component.
-- [ ] Nothing dark: no `bg-black/*`, no `shadow-black/*`, no `text-white`
-      except on a `-strong` fill.
+- [ ] Dark fills are reserved for the desktop rail and semantic solid controls;
+      no black shadows and no white text on an unverified fill.
 - [ ] Radii come from the scale; value-bearing shapes are pills.
 - [ ] Figures keep `.figure` / `.tabnum`.
 - [ ] Any per-entity variation comes from `fnv1a64`, not `Math.random`.
@@ -426,8 +422,9 @@ Never below 13: these are drawn to be simple, not to be micro-type.
 
 ### 10.5 The names
 
-Five tabs — `gauge` (Home), `building` (Company), `chart` (Market), `globe`
-(World), `playMark` (Play). Pairwise distinct, and pinned by `nav.test.ts`.
+Four rooms — `gauge` (Today), `building` (Build), `chart` (Power), `globe`
+(World) — plus the persistent `playMark` (Plan). Pairwise distinct, and pinned
+by `nav.test.ts`.
 
 Twenty sheets, each keeping the mark its screen was known by — `building`
 (Company), `boardTable` (Group, Boardroom), `box` (Products), `people`,
@@ -436,7 +433,7 @@ Twenty sheets, each keeping the mark its screen was known by — `building`
 Staff), `handshake` (Deal Room), `newspaper` (News, Quarter Resolution),
 `chat` (Social), `network`, `trophy` (Leaderboard), `globe` (Sector).
 
-Still drawn, from the nav groups the five tabs replaced — `desk`, `compass`,
+Still drawn for legacy and secondary surfaces — `desk`, `compass`,
 `vault`, `stamp`.
 
 Utility — `settings`, `bell`, `live`, `close`, `chevronRight`, `chevronDown`,

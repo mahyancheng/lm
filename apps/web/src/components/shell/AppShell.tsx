@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Suspense, type ReactNode } from 'react';
-import { TABS, isGamePath, tabFor } from '@/lib/nav';
+import { PLAN_ACTION, TABS, isGamePath, tabFor } from '@/lib/nav';
 import { PLAYER_ID, useFounderNetWorth, useGame, useGameActions, useOutcome, useQueuedActions, useSession } from '@/lib/game';
 import { Icon, cx } from '@/components/ui';
 import { ChiefOfStaffDock } from './ChiefOfStaffDock';
@@ -20,10 +20,10 @@ import { VerdictScreen, verdictOf } from '@/components/screens/verdict';
  * overlay. The landing page and the auth pages get the page and nothing else —
  * they are outside the session.
  *
- * **The phone is the primary layout, and the bottom bar is the whole
- * navigation.** Five tabs, each one scrolling page of cards; every drill-down
+ * **The phone is the primary layout.** Four subject rooms and the persistent
+ * Plan action share its bottom bar; each room is one scrolling page; every drill-down
  * is a sheet over its tab rather than a route of its own. There is no sub-tab
- * strip and no hamburger: chrome is a 56px header and a 60px bar, and nothing
+ * strip and no hamburger: chrome is a compact header and bottom bar, and nothing
  * in the game is more than a tab and a card away.
  *
  * From `lg` the same data draws the persistent rail and both bars disappear.
@@ -57,22 +57,22 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
   const tab = tabFor(pathname);
 
   return (
-    <div className="min-h-dvh bg-base">
+    <div className="founders-desk min-h-dvh bg-base">
       <div className="flex min-h-dvh">
         {/* Desktop rail */}
         <aside
-          className="sticky top-0 hidden h-dvh shrink-0 border-r border-hair bg-panel lg:block"
+          className="sticky top-0 hidden h-dvh shrink-0 border-r border-hair bg-ink lg:block"
           style={{ width: 'var(--rail-width)' }}
         >
-          <div className="flex h-14 items-center gap-2.5 border-b border-hair px-4">
-            <span className="flex size-7 items-center justify-center rounded-chip bg-brand-strong text-white shadow-card">
+          <div className="flex h-[72px] items-center gap-3 border-b border-white/10 px-5">
+            <span className="flex size-9 items-center justify-center rounded-chip bg-brand text-white shadow-card">
               <Icon name="logo" size={16} accent="current" />
             </span>
-            <span className="text-[13px] font-bold tracking-tight text-ink">Frontier Capital</span>
+            <span className="font-serif text-[17px] font-bold tracking-tight text-white">Founder's Desk</span>
           </div>
           {/* The rail marks the open sheet, so it reads the search params and
               renders behind its own boundary like the host does. */}
-          <div className="h-[calc(100dvh-3.5rem)]">
+          <div className="h-[calc(100dvh-4.5rem)]">
             <Suspense fallback={null}>
               <NavRail />
             </Suspense>
@@ -97,8 +97,8 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
             </div>
           ) : null}
 
-          <main className="main-scroll-pad min-w-0 flex-1 px-3 pt-4 sm:px-5">
-            <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">{children}</div>
+          <main className="main-scroll-pad min-w-0 flex-1 px-4 pt-6 sm:px-8 lg:px-10 lg:pt-9">
+            <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-6">{children}</div>
           </main>
         </div>
       </div>
@@ -106,11 +106,10 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
       {/* The phone's primary navigation: one tab per page. */}
       <nav
         aria-label="Sections"
-        className="bottom-nav fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-hair bg-panel/95 backdrop-blur lg:hidden"
+        className="bottom-nav fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-hair bg-panel/95 px-1 backdrop-blur lg:hidden"
       >
         {TABS.map((entry) => {
           const active = tab !== null && tab.id === entry.id;
-          const badge = entry.id === 'play' && queued.length > 0 ? queued.length : null;
           return (
             <Link
               key={entry.id}
@@ -130,14 +129,19 @@ export function AppShell({ children }: { readonly children: ReactNode }): React.
                 <Icon name={entry.icon} size={19} accent="inherit" />
               </span>
               {entry.short}
-              {badge !== null ? (
-                <span className="figure absolute top-1 right-3 rounded-pill bg-brand px-1 text-[9px] leading-[14px] font-bold text-white">
-                  {badge}
-                </span>
-              ) : null}
             </Link>
           );
         })}
+        <Link
+          href={PLAN_ACTION.href}
+          aria-current={tab?.id === 'play' ? 'page' : undefined}
+          aria-label={queued.length === 0 ? 'Plan quarter' : `Plan quarter · ${queued.length} instructions ready`}
+          className="press-pop tap-target relative m-1 flex flex-col items-center justify-center gap-0.5 rounded-[10px] bg-warn-strong px-1 text-[10px] font-bold text-white shadow-pop"
+        >
+          <Icon name={PLAN_ACTION.icon} size={18} accent="current" />
+          {PLAN_ACTION.short}
+          {queued.length > 0 ? <span className="figure absolute -top-1 -right-0.5 rounded-pill bg-ink px-1.5 text-[9px] leading-[16px] text-white">{queued.length}</span> : null}
+        </Link>
       </nav>
 
       {/* One sheet, read from `?sheet=`. `useSearchParams` bails the prerender

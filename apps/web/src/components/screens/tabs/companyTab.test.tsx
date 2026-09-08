@@ -77,7 +77,7 @@ function line(id: string, name: string, price: number, margin: number): Product 
 /*  The page                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const CARDS = ['FloorCard', 'LinesCard', 'PeopleCard', 'ResearchCard', 'GovernmentCard', 'FinancialsCard', 'GroupCard'] as const;
+const CARDS = ['LinesCard', 'ResearchCard', 'FloorCard', 'PeopleCard', 'FinancialsCard', 'GovernmentCard', 'GroupCard'] as const;
 
 const page = [
   renderToStaticMarkup(
@@ -130,8 +130,8 @@ const page = [
   renderToStaticMarkup(<GroupCard companies={3} revenueUsd={40_000_000} cashUsd={22_000_000} enterpriseValueUsd={310_000_000} headcount={120} />),
 ].join('\n');
 
-describe('the Company tab is seven cards in the plan’s order', () => {
-  it('renders them in that order and mounts each exactly once', () => {
+describe('the Build workspace follows the idea-to-market flow', () => {
+  it('puts products and research before operating detail and mounts each once', () => {
     const positions = CARDS.map((name) => ({ name, at: SOURCE.indexOf(`<${name}`) }));
     for (const entry of positions) expect(entry.at, `${entry.name} is not mounted`).toBeGreaterThan(-1);
     for (let index = 1; index < positions.length; index += 1) {
@@ -143,11 +143,18 @@ describe('the Company tab is seven cards in the plan’s order', () => {
     for (const name of CARDS) expect(SOURCE.split(`<${name}`).length - 1, `${name} is mounted twice`).toBe(1);
   });
 
+  it('offers real idea, capability, and launch steps', () => {
+    expect(SOURCE).toContain('Describe an idea');
+    expect(SOURCE).toContain('leadingProgramme.progress');
+    expect(SOURCE).toContain("sheetHref('research')");
+    expect(SOURCE).toContain("sheetHref('products')");
+  });
+
   it('shows Group only when the seat directs more than its founding company', () => {
     // The card is behind `hasGroup`, which is what the plan makes it conditional
     // on; a seat with one company must not see an empty consolidation.
     expect(SOURCE).toMatch(/hasGroup\(session, PLAYER_ID\)/);
-    expect(SOURCE).toMatch(/groupStatement === null \? null : \(/);
+    expect(SOURCE).toMatch(/groupStatement === null \? null :/);
   });
 });
 

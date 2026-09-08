@@ -194,7 +194,7 @@ describe('the primitives let a sentence finish', () => {
     // twenty moved bodies lay out 16 points narrower than it did as a route.
     const drawer = read('./Drawer.tsx');
     expect(drawer).toContain('overflow-y-auto px-3 py-4 sm:px-5');
-    expect(read('../shell/AppShell.tsx')).toContain('px-3 pt-4 sm:px-5');
+    expect(read('../shell/AppShell.tsx')).toContain('px-4 pt-6 sm:px-8');
     expect(drawer.match(/(?<!sm:)px-5/g)).toBeNull();
   });
 });

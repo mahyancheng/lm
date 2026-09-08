@@ -88,10 +88,10 @@ export function QueueCard({
   const multiCompany = companyGroups.length > 1;
   return (
     <Panel
-      title="Queued instructions"
+      title="Planned moves"
       iconName="ledger"
       iconTone={queued === 0 ? 'neutral' : 'brand'}
-      subtitle={queued === 0 ? 'Nothing waiting for this quarter.' : `${queued} instruction${queued === 1 ? '' : 's'}, in the order they will run.`}
+      subtitle={queued === 0 ? 'No new moves planned for this quarter.' : `${queued} move${queued === 1 ? '' : 's'} ready for your review.`}
       actions={
         queued === 0 ? undefined : (
           <button type="button" className="btn btn-ghost tap-target px-2" onClick={onClear} disabled={resolving}>
@@ -104,15 +104,15 @@ export function QueueCard({
         <EmptyState
           compact
           icon="stamp"
-          title="Nothing queued for this quarter"
-          message="A quarter with no instructions is legal and sometimes correct: the world still moves, rivals still act, and your company still trades. But you probably meant to do something."
+          title="Advance with no new instructions"
+          message="The world and your rivals will still move. You can advance now, or add a move from Build, Power, or your Chief of Staff."
         />
       ) : (
         <div className="flex flex-col gap-3">
           {groups.map((group) => (
             <section key={group.phase}>
               <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1">
-                <span className="label-caps truncate">{titleise(group.phase)}</span>
+                <span className="label-caps truncate">{group.entries.length === 1 ? 'Planned move' : 'Planned moves'}</span>
                 <span className="figure shrink-0 text-[10px] text-ink-faint">
                   {group.entries.length} instruction{group.entries.length === 1 ? '' : 's'}
                 </span>

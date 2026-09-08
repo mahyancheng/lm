@@ -258,7 +258,7 @@ export function SealBar({ quarter, canSubmit, resolving, queued, blocked, onArm 
       >
         <p className="mb-1.5 text-center text-[10.5px] leading-relaxed text-ink-faint">
           {canSubmit
-            ? `${queued} instruction${queued === 1 ? '' : 's'} · you type the word to confirm`
+            ? `${queued} planned move${queued === 1 ? '' : 's'} · ready for final review`
             : `${blocked} action${blocked === 1 ? '' : 's'} still need your confirmation`}
         </p>
         <div className="flex items-center gap-2">

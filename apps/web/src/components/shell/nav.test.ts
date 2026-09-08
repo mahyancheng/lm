@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { HOME_ROUTE, TABS, isGamePath, tabFor } from '../../lib/nav';
+import { HOME_ROUTE, PLAN_ACTION, TABS, isGamePath, tabFor } from '../../lib/nav';
 
 const iconSource = readFileSync(fileURLToPath(new URL('../ui/icons.tsx', import.meta.url)), 'utf8');
 
@@ -49,11 +49,10 @@ describe('the icon set', () => {
 describe('the tab bar', () => {
   const names = new Set(declaredNames());
 
-  // Five, and no more: the bar is the whole navigation now — no sub-tab strip
-  // and no hamburger — and a sixth 78px target on a 390px phone is the point
-  // at which a thumb starts missing.
-  it('is exactly five tabs, each naming a mark that exists', () => {
-    expect(TABS).toHaveLength(5);
+  // Four subject rooms stay stable while planning remains a prominent action
+  // in the fifth mobile slot and at the foot of the desktop rail.
+  it('has four primary rooms, each naming a mark that exists', () => {
+    expect(TABS).toHaveLength(4);
     for (const tab of TABS) {
       expect(names.has(tab.icon), `${tab.href} asks for the "${tab.icon}" mark`).toBe(true);
     }
@@ -68,7 +67,14 @@ describe('the tab bar', () => {
     expect(tabFor(HOME_ROUTE)?.id).toBe('home');
   });
 
-  it('is null off the five', () => {
+  it('keeps Plan addressable outside the subject set', () => {
+    expect(TABS.some((tab) => tab.id === 'play')).toBe(false);
+    expect(PLAN_ACTION.href).toBe('/play');
+    expect(tabFor('/play')?.id).toBe('play');
+    expect(isGamePath('/play')).toBe(true);
+  });
+
+  it('is null outside the game', () => {
     expect(tabFor('/sign-in')).toBeNull();
     expect(tabFor('/')).toBeNull();
   });

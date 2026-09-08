@@ -130,6 +130,8 @@ export function QuarterResolutionScreen(): React.JSX.Element {
   }, [report, company.id, llm.available]);
 
   const sections = view?.sections ?? [];
+  const companySection = sections.find((section) => section.id === 'company');
+  const biggestOutcomes = companySection?.lines.slice(0, 3) ?? [];
   /** The subjects the rank panel looks for: the company and the founder behind it. */
   const ownIds = useMemo(() => new Set<string>([company.id, founder.id]), [company.id, founder.id]);
 
@@ -188,11 +190,11 @@ export function QuarterResolutionScreen(): React.JSX.Element {
         <Panel>
           <EmptyState
             icon="newspaper"
-            title="No quarter has resolved in this tab yet"
-            message="Queue your instructions, review them, and lock the quarter. The report that comes back is a rendering of the ledger, not a summary of it."
+            title="No quarter to review yet"
+            message="Review your plan and advance the quarter. Your results will appear here."
             action={
               <Link href={tabPath('play')} className="btn btn-primary btn-sm tap-target">
-                Go to the desk
+                Open Plan
               </Link>
             }
           />
@@ -218,26 +220,30 @@ export function QuarterResolutionScreen(): React.JSX.Element {
           <Icon name={settings.skipResolutionReveal ? 'live' : 'check'} size={15} />
           {settings.skipResolutionReveal ? 'Replay the reveal' : 'Skip to the end'}
         </button>
-        <Link href={HOME_ROUTE} className="btn btn-primary tap-target press-pop">
-          <Icon name="chevronRight" size={16} accent="current" />
-          <span className="hidden sm:inline">Continue to next quarter</span>
-          <span className="sm:hidden">Next quarter</span>
-        </Link>
+        {committed ? (
+          <Link href={HOME_ROUTE} className="btn btn-primary tap-target press-pop">
+            <Icon name="chevronRight" size={16} accent="current" />
+            Continue to Today
+          </Link>
+        ) : (
+          <Link href={tabPath('play')} className="btn btn-primary tap-target press-pop">
+            <Icon name="back" size={16} accent="current" />
+            Return to Plan
+          </Link>
+        )}
       </div>
 
       {/* --- the refusal case ---------------------------------------------- */}
       {!committed ? (
         <Panel
           title="The quarter did not commit"
-          subtitle="An invariant refused it and the pre-resolution state was restored"
+          subtitle="The quarter is still open and your plan is intact"
           iconName="ledger"
           iconTone="loss"
           className="border-loss/40"
         >
           <p className="text-[12px] leading-relaxed text-ink-dim">
-            Nothing changed. Your queued instructions are still yours, the world is where it was, and the report below is what the pipeline
-            produced before the gate rejected it. A failed check at the ledger commit aborts that commit — that is the mechanism working,
-            not a lost quarter.
+            Nothing changed. Review the failed checks, edit your plan if needed, then try again.
           </p>
           <SectionHeading className="mt-3" rule>
             Checks that did not pass
@@ -264,6 +270,27 @@ export function QuarterResolutionScreen(): React.JSX.Element {
         </Panel>
       ) : null}
 
+      {/* The answer first: what changed for the company, before provenance and market detail. */}
+      {committed && biggestOutcomes.length > 0 ? (
+        <section className="panel-surface overflow-hidden border-brand/30 px-5 py-5 sm:px-7 sm:py-7" aria-labelledby="quarter-outcome-title">
+          <div className="label-caps text-brand">Your quarter</div>
+          <h1 id="quarter-outcome-title" className="mt-2 max-w-3xl font-serif text-3xl leading-tight text-ink sm:text-4xl">{report.headline}</h1>
+          <ol className="mt-5 grid gap-3 lg:grid-cols-3">
+            {biggestOutcomes.map((line, index) => (
+              <li key={`${line.phase}-${index}`}>
+                <button type="button" onClick={() => setOpenLine(line)} className="raised-surface tap-target h-full w-full px-4 py-3 text-left hover:border-hair-strong">
+                  <span className="label-caps-faint">{index + 1}</span>
+                  <span className="mt-1 block text-[13px] leading-relaxed text-ink">{line.text}</span>
+                  {line.deltaLabel === null ? null : <span className={`figure mt-2 block text-[12px] tone-${toneOfLine(line.tone)}`}>{line.deltaLabel}</span>}
+                  <span className="mt-2 block text-[10.5px] text-ink-faint">See what caused this</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+          <Link href={HOME_ROUTE} className="btn btn-primary btn-lg tap-target mt-5 w-full sm:w-auto">Continue to Today <Icon name="chevronRight" size={17} accent="current" /></Link>
+        </section>
+      ) : null}
+
       {/* --- the front page -------------------------------------------------- */}
       <Newspaper
         edition={`${quarterLabel(session.startYear, report.quarter)} edition · ${committed ? 'committed' : 'not committed'}`}
@@ -274,6 +301,12 @@ export function QuarterResolutionScreen(): React.JSX.Element {
         sequenceTo={report.sequenceTo}
       />
 
+      <details className="panel-surface overflow-hidden">
+        <summary className="tap-target flex cursor-pointer list-none items-center justify-between px-4 py-3">
+          <span><span className="font-serif text-xl text-ink">Full quarter detail</span><span className="ml-2 text-[11px] text-ink-faint">All changes, prices, and ranks</span></span>
+          <Icon name="chevronDown" size={16} />
+        </summary>
+        <div className="flex flex-col gap-4 border-t border-hair p-4">
       {/* --- the quarter, counted -------------------------------------------- */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
@@ -551,6 +584,8 @@ export function QuarterResolutionScreen(): React.JSX.Element {
           />
         </Panel>
       ) : null}
+        </div>
+      </details>
 
       {/* --- footer ---------------------------------------------------------- */}
       {/* Three panels of provenance. They are the proof, not the story, so on a

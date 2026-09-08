@@ -76,7 +76,7 @@ export function Drawer({
             ? // phone: a bottom sheet; `sm` and up: the side pane
               'inset-x-0 bottom-0 rounded-t-panel border-t sm:inset-y-0 sm:right-0 sm:left-auto sm:max-h-none sm:w-[var(--drawer-width)] sm:rounded-none sm:border-t-0 sm:border-l'
             : 'inset-x-0 bottom-0 rounded-t-panel border-t',
-          height === 'full' ? 'max-h-[95dvh]' : 'max-h-[85dvh]',
+          height === 'full' ? 'h-dvh max-h-dvh rounded-none sm:h-auto sm:max-h-none' : 'max-h-[85dvh]',
           className,
         )}
         style={side === 'right' ? ({ ['--drawer-width' as string]: `${width}px` } as React.CSSProperties) : undefined}

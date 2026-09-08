@@ -477,8 +477,8 @@ export default function LandingPage(): React.JSX.Element {
             <Icon name="logo" size={20} accent="inherit" />
           </span>
           <div>
-            <div className="text-[14px] font-extrabold tracking-tight text-ink">Frontier Capital</div>
-            <div className="label-caps-faint leading-none">An AI-industry business sim</div>
+            <div className="font-display text-[17px] leading-none text-ink">Frontier Capital</div>
+            <div className="label-caps-faint mt-1 leading-none">A company-building strategy game</div>
           </div>
           {/* Connecting Claude used to need a founded company first — the panel
               lives in the game's status bar. A first-time player expects it at
@@ -495,19 +495,16 @@ export default function LandingPage(): React.JSX.Element {
         </header>
 
         {/* --- hero -------------------------------------------------------- */}
-        <section className="order-2 grid items-center gap-6 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
+        <section className="order-2 grid items-center gap-6 rounded-[28px] border border-hair bg-raised p-5 sm:p-8 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
           <div className="animate-pop-in flex min-w-0 flex-col gap-4">
             <span className="label-caps inline-flex w-fit items-center rounded-pill bg-brand-wash px-3 py-1 text-brand">
-              2027 Q1 · {formatCount(SECTORS.length)} sectors · {formatCount(REGIONS.length)} regions
+              The frontier is open · 2027 Q1
             </span>
-            <h1 className="max-w-2xl text-[30px] leading-[1.1] font-extrabold tracking-tight text-ink sm:text-[42px]">
-              Found a company. Outthink everybody else in the economy.
+            <h1 className="font-display max-w-2xl text-[38px] leading-[0.98] tracking-tight text-ink sm:text-[54px]">
+              Build the company<br />they did not see coming.
             </h1>
-            <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-dim sm:text-[14px]">
-              Robotics, manufacturing, energy, logistics, consumer — or the models everybody else is buying. Tell the Chief of Staff where
-              you want to begin and the world is built around that answer: {formatCount(ALL_BACKGROUNDS.length)} opening positions across{' '}
-              {formatCount(SECTORS.length)} sectors and {formatCount(REGIONS.length)} regions, each with its own price for talent, power and
-              government money.
+            <p className="max-w-xl text-[14px] leading-relaxed text-ink-dim">
+              Choose an industry, name the company, and take your first position in a living economy. Every quarter creates a new opening — or closes one.
             </p>
 
             {/* Thumb buttons: full width on a phone, stacked in intent order —
@@ -531,13 +528,12 @@ export default function LandingPage(): React.JSX.Element {
                 disabled={busy}
               >
                 <Icon name="plus" size={18} accent={save === null ? 'current' : 'brand'} />
-                Start a new company
+                New company
               </button>
             </div>
 
             <p className="text-[11.5px] leading-relaxed text-ink-faint">
-              Two dozen companies, a Frontier Map that spans every sector, and open procurements in all of them — running locally in this
-              browser. No sign-up needed.
+              Your company saves here from its first decision. No sign-up required.
             </p>
           </div>
 
@@ -565,8 +561,8 @@ export default function LandingPage(): React.JSX.Element {
         {/* --- entry points ------------------------------------------------ */}
         <div id="new-company" className="order-3 grid scroll-mt-4 gap-4 lg:order-4 lg:grid-cols-3">
           <Panel
-            title="Start a new company"
-            subtitle="Tell the Chief of Staff where you want to begin"
+            title="Found your company"
+            subtitle="Pick an arena. Give it a name. Take the first move."
             iconName="building"
             iconTone="brand"
             className={cx(save === null ? 'order-1' : 'order-2', 'lg:order-1 lg:col-span-2')}

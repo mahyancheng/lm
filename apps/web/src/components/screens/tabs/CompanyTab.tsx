@@ -26,8 +26,10 @@
  * is what every sheet on this tab reads.
  */
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import { STAFF_ROLES } from '@frontier/contracts';
+import { formatPct } from '@frontier/shared';
 import {
   consolidatedEnterpriseValueOf,
   groupStatementOf,
@@ -39,6 +41,8 @@ import {
   servingComputeUnits,
 } from '@frontier/simulation';
 import { OfficeSceneCompact } from '@/components/scenes/office';
+import { askChief } from '@/components/screens/chief-of-staff/composerBus';
+import { Panel } from '@/components/ui';
 import { debtServiceView } from '@/components/screens/financials/headroom';
 import { ROLE_LABEL, blendedMarketCompUsd, headcountOf } from '@/components/screens/people/labels';
 import { productServingUnits } from '@/components/screens/products/labels';
@@ -106,6 +110,8 @@ export function CompanyTab(): React.JSX.Element {
   // dropped from it would put its own target node back on the "ready" list.
   const projects = useMemo(() => researchProjectsForCompany(session, company.id), [session, company.id]);
   const programmes = projects.filter((project) => project.companyId === company.id && project.status === 'active');
+  const leadingProgramme = programmes[0] ?? null;
+  const leadingNode = leadingProgramme === null ? null : session.techGraph.nodes.find((node) => node.id === leadingProgramme.targetNodeId) ?? null;
   const envelopeUsd = useMemo(() => researchEnvelopeUsd(company, []), [company]);
   // The node map is world 3's; in an older world there is no "one programme
   // away" list to count, and a zero would read as a fact rather than an absence.
@@ -143,74 +149,56 @@ export function CompanyTab(): React.JSX.Element {
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <FloorCard
-        companyName={company.name}
-        summary={`${archetypeLabel(company.archetype)} · ${company.headquartersCity}`}
-        scene={<OfficeSceneCompact href={sheetHref('company')} />}
-        headcount={headcount}
-        morale={employees.morale}
-        payrollUsd={company.financials.payroll}
-        runwayQuarters={metrics?.runwayQuarters ?? null}
-        focus={floorFocus}
-      />
+    <div className="flex flex-col gap-5">
+      <header className="px-1 pt-1">
+        <p className="label-caps text-brand">Build</p>
+        <h1 className="mt-1 font-serif text-3xl leading-none text-ink sm:text-4xl">Make the next thing matter.</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink-dim">Your operating portfolio, production constraints, and the capabilities that unlock what comes next.</p>
+      </header>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <LinesCard
-          lineCount={active.length}
-          revenueUsd={lineRevenue}
-          grossProfitUsd={lineGrossProfit}
-          headroomUnits={headroomUnits}
-          lines={lines}
-        />
+      <section aria-labelledby="build-journey">
+        <h2 id="build-journey" className="mb-2 px-1 font-serif text-xl text-ink">Idea to market</h2>
+        <Panel subtitle="Three real moves carry an idea from the table into the operating portfolio.">
+          <ol className="grid gap-3 md:grid-cols-3">
+            <li className="rounded-card border border-hair bg-raised p-3">
+              <span className="label-caps text-brand">1 · Frame the idea</span>
+              <p className="mt-2 min-h-10 text-sm text-ink-dim">Describe the customer, problem, and advantage. Your chief of staff will pressure-test it against this world.</p>
+              <button type="button" onClick={() => askChief('I have a new product idea. Help me define the customer, capability, and launch path.')} className="btn btn-ghost tap-target mt-3 w-full">Describe an idea</button>
+            </li>
+            <li className="rounded-card border border-hair bg-raised p-3">
+              <span className="label-caps text-brand">2 · Build capability</span>
+              <p className="mt-2 min-h-10 text-sm text-ink-dim">{leadingProgramme === null ? (readyToStart !== null && readyToStart > 0 ? `${readyToStart} research paths are ready to start.` : 'Choose a research path whose prerequisites you can support.') : `${leadingNode?.title ?? 'Active programme'} · ${formatPct(leadingProgramme.progress)} progress.`}</p>
+              <Link href={sheetHref('research')} className="btn btn-primary tap-target mt-3 w-full">{leadingProgramme === null ? 'Choose next capability' : 'Open research pipeline'}</Link>
+            </li>
+            <li className="rounded-card border border-hair bg-raised p-3">
+              <span className="label-caps text-brand">3 · Launch and learn</span>
+              <p className="mt-2 min-h-10 text-sm text-ink-dim">{active.length === 0 ? 'No line is active. Turn a held capability into an offer.' : `${active.length} active line${active.length === 1 ? '' : 's'} producing ${lineRevenue === 0 ? 'no booked revenue yet' : 'booked revenue this quarter'}.`}</p>
+              <Link href={sheetHref('products')} className="btn btn-ghost tap-target mt-3 w-full">{active.length === 0 ? 'Plan first launch' : 'Manage products'}</Link>
+            </li>
+          </ol>
+        </Panel>
 
-        <PeopleCard
-          headcount={headcount}
-          openRoles={employees.openRoles}
-          morale={employees.morale}
-          attrition={employees.attrition}
-          avgCompUsd={employees.avgComp}
-          marketCompUsd={marketComp}
-          roles={roles}
-          roleCount={STAFF_ROLES.length}
-        />
-      </div>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+          <LinesCard lineCount={active.length} revenueUsd={lineRevenue} grossProfitUsd={lineGrossProfit} headroomUnits={headroomUnits} lines={lines} />
+          <ResearchCard programmes={programmes.length} envelopeUsd={envelopeUsd} researchers={employees.researchers} readyToStart={readyToStart} />
+        </div>
+      </section>
+      <section aria-labelledby="build-company">
+        <h2 id="build-company" className="mb-2 px-1 font-serif text-xl text-ink">Keep the machine moving</h2>
+        <FloorCard companyName={company.name} summary={`${archetypeLabel(company.archetype)} · ${company.headquartersCity}`} scene={<OfficeSceneCompact href={sheetHref('company')} />} headcount={headcount} morale={employees.morale} payrollUsd={company.financials.payroll} runwayQuarters={metrics?.runwayQuarters ?? null} focus={floorFocus} />
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <PeopleCard headcount={headcount} openRoles={employees.openRoles} morale={employees.morale} attrition={employees.attrition} avgCompUsd={employees.avgComp} marketCompUsd={marketComp} roles={roles} roleCount={STAFF_ROLES.length} />
+          <FinancialsCard revenueUsd={pnl.revenue} operatingIncomeUsd={pnl.operatingIncome} cashMovementUsd={company.financials.quarterlyBurn} debtServiceUsd={debtService.totalUsd} serviceHeadroomUsd={debtService.headroomUsd} />
+        </div>
+      </section>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <ResearchCard
-          programmes={programmes.length}
-          envelopeUsd={envelopeUsd}
-          researchers={employees.researchers}
-          readyToStart={readyToStart}
-        />
-
-        <GovernmentCard
-          pastPerformance={company.governmentPastPerformance}
-          openCompetitions={openCompetitions}
-          backlogUsd={backlogUsd}
-          complianceUsd={complianceUsd}
-        />
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <FinancialsCard
-          revenueUsd={pnl.revenue}
-          operatingIncomeUsd={pnl.operatingIncome}
-          cashMovementUsd={company.financials.quarterlyBurn}
-          debtServiceUsd={debtService.totalUsd}
-          serviceHeadroomUsd={debtService.headroomUsd}
-        />
-
-        {groupStatement === null ? null : (
-          <GroupCard
-            companies={groupRows.length}
-            revenueUsd={groupStatement.income.revenueUsd}
-            cashUsd={groupStatement.balance.cashUsd}
-            enterpriseValueUsd={groupValueUsd}
-            headcount={groupRows.reduce((total, row) => total + row.headcount, 0)}
-          />
-        )}
-      </div>
+      <details className="rounded-card border border-hair bg-panel p-3">
+        <summary className="tap-target cursor-pointer font-semibold text-ink">More operations{openCompetitions > 0 ? ` · ${openCompetitions} open government ${openCompetitions === 1 ? 'opportunity' : 'opportunities'}` : ''}</summary>
+        <div className="mt-3 grid gap-4 xl:grid-cols-2">
+          <GovernmentCard pastPerformance={company.governmentPastPerformance} openCompetitions={openCompetitions} backlogUsd={backlogUsd} complianceUsd={complianceUsd} />
+          {groupStatement === null ? null : <GroupCard companies={groupRows.length} revenueUsd={groupStatement.income.revenueUsd} cashUsd={groupStatement.balance.cashUsd} enterpriseValueUsd={groupValueUsd} headcount={groupRows.reduce((total, row) => total + row.headcount, 0)} />}
+        </div>
+      </details>
     </div>
   );
 }

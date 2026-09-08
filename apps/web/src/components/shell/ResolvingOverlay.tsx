@@ -40,31 +40,31 @@ const STAGES: readonly Stage[] = [
   {
     id: 'desk',
     title: 'Your instructions',
-    caption: 'Everything you queued is read back, validated and stamped.',
+    caption: 'Your planned moves are checked and put into motion.',
     phases: ['action_collection'],
   },
   {
     id: 'globe',
     title: 'The world moves',
-    caption: 'Events fire, modifiers land, and the frontier reveals what it now believes.',
+    caption: 'News breaks, rivals react, and the landscape changes.',
     phases: ['world_events', 'gm_modifiers', 'information_reveal'],
   },
   {
     id: 'podium',
     title: 'Boards and the state',
-    caption: 'Directors vote, capital moves, and public awards are decided.',
+    caption: 'Directors vote, money moves, and public awards are decided.',
     phases: ['board_resolution', 'capital_resolution', 'government_resolution'],
   },
   {
     id: 'office',
     title: 'Your company works',
-    caption: 'Hiring, research, prices, demand — and the books that follow from them.',
+    caption: 'Teams build, research advances, customers choose, and the books close.',
     phases: ['talent_resolution', 'research_resolution', 'node_market_resolution', 'product_demand_resolution', 'financial_resolution'],
   },
   {
     id: 'ticker',
     title: 'The markets price it',
-    caption: 'Disclosure, then price, then the feed, the boards and the ledger.',
+    caption: 'The market takes stock and a new quarter begins.',
     phases: [
       'disclosure_resolution',
       'market_resolution',
@@ -164,7 +164,7 @@ export function ResolvingOverlay(): React.JSX.Element | null {
         <div className="flex items-baseline justify-between gap-3">
           <span className="label-caps text-brand">{heading}</span>
           <span className="figure text-[10px] text-ink-faint">
-            {resolving ? `${RESOLUTION_PHASES.length} phases` : progress === null ? '' : `Q${progress.quarter}`}
+            {resolving ? '5 steps' : progress === null ? '' : `Q${progress.quarter}`}
           </span>
         </div>
         <p className="mt-1 text-[13px] font-semibold text-ink">{detail}</p>
@@ -230,40 +230,18 @@ export function ResolvingOverlay(): React.JSX.Element | null {
           </ol>
         ) : null}
 
-        {/* --- the phases, streaming --------------------------------------- */}
         {resolving ? (
-          /* Deliberately not keyed on the stage: re-mounting inside a live
-             region would re-announce every phase name on every step. The
-             stream plays once, on arrival, and the marks update in place. */
-          <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-0.5" aria-label="Resolution phases">
-            {RESOLUTION_PHASES.map((phase, index) => {
-              const owner = STAGE_OF_PHASE.get(phase) ?? STAGES.length;
-              const state = owner < stageIndex ? 'done' : owner <= lastActive ? 'active' : 'waiting';
-              return (
-                <li
-                  key={phase}
-                  className="animate-fade-in flex min-w-0 items-center gap-1.5"
-                  style={{ animationDelay: `${index * 18}ms` }}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={[
-                      'inline-block size-1.5 shrink-0 rounded-pill',
-                      state === 'active' ? 'animate-pulse-soft bg-brand' : state === 'done' ? 'bg-gain' : 'bg-hair-strong',
-                    ].join(' ')}
-                  />
-                  <span
-                    className={[
-                      'min-w-0 truncate text-[10px]',
-                      state === 'active' ? 'text-ink' : state === 'done' ? 'text-ink-dim' : 'text-ink-faint',
-                    ].join(' ')}
-                  >
-                    {PHASE_LABEL[phase] ?? phase}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+          <ol className="mt-4 grid grid-cols-5 gap-1.5" aria-label="Quarter progress">
+            {STAGES.map((entry, index) => (
+              <li key={entry.id} className="min-w-0">
+                <span className={[
+                  'block h-1.5 rounded-pill',
+                  index < stageIndex ? 'bg-gain' : index <= lastActive ? 'animate-pulse-soft bg-brand' : 'bg-hair-strong',
+                ].join(' ')} />
+                <span className="mt-1 block truncate text-[9px] text-ink-faint">{entry.title}</span>
+              </li>
+            ))}
+          </ol>
         ) : null}
 
         {/* --- what is actually happening right now, with elapsed time ------ */}

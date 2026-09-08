@@ -173,7 +173,7 @@ export const SHEETS: Readonly<Record<SheetId, SheetMeta>> = {
     icon: 'chat',
   },
   network: {
-    tab: 'world',
+    tab: 'market',
     title: 'Network',
     blurb: 'Investors, founders, officials, directors, journalists.',
     icon: 'network',
@@ -319,7 +319,7 @@ export const LEGACY_ROUTES: Readonly<Record<string, LegacyRoute>> = {
   '/boardroom': { tab: 'market', sheet: 'boardroom' },
   '/news': { tab: 'world', sheet: 'news' },
   '/social': { tab: 'world', sheet: 'social' },
-  '/network': { tab: 'world', sheet: 'network' },
+  '/network': { tab: 'market', sheet: 'network' },
   '/leaderboard': { tab: 'world', sheet: 'leaderboard' },
   '/chief-of-staff': { tab: 'play', sheet: 'chief-of-staff' },
   '/end-quarter': { tab: 'play', sheet: null },

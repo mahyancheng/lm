@@ -80,7 +80,7 @@ function mountsOf(tag: string): string[] {
 /*  The page                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const CARDS = ['StockCard', 'FundingCard', 'RegisterCard', 'TapeCard', 'PortfolioCard', 'DealsCard', 'BoardCard'] as const;
+const CARDS = ['DealsCard', 'RegisterCard', 'StockCard', 'FundingCard', 'BoardCard', 'PortfolioCard', 'TapeCard'] as const;
 
 function renderRegister(answerable: number): string {
   return renderToStaticMarkup(
@@ -136,8 +136,8 @@ function renderPage(answerable: number): string {
 
 const page = renderPage(2);
 
-describe('the Market tab is seven cards in the plan’s order', () => {
-  it('renders them in that order and mounts each exactly once', () => {
+describe('the Power workspace follows the conversation-to-capital flow', () => {
+  it('puts live situations before capital and folds supporting detail', () => {
     const positions = CARDS.map((name) => ({ name, at: SOURCE.indexOf(`<${name}`) }));
     for (const entry of positions) expect(entry.at, `${entry.name} is not mounted`).toBeGreaterThan(-1);
     for (let index = 1; index < positions.length; index += 1) {
@@ -148,6 +148,13 @@ describe('the Market tab is seven cards in the plan’s order', () => {
     }
     for (const name of CARDS) expect(SOURCE.split(`<${name}`).length - 1, `${name} is mounted twice`).toBe(1);
   });
+  it('targets only a projected deal counterpart or opens Network for user choice', () => {
+    expect(SOURCE).toContain('buildDirectory(session, view, founder.id)');
+    expect(SOURCE).toContain('counterpartCompanyId');
+    expect(SOURCE).toContain('Open network');
+    expect(SOURCE).toContain('setPendingNetworkCharacter(counterpart.character.id)');
+  });
+
 });
 
 describe('every address on the Market tab', () => {

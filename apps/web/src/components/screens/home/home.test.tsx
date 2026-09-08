@@ -245,12 +245,13 @@ describe('every address on Home', () => {
       expect(source, `HomeTab links at ${route} directly`).not.toContain(`"${route}"`);
       expect(source, `HomeTab pushes ${route} directly`).not.toContain(`'${route}'`);
     }
-    // The next decision comes before operating detail, rather than being buried after it.
-    for (const card of ['FloorCard', 'FiguresGrid', 'NeedsDeciding', 'OffersCard', 'ObjectivesCard', 'TapeStrip']) {
-      expect(source).toContain(`<${card}`);
-    }
-    expect(source.indexOf('<NeedsDeciding')).toBeGreaterThan(source.indexOf('<FloorCard'));
-    expect(source.indexOf('<NeedsDeciding')).toBeLessThan(source.indexOf('<FiguresGrid'));
+    // Today leads with truthful position, then canonical priorities and a reviewable plan.
+    expect(source).toContain('Founder briefing');
+    expect(source).toContain('<NeedsDeciding');
+    expect(source).toContain('What do you want to do?');
+    expect(source).toContain('Quarter plan');
+    expect(source.indexOf('<NeedsDeciding')).toBeLessThan(source.indexOf('Quarter plan'));
+    expect(source).toContain("entry.validation.status === 'rejected'");
   });
 });
 

@@ -7,8 +7,8 @@ should mostly be unaware of it.
 ## 1. Aesthetic target
 
 ```text
-Bright approachable business sim  ×  Legible venture dashboard
-        ×  Corporate strategy game  ×  Living social network
+Warm paper tabletop strategy  ×  Legible venture dashboard
+       ×  Living company world
 ```
 
 What that means in practice:
@@ -26,22 +26,28 @@ What that means in practice:
   where financial surfaces are cool. A director's card shows their traits, their
   mandate and what they remember about you.
 
-**Responsive is a requirement.** Desktop is primary, but every screen must be
-usable on a tablet and readable on a phone. Wide tables scroll inside their own
+**Responsive is a requirement.** Phone is primary; every screen must also use
+the available room on tablet and desktop. Wide tables scroll inside their own
 container; the page body never scrolls horizontally.
 
 ## 2. The screens
 
-Each of these is a **sheet** over one of the five tabs (Home, Company, Market,
-World, Play) rather than a route of its own — see
-[GAME_DESIGN.md §9](./GAME_DESIGN.md) for which tab owns which. What each
-surface must show and must never show is unchanged by that; only the way in is.
-The Command Centre below is now the Home tab, and End Quarter is the Play tab.
+The top level is four places: **Today**, **Build**, **Power**, and **World**.
+**Plan** is the persistent review-and-advance action, visually separated from
+those subjects. Existing routes remain `/home`, `/company`, `/market`,
+`/world`, and `/play`; drill-down subjects remain sheets so Back closes them.
 
-### 1. Command Centre
+The play loop is **brief → choose moves → review Plan → advance → debrief**.
+Today ranks what needs attention. Build and Power let the player act, World
+explains external change, and accepted actions enter Plan. The debrief leads
+with the player's largest outcomes, then supported causes, then next decisions.
+Ledger and engine diagnostics stay available under details.
 
-*Quarter summary, cash, runway, valuation, alerts.* The landing screen, and the
-one a returning player reads first.
+### 1. Today
+
+*Quarter brief, cash, runway, prioritized decisions and work in motion.* The
+landing screen and the one a returning player reads first. A new company lands
+here after **Open the doors** and receives clear first moves for its sector.
 
 ```text
 2031 Q2                 ORBIT INTELLIGENCE
@@ -174,15 +180,16 @@ them back.
 
 *Conversational control interface.* See §5 below.
 
-### 17. End Quarter
+### 17. Plan
 
-*Review actions and lock submission.* Every `SubmittedAction` grouped by the
-resolution phase that will consume it, each showing its
+*Review moves and advance the quarter.* Every `SubmittedAction` shows its
 `ActionValidationResult`: accepted, clamped (with the reduced form shown), or
 rejected (with reason and code). Actions in `CONFIRMATION_REQUIRED_ACTIONS`
 lacking `confirmedByHuman` are blocked here with an explicit confirm control.
 Cash, compute and headcount are projected after the submitted set, so a player
 sees they have committed 120% of their cash before the engine tells them.
+Exact arithmetic may be stated directly; uncertain future effects must be
+labelled as estimates. Advancing an empty Plan is legal and must say so plainly.
 
 ### 18. Quarter Resolution
 
@@ -218,9 +225,9 @@ Rules for this screen:
    `deltaLabel`, a `tone` and `refEventIds`. **INVARIANT: every line must
    reference at least one committed ledger event.** Nothing here is narrative
    invention.
-2. **Phases arrive in pipeline order**, revealed progressively. The pacing is the
-   drama: world, then competition, then your company, then markets, then rank.
-   The player can skip to the end, and the skip is remembered.
+2. Lead with the three largest player-company outcomes. Follow with supported
+   causes, world/market/rank context, and actionable next decisions. Engine
+   phases, invariants, state hashes and timings belong in collapsed details.
 3. **The `!` tone (`warning`) is reserved** for something that has not gone wrong
    yet. It is the game pointing at next quarter.
 4. **Every line is clickable** and opens its ledger rows. "Why did my stock

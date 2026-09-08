@@ -174,11 +174,11 @@ export function StatusBar(): React.JSX.Element {
             'press-pop tap-target flex shrink-0 items-center justify-center gap-1.5 rounded-chip px-0 text-[10px] font-semibold hover:bg-raised md:px-2',
             llm.available ? 'text-gain' : 'text-ink-faint',
           )}
-          aria-label={llm.available ? 'Live model configured — open settings' : 'No model configured — open settings'}
+          aria-label={llm.available ? 'World simulation ready — open settings' : 'Standard world simulation — open settings'}
           title={
             llm.available
-              ? `Live model: ${llm.transportKind}${llm.model === null ? '' : ` (${llm.model})`}. Rivals and world events are model-directed this quarter. Open Settings to test or change the credential.`
-              : 'No model configured. Every role uses its deterministic fallback and the game plays in full — click to paste a Claude token.'
+              ? 'World simulation is ready. Open settings to review it.'
+              : 'The standard world simulation is active. Open settings for options.'
           }
         >
           {/* Live is a filled dot and offline is a hollow ring: the state is a
@@ -189,7 +189,7 @@ export function StatusBar(): React.JSX.Element {
             accent={llm.available ? 'current' : 'inherit'}
             className={cx('icon-knockout-panel', llm.available ? 'pulse-dot' : undefined)}
           />
-          <span className="hidden md:inline">{llm.available ? 'Live' : 'Offline'}</span>
+          <span className="hidden md:inline">{llm.available ? 'Ready' : 'Standard'}</span>
         </button>
 
         <button

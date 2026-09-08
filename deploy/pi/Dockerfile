@@ -123,6 +123,13 @@ RUN printf '%s\n' \
 
 FROM --platform=linux/arm64 node:22-bookworm-slim AS runtime
 
+# Codex's native HTTPS client needs the OS trust store. Node's bundled CAs
+# can make network probes pass even when device sign-in cannot reach OpenAI.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -s /etc/ssl/certs/ca-certificates.crt
+
 # Verified against the app-server protocol used by this integration. Bump only
 # after regenerating/validating its app-server schema and smoke-testing a turn.
 ARG CODEX_CLI_VERSION=0.151.0-alpha.2

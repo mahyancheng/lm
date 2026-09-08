@@ -61,6 +61,15 @@ echo "==> Pulling ${IMAGE}"
 docker pull "${IMAGE}" >/dev/null
 new_id="$(id_of "${IMAGE}")"
 new_digest="$(digest_of "${IMAGE}")"
+# A locally verified repair can be ahead of the registry while CI builds.
+# Do not let the hourly timer replace it with a provably older commit.
+running_sha="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' frontier-capital 2>/dev/null | sed -n 's/^BUILD_SHA=//p' || true)"
+candidate_sha="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE" 2>/dev/null | sed -n 's/^BUILD_SHA=//p' || true)"
+if [[ -n "$running_sha" && -n "$candidate_sha" && "$running_sha" != "$candidate_sha" ]] \
+  && git -C ../.. merge-base --is-ancestor "$candidate_sha" "$running_sha" 2>/dev/null; then
+  echo "Registry build ${candidate_sha} is older than running repair ${running_sha}; keeping the running container."
+  exit 0
+fi
 if [[ -n "$running_id" && "$new_id" == "$running_id" ]]; then
   echo "Already on the latest image: ${new_digest:-$new_id}"
   echo "  version:  $(running_build)"

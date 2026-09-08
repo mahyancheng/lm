@@ -41,7 +41,7 @@ vi.mock('next/headers', () => ({
 // Demo mode: no Supabase env configured in the test process, so `admit`/`admitQuick`
 // resolve the anonymous principal from the mocked cookie above without ever
 // reaching `getRouteClient`.
-const { admit, admitQuick } = await import('./_gateway');
+const { admit, admitConfiguration, admitQuick } = await import('./_gateway');
 const { RATE_LIMIT_PER_WINDOW, RATE_LIMIT_QUICK_PER_WINDOW } = await import('./_identity');
 
 function requestFor(principalId: string): Request {
@@ -101,5 +101,24 @@ describe('admitQuick keeps a separate budget from admit', () => {
     for (let i = 0; i < RATE_LIMIT_PER_WINDOW; i += 1) expect((await admit(requestFor(a))).ok).toBe(true);
     expect((await admit(requestFor(a))).ok).toBe(false);
     expect((await admit(requestFor(b))).ok).toBe(true);
+  });
+});
+
+describe('admitConfiguration keeps account setup separate from model traffic', () => {
+  it('allows the first configuration request after model traffic exhausts its window', async () => {
+    const principal = randomUUID();
+    for (let i = 0; i < RATE_LIMIT_PER_WINDOW; i += 1) {
+      expect((await admit(requestFor(principal))).ok).toBe(true);
+    }
+    expect((await admit(requestFor(principal))).ok).toBe(false);
+    expect((await admitConfiguration(requestFor(principal))).ok).toBe(true);
+  });
+
+  it('still bounds configuration requests in their own window', async () => {
+    const principal = randomUUID();
+    for (let i = 0; i < RATE_LIMIT_PER_WINDOW; i += 1) {
+      expect((await admitConfiguration(requestFor(principal))).ok).toBe(true);
+    }
+    expect((await admitConfiguration(requestFor(principal))).ok).toBe(false);
   });
 });

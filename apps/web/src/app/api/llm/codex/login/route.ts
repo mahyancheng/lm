@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { admit, admitQuick } from '../../_gateway';
+import { admitConfiguration, admitQuick } from '../../_gateway';
 import { cancelLoginFor, loginStatusFor, logoutCodex, startLoginFor } from '../../_codexLogin';
 import { gateTokenWrite, guardWriteRequest, json, mayReadDescriptor } from '../../token/_shared';
 
@@ -26,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   const forged = guardWriteRequest(request, true);
   if (forged !== null) return forged;
-  const admission = await admit(request);
+  const admission = await admitConfiguration(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
   const refusal = await gateTokenWrite(request, { principal, mintedPrincipal });
@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<Response> {
 export async function DELETE(request: Request): Promise<Response> {
   const forged = guardWriteRequest(request, true);
   if (forged !== null) return forged;
-  const admission = await admit(request);
+  const admission = await admitConfiguration(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
   const refusal = await gateTokenWrite(request, { principal, mintedPrincipal });

@@ -272,6 +272,18 @@ const quickAnswerLimiter = processSingleton('llm.quickAnswerLimiter', () =>
 );
 
 /**
+ * A separate admission bucket for privileged configuration mutations.
+ *
+ * Connecting or disconnecting the managed Codex account does not make a model
+ * call. Keeping those requests in the role bucket meant ordinary game traffic
+ * could exhaust all twenty model admissions and make the operator's very first
+ * Connect click return 429. The tighter token-write limiter still applies on
+ * top of this admission, so separating the buckets does not relax the write
+ * bound.
+ */
+const configurationLimiter = processSingleton('llm.configurationLimiter', () => createRateLimiter());
+
+/**
  * A third, much tighter bucket for writing the Claude credential.
  *
  * It sits *on top of* `admit()`'s window rather than replacing it. Setting a
@@ -357,6 +369,11 @@ export async function admit(request: Request): Promise<{ ok: true; admission: Ad
  */
 export async function admitQuick(request: Request): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
   return admitAgainst(request, quickAnswerLimiter);
+}
+
+/** Admit a privileged configuration request without spending model-call budget. */
+export async function admitConfiguration(request: Request): Promise<{ ok: true; admission: Admission } | { ok: false; response: NextResponse }> {
+  return admitAgainst(request, configurationLimiter);
 }
 
 async function admitAgainst(

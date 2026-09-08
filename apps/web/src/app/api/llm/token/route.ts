@@ -45,8 +45,9 @@
  * before it can offer any control, so the cookie is always in place before a
  * Connect button exists to press.
  *
- * `admit()` still runs first, unchanged: the size ceiling, the principal and
- * the ordinary role window all apply. This route only ever adds.
+ * Configuration admission still runs first: the size ceiling and principal
+ * checks apply, while account setup cannot consume or be blocked by the model
+ * role window. Writes additionally spend the tighter five-per-minute budget.
  *
  * ## Lifetime
  *
@@ -57,7 +58,7 @@
  * the environment variable remains the only durable answer there.
  */
 
-import { admit, chargeSetupSecretAttempt } from '../_gateway';
+import { admitConfiguration, chargeSetupSecretAttempt } from '../_gateway';
 import { clearRuntimeCredential, publicTokenStatus, setRuntimeCredential, tokenWriteOriginKey } from '../_runtime';
 import {
   TokenBodySchema,
@@ -84,7 +85,7 @@ export const dynamic = 'force-dynamic';
  * cross-site one.
  */
 export async function GET(request: Request): Promise<Response> {
-  const admission = await admit(request);
+  const admission = await admitConfiguration(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
 
@@ -122,7 +123,7 @@ export async function POST(request: Request): Promise<Response> {
   const forged = guardWriteRequest(request, true);
   if (forged !== null) return forged;
 
-  const admission = await admit(request);
+  const admission = await admitConfiguration(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
 
@@ -158,7 +159,7 @@ export async function DELETE(request: Request): Promise<Response> {
   const forged = guardWriteRequest(request, false);
   if (forged !== null) return forged;
 
-  const admission = await admit(request);
+  const admission = await admitConfiguration(request);
   if (!admission.ok) return admission.response;
   const { finish, principal, mintedPrincipal } = admission.admission;
 

@@ -12,7 +12,7 @@ const manager = {
 const invalidate = vi.fn();
 vi.mock('@frontier/llm', () => ({ getCodexLoginManager: vi.fn(() => manager) }));
 vi.mock('./_gateway', () => ({ invalidateGatewayForManagedCodexAuth: invalidate }));
-const { resetCodexLoginOwnership, startLoginFor, loginStatusFor } = await import('./_codexLogin');
+const { resetCodexLoginOwnership, startLoginFor, loginStatusFor, refreshCodexAccount } = await import('./_codexLogin');
 
 const a = { kind: 'anonymous' as const, id: 'operator-a' };
 const b = { kind: 'anonymous' as const, id: 'operator-b' };
@@ -46,5 +46,17 @@ describe('managed Codex login ownership', () => {
     expect(loginStatusFor(a, 'login-1')).toEqual({ state: 'expired' });
     manager.start.mockResolvedValue(waiting);
     expect(await startLoginFor(b)).toMatchObject({ ok: true, loginId: 'login-1' });
+  });
+
+  it('returns the manager safe failure code without exposing diagnostic text', async () => {
+    manager.start.mockResolvedValue({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'secret account diagnostic', errorCode: 'codex_executable_unavailable' });
+    expect(await startLoginFor(a)).toEqual({ ok: false, reason: 'codex_executable_unavailable' });
+  });
+
+  it('turns unexpected manager rejections into safe bounded failures', async () => {
+    manager.start.mockRejectedValue(new Error('token=secret account=private'));
+    expect(await startLoginFor(a)).toEqual({ ok: false, reason: 'codex_start_failed' });
+    manager.refreshAccount.mockRejectedValue(new Error('token=secret account=private'));
+    expect(await refreshCodexAccount()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Codex app-server could not initialize.', errorCode: 'codex_initialization_failed' });
   });
 });

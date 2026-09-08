@@ -23,13 +23,23 @@ export interface CodexLoginPrompt {
   readonly expiresAtMs: number;
 }
 
+export type CodexLoginErrorCode =
+  | 'storage_unavailable'
+  | 'codex_configuration_invalid'
+  | 'codex_executable_unavailable'
+  | 'codex_initialization_failed'
+  | 'device_auth_unavailable'
+  | 'provider_unavailable'
+  | 'account_verification_failed'
+  | 'codex_start_failed';
+
 export type CodexLoginStatus =
-  | { readonly state: 'unavailable'; readonly cliAvailable: false; readonly signedIn: false; readonly error: string }
+  | { readonly state: 'unavailable'; readonly cliAvailable: false; readonly signedIn: false; readonly error: string; readonly errorCode: CodexLoginErrorCode }
   | { readonly state: 'signedOut'; readonly cliAvailable: true; readonly signedIn: false }
   | { readonly state: 'waiting'; readonly cliAvailable: true; readonly signedIn: false; readonly login: CodexLoginPrompt }
   | { readonly state: 'signedIn'; readonly cliAvailable: true; readonly signedIn: true; readonly authMode: 'chatgpt' }
   | { readonly state: 'expired'; readonly cliAvailable: true; readonly signedIn: false; readonly error: string }
-  | { readonly state: 'failed'; readonly cliAvailable: true; readonly signedIn: false; readonly error: string };
+  | { readonly state: 'failed'; readonly cliAvailable: true; readonly signedIn: false; readonly error: string; readonly errorCode: 'account_verification_failed' | 'codex_start_failed' };
 
 export interface CodexLoginManager {
   status(): CodexLoginStatus;
@@ -92,7 +102,7 @@ export function createCodexLoginManager(config: CodexLoginManagerConfig = {}): C
     if (session === null || completion.loginId !== session.login.loginId) return;
     if (!completion.success) {
       endActive();
-      current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in did not complete.' };
+      current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in did not complete.', errorCode: 'codex_start_failed' };
       return;
     }
     try {
@@ -104,12 +114,12 @@ export function createCodexLoginManager(config: CodexLoginManagerConfig = {}): C
         notifyAccountChanged();
         current = { state: 'signedIn', cliAvailable: true, signedIn: true, authMode: 'chatgpt' };
       } else {
-        current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in could not be verified.' };
+        current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in could not be verified.', errorCode: 'account_verification_failed' };
       }
     } catch {
       if (active !== session) return;
       endActive();
-      current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in could not be verified.' };
+      current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in could not be verified.', errorCode: 'account_verification_failed' };
     }
   };
 
@@ -128,9 +138,10 @@ export function createCodexLoginManager(config: CodexLoginManagerConfig = {}): C
           current = isRecord(account) && account['type'] === 'chatgpt'
             ? { state: 'signedIn', cliAvailable: true, signedIn: true, authMode: 'chatgpt' }
             : { state: 'signedOut', cliAvailable: true, signedIn: false };
-        } catch {
+        } catch (error) {
           if (generation !== expectedGeneration || active !== null) return current;
-          current = { state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Codex is unavailable on this host.' };
+          const failure = loginFailure(error, opened === null ? 'initialize' : 'account');
+          current = { state: 'unavailable', cliAvailable: false, signedIn: false, ...failure };
         } finally { opened?.client.stop(); }
         return current;
       })().finally(() => { refreshing = null; });
@@ -164,17 +175,18 @@ export function createCodexLoginManager(config: CodexLoginManagerConfig = {}): C
           const unsubscribeClose = opened.client.onClose(() => {
             if (active !== session) return;
             endActive();
-            current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in was interrupted.' };
+            current = { state: 'failed', cliAvailable: true, signedIn: false, error: 'ChatGPT sign-in was interrupted.', errorCode: 'codex_start_failed' };
           });
           active.unsubscribe = () => { unsubscribe(); unsubscribeClose(); };
           current = { state: 'waiting', cliAvailable: true, signedIn: false, login: parsed };
           opened = null;
           if (early !== null) void finish(early);
           return current;
-        } catch {
+        } catch (error) {
           opened?.client.stop();
           if (generation !== expectedGeneration) return current;
-          current = { state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Could not start ChatGPT sign-in.' };
+          const failure = loginFailure(error, opened === null ? 'initialize' : 'login');
+          current = { state: 'unavailable', cliAvailable: false, signedIn: false, ...failure };
           return current;
         }
       })().finally(() => { starting = null; });
@@ -199,9 +211,10 @@ export function createCodexLoginManager(config: CodexLoginManagerConfig = {}): C
         if (generation !== expectedGeneration) return current;
         current = { state: 'signedOut', cliAvailable: true, signedIn: false };
         notifyAccountChanged();
-      } catch {
+      } catch (error) {
         if (generation !== expectedGeneration) return current;
-        current = { state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Could not sign out of ChatGPT.' };
+        const failure = loginFailure(error, opened === null ? 'initialize' : 'login');
+        current = { state: 'unavailable', cliAvailable: false, signedIn: false, ...failure };
       } finally { opened?.client.stop(); }
       return current;
     },
@@ -234,4 +247,26 @@ function safeHttpsUrl(value: unknown): string {
   const url = new URL(text);
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.hostname !== 'auth.openai.com') throw new Error('unsafe Codex verification URL');
   return url.toString();
+}
+
+function loginFailure(error: unknown, phase: 'initialize' | 'login' | 'account'): { readonly error: string; readonly errorCode: CodexLoginErrorCode } {
+  const text = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (text.includes('must not contain external config') || text.includes('must not contain custom skills')) {
+    return { error: 'Managed Codex configuration is not isolated.', errorCode: 'codex_configuration_invalid' };
+  }
+  if (text.includes('codex_home') || text.includes('dedicated codex home') || text.includes('eacces') || text.includes('permission denied')) {
+    return { error: 'Managed Codex storage is unavailable.', errorCode: 'storage_unavailable' };
+  }
+  if (text.includes('enoent') || text.includes('could not start codex app-server')) {
+    return { error: 'The Codex executable is unavailable on this host.', errorCode: 'codex_executable_unavailable' };
+  }
+  if (phase === 'initialize') return { error: 'Codex app-server could not initialize.', errorCode: 'codex_initialization_failed' };
+  if (text.includes('device') && (text.includes('disabled') || text.includes('unsupported') || text.includes('not allowed') || text.includes('unavailable'))) {
+    return { error: 'ChatGPT device sign-in is unavailable for this Codex installation.', errorCode: 'device_auth_unavailable' };
+  }
+  if (text.includes('network') || text.includes('connect') || text.includes('dns') || text.includes('timed out') || text.includes('timeout')) {
+    return { error: 'ChatGPT could not be reached from this host.', errorCode: 'provider_unavailable' };
+  }
+  if (phase === 'account') return { error: 'ChatGPT sign-in could not be verified.', errorCode: 'account_verification_failed' };
+  return { error: 'Could not start ChatGPT sign-in.', errorCode: 'codex_start_failed' };
 }

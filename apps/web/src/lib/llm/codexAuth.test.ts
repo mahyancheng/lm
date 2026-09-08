@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cancelCodexLogin, codexEffectiveReady, createCodexLoginLifecycle, pollCodexLogin, startCodexLogin } from './codexAuth';
+import { cancelCodexLogin, codexCooldownLine, codexEffectiveReady, codexLoginFailureLine, codexRetryAfterSeconds, codexTerminalLoginLine, createCodexLoginLifecycle, pollCodexLogin, startCodexLogin } from './codexAuth';
 
 const response = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -46,6 +46,50 @@ describe('managed Codex login client', () => {
     await expect(pollCodexLogin('l1')).resolves.toMatchObject({ kind: 'ok', value: { state: 'pending' } });
     await expect(pollCodexLogin('l1')).resolves.toMatchObject({ kind: 'ok', value: { state: 'connected' } });
     expect(fetch.mock.calls[1]![0]).toContain('loginId=l1');
+  });
+
+  it('keeps a start request alive past ten seconds, then aborts at its bounded deadline', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetch = vi.fn().mockImplementation((_path: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init.signal as AbortSignal;
+      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('fetch', fetch);
+
+    const request = startCodexLogin();
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(signal?.aborted).toBe(true);
+    await expect(request).resolves.toEqual({ kind: 'unreachable' });
+    vi.useRealTimers();
+  });
+
+  it('keeps a structured startup failure useful while ignoring arbitrary server detail', async () => {
+    const fetch = vi.fn().mockResolvedValue(response({ reason: 'codex_executable_unavailable', detail: 'token=secret\nstack trace' }, 503));
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(startCodexLogin()).resolves.toEqual({ kind: 'refused', status: 503, reason: 'codex_executable_unavailable' });
+    expect(codexLoginFailureLine('account_verification_failed')).toBe('This server could not verify the ChatGPT account. Check the server setup.');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('uses a bounded Retry-After cooldown and does not retry a failed start', async () => {
+    const fetch = vi.fn().mockResolvedValue(response({ reason: 'rate_limited' }, 429));
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('fetch', fetch);
+    // The response helper keeps headers available to the client boundary.
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ reason: 'rate_limited' }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '12' } }));
+
+    await expect(startCodexLogin()).resolves.toEqual({ kind: 'refused', status: 429, reason: 'rate_limited', retryAfterSeconds: 12 });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(codexRetryAfterSeconds('999999')).toBe(3600);
+    expect(codexRetryAfterSeconds('not-a-number')).toBeUndefined();
+    expect(codexCooldownLine(12)).toBe('Too many sign-in attempts. Try again in 12 seconds.');
+    expect(codexTerminalLoginLine('error')).toBe('ChatGPT sign-in could not be completed. Try again.');
   });
 
   it('maps refused start and sends cancellation for an expired or abandoned flow', async () => {

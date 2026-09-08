@@ -89,11 +89,11 @@ export function loginStatusFor(principal: Principal, loginId: string): { readonl
 
 export type StartLoginResult =
   | { readonly ok: true; readonly loginId: string; readonly userCode: string; readonly verificationUrl: string; readonly expiresAt: string }
-  | { readonly ok: false; readonly reason: 'login_in_progress' | 'already_connected' | 'unavailable'; readonly detail?: string };
+  | { readonly ok: false; readonly reason: 'login_in_progress' | 'already_connected' | 'storage_unavailable' | 'codex_configuration_invalid' | 'codex_executable_unavailable' | 'codex_initialization_failed' | 'device_auth_unavailable' | 'provider_unavailable' | 'account_verification_failed' | 'codex_start_failed' };
 
 export async function startLoginFor(principal: Principal): Promise<StartLoginResult> {
   const storageError = prepareCodexHome();
-  if (storageError !== null) return { ok: false, reason: 'unavailable', detail: storageError };
+  if (storageError !== null) return { ok: false, reason: 'storage_unavailable' };
   const actor = actorFor(principal);
   const held = store();
   reconcileOwned();
@@ -102,9 +102,11 @@ export async function startLoginFor(principal: Principal): Promise<StartLoginRes
   if (held.starting !== null) return held.starting.actor === actor ? held.starting.result : { ok: false, reason: 'login_in_progress' };
 
   const result = (async (): Promise<StartLoginResult> => {
-    const status = await codexLoginManager().start();
+    let status: CodexLoginStatus;
+    try { status = await codexLoginManager().start(); }
+    catch { return { ok: false, reason: 'codex_start_failed' }; }
     if (status.state === 'signedIn') return { ok: false, reason: 'already_connected' };
-    if (status.state !== 'waiting') return { ok: false, reason: 'unavailable', detail: status.state === 'unavailable' || status.state === 'failed' ? status.error : undefined };
+    if (status.state !== 'waiting') return { ok: false, reason: status.state === 'unavailable' ? status.errorCode : 'codex_start_failed' };
     held.owned = { loginId: status.login.loginId, actor, active: true, terminal: null };
     return { ok: true, loginId: status.login.loginId, userCode: status.login.userCode, verificationUrl: status.login.verificationUrl, expiresAt: new Date(status.login.expiresAtMs).toISOString() };
   })();
@@ -131,8 +133,9 @@ export async function cancelLoginFor(principal: Principal, loginId: string): Pro
 /** Health is allowed to perform the explicit read-only account truth check. */
 export async function refreshCodexAccount(): Promise<CodexLoginStatus> {
   const storageError = prepareCodexHome();
-  if (storageError !== null) return { state: 'unavailable', cliAvailable: false, signedIn: false, error: storageError };
-  return codexLoginManager().refreshAccount();
+  if (storageError !== null) return { state: 'unavailable', cliAvailable: false, signedIn: false, error: storageError, errorCode: 'storage_unavailable' };
+  try { return await codexLoginManager().refreshAccount(); }
+  catch { return { state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Codex app-server could not initialize.', errorCode: 'codex_initialization_failed' }; }
 }
 
 export async function logoutCodex(): Promise<CodexLoginStatus> {

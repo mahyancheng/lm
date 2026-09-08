@@ -40,6 +40,28 @@ describe('managed Codex login routes', () => {
     expect(mocks.start).toHaveBeenCalledWith(principal);
   });
 
+  it('preserves a safe typed startup failure in a 503 response', async () => {
+    mocks.start.mockResolvedValue({ ok: false, reason: 'codex_initialization_failed' });
+    const response = await POST(new Request('http://localhost/api/llm/codex/login', { method: 'POST', headers, body: '{}' }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ ok: false, reason: 'codex_initialization_failed' });
+  });
+
+  it('preserves authorization and rate-limit responses, including Retry-After', async () => {
+    mocks.gate.mockResolvedValueOnce(Response.json({ ok: false, reason: 'setup_secret_required' }, { status: 403 }));
+    const forbidden = await POST(new Request('http://localhost/api/llm/codex/login', { method: 'POST', headers, body: '{}' }));
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toEqual({ ok: false, reason: 'setup_secret_required' });
+    expect(mocks.start).not.toHaveBeenCalled();
+
+    mocks.gate.mockResolvedValueOnce(Response.json({ ok: false, reason: 'rate_limited' }, { status: 429, headers: { 'retry-after': '47' } }));
+    const limited = await POST(new Request('http://localhost/api/llm/codex/login', { method: 'POST', headers, body: '{}' }));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('47');
+    expect(await limited.json()).toEqual({ ok: false, reason: 'rate_limited' });
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
   it('does not invalidate inference when cancellation was not authorized for the login', async () => {
     mocks.cancel.mockResolvedValue({ ok: false, reason: 'forbidden' });
     const response = await DELETE(new Request('http://localhost/api/llm/codex/login', { method: 'DELETE', headers, body: JSON.stringify({ loginId: 'someone_else' }) }));

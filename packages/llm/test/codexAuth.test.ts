@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createCodexLoginManager, type CodexAppServerProcess } from '../src';
 
-function fakeProcess(options: { url?: string; signedIn?: boolean; earlyCompletion?: boolean } = {}) {
+function fakeProcess(options: { url?: string; signedIn?: boolean; earlyCompletion?: boolean; initializeError?: string; loginError?: string } = {}) {
   const sent: Record<string, unknown>[] = [];
   const queue: string[] = [];
   let wake: (() => void) | null = null;
@@ -16,9 +19,10 @@ function fakeProcess(options: { url?: string; signedIn?: boolean; earlyCompletio
     write(line) {
       const message = JSON.parse(line) as Record<string, unknown>;
       sent.push(message);
-      if (message['method'] === 'initialize') push({ id: message['id'], result: {} });
+      if (message['method'] === 'initialize') push(options.initializeError === undefined ? { id: message['id'], result: {} } : { id: message['id'], error: { code: -32000, message: options.initializeError } });
       if (message['method'] === 'account/read') push({ id: message['id'], result: { account: signedIn ? { type: 'chatgpt' } : null } });
       if (message['method'] === 'account/login/start') {
+        if (options.loginError !== undefined) { push({ id: message['id'], error: { code: -32000, message: options.loginError } }); return; }
         if (options.earlyCompletion) { signedIn = true; push({ method: 'account/login/completed', params: { loginId: 'login-1', success: true } }); }
         push({ id: message['id'], result: { type: 'chatgptDeviceCode', loginId: 'login-1', userCode: 'ABCD-EFGH', verificationUrl: options.url ?? 'https://auth.openai.com/device' } });
       }
@@ -88,8 +92,27 @@ describe('Codex managed ChatGPT login', () => {
   it('rejects unsafe verification URLs without exposing them', async () => {
     const process = fakeProcess({ url: 'http://attacker.test/steal' });
     const manager = createCodexLoginManager({ spawn: () => process, env: {}, rpcTimeoutMs: 100 });
-    expect(await manager.start()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Could not start ChatGPT sign-in.' });
+    expect(await manager.start()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Could not start ChatGPT sign-in.', errorCode: 'codex_start_failed' });
     expect(process.killed).toBe(true);
+  });
+
+  it('reports sanitized initialization and explicit device-auth failures', async () => {
+    const initialization = createCodexLoginManager({ spawn: () => fakeProcess({ initializeError: 'internal bootstrap detail' }), env: {}, rpcTimeoutMs: 100 });
+    expect(await initialization.start()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Codex app-server could not initialize.', errorCode: 'codex_initialization_failed' });
+
+    const deviceAuth = createCodexLoginManager({ spawn: () => fakeProcess({ loginError: 'device authorization is disabled by workspace policy' }), env: {}, rpcTimeoutMs: 100 });
+    expect(await deviceAuth.start()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'ChatGPT device sign-in is unavailable for this Codex installation.', errorCode: 'device_auth_unavailable' });
+  });
+
+  it('distinguishes an unsafe dedicated home before attempting to launch Codex', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'frontier-login-home-'));
+    try {
+      await writeFile(join(home, 'config.toml'), '[mcp_servers.external]\n');
+      const manager = createCodexLoginManager({ codexHome: home, env: {}, command: '/not/reached', rpcTimeoutMs: 100 });
+      expect(await manager.start()).toEqual({ state: 'unavailable', cliAvailable: false, signedIn: false, error: 'Managed Codex configuration is not isolated.', errorCode: 'codex_configuration_invalid' });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it('probes and logs out with sanitized process environment', async () => {

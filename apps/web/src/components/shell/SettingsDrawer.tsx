@@ -50,7 +50,7 @@ import {
   tokenDraftIssue,
 } from '@/lib/llm/token';
 import { resetLlmHealth, type LlmHealth } from '@/lib/llm/client';
-import { cancelCodexLogin, codexEffectiveReady, codexLoginFailureLine, createCodexLoginLifecycle, logoutCodex, pollCodexLogin, startCodexLogin, type CodexLoginStart, type CodexLoginState } from '@/lib/llm/codexAuth';
+import { cancelCodexLogin, codexCooldownLine, codexEffectiveReady, codexTerminalLoginLine, codexLoginFailureLine, createCodexLoginLifecycle, logoutCodex, pollCodexLogin, startCodexLogin, type CodexLoginStart, type CodexLoginState } from '@/lib/llm/codexAuth';
 import { buildStampLine, clientBuildStamp } from '@/lib/version';
 import type { SettingsSection } from './settingsBus';
 import {
@@ -271,6 +271,7 @@ function CodexSection({
   const [state, setState] = useState<CodexLoginState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [copied, setCopied] = useState(false);
   const [statusFetch, setStatusFetch] = useState<TokenFetch<TokenStatus> | null>(null);
   const [secretDraft, setSecretDraft] = useState('');
@@ -301,6 +302,12 @@ function CodexSection({
     stopPolling();
     if (copyTimer.current !== null) clearTimeout(copyTimer.current);
   }, [stopPolling]);
+
+  useEffect(() => {
+    if (cooldownSeconds < 1) return;
+    const countdown = setTimeout(() => setCooldownSeconds((seconds) => Math.max(0, seconds - 1)), 1_000);
+    return () => clearTimeout(countdown);
+  }, [cooldownSeconds]);
 
   const check = useCallback(async (loginId: string, generation: number): Promise<void> => {
     if (!lifecycle.current.current(generation)) return;
@@ -334,12 +341,12 @@ function CodexSection({
       onChanged();
     } else {
       stopPolling();
-      setError(result.value.error ?? (result.value.state === 'expired' ? 'This sign-in code expired.' : 'Sign-in was cancelled.'));
+      setError(codexTerminalLoginLine(result.value.state));
     }
   }, [onChanged, stopPolling]);
 
   async function begin(): Promise<void> {
-    if (busy || !panel.canWrite) return;
+    if (busy || cooldownSeconds > 0 || !panel.canWrite) return;
     stopPolling();
     const generation = lifecycle.current.begin();
     setBusy(true); setError(null); setState(null); deadline.current = null;
@@ -351,7 +358,10 @@ function CodexSection({
       setState('pending');
       deadline.current = Date.parse(result.value.expiresAt);
       timer.current = setTimeout(() => void check(result.value.loginId, generation), 700);
-    } else setError(result.kind === 'refused' ? codexLoginFailureLine(result.reason) : 'Could not start ChatGPT sign-in. Try again.');
+    } else {
+      if (result.kind === 'refused' && result.retryAfterSeconds !== undefined) setCooldownSeconds(result.retryAfterSeconds);
+      setError(result.kind === 'refused' ? codexLoginFailureLine(result.reason) : 'Could not start ChatGPT sign-in. Try again.');
+    }
     setBusy(false);
   }
 
@@ -446,8 +456,8 @@ function CodexSection({
         ) : flow === null ? (
           <>
             <p className="text-[10.5px] leading-relaxed text-ink-dim">Connect this game to your ChatGPT account with a short code. Your account powers the game’s company bots on this server.</p>
-            <button type="button" className="btn btn-primary tap-target w-full justify-center" disabled={busy || !panel.canWrite} onClick={() => void begin()}>
-              {busy ? 'Preparing sign-in…' : 'Connect ChatGPT'}
+            <button type="button" className="btn btn-primary tap-target w-full justify-center" disabled={busy || cooldownSeconds > 0 || !panel.canWrite} onClick={() => void begin()}>
+              {busy ? 'Preparing sign-in…' : cooldownSeconds > 0 ? `Try again in ${cooldownSeconds}s` : 'Connect ChatGPT'}
             </button>
           </>
         ) : (
@@ -466,7 +476,7 @@ function CodexSection({
           </>
         )}
       </div>
-      {error !== null && flow === null ? <p className="rounded-card border border-loss/25 bg-loss-wash px-3.5 py-2.5 text-[10.5px] text-loss">{error}</p> : null}
+      {error !== null && flow === null ? <p className="rounded-card border border-loss/25 bg-loss-wash px-3.5 py-2.5 text-[10.5px] text-loss">{cooldownSeconds > 0 ? codexCooldownLine(cooldownSeconds) : error}</p> : null}
     </section>
   );
 }

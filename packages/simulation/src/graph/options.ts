@@ -34,7 +34,7 @@ import { OPEN_MARKET_PREMIUM, namedSupplierPriceUsd, openMarketPriceUsd, unitCos
 import { lineNodeIdOf, lineOf, ownedNodeIdsOf, producersOf, unitsSoldLastQuarterOf } from './lines';
 import { dataSelfSupplyShare } from './data';
 import { licenceOfferOf, licenceUpfrontUsd, ownsNodeOutright } from './licensing';
-import { resolveFill, type ResolvedFill } from './slots';
+import { resolveFill, researchInputUnavailable, type ResolvedFill } from './slots';
 
 /* -------------------------------------------------------------------------- */
 /*  Routes                                                                     */
@@ -270,9 +270,10 @@ function slotCandidate(
   // Blocked is the strong claim `resolveFill` makes: a blocking slot whose node
   // nobody in the world owns or licences. A pool that covers the whole draw, or
   // a line of the company's own, never blocks.
-  const blocked = slot.blocking && selfShare < 1 && ownLine === undefined && producersOf(state, candidate.id, cache).length === 0 && !owned.has(candidate.id);
+  const unavailableResearch = researchInputUnavailable(state, company.id, candidate.id);
+  const blocked = unavailableResearch || slot.blocking && selfShare < 1 && ownLine === undefined && producersOf(state, candidate.id, cache).length === 0 && !owned.has(candidate.id);
   const spotUsd = openMarketPriceUsd(state, candidate.id);
-  routes.push({
+  if (!unavailableResearch) routes.push({
     kind: 'market',
     supplierCompanyId: null,
     supplierProductId: null,

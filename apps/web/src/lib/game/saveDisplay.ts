@@ -17,8 +17,8 @@ import type { SaveFile, SlotSummary } from './persistence';
 export const DEFAULT_COMPANY_NAME = 'Player Ventures';
 export const DEFAULT_FOUNDER_NAME = 'Avery Sinclair';
 
-/** Every demo session opens in 2027; a save records quarter indices, not years. */
-export const DEMO_START_YEAR = 2027;
+/** The reset AI-boom campaign opens in 2023; a save records quarter indices, not years. */
+export const DEMO_START_YEAR = 2023;
 
 /** The company a save belongs to, with the classic world as the fallback. */
 export function savedCompanyName(setup: Pick<NewGameSetup, 'companyName'> | null): string {

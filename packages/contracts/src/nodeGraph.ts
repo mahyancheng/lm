@@ -1,3 +1,4 @@
+import { buildAiModelNodes, buildAiDatasets, AI_MODEL_DESIGNS } from './aiModels';
 /**
  * @frontier/contracts — nodeGraph.ts
  *
@@ -100,12 +101,12 @@ import {
 
 /** Belief defaults per maturity, so ninety rows do not repeat six numbers each. */
 const MATURITY_BELIEF: Readonly<Record<NodeMaturity, { confidence: number; novelty: number; plausibility: number; window: readonly [number, number] }>> = {
-  commodity: { confidence: 0.99, novelty: 0.02, plausibility: 1, window: [2027, 2027] },
-  established: { confidence: 0.95, novelty: 0.1, plausibility: 0.98, window: [2027, 2028] },
-  emerging: { confidence: 0.72, novelty: 0.36, plausibility: 0.9, window: [2028, 2031] },
-  frontier: { confidence: 0.46, novelty: 0.62, plausibility: 0.78, window: [2030, 2035] },
-  speculative: { confidence: 0.22, novelty: 0.85, plausibility: 0.54, window: [2034, 2042] },
-  discredited: { confidence: 0.08, novelty: 0.7, plausibility: 0.24, window: [2040, 2048] },
+  commodity: { confidence: 0.99, novelty: 0.02, plausibility: 1, window: [2023, 2023] },
+  established: { confidence: 0.95, novelty: 0.1, plausibility: 0.98, window: [2023, 2024] },
+  emerging: { confidence: 0.72, novelty: 0.36, plausibility: 0.9, window: [2024, 2027] },
+  frontier: { confidence: 0.46, novelty: 0.62, plausibility: 0.78, window: [2026, 2031] },
+  speculative: { confidence: 0.22, novelty: 0.85, plausibility: 0.54, window: [2030, 2038] },
+  discredited: { confidence: 0.08, novelty: 0.7, plausibility: 0.24, window: [2036, 2044] },
 };
 
 /** Programme cost defaults per maturity, before the tier factor below. */
@@ -1528,8 +1529,8 @@ const AI_NODES: readonly EconomicNode[] = [
   }),
   node({
     id: 'sys_frontier_model',
-    label: 'Frontier model',
-    blurb: 'A trained and aligned frontier model, licensed for eight quarters at a time.',
+    label: 'Early language model',
+    blurb: 'A first-wave language model, licensed for eight quarters. Commercial uses are still being discovered.',
     sector: 'ai',
     tier: 4,
     role: 'model',
@@ -1605,7 +1606,7 @@ const AI_NODES: readonly EconomicNode[] = [
     // ONE slot, and it is the choice the owner asked for: the model behind the
     // API. A licence serves about twenty million million-token units over its
     // eight quarters, so one unit draws a twenty-millionth of one.
-    slots: [slot('model', 'model', 0.000_000_05, 'R', { def: 'sys_frontier_model' })],
+    slots: [slot('model', 'model', 0.000_000_05, 'R', { def: 'sys_frontier_model', accepts: ['sys_frontier_model', 'sys_efficient_small_model', ...AI_MODEL_DESIGNS.filter(d => d.output === 'text' || d.output === 'code').map(d => d.nodeId)] })],
     capacity: 'compute',
     // One accelerator serves roughly 30,000 million-token units a quarter.
     draw: 0.000_033_3,
@@ -1683,7 +1684,7 @@ const AI_NODES: readonly EconomicNode[] = [
     requires: ['svc_inference_api'],
     slots: [
       slot('model', 'inference_api', 90, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', 1, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', 1, 'R', { def: 'svc_copilot_framework' }),
       DELIVERY_SLOT,
     ],
     capacity: 'compute',
@@ -1769,7 +1770,7 @@ const AI_NODES: readonly EconomicNode[] = [
     price: 600,
     slots: [
       slot('model', 'inference_api', 40, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', 1, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', 1, 'R', { def: 'svc_copilot_framework' }),
       DELIVERY_SLOT,
     ],
     capacity: 'compute',
@@ -2619,7 +2620,7 @@ const CONSUMER_NODES: readonly EconomicNode[] = [
     price: 9,
     slots: [
       slot('model', 'inference_api', 0.1, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_copilot_framework' }),
       BEHAVIOUR_SLOT(0.000_000_01),
       DELIVERY_SLOT,
     ],
@@ -2647,7 +2648,7 @@ const CONSUMER_NODES: readonly EconomicNode[] = [
     price: 36,
     slots: [
       slot('model', 'inference_api', 0.05, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_copilot_framework' }),
       BEHAVIOUR_SLOT(0.000_000_005),
       DELIVERY_SLOT,
     ],
@@ -2675,7 +2676,7 @@ const CONSUMER_NODES: readonly EconomicNode[] = [
     price: 16,
     slots: [
       slot('model', 'inference_api', 0.4, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_copilot_framework' }),
       BEHAVIOUR_SLOT(0.000_000_005),
       DELIVERY_SLOT,
     ],
@@ -2703,7 +2704,7 @@ const CONSUMER_NODES: readonly EconomicNode[] = [
     price: 4,
     slots: [
       slot('model', 'inference_api', 0.05, 'R', { def: 'svc_inference_api', label: 'Model' }),
-      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_agent_harness' }),
+      slot('harness', 'harness', CONSUMER_HARNESS_SEATS, 'R', { def: 'svc_copilot_framework' }),
       BEHAVIOUR_SLOT(0.000_000_005),
       DELIVERY_SLOT,
     ],
@@ -2822,7 +2823,9 @@ export function withDerivedMarkets(nodes: readonly EconomicNode[]): readonly Eco
 export const ECONOMIC_NODES: readonly EconomicNode[] = withDerivedMarkets([
   ...MANUFACTURING_NODES,
   ...ENERGY_NODES,
-  ...AI_NODES,
+  ...AI_NODES.map(entry => ({ ...entry, endDemandBaseUnits: Math.max(1, Math.round(entry.endDemandBaseUnits * 0.15)), researchCostRangeUsd: entry.researchCostRangeUsd.map(cost => Math.round(cost * 0.005)) as [number, number] })),
+  ...buildAiDatasets(AI_NODES.find(node => node.id === 'dat_web_corpus')!),
+  ...buildAiModelNodes(AI_NODES.find(node => node.id === 'sys_frontier_model')!),
   ...ROBOTICS_NODES,
   ...LOGISTICS_NODES,
   ...CONSUMER_NODES,

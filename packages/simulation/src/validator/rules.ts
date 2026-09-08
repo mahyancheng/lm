@@ -1,3 +1,4 @@
+import { researchInputUnavailable } from '../graph/slots';
 /**
  * @frontier/simulation — validator/rules.ts
  *
@@ -693,6 +694,10 @@ function validateSlotChoices(
       continue;
     }
     seen.add(slot.id);
+    if (choice.nodeId !== null && researchInputUnavailable(ctx.draft, ctx.company.id, choice.nodeId)) {
+      verdict.reject('requirement_not_met', 'This research design has no available supplier. Research and produce it, or buy from a published supplier.');
+      return null;
+    }
     const checked = checkSlotChoice(ctx, node, slot, choice, ownProductId, reasons);
     if (checked === null) {
       verdict.reject('requirement_not_met', `${node.label} needs a ${slot.label.toLowerCase()}: that slot cannot be left empty.`);
@@ -1533,6 +1538,10 @@ const fillSlot: Rule<'fill_slot'> = (intent, verdict, ctx) => {
     return;
   }
   const reasons: string[] = [];
+  if (intent.nodeId !== null && researchInputUnavailable(ctx.draft, ctx.company.id, intent.nodeId)) {
+    verdict.reject('requirement_not_met', 'This research design has no available supplier. Research and produce it, or buy from a published supplier.');
+    return;
+  }
   const checked = checkSlotChoice(ctx, node, slot, intent, product.id, reasons);
   if (checked === null) return; // unreachable: the required-empty case was refused above
   if (checked.supplierCompanyId !== intent.supplierCompanyId || checked.supplierProductId !== intent.supplierProductId) {

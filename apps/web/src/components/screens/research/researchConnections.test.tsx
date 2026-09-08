@@ -295,7 +295,7 @@ describe('the research picture is the engine\'s answer, arranged', () => {
   it('says what the programme buys, in the engine\'s order: something to sell, then something to research', () => {
     const state = createWorld3Session();
     const company = playerOf(state);
-    const { view, model } = pictureOf(state, company);
+    const { view, model } = pictureOf(state, company, { showAllOptions: true });
 
     const option = view.options.find((entry) => othersOf(entry).length >= 2);
     expect(option).toBeDefined();

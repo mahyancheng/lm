@@ -1,3 +1,4 @@
+import { AI_MODEL_DESIGNS, MAX_SLOT_ACCEPTS } from '../src';
 /**
  * The world-3 node table, proved rather than trusted.
  *
@@ -111,8 +112,8 @@ function slotOf(nodeId: string, slotId: string): NodeSlot {
 /* -------------------------------------------------------------------------- */
 
 describe('the node table', () => {
-  it('carries the whole economy: ninety-seven rows, every one a valid node', () => {
-    expect(ECONOMIC_NODES.length).toBe(97);
+  it('carries the whole economy: the expanded AI research catalogue, every one a valid node', () => {
+    expect(ECONOMIC_NODES.length).toBe(97 + AI_MODEL_DESIGNS.length + 5);
     for (const entry of ECONOMIC_NODES) expect(() => EconomicNodeSchema.parse(entry)).not.toThrow();
   });
 
@@ -256,7 +257,7 @@ describe('roles', () => {
     for (const role of ROLE_CHOICE_REQUIRED) {
       expect(economicNodesOfRole(role).length, `role ${role} offers no choice`).toBeGreaterThanOrEqual(2);
     }
-    expect(economicNodesOfRole('model').map((entry) => entry.id)).toEqual(['sys_frontier_model', 'sys_efficient_small_model', 'sys_robot_policy_model']);
+    expect(economicNodesOfRole('model').map((entry) => entry.id)).toEqual(['sys_frontier_model', 'sys_efficient_small_model', ...AI_MODEL_DESIGNS.map(d => d.nodeId), 'sys_robot_policy_model']);
     expect(economicNodesOfRole('harness').map((entry) => entry.id)).toEqual(['svc_agent_harness', 'svc_copilot_framework']);
     expect(economicNodesOfRole('robot').length).toBe(4);
   });
@@ -296,8 +297,8 @@ describe('slots', () => {
     // wafer → die: a blocking slot narrowed to the logic wafer, at the same quantity.
     expect(slotOf('cmp_logic_die', 'wafer')).toMatchObject({ role: 'wafer', qtyPerUnit: 0.022, required: true, blocking: true, accepts: ['mat_wafer_300mm'], defaultNodeId: 'mat_wafer_300mm', kind: 'input' });
     // model → API: ONE slot of role model, open to every model, defaulting to the frontier.
-    expect(slotOf('svc_inference_api', 'model')).toMatchObject({ role: 'model', required: true, blocking: false, accepts: [], defaultNodeId: 'sys_frontier_model', kind: 'input' });
-    expect(admissibleNodesFor('svc_inference_api', 'model').map((entry) => entry.id)).toEqual(['sys_frontier_model', 'sys_efficient_small_model', 'sys_robot_policy_model']);
+    expect(slotOf('svc_inference_api', 'model')).toMatchObject({ role: 'model', required: true, blocking: false, defaultNodeId: 'sys_frontier_model', kind: 'input' });
+    expect(admissibleNodesFor('svc_inference_api', 'model').map((entry) => entry.id)).toEqual(['sys_frontier_model', 'sys_efficient_small_model', ...AI_MODEL_DESIGNS.filter(d => d.output === 'text' || d.output === 'code').map(d => d.nodeId)]);
     // API → app: required, never blocking, at today's ninety million tokens a seat; beside it a harness and an empty delivery slot.
     expect(slotOf('app_agent_platform', 'model')).toMatchObject({ role: 'inference_api', qtyPerUnit: 90, required: true, blocking: false, defaultNodeId: 'svc_inference_api' });
     expect(slotOf('app_agent_platform', 'harness')).toMatchObject({ role: 'harness', required: true, blocking: false, accepts: [] });
@@ -338,7 +339,7 @@ describe('slots', () => {
     expect(NodeSlotSchema.safeParse(good).success).toBe(true);
     expect(NodeSlotSchema.safeParse({ ...good, role: 'not_a_role' }).success).toBe(false);
     expect(NodeSlotSchema.safeParse({ ...good, qtyPerUnit: -1 }).success).toBe(false);
-    expect(NodeSlotSchema.safeParse({ ...good, accepts: new Array<string>(7).fill('x') }).success).toBe(false);
+    expect(NodeSlotSchema.safeParse({ ...good, accepts: new Array<string>(MAX_SLOT_ACCEPTS + 1).fill('x') }).success).toBe(false);
     expect(NodeSlotSchema.safeParse({ ...good, kind: 'output' }).success).toBe(false);
   });
 });

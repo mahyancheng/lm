@@ -1,3 +1,4 @@
+import { availableAtAiBoomOpening, AI_BOOM_START_YEAR, AI_BOOM_SCENARIO_ID, OPENING_AI_MODEL_ID } from '@frontier/contracts';
 /**
  * @frontier/simulation — scenario/world3
  *
@@ -130,7 +131,8 @@ export const W3_DEFAULT_SETUP: NewGameSetup = NewGameSetupSchema.parse({
 export function w3SeedLinesFor(setup: NewGameSetup): Readonly<Record<string, readonly W3SeedLine[]>> {
   const out: Record<string, readonly W3SeedLine[]> = {};
   for (const seed of V2_COMPANY_SEEDS) out[seed.id] = w3RivalLinesFor(seed.id);
-  out[W2_COMPANIES.player] = [BACKGROUND_OPENING_LINE[setup.backgroundId]];
+  const opening = BACKGROUND_OPENING_LINE[setup.backgroundId];
+  out[W2_COMPANIES.player] = availableAtAiBoomOpening(opening.nodeId) ? [opening] : [];
   return out;
 }
 
@@ -190,7 +192,7 @@ export function w3NodeOwnership(subjects: readonly OwnershipSubject[]): Readonly
       subject.background !== null
         ? startingNodesFor(subject.background)
         : startingNodesForRival(subject.sector, subject.capabilityLevel ?? 0, subject.lineNodeIds);
-    owned.set(subject.companyId, new Set(ids));
+    owned.set(subject.companyId, new Set(ids.filter(id => availableAtAiBoomOpening(id) && requiresClosure(id).every(availableAtAiBoomOpening))));
   }
 
   const ordered = [...owned.keys()].sort();
@@ -211,6 +213,7 @@ export function w3NodeOwnership(subjects: readonly OwnershipSubject[]): Readonly
   };
 
   for (const node of ECONOMIC_NODES) {
+    if (!availableAtAiBoomOpening(node.id) || !requiresClosure(node.id).every(availableAtAiBoomOpening)) continue;
     if (holdersOf(node.id)) continue;
     const holder = smallestHolder(node.sector) ?? smallestHolder(null);
     if (holder === null) continue;
@@ -226,6 +229,8 @@ export function w3NodeOwnership(subjects: readonly OwnershipSubject[]): Readonly
     // the company's own chain intact.
     result[companyId] = inTableOrder(owned.get(companyId) ?? []).slice(0, W3_MAX_OWNED_NODES);
   }
+  // The first language-model laboratory holds the baseline; later designs must be researched.
+  if (result[W2_COMPANIES.aletheia]) result[W2_COMPANIES.aletheia] = inTableOrder([...result[W2_COMPANIES.aletheia]!, OPENING_AI_MODEL_ID, ...requiresClosure(OPENING_AI_MODEL_ID)]).slice(0, W3_MAX_OWNED_NODES);
   return result;
 }
 
@@ -351,7 +356,7 @@ function asNodeCompany(
   const slug = w3SlugOf(company.id);
   const isPlayer = company.id === W2_COMPANIES.player;
   const brand = company.name.split(' ')[0] ?? company.name;
-  const revenue = Math.max(0, company.financials?.revenueQuarterly ?? 0);
+  const revenue = Math.max(0, company.financials?.revenueQuarterly ?? 0) * (company.sector === 'ai' ? 0.15 : 1);
   // A pre-revenue company sizes its pilot off its bank instead of off a run
   // rate it does not have yet.
   const cash = Math.max(0, company.balanceSheet?.assets.cash ?? 0);
@@ -722,7 +727,15 @@ function w3RawInput(seed: number, setup: NewGameSetup, measured: W3Measured): Se
   return {
     ...base,
     sessionId,
-    config: { ...base.config, worldVersion: WORLD_3_VERSION, scenarioId: 'frontier_node_economy_2027' },
+    startYear: AI_BOOM_START_YEAR,
+    config: { ...base.config, startYear: AI_BOOM_START_YEAR, worldVersion: WORLD_3_VERSION, scenarioId: AI_BOOM_SCENARIO_ID },
+    world: { ...base.world,
+      aiFrontier: { frontierCapability: 0.28, inferenceCost: 0.82, trainingEfficiency: 0.25, openSourceGap: 0.6, benchmarkSaturation: 0.12 },
+      dataDomain: { ...base.world!.dataDomain, syntheticDataMaturity: 0.12, licensingCost: 1.1 },
+      society: { ...base.world!.society, aiTrust: 0.38, automationAnxiety: 0.32, developerSentiment: 0.72 },
+      regulation: { ...base.world!.regulation, modelRules: 0.12, safetyObligations: 0.18 },
+      media: { ...base.world!.media, dominantNarrative: 'ai_optimism', attentionLevel: 0.82 },
+    },
     techGraph: nodeTechGraph(sessionId, 0),
     // A world-2 programme aimed at a `tech_` node has nothing to aim at here,
     // so it is re-aimed at a real node its company can actually start, and
@@ -771,7 +784,7 @@ export function w3SeedLineRevenueUsd(seed: number, setup: NewGameSetup): Readonl
   const out: Record<string, number> = {};
   for (const company of world2SessionInput(seed, setup).companies ?? []) {
     const slug = w3SlugOf(company.id);
-    const revenue = Math.max(0, company.financials?.revenueQuarterly ?? 0);
+    const revenue = Math.max(0, company.financials?.revenueQuarterly ?? 0) * (company.sector === 'ai' ? 0.15 : 1);
     (lines[company.id] ?? []).forEach((line, index) => {
       out[w3SeedProductId(slug, index)] = revenue * line.revenueShare;
     });
@@ -1198,7 +1211,7 @@ function samePrices(a: W3OpeningPrices, b: W3OpeningPrices): boolean {
  * from the first round, and the handful near balance settle on the second.
  * Three is a bound on a loop that stops the moment two rounds agree.
  */
-export const W3_PRICING_ROUNDS = 3;
+export const W3_PRICING_ROUNDS = 8;
 
 /* -------------------------------------------------------------------------- */
 /*  Opening quality                                                            */

@@ -40,6 +40,7 @@ import {
   roundStep,
   type Column,
 } from '@/components/ui';
+import { ModelDesignPanel } from './ModelDesignPanel';
 import { FrontierMap } from '@/components/screens/research/FrontierMap';
 import { ResearchConnectionsScreen } from '@/components/screens/research/ResearchConnectionsScreen';
 import { ExperimentsPanel } from './ExperimentsPanel';
@@ -415,6 +416,7 @@ export function ResearchScreen(): React.JSX.Element {
           context; the three-column diagram is the screen, and putting 500
           points of cards above it means a founder scrolls to reach the thing
           they came for. Worlds 1 and 2 keep the order the Frontier Map had. */}
+      {nodeEconomy ? <ModelDesignPanel onOpenNode={setSelectedId} /> : null}
       {nodeEconomy ? <ResearchConnectionsScreen onOpenNode={setSelectedId} openableNodeIds={openableNodeIds} /> : null}
 
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">

@@ -105,3 +105,5 @@ export * from './engine';
  * records this so an old logged model output can always be interpreted.
  */
 export const CONTRACTS_VERSION = '1.14.0';
+
+export * from './aiModels';

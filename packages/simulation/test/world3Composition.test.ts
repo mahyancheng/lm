@@ -51,11 +51,11 @@ import { cellEndDemandUnits, cellOf, describeLine, launchCapacityPreview, lineNo
 import { validateAction } from '../src/validator/index';
 import { BatchBudget } from '../src/validator/context';
 
-const SUITE = 'app_ai_software_suite';
+const SUITE = 'app_vertical_ai_app';
 const VERTICAL = 'app_vertical_ai_app';
 const API = 'svc_inference_api';
 const SMALL = 'sys_efficient_small_model';
-const HARNESS = 'svc_agent_harness';
+const HARNESS = 'svc_copilot_framework';
 const ARM = 'sys_industrial_arm';
 
 function session(backgroundId: 'enterprise_ai' | 'frontier_lab' = 'enterprise_ai'): SessionState {
@@ -71,7 +71,7 @@ function companyOf(state: SessionState, id: string): Company {
 const playerOf = (state: SessionState): Company => companyOf(state, W2_COMPANIES.player);
 
 function lineOn(company: Company, nodeId: string): Product {
-  const line = company.products.find((product) => product.isActive && product.nodeId === nodeId);
+  const line = [...company.products].reverse().find((product) => product.isActive && product.nodeId === nodeId);
   if (line === undefined) throw new Error(`${company.name} runs no line on ${nodeId}`);
   return line;
 }
@@ -162,7 +162,8 @@ describe('the same line on two companies\' APIs, in the seeded world', () => {
       const landed = resolve(state, [asPlayer(state, intent)]);
       state = landed.nextState;
       // It ships in the quarter it lands, on exactly the capacity the preview quoted.
-      const firstQuarter = landed.events.find((event) => event.type === 'demand_resolved' && event.actorId === W2_COMPANIES.player && event.payload.nodeId === VERTICAL);
+      const newLine = lineOn(playerOf(state), VERTICAL);
+      const firstQuarter = landed.events.find((event) => event.type === 'demand_resolved' && event.actorId === W2_COMPANIES.player && event.payload.nodeId === VERTICAL && event.payload.productId === newLine.id);
       expect(firstQuarter?.payload.producibleUnits, 'the launched line had no capacity').toBe(preview?.unitsPerQuarter);
       expect(firstQuarter?.payload.unitsSold as number, 'the launched line sold nothing the quarter it landed').toBeGreaterThan(0);
       state = resolve(state, []).nextState;
@@ -232,14 +233,14 @@ describe('the slots the owner named, in the seeded world', () => {
     return out;
   }
 
-  it('offers an app founder each harness node from a named company — two nodes, two companies', () => {
+  it('offers the early copilot framework while agent harnesses await research', () => {
     const state = session();
     const routes = buyRoutesFor(state, playerOf(state), VERTICAL, 'harness');
-    expect(routes.get(HARNESS)).toEqual([W2_COMPANIES.aletheia]);
+    expect(routes.get('svc_agent_harness')).toEqual([]);
     expect(routes.get('svc_copilot_framework')).toEqual([W2_COMPANIES.sable]);
     // The same two the quarter after the NPC publishing pass has run.
     const later = buyRoutesFor(resolve(state, []).nextState, playerOf(state), VERTICAL, 'harness');
-    expect(later.get(HARNESS)).toContain(W2_COMPANIES.aletheia);
+    expect(later.get('svc_agent_harness')).toEqual([]);
     expect(later.get('svc_copilot_framework')).toContain(W2_COMPANIES.sable);
   });
 
@@ -327,7 +328,7 @@ describe('publishing a new line in the seeded world', () => {
     const sable = companyOf(state, W2_COMPANIES.sable);
     const verdict = verdictFor(state, launchOf(state, API, 'Player API', [{ slotId: 'model', nodeId: SMALL, supplierCompanyId: sable.id, supplierProductId: lineOn(sable, SMALL).id }], 'developer_api'));
     expect(verdict.status).toBe('rejected');
-    expect(verdict.reasons.join(' ')).toContain('Frontier model');
+    expect(verdict.reasons.join(' ')).toContain('Early language model');
     expect(verdict.reasons.join(' ')).toContain('Research it, licence it, or buy a company that has it');
   });
 });
@@ -407,7 +408,7 @@ describe('the same node sold into two industries', () => {
     state = settled.nextState;
 
     const player = playerOf(state);
-    const lines = linesOn(player, VERTICAL);
+    const lines = linesOn(player, VERTICAL).filter(line => line.id !== 'prd_player_ventures_core');
     expect(lines.length, 'the second line on the node was not kept').toBe(2);
     const [logistics, manufacturing] = lines as [Product, Product];
     const node = nodeOf(VERTICAL);
@@ -464,7 +465,7 @@ describe('the same node sold into two industries', () => {
     state = resolve(state, []).nextState;
 
     const player = playerOf(state);
-    const lines = linesOn(player, VERTICAL);
+    const lines = linesOn(player, VERTICAL).filter(line => line.id !== 'prd_player_ventures_core');
     expect(lines.length).toBe(2);
     const [a, b] = lines as [Product, Product];
     expect(cellOf(a, nodeOf(VERTICAL))).not.toEqual(cellOf(b, nodeOf(VERTICAL)));

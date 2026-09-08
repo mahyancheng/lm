@@ -78,7 +78,7 @@ export function worldBriefing(session: SessionState): string {
   const w = session.world;
   const events = session.activeEvents.filter((event) => event.visibility === 'public').slice(0, 4);
   const lines = [
-    `${quarterLabel(session.startYear, session.quarter)}. Policy rate ${formatPct(w.macro.policyRate)}, inflation ${formatPct(w.macro.inflation)}, GDP growth ${formatPct(w.macro.gdpGrowth)}.`,
+    `${session.config.scenarioId === 'chatgpt_boom_2023' ? 'Historically inspired AI boom after ChatGPT’s public launch. Follow this session’s date and achieved research; later real-world products are not already available. The future is open-ended. ' : ''}${quarterLabel(session.startYear, session.quarter)}. Policy rate ${formatPct(w.macro.policyRate)}, inflation ${formatPct(w.macro.inflation)}, GDP growth ${formatPct(w.macro.gdpGrowth)}.`,
     `Capital markets: risk appetite ${w.capitalMarkets.riskAppetite.toFixed(2)}, venture liquidity ${w.capitalMarkets.ventureLiquidity.toFixed(2)}, IPO window ${w.capitalMarkets.ipoWindow.toFixed(2)}, debt availability ${w.capitalMarkets.debtAvailability.toFixed(2)}.`,
     `Compute: accelerator supply ${w.compute.acceleratorSupply.toFixed(2)}, spot price index ${w.compute.spotPrice.toFixed(2)}.`,
     `Talent: salary pressure ${w.talent.salaryPressure.toFixed(2)}, researcher supply ${w.talent.researcherSupply.toFixed(2)}.`,

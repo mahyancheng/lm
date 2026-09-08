@@ -1,3 +1,4 @@
+import { AI_MODEL_DESIGNS_BY_ID } from '@frontier/contracts';
 /**
  * @frontier/simulation — graph/production.ts
  *
@@ -308,7 +309,7 @@ export function effectiveQuality(
   cache?: NodeCostCache,
   fills: readonly ResolvedFill[] = resolveFills(state, company, product, node, cache),
 ): number {
-  const base = unit(deliveredQuality(product) + dataQualityUplift(company, node.sector));
+  const base = unit(deliveredQuality(product) * (AI_MODEL_DESIGNS_BY_ID[node.id]?.qualityFactor ?? 1) + dataQualityUplift(company, node.sector));
 
   let inputValue = 0;
   for (const line of cost.lines) if (line.sourceKind !== 'conversion') inputValue += Math.max(0, line.amountUsd);

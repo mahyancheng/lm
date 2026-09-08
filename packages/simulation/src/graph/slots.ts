@@ -1,3 +1,4 @@
+import { availableAtAiBoomOpening } from '@frontier/contracts';
 /**
  * @frontier/simulation — graph/slots.ts
  *
@@ -203,6 +204,17 @@ export function slotForInput(node: EconomicNode, fills: readonly ProductSlotFill
  * on the slot's node, and threading the depth keeps that from restarting the
  * roll-up's guard. Every other caller resolves a slot from the top.
  */
+/** Later designs need a real supplier; a private research result is not an anonymous import. */
+export function researchInputUnavailable(state: SessionState, buyerId: string, nodeId: string): boolean {
+  if (availableAtAiBoomOpening(nodeId)) return false;
+  return !state.companies.some(supplier => supplier.isActive && supplier.products.some(product => {
+    if (!product.isActive || product.nodeId !== nodeId) return false;
+    if (supplier.id === buyerId) return true;
+    const terms = product.supplyTerms;
+    return terms != null && !terms.blockedCustomerIds.includes(buyerId) && (terms.openToAll || terms.exclusiveCustomerIds.includes(buyerId));
+  }));
+}
+
 export function resolveFill(
   state: SessionState,
   company: Company,
@@ -232,6 +244,7 @@ export function resolveFill(
   // A required slot cannot be left empty: a null fill on one reads as the default.
   if (nodeId === null && slot.required) nodeId = slot.defaultNodeId;
   if (nodeId === null) return empty();
+  if (researchInputUnavailable(state, company.id, nodeId)) return { slotId: slot.id, nodeId, route: 'blocked', supplierCompanyId: null, supplierProductId: null, askUsd: null, changedThisQuarter };
 
   /* --- 4: make ------------------------------------------------------------- */
   // The cheapest of this company's lines on the input when it runs more than

@@ -1,3 +1,4 @@
+import { researchInputUnavailable } from '../graph/slots';
 /**
  * @frontier/simulation — companies/npcSlots.ts
  *
@@ -122,7 +123,7 @@ export function scoredSlotOptions(state: SessionState, company: Company, node: E
   const admissible = admissibleNodesFor(node.id, slot.id);
   for (let tableIndex = 0; tableIndex < admissible.length; tableIndex += 1) {
     const candidate = admissible[tableIndex];
-    if (candidate === undefined) continue;
+    if (candidate === undefined || researchInputUnavailable(state, company.id, candidate.id)) continue;
     const scored = (route: ScoredSlotOption['route'], supplierCompanyId: string | null, supplierProductId: string | null, unitPriceUsd: number, qualityScore: number, isDirectRival: boolean): ScoredSlotOption => ({
       nodeId: candidate.id,
       route,

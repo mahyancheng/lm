@@ -1,3 +1,4 @@
+import { availableAtAiBoomOpening, requiresClosure } from '@frontier/contracts';
 /**
  * The world-version-3 opening state.
  *
@@ -178,11 +179,12 @@ describe('world-3 node ownership', () => {
    * input of three categories and was sold by nobody, and where seven of
    * thirty-six categories were ever an input at all.
    */
-  it('opens with a producer or an owner for every node in the table', () => {
+  it('opens with suppliers for early technologies, leaving later designs to research', () => {
     const unmade: string[] = [];
     for (const node of ECONOMIC_NODES) {
       const made = state.companies.some((company) => canProduce(company, node.id, 0));
-      if (!made) unmade.push(node.id);
+      if (!made && availableAtAiBoomOpening(node.id) && requiresClosure(node.id).every(availableAtAiBoomOpening)) unmade.push(node.id);
+      if (!availableAtAiBoomOpening(node.id)) expect(made, node.id).toBe(false);
     }
     expect(unmade).toEqual([]);
   });
@@ -313,7 +315,7 @@ describe('the composed rival lines', () => {
 
     expect(sourceOf(lineOn(W2_COMPANIES.sable, 'svc_inference_api'), 'model')).toBe('self');
     expect(sourceOf(lineOn(W2_COMPANIES.basalt, 'svc_inference_api'), 'model')).toBe('aletheia');
-    expect(sourceOf(lineOn(W2_COMPANIES.aletheia, 'app_ai_software_suite'), 'model')).toBe('basalt');
+    expect(sourceOf(lineOn(W2_COMPANIES.aletheia, 'app_vertical_ai_app'), 'model')).toBe('basalt');
     expect(lineOn(W2_COMPANIES.aletheia, 'sys_frontier_model')?.published).toBe(true);
     expect(sourceOf(lineOn(W2_COMPANIES.ironvale, 'sys_warehouse_amr'), 'battery')).toBe('cinder');
     expect(sourceOf(lineOn(W2_COMPANIES.ironvale, 'sys_warehouse_amr'), 'model')).toBe('wrenford');
@@ -328,9 +330,9 @@ describe('the composed rival lines', () => {
     const sourceOf = (line: W3SeedLine | undefined, slotId: string): string | undefined => line?.fills.find((fill) => fill.slotId === slotId)?.source;
 
     // "A harness from company B": two harness nodes, two companies, both published.
-    expect(lineOn(W2_COMPANIES.aletheia, 'svc_agent_harness')?.published).toBe(true);
+    expect(lineOn(W2_COMPANIES.aletheia, 'svc_agent_harness')).toBeUndefined();
     expect(lineOn(W2_COMPANIES.sable, 'svc_copilot_framework')?.published).toBe(true);
-    expect(sourceOf(lineOn(W2_COMPANIES.aletheia, 'app_ai_software_suite'), 'harness')).toBe('self');
+    expect(sourceOf(lineOn(W2_COMPANIES.aletheia, 'app_vertical_ai_app'), 'harness')).toBe('sable');
     // The robot harness: Palma sells it and its own arm runs on it; Ironvale's robot buys it.
     expect(lineOn(W2_COMPANIES.palma, 'svc_robot_control_stack')?.published).toBe(true);
     expect(sourceOf(lineOn(W2_COMPANIES.palma, 'sys_industrial_arm'), 'harness')).toBe('self');
@@ -340,7 +342,7 @@ describe('the composed rival lines', () => {
     expect(lineOn(W2_COMPANIES.rasan, 'mat_machined_structure')?.published).toBe(true);
     expect(sourceOf(lineOn(W2_COMPANIES.volta, 'sys_wind_turbine'), 'structure')).toBe('self');
     // And the openings that take a harness take it from a named company.
-    expect(BACKGROUND_OPENING_LINE.consumer_ai.fills.find((fill) => fill.slotId === 'harness')?.source).toBe('aletheia');
+    expect(BACKGROUND_OPENING_LINE.consumer_ai.fills.find((fill) => fill.slotId === 'harness')?.source).toBe('sable');
     expect(BACKGROUND_OPENING_LINE.bootstrapper.fills.find((fill) => fill.slotId === 'harness')?.source).toBe('sable');
     expect(BACKGROUND_OPENING_LINE.warehouse_robotics.fills.find((fill) => fill.slotId === 'harness')?.source).toBe('palma');
   });
@@ -481,7 +483,7 @@ describe('the composed background openings', () => {
 
   it('opens the owner\'s example: enterprise AI sells a suite on Basalt\'s API with a market harness, aimed at logistics enterprises', () => {
     const line = BACKGROUND_OPENING_LINE.enterprise_ai;
-    expect(line.nodeId).toBe('app_ai_software_suite');
+    expect(line.nodeId).toBe('app_vertical_ai_app');
     expect(line.fills.find((fill) => fill.slotId === 'model')).toEqual({ slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' });
     expect(line.fills.find((fill) => fill.slotId === 'harness')?.source).toBe('market');
     expect(line.segment).toBe('enterprise');

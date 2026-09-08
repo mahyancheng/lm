@@ -267,7 +267,7 @@ function SaveFacts({
       </div>
       <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
         <dt className="label-caps-faint">Quarter</dt>
-        <dd className="figure text-[12.5px] font-semibold text-ink">{quarter === null ? '—' : quarterLabel(2027, quarter)}</dd>
+        <dd className="figure text-[12.5px] font-semibold text-ink">{quarter === null ? '—' : quarterLabel(2023, quarter)}</dd>
       </div>
       {seed === undefined ? null : (
         <div className="flex items-baseline justify-between gap-2 border-b border-hair pb-1.5">
@@ -498,7 +498,7 @@ export default function LandingPage(): React.JSX.Element {
         <section className="order-2 grid items-center gap-6 rounded-[28px] border border-hair bg-raised p-5 sm:p-8 lg:grid-cols-[1.05fr_1fr] lg:gap-8">
           <div className="animate-pop-in flex min-w-0 flex-col gap-4">
             <span className="label-caps inline-flex w-fit items-center rounded-pill bg-brand-wash px-3 py-1 text-brand">
-              The frontier is open · 2027 Q1
+              The AI boom begins · 2023 Q1
             </span>
             <h1 className="font-display max-w-2xl text-[38px] leading-[0.98] tracking-tight text-ink sm:text-[54px]">
               Build the company<br />they did not see coming.

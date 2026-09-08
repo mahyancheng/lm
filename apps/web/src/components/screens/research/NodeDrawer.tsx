@@ -58,6 +58,7 @@ import {
   roundStep,
 } from '@/components/ui';
 import { setPendingLaunchCategory, useGameActions } from '@/lib/game';
+import { ModelDesignSummary } from './ModelDesignPanel';
 import { STATE_STYLE, VISIBILITY_LABEL } from './graphLayout';
 import {
   BOTTLENECK_LABEL,
@@ -285,6 +286,7 @@ export function NodeDrawer({ session, graph, company, node, projects, onClose, o
             {node.achievedQuarter === null ? null : <Tag tone="gain">{quarterLabel(session.startYear, node.achievedQuarter)}</Tag>}
           </div>
 
+          <ModelDesignSummary nodeId={node.id} />
           <p className="text-[12.5px] leading-relaxed text-ink-dim">{node.summary}</p>
 
           {node.productBlueprint !== undefined ? (() => {

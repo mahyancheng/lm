@@ -80,12 +80,12 @@ export const BACKGROUND_TIER_REACH: Readonly<Record<BackgroundId, NodeTier>> = {
  */
 export const BACKGROUND_SIGNATURE_NODES: Readonly<Record<BackgroundId, readonly string[]>> = {
   frontier_lab: ['sys_frontier_model', 'svc_training_run', 'dat_web_corpus', 'dat_preference_data'],
-  enterprise_ai: ['app_ai_software_suite', 'svc_inference_api', 'app_vertical_ai_app'],
+  enterprise_ai: ['app_vertical_ai_app', 'svc_inference_api', 'app_vertical_ai_app'],
   consumer_ai: ['app_consumer_subscription', 'svc_inference_api', 'sys_efficient_small_model'],
   infrastructure: ['svc_training_run', 'svc_inference_api', 'svc_datacentre_capacity'],
   bootstrapper: ['app_vertical_ai_app', 'svc_inference_api'],
   warehouse_robotics: ['sys_warehouse_amr', 'cmp_precision_actuator', 'sys_edge_compute_module'],
-  humanoid_lab: ['sys_humanoid_robot', 'sys_robot_policy_model', 'dat_robot_telemetry'],
+  humanoid_lab: ['sys_industrial_arm', 'sys_robot_policy_model', 'dat_robot_telemetry'],
   contract_manufacturer: ['sys_advanced_package', 'mat_wafer_300mm', 'cmp_logic_die', 'cmp_ic_substrate'],
   precision_components: ['cmp_precision_actuator', 'mat_machined_structure', 'cmp_power_electronics'],
   grid_developer: ['svc_power_purchase_agreement', 'sys_substation', 'svc_grid_interconnect'],
@@ -162,14 +162,14 @@ export const BACKGROUND_OPENING_LINE: Readonly<Record<BackgroundId, W3SeedLine>>
   // Basalt's inference API with an agent harness from the open market, aimed
   // at logistics enterprises".
   enterprise_ai: {
-    nodeId: 'app_ai_software_suite',
+    nodeId: 'app_vertical_ai_app',
     revenueShare: 1,
     segment: 'enterprise',
     targetIndustry: 'logistics',
     published: false,
     fills: [
       { slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' },
-      { slotId: 'harness', nodeId: 'svc_agent_harness', source: 'market' },
+      { slotId: 'harness', nodeId: 'svc_copilot_framework', source: 'market' },
     ],
   },
   // The owner's chain at quarter zero: Sable's model behind Aletheia's harness,
@@ -182,7 +182,7 @@ export const BACKGROUND_OPENING_LINE: Readonly<Record<BackgroundId, W3SeedLine>>
     published: false,
     fills: [
       { slotId: 'model', nodeId: 'svc_inference_api', source: 'sable' },
-      { slotId: 'harness', nodeId: 'svc_agent_harness', source: 'aletheia' },
+      { slotId: 'harness', nodeId: 'svc_copilot_framework', source: 'sable' },
       { slotId: 'data', nodeId: 'dat_consumer_behaviour', source: 'lumen' },
     ],
   },
@@ -219,7 +219,7 @@ export const BACKGROUND_OPENING_LINE: Readonly<Record<BackgroundId, W3SeedLine>>
     ],
   },
   humanoid_lab: {
-    nodeId: 'sys_humanoid_robot',
+    nodeId: 'sys_industrial_arm',
     revenueShare: 1,
     segment: 'enterprise',
     targetIndustry: 'manufacturing',

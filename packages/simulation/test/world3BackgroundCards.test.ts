@@ -325,7 +325,7 @@ describe('the stale world-2 figures', () => {
     const company = openingOf('humanoid_lab', 'north_america');
     expect(company.financials.cash).toBeGreaterThan(50_000_000);
     expectClaim(card.get('Cash') ?? '', company.financials.cash, 'humanoid cash');
-    expect(card.get('Price')).toBe(w3CardPrice(company.products[0]?.pricePerSeat ?? 0, 'robot'));
+    expect(card.get('Price')).toBe(w3CardPrice(company.products[0]?.pricePerSeat ?? 0, ECONOMIC_NODES_BY_ID[startingLineNodeFor('humanoid_lab')]!.unitLabel));
   });
 });
 

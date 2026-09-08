@@ -234,7 +234,7 @@ export type NodeSlotKind = z.infer<typeof NodeSlotKindSchema>;
 export const MAX_NODE_SLOTS = 6;
 
 /** The most nodes one slot may narrow itself to. */
-export const MAX_SLOT_ACCEPTS = 6;
+export const MAX_SLOT_ACCEPTS = 64;
 
 export const NodeSlotSchema = z
   .object({
@@ -770,7 +770,7 @@ export const BOM_CAP_SERVICE = 0.75;
 
 /** True when this node is one the hardware bill-of-materials band applies to. */
 export function bomBandApplies(node: EconomicNode): boolean {
-  return node.saleKind === 'unit' && node.tier >= 4 && node.id.startsWith('sys_');
+  return node.role !== 'model' && node.saleKind === 'unit' && node.tier >= 4 && node.id.startsWith('sys_');
 }
 
 /** True when this node is a service or platform, held under `BOM_CAP_SERVICE`. */

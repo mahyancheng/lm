@@ -1,3 +1,4 @@
+import { availableAtAiBoomOpening } from '@frontier/contracts';
 /**
  * @frontier/simulation — scenario/world3/lines.ts
  *
@@ -95,14 +96,14 @@ export const W3_RIVAL_LINES: Readonly<Record<string, readonly W3SeedLine[]>> = {
       fills: [{ slotId: 'preference', nodeId: 'dat_preference_data', source: 'kestrel' }],
     },
     {
-      nodeId: 'app_ai_software_suite',
+      nodeId: 'app_vertical_ai_app',
       revenueShare: 0.35,
       segment: 'enterprise',
       targetIndustry: 'manufacturing',
       published: false,
       fills: [
         { slotId: 'model', nodeId: 'svc_inference_api', source: 'basalt' },
-        { slotId: 'harness', nodeId: 'svc_agent_harness', source: 'self' },
+        { slotId: 'harness', nodeId: 'svc_copilot_framework', source: 'sable' },
       ],
     },
     // The harness the lab's own suite runs on, sold to anyone with a model to
@@ -566,5 +567,7 @@ export const W3_RIVAL_LINES: Readonly<Record<string, readonly W3SeedLine[]>> = {
 
 /** The lines a seeded rival opens with, or none for an id the table does not know. */
 export function w3RivalLinesFor(companyId: string): readonly W3SeedLine[] {
-  return W3_RIVAL_LINES[companyId] ?? [];
+  const lines = (W3_RIVAL_LINES[companyId] ?? []).filter(line => availableAtAiBoomOpening(line.nodeId));
+  const share = lines.reduce((total, line) => total + line.revenueShare, 0);
+  return lines.map(line => ({ ...line, revenueShare: line.revenueShare / share, fills: line.fills.filter(fill => availableAtAiBoomOpening(fill.nodeId)) }));
 }

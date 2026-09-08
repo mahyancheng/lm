@@ -42,7 +42,7 @@ export function AuthShell({
             <div className="flex flex-col gap-3">
               <p className="text-[12px] leading-relaxed text-ink-dim">
                 Supabase is not configured, so there is no shared world to sign into. This is the default and it is not a fault: demo
-                mode runs the same engine, the same invariants and the same 2027 Q1 world entirely in your browser.
+                mode runs the same engine, the same invariants and the same 2023 Q1 world entirely in your browser.
               </p>
               <div className="rounded-[4px] border border-hair bg-base/60 p-2.5">
                 <p className="label-caps-faint mb-1.5">Set in .env.local, then restart</p>

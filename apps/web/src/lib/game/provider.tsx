@@ -1156,6 +1156,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
       session.sessionId,
       `quarter_${session.sessionId}_${session.quarter}`,
       submitted,
+      (status) => dispatch({ type: 'resolve_status', status }),
     );
     if (canonical !== null) {
       if ((canonical.status === 'resolved' || canonical.status === 'duplicate') && canonical.file !== null) {
@@ -1179,7 +1180,7 @@ export function GameProvider({ children }: { readonly children: ReactNode }): Re
         dispatch({ type: 'notice', notice: canonical.outcome === null ? 'Canonical quarter committed. The visible ledger contains this quarter’s reported outcomes.' : null });
         return true;
       }
-      dispatch({ type: 'resolve_failed', notice: canonical.status === 'stale' ? 'The canonical game changed in another session. Reload its latest state before submitting again.' : 'The canonical game service refused this quarter. Your queue is unchanged.' });
+      dispatch({ type: 'resolve_failed', notice: canonical.status === 'unavailable' ? 'Connection to quarter progress was interrupted. Your moves are preserved; try again to reconnect.' : canonical.status === 'stale' ? 'The canonical game changed in another session. Reload its latest state before submitting again.' : 'The canonical game service refused this quarter. Your queue is unchanged.' });
       return false;
     }
     let gmProposal: GmProposalBatch | null = null;

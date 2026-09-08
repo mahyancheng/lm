@@ -59,3 +59,38 @@ describe('canonical session binding', () => {
     expect(canonicalSessionRevision(id)).toBe(12);
   });
 });
+
+describe('long-running canonical quarter observation', () => {
+  it('recovers a lost start response by polling the existing job without starting it again', async () => {
+    vi.useFakeTimers();
+    try {
+      const { resolveCanonicalGameQuarter } = await import('./canonicalSession');
+      const id = 'poll_lost_response'; noteCanonicalSessionRevision(id, 1);
+      const fetcher = vi.fn().mockRejectedValueOnce(new Error('lost connection'))
+        .mockResolvedValueOnce(json({ status: 'pending', progress: 'Planning rival companies: 2 of 24' }, 202))
+        .mockResolvedValueOnce(json({ status: 'resolved', revision: 2, file: null, outcome: null }));
+      vi.stubGlobal('fetch', fetcher);
+      const progress = vi.fn();
+      const result = resolveCanonicalGameQuarter(id, 'q0', [], progress);
+      await vi.advanceTimersByTimeAsync(4001);
+      await expect(result).resolves.toMatchObject({ status: 'resolved', revision: 2 });
+      expect(fetcher.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+      expect(progress).toHaveBeenCalledWith('Planning rival companies: 2 of 24');
+    } finally { vi.useRealTimers(); }
+  });
+  it('resubmits the exact request after a restart so durable receipts prevent a double commit', async () => {
+    vi.useFakeTimers();
+    try {
+      const { resolveCanonicalGameQuarter } = await import('./canonicalSession');
+      const id = 'poll_restart'; noteCanonicalSessionRevision(id, 3);
+      const fetcher = vi.fn().mockResolvedValueOnce(json({ status: 'pending' }, 202))
+        .mockResolvedValueOnce(json({ status: 'missing' }, 404))
+        .mockResolvedValueOnce(json({ status: 'duplicate', revision: 4, file: null, outcome: null }));
+      vi.stubGlobal('fetch', fetcher);
+      const result = resolveCanonicalGameQuarter(id, 'q0', []);
+      await vi.advanceTimersByTimeAsync(4001);
+      await expect(result).resolves.toMatchObject({ status: 'duplicate', revision: 4 });
+      expect(fetcher.mock.calls[2]?.[1]?.body).toBe(fetcher.mock.calls[0]?.[1]?.body);
+    } finally { vi.useRealTimers(); }
+  });
+});

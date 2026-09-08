@@ -42,24 +42,60 @@ export async function syncCanonicalGameSession(file: SaveFile, sessionId: string
 }
 
 export interface CanonicalResolveResult {
-  readonly status: 'resolved' | 'duplicate' | 'stale' | 'forbidden' | 'missing';
+  readonly status: 'resolved' | 'duplicate' | 'stale' | 'forbidden' | 'missing' | 'unavailable';
   readonly revision: number | null;
   readonly file: SaveFile | null;
   readonly outcome: QuarterResolutionOutcome | null;
 }
 
-export async function resolveCanonicalGameQuarter(sessionId: string, requestId: string, playerActions: readonly unknown[]): Promise<CanonicalResolveResult | null> {
+export async function resolveCanonicalGameQuarter(sessionId: string, requestId: string, playerActions: readonly unknown[], onProgress?: (message: string) => void): Promise<CanonicalResolveResult | null> {
   const revision = canonicalSessionRevision(sessionId);
   if (revision === null) return null;
-  try {
-    const response = await fetch('/api/game/resolve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, expectedRevision: revision, requestId, playerActions }) });
-    const body = await response.json() as Partial<CanonicalResolveResult>;
-    const status = body.status;
-    if (status !== 'resolved' && status !== 'duplicate' && status !== 'stale' && status !== 'forbidden' && status !== 'missing') return { status: 'forbidden', revision, file: null, outcome: null };
-    const nextRevision = typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null;
-    if (nextRevision !== null) noteCanonicalSessionRevision(sessionId, nextRevision);
-    return { status, revision: nextRevision, file: body.file ?? null, outcome: body.outcome ?? null };
-  } catch { return { status: 'forbidden', revision, file: null, outcome: null }; }
+  const unavailable: CanonicalResolveResult = { status: 'unavailable', revision, file: null, outcome: null };
+  const body = JSON.stringify({ sessionId, expectedRevision: revision, requestId, playerActions });
+  const statusUrl = `/api/game/resolve?sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`;
+  let start = true;
+  let failures = 0;
+  while (failures < 5) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch(start ? '/api/game/resolve' : statusUrl, start
+        ? { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: controller.signal }
+        : { cache: 'no-store', signal: controller.signal });
+      clearTimeout(timeout);
+      if (!start && response.status === 404) {
+        // A restart can lose the observer job, but canonical receipts survive.
+        // Re-submit the exact id and actions; the service returns the receipt.
+        start = true;
+        failures += 1;
+      } else if (response.status === 429 || response.status >= 500) {
+        failures += 1;
+        onProgress?.('Reconnecting to quarter progress. Your moves are preserved.');
+      } else {
+        const result = await response.json() as Omit<Partial<CanonicalResolveResult>, 'status'> & { status?: string; progress?: string };
+        if (result.status === 'pending') {
+          failures = 0;
+          start = false;
+          onProgress?.(result.progress ?? 'Resolving the quarter');
+        } else {
+          const status = result.status;
+          if (status !== 'resolved' && status !== 'duplicate' && status !== 'stale' && status !== 'forbidden' && status !== 'missing') return unavailable;
+          const nextRevision = typeof result.revision === 'number' && Number.isInteger(result.revision) ? result.revision : null;
+          if (nextRevision !== null) noteCanonicalSessionRevision(sessionId, nextRevision);
+          return { status, revision: nextRevision, file: result.file ?? null, outcome: result.outcome ?? null };
+        }
+      }
+    } catch {
+      // A lost POST response does not mean the server stopped. Look up the job
+      // before re-submitting, rather than reporting a false authority refusal.
+      start = false;
+      failures += 1;
+      onProgress?.('Reconnecting to quarter progress. Your moves are preserved.');
+    } finally { clearTimeout(timeout); }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return unavailable;
 }
 
 export type CanonicalSessionBinding =

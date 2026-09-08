@@ -148,7 +148,7 @@ export function createCodexAppServerTransport(config: CodexAppServerTransportCon
           input: [{ type: 'text', text: prompt }],
           outputSchema,
           approvalPolicy: 'never',
-          sandboxPolicy: { type: 'readOnly', access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
+          permissions: 'frontier-minimal',
         }, timeoutMs);
         if (outcome.error !== null) return failed(finish, req.schemaName, modelId, classifyError(outcome.error), describe(outcome.error), threadId, outcome.text, outcome.tokens);
 
@@ -170,7 +170,7 @@ export function createCodexAppServerTransport(config: CodexAppServerTransportCon
 
 function threadParams(model: string | undefined, cwd: string | undefined, ephemeral: boolean, developerInstructions: string): Record<string, unknown> {
   const params: Record<string, unknown> = {
-    approvalPolicy: 'never', sandbox: 'read-only', serviceName: 'frontier_capital', ephemeral, developerInstructions,
+    approvalPolicy: 'never', permissions: 'frontier-minimal', serviceName: 'frontier_capital', ephemeral, developerInstructions,
     dynamicTools: [], environments: [],
     config: {
       web_search: 'disabled',
@@ -310,7 +310,18 @@ export function ambientCodexEnv(): Readonly<Record<string, string | undefined>> 
   const holder = globalThis as { process?: { env?: Record<string, string | undefined> } };
   return holder.process?.env ?? {};
 }
-export function codexAppServerArgs(): readonly string[] { return ['app-server', '-c', 'forced_login_method="chatgpt"']; }
+export function codexAppServerArgs(): readonly string[] {
+  // Keep the profile in the process config: turn/start reloads profiles and
+  // does not retain profile definitions supplied only to thread/start.
+  // This replaces removed readOnly.access without granting root reads.
+  return ['app-server', '-c', 'forced_login_method="chatgpt"',
+    '-c', 'default_permissions="frontier-minimal"',
+    '-c', 'permissions.frontier-minimal.filesystem={":root"="deny",":minimal"="read"}',
+    '-c', 'permissions.frontier-minimal.network.enabled=false',
+    // Authenticated app-server startup otherwise syncs account plugins into
+    // this dedicated home before thread-level feature overrides take effect.
+    '-c', 'features.plugins=false', '-c', 'features.remote_plugin=false', '-c', 'features.apps=false'];
+}
 
 export async function assertIsolatedCodexHome(codexHome: string | undefined): Promise<void> {
   if (codexHome === undefined || codexHome.trim().length === 0) {

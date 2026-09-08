@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createInMemorySessionStore } from '../src/sessionStore';
-import { assertIsolatedCodexHome, createCodexAppServerTransport } from '../src/transport/codexAppServer';
+import { assertIsolatedCodexHome, codexAppServerArgs, createCodexAppServerTransport } from '../src/transport/codexAppServer';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,6 +77,14 @@ function fakeProcess(options: { failResume?: string; silentInitialize?: boolean;
 }
 
 describe('Codex app-server transport', () => {
+  it('installs the restricted profile and disables account plugin sync before initialization', () => {
+    const args = codexAppServerArgs();
+    expect(args).toContain('permissions.frontier-minimal.filesystem={":root"="deny",":minimal"="read"}');
+    expect(args).toContain('permissions.frontier-minimal.network.enabled=false');
+    expect(args).toContain('features.plugins=false');
+    expect(args).toContain('features.remote_plugin=false');
+    expect(args).toContain('features.apps=false');
+  });
   it('performs initialize, thread/start and turn/start over JSONL and buffers early completion events', async () => {
     const process = fakeProcess({ earlyCompletion: true });
     let childEnv: Readonly<Record<string, string | undefined>> = {};
@@ -94,7 +102,7 @@ describe('Codex app-server transport', () => {
     expect(start?.params?.['ephemeral']).toBe(true);
     expect(start?.params).toMatchObject({
       approvalPolicy: 'never',
-      sandbox: 'read-only',
+      permissions: 'frontier-minimal',
       developerInstructions: 'You are a bounded game',
       dynamicTools: [],
       environments: [],
@@ -112,7 +120,7 @@ describe('Codex app-server transport', () => {
     const turn = process.sent.find((entry) => entry.method === 'turn/start');
     expect(turn?.params).toMatchObject({
       approvalPolicy: 'never',
-      sandboxPolicy: { type: 'readOnly', access: { type: 'restricted', includePlatformDefaults: true, readableRoots: [] } },
+      permissions: 'frontier-minimal',
       outputSchema: { type: 'object', additionalProperties: false },
     });
     transport.close();
@@ -133,7 +141,7 @@ describe('Codex app-server transport', () => {
       threadId: 'thread-1',
       cwd: '/isolated',
       approvalPolicy: 'never',
-      sandbox: 'read-only',
+      permissions: 'frontier-minimal',
       developerInstructions: 'You are a bounded game',
       config: {
         web_search: 'disabled',

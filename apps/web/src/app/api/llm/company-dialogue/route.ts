@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import type { CharacterReply } from '@frontier/contracts';
-import { admit, gateway, parseBody, runRole } from '../_gateway';
+import { admit, gateway, parseBody, fallback, transportAvailable } from '../_gateway';
 import { companyDialogueDraft } from '@/lib/game/server/companyDialogueDraft';
 import { buildCompanyDialogueContext } from './context';
 import { appendCanonicalDialogueTurn, canonicalDialogueTurn, loadCanonicalCompanyDialogue } from '@/lib/game/server/sessionAuthority';
@@ -22,7 +22,8 @@ export async function POST(request: Request): Promise<Response> {
   const built = canonical && buildCompanyDialogueContext(canonical, companyId, admission.admission.principal.id, message);
   if (!canonical || !built) return admission.admission.finish(NextResponse.json({ error: 'canonical_company_unavailable' }, { status: 409 }));
   const companyKey = admission.admission.conversationKey('npc', { gameSessionId: sessionId, playerId: companyId, conversationId: companyId });
-  return admission.admission.finish(await runRole(async () => {
+  if (!transportAvailable()) return admission.admission.finish(fallback('transport_none'));
+  try {
     const proposed = await gateway().roles.companyDialogue.converse(built.context, companyKey, { sessionId, quarter: canonical.state.quarter });
     const normalized = proposed.output === null ? null : companyDialogueDraft(proposed.output, companyId, built.playerCompanyId, canonical.state.quarter);
     const claimsCompletedAction = (normalized?.commands?.length ?? 0) > 0 && /\b(?:is|was|has been|we have|i have|i)\s+(?:sign(?:ed)?|accept(?:ed)?|approve(?:d)?|reserve(?:d)?|deliver(?:ed)?|complete(?:d)?)\b/i.test(normalized!.text);
@@ -30,6 +31,9 @@ export async function POST(request: Request): Promise<Response> {
     const output: CharacterReply | { text: string; commands: never[] } = normalized === null ? { text: replyText, commands: [] } : { ...normalized, text: replyText };
     const receipts: never[] = [];
     const revision = await appendCanonicalDialogueTurn({ sessionId, ownerId: admission.admission.principal.id, companyId, turnId, playerCompanyId: built.playerCompanyId, playerCharacterId: built.playerCharacterId, playerText: message, replyText, output, receipts, fallbackUsed: proposed.fallbackUsed });
-    return { turnId, output, fallbackUsed: proposed.fallbackUsed, receipts, revision };
-  }));
+    if (revision === null) return admission.admission.finish(NextResponse.json({ error: 'conversation_not_saved' }, { status: 409 }));
+    return admission.admission.finish(NextResponse.json({ turnId, output, fallbackUsed: proposed.fallbackUsed, receipts, revision }, { headers: { 'cache-control': 'no-store' } }));
+  } catch {
+    return admission.admission.finish(fallback('company_dialogue_failed'));
+  }
 }

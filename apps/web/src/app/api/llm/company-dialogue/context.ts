@@ -25,7 +25,7 @@ export function buildCompanyDialogueContext(canonical: CanonicalDialogue, compan
   state.deals.filter((deal) => deal.proposerId === company.id || deal.counterpartyId === company.id).slice(-6).forEach((deal) => addJson(`Deal ${deal.id}`, deal));
   canonical.queuedActions.filter((action) => action.actorCompanyId === company.id).slice(-4).forEach((action) => addJson(`Queued ${action.actionId}`, action.intent));
   state.boardProposals.filter((proposal) => proposal.companyId === company.id && (proposal.status === 'draft' || proposal.status === 'tabled')).slice(-4).forEach((proposal) => addJson(`Pending board ${proposal.id}`, proposal));
-  return { context: { character: ceo, relationship: null, counterpartRelationship: null, memories, topic: message, gameFacts: facts,
+  return { context: { character: ceo, relationship: null, counterpartRelationship: null, memories, topic: message.slice(0, 200), gameFacts: facts,
     conversationHistory: [...(thread?.turns.slice(-10).map((turn) => ({ speakerId: turn.speakerId, text: turn.text })) ?? []), { speakerId: player.characterId, text: message }],
     accessBasis: 'Private canonical company negotiation. Internal facts inform decisions but are not automatic disclosures.', pendingProposalSummary: state.deals.find((deal) => deal.status === 'proposed' && (deal.proposerId === company.id || deal.counterpartyId === company.id))?.summary ?? null },
     playerCompanyId: playerCompany.id, playerCharacterId: player.characterId };

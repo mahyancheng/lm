@@ -9,3 +9,12 @@ describe('company dialogue commercial dossier', () => { it('supplies exact buyer
   expect(built.context.gameFacts).toContainEqual({ label: 'Player buyer company ID', value: buyerId }); expect(built.context.gameFacts).toContainEqual({ label: 'NPC company ID', value: seller.company.id });
   expect(built.context.gameFacts).toContainEqual({ label: 'Hardware seller quote', value: `${seller.unitPriceUsd} USD/unit` }); expect(built.context.gameFacts.find((fact) => fact.label === 'Current physical capacity')?.value).toContain(String(seller.sellableUnits)); expect(built.context.gameFacts.find((fact) => fact.label === 'PRIVATE company cash')?.value).toContain('do not disclose');
 }); });
+
+it('retains the entire 600-character message while bounding the topic summary', () => {
+  const state = createSession({ seed: 8123, setup });
+  const company = sellersFor(state, 'accelerators', state.players[0]!.companyId)[0]!.company;
+  const message = 'Please explain the terms. '.repeat(24);
+  const built = buildCompanyDialogueContext({ state, revision: 1, queuedActions: [] }, company.id, PLAYER_ID, message)!;
+  expect(built.context.topic).toHaveLength(200);
+  expect(built.context.conversationHistory.at(-1)?.text).toBe(message);
+});

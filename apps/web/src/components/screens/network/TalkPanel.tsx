@@ -195,6 +195,7 @@ export function TalkPanel({
   );
   const [turns, setTurns] = useState<readonly DialogueTurn[]>([]);
   const [draft, setDraft] = useState('');
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [offline, setOffline] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -206,6 +207,7 @@ export function TalkPanel({
 
   // A new person/company is a new thread and may discard local reply cards.
   useEffect(() => {
+    setSendError(null);
     setDeal(undefined);
     setAcceleratorQuote(undefined);
     setShowDeal(false);
@@ -235,6 +237,7 @@ export function TalkPanel({
     setTurns(history);
     setDraft('');
     setSending(true);
+    setSendError(null);
 
     // A company CEO's shared agent must never receive chats from a prior
     // employer. The personal transcript can show them; the company context may
@@ -247,7 +250,7 @@ export function TalkPanel({
       relationship: inbound,
       counterpartRelationship: outbound,
       memories: theirMemories.slice(0, 6),
-      topic: message,
+      topic: message.slice(0, 200),
       gameFacts: negotiationFacts(session, target, company, view.techGraph, counterparty?.id),
       conversationHistory: companyHistory.map((turn) => ({ speakerId: turn.speakerId, text: turn.text.slice(0, 600) })),
       accessBasis,
@@ -267,11 +270,12 @@ export function TalkPanel({
           const companyResult = await requestCompanyDialogue(context, { sessionId: session.sessionId, playerId: PLAYER_ID, conversationId: target.companyId! });
           // Old deterministic adapters return CharacterReply directly; the
           // actual route returns an envelope with receipts and a revision.
-          const wire = companyResult as unknown as { output?: CharacterReply | null; turnId?: string; receipts?: readonly ConversationReceipt[]; revision?: number | null; text?: string } | null;
+          const wire = companyResult as unknown as { output?: CharacterReply | null; turnId?: string; receipts?: readonly ConversationReceipt[]; revision?: number | null; text?: string; error?: string } | null;
           if (wire !== null && Array.isArray(wire.receipts)) {
             noteCanonicalSessionRevision(session.sessionId, wire.revision ?? null);
             receipts = [...wire.receipts];
           }
+          if (wire?.error) throw new Error(wire.error);
           ceoTurnId = typeof wire?.turnId === 'string' ? wire.turnId : null;
           return wire?.output ?? (wire?.text === undefined ? null : wire as unknown as CharacterReply);
         })()
@@ -295,10 +299,14 @@ export function TalkPanel({
       // The store accepts only the LLM contract's bounded memory draft and
       // converts it to a factual, non-binding conversation memory.
       memory = output?.memoryToStore ?? null;
-    } catch {
-      // The client never throws at a screen. A model failure is a degraded
-      // conversation, not a broken one.
-      reply = null;
+    } catch (error) {
+      if (scopeRef.current === scope && quarterRef.current === requestQuarter) {
+        setSendError(error instanceof Error ? error.message : 'Could not send this message. Please try again.');
+        setDraft(message);
+        setTurns(turns);
+        setSending(false);
+      }
+      return;
     }
 
     if (scopeRef.current !== scope || quarterRef.current !== requestQuarter) {
@@ -425,6 +433,8 @@ export function TalkPanel({
         })}
       </section> : null}
 
+      {sendError === null ? null : <p role="alert" className="mt-2 text-xs text-loss">{sendError}</p>}
+      {sending ? <p role="status" className="mt-2 text-xs text-ink-dim">Waiting for {target.name}. Company replies can take a minute.</p> : null}
       <div className="mt-2 flex items-end gap-2">
         <label className="block flex-1">
           <span className="sr-only">Message {target.name}</span>

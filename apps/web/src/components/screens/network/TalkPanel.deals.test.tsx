@@ -157,3 +157,14 @@ describe('TalkPanel historical CEO receipts', () => {
     expect(rendered).not.toContain('Queued for resolution. It is not accepted, binding, or delivered');
   });
 });
+
+it('keeps the unsent message and existing offer when company chat fails', async () => {
+  requestCompanyDialogue.mockResolvedValue({ output: null, turnId: 'failed_turn', receipts: [], revision: null, error: 'Could not reach company chat. Please retry.' });
+  await act(async () => root.render(<Panel />));
+  const textarea = walk(container).find((node) => node.tagName === 'TEXTAREA')!;
+  await act(async () => { (props(textarea).onChange as (event: unknown) => void)({ target: { value: 'Please confirm our terms.' } }); });
+  await act(async () => { click(button(container, 'Send')); await Promise.resolve(); });
+  expect(walk(container).map((node) => node.textContent).join(' ')).toContain('Could not reach company chat. Please retry.');
+  expect(props(textarea).value).toBe('Please confirm our terms.');
+  expect(props(button(container, 'Send')).disabled).toBe(false);
+});

@@ -499,6 +499,7 @@ export interface CompanyCommandReceipt {
 }
 
 export interface CompanyDialogueReply {
+  readonly error?: string;
   readonly output: CharacterReply | null;
   /** Opaque id for this CEO turn; required to approve one proposed command. */
   readonly turnId: string;
@@ -514,9 +515,12 @@ export async function requestCompanyDialogue(context: CharacterUtteranceContext,
     ? crypto.randomUUID().replaceAll('-', '_')
     : `turn_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
   if (typeof window === 'undefined') return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHIEF_OF_STAFF_TIMEOUT_MS);
+  const unavailable = (error: string): CompanyDialogueReply => ({ output: null, turnId, receipts: [], revision: null, error });
   try {
-    const response = await fetch('/api/llm/company-dialogue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: conversation.sessionId, companyId: conversation.conversationId, turnId, message: context.topic }), cache: 'no-store' });
-    if (!response.ok) return null;
+    const response = await fetch('/api/llm/company-dialogue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: conversation.sessionId, companyId: conversation.conversationId, turnId, message: context.conversationHistory.at(-1)?.text ?? context.topic }), cache: 'no-store', signal: controller.signal });
+    if (!response.ok) return unavailable(response.status === 409 ? 'This conversation could not load the saved company. Refresh the game and try again.' : response.status === 429 ? 'Too many messages at once. Wait a moment and try again.' : 'The company chat service could not accept your message. Please try again.');
     const body = await response.json() as { output?: CharacterReply | null; revision?: unknown; receipts?: readonly { proposalIndex?: unknown; status?: unknown; revision?: unknown; intent?: ActionIntent | null; reason?: unknown; queuedAction?: { intent?: ActionIntent } | null; validation?: { reasons?: readonly { message?: unknown }[] } | null }[] };
     const receipts: CompanyCommandReceipt[] = (body.receipts ?? []).map((receipt) => ({
       ...(typeof receipt.proposalIndex === 'number' && Number.isInteger(receipt.proposalIndex) ? { proposalIndex: receipt.proposalIndex } : {}),
@@ -525,8 +529,9 @@ export async function requestCompanyDialogue(context: CharacterUtteranceContext,
       intent: receipt.intent ?? receipt.queuedAction?.intent ?? null,
       reason: typeof receipt.reason === 'string' ? receipt.reason : (receipt.validation?.reasons?.map((reason) => typeof reason.message === 'string' ? reason.message : '').filter(Boolean).join(' ') || null),
     }));
+    if (body.output == null) return unavailable('The company could not reply. Check the ChatGPT connection in Settings, then try again.');
     return { output: body.output ?? null, turnId, receipts, revision: typeof body.revision === 'number' && Number.isInteger(body.revision) ? body.revision : null };
-  } catch { return null; }
+  } catch { return unavailable(controller.signal.aborted ? 'The company reply took too long. Your message is kept here; refresh before retrying to check whether the reply was saved.' : 'Could not reach company chat. Your message is kept here so you can retry.'); } finally { clearTimeout(timer); }
 }
 
 /** Submit one CEO-proposed command after the player has reviewed its exact terms. */

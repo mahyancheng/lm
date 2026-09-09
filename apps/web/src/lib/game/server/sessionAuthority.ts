@@ -1,4 +1,5 @@
 /** Pi-local canonical game files. This is server-only and opt-in via GAME_SESSION_DIR. */
+import { companyDialogueDraft } from './companyDialogueDraft';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ActionIntentSchema, type ActionIntent, type ActionValidationResult, type SessionState, type SubmittedAction } from '@frontier/contracts';
@@ -134,8 +135,28 @@ function upgradeCanonicalStoredGame(root: string, sessionId: string, stored: Sto
   const current = replay(stored.file);
   if (current === null) return null;
   const upgraded = upgradeSaveFileAtLoad(stored.file, current);
-  if (!upgraded.changed) return stored;
-  const next: StoredGame = { ...stored, revision: stored.revision + 1, file: upgraded.file };
+  // Restore the latest still-current legacy offer for each company. Earlier
+  // drafts may have been superseded during negotiation and must not reappear.
+  const state = upgraded.changed ? upgraded.file.checkpoint?.state ?? current : current;
+  let threads = state.conversationThreads ?? [];
+  let recovered = false;
+  const latest = new Map<string, number>();
+  stored.receipts.forEach((receipt, index) => { if (receipt.dialogue?.companyId) latest.set(receipt.dialogue.companyId, index); });
+  const receipts = stored.receipts.map((receipt, index) => {
+    const dialogue = receipt.dialogue;
+    if (!dialogue?.companyId || latest.get(dialogue.companyId) !== index || dialogue.quarter !== state.quarter || !dialogue.output || !('dealDraft' in dialogue.output)) return receipt;
+    const turnId = receipt.commandId.slice('dialogue_'.length);
+    const thread = threads.find((entry) => entry.targetCompanyId === dialogue.companyId && entry.turns.some((turn) => turn.turnId === turnId));
+    if (!thread) return receipt;
+    const output = companyDialogueDraft(dialogue.output, dialogue.companyId, thread.playerCompanyId, state.quarter);
+    if (output === dialogue.output) return receipt;
+    recovered = true;
+    threads = threads.map((entry) => entry.id !== thread.id ? entry : { ...entry, turns: entry.turns.map((turn) => turn.turnId === turnId && turn.speakerId === entry.targetCharacterId ? { ...turn, proposedCommands: output.commands } : turn) });
+    return { ...receipt, dialogue: { ...dialogue, output } };
+  });
+  if (!upgraded.changed && !recovered) return stored;
+  const file = recovered ? { ...upgraded.file, checkpoint: { quarter: state.quarter, state: { ...state, conversationThreads: threads } } } : upgraded.file;
+  const next: StoredGame = { ...stored, revision: stored.revision + 1, file, receipts };
   return writeGame(root, sessionId, next) ? next : null;
 }
 

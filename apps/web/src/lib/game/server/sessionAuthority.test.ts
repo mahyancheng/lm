@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSaveFile, inspectSaveValue } from '@/lib/game/saveFile';
 import type { DealProposal } from '@frontier/contracts';
 import { createSession, PLAYER_ID } from '@/lib/game/engine';
-import { registerGame, resolveCanonicalQuarter, submitCompanyCommand } from './sessionAuthority';
+import { appendCanonicalDialogueTurn, canonicalCompanyDialogueProposal, loadCanonicalCompanyDialogue, registerGame, resolveCanonicalQuarter, submitCompanyCommand } from './sessionAuthority';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -41,4 +41,29 @@ describe('Pi canonical session authority', () => {
   it('records same command once and refuses a changed replay', async () => { const r = root(); const { session, file } = fixture(); const company = npc(session); const reg = registerGame(file, 'owner_a', r); const input = { sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: reg.revision!, conversationId: company.id, commandId: 'offer_1', command: { type: 'submit_board_proposal', kind: 'annual_plan', title: 'Plan', summary: 'Approve the annual operating plan.', amountUsd: null, targetCompanyId: null, stockComponentPct: null } }; const one = await submitCompanyCommand(input, r); expect(one.status).toBe('queued'); const duplicate = await submitCompanyCommand(input, r); expect(duplicate.status).toBe('duplicate'); expect(duplicate.queuedAction?.actionId).toBe(one.queuedAction?.actionId); const changed = await submitCompanyCommand({ ...input, command: { ...input.command, title: 'Different plan' } }, r); expect(changed.status).toBe('forbidden'); });
   it('rejects forged player identity and resolves an exact duplicate only once', async () => { const r = root(); const { session, file } = fixture(); const reg = registerGame(file, 'owner_a', r); const forged = { ...playerAction(session), actorPlayerId: 'forged' }; expect((await resolveCanonicalQuarter({ sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: reg.revision!, requestId: 'q1', playerActions: [forged] }, null, r)).status).toBe('forbidden'); const action = playerAction(session); const first = await resolveCanonicalQuarter({ sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: reg.revision!, requestId: 'q2', playerActions: [action, action] }, null, r); expect(first.status).toBe('resolved'); const again = await resolveCanonicalQuarter({ sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: reg.revision!, requestId: 'q2', playerActions: [action] }, null, r); expect(again.status).toBe('duplicate'); expect(again.file!.log).toHaveLength(1); });
   it('serializes concurrent resolves and preserves a planned NPC bundle for replay', async () => { const r = root(); const { session, file } = fixture(); const reg = registerGame(file, 'owner_a', r); const rival = npc(session); const planner = { planWorld: async () => null, reviewResearch: async () => null, planNpc: async (_state: typeof session, id: string) => id === rival.id ? { requestedCompanyId: id, bundle: { companyId: id, posture: rival.posture, rationale: 'test', strategySummary: 'test', actions: [] } } : null }; const input = { sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: reg.revision!, requestId: 'q3', playerActions: [playerAction(session)] }; const [a, b] = await Promise.all([resolveCanonicalQuarter(input, planner, r), resolveCanonicalQuarter(input, planner, r)]); expect([a.status, b.status].sort()).toEqual(['duplicate', 'resolved']); const saved = (a.file ?? b.file)!; expect(saved.log[0]!.npcBundles).toHaveLength(1); });
+});
+
+
+describe('legacy dialogue recovery', () => {
+  it('restores an offer once, preserves state and queues only after review', async () => {
+    const r = root(); const { session, file } = fixture();
+    const seller = session.companies.find((company) => company.id === 'cmp_tessellate')!;
+    const buyer = session.players[0]!;
+    registerGame(file, 'owner_a', r);
+    const term = { kind: 'owned_accelerator_supply' as const, supplierCompanyId: seller.id, buyerCompanyId: buyer.companyId, quantityPerQuarter: 10, durationQuarters: 16, hardwarePriceReference: 'seller_quote' as const, premiumPct: 5, maxUnitPriceUsd: 80000, priority: 7, nonExclusive: true, cancellable: false, contractEndQuarter: 16 };
+    const output = { text: 'Firm terms for review.', newCommitment: null, relationshipDeltas: { trust: 0, respect: 0, hostility: 0 }, memoryToStore: null, dealDraft: { counterpartyId: seller.id, counterpartyKind: 'company' as const, gives: [], gets: [{ ...term, quantityPerQuarter: 40, durationQuarters: 1, contractEndQuarter: 1 }, term], confidentiality: 'private' as const, expiresQuarter: 1, binding: true, intentStatements: [], summary: '50 initially, then 10 per quarter for 15 more quarters.' } };
+    await appendCanonicalDialogueTurn({ sessionId: session.sessionId, ownerId: 'owner_a', companyId: seller.id, turnId: 'legacy_offer', playerCompanyId: buyer.companyId, playerCharacterId: buyer.characterId, playerText: 'Please offer me a deal', replyText: output.text, output }, r);
+    const restored = loadCanonicalCompanyDialogue(session.sessionId, 'owner_a', seller.id, r)!;
+    expect(restored.queuedActions).toEqual([]);
+    expect(restored.state.quarter).toBe(0);
+    const command = restored.state.conversationThreads![0]!.turns[1]!.proposedCommands![0]!;
+    expect(command).toMatchObject({ type: 'propose_deal', proposal: { counterpartyId: buyer.companyId, gives: [{ ...term, initialQuantity: 50 }], gets: [] } });
+    const path = join(r, session.sessionId + '.json'); const once = readFileSync(path, 'utf8');
+    loadCanonicalCompanyDialogue(session.sessionId, 'owner_a', seller.id, r);
+    expect(readFileSync(path, 'utf8')).toBe(once);
+    const proposal = canonicalCompanyDialogueProposal({ sessionId: session.sessionId, ownerId: 'owner_a', companyId: seller.id, turnId: 'legacy_offer', proposalIndex: 0 }, r);
+    expect(proposal.status).toBe('ready');
+    const queued = await submitCompanyCommand({ sessionId: session.sessionId, ownerId: 'owner_a', expectedRevision: restored.revision, conversationId: seller.id, commandId: 'dialogue_legacy_offer_0', command }, r);
+    expect(queued.status, JSON.stringify(queued.validation)).toBe('queued');
+  });
 });

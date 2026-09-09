@@ -45,9 +45,9 @@ export function HomeTab(): React.JSX.Element {
     <section className="rounded-card border border-brand/30 bg-panel px-4 py-4 shadow-card sm:px-5" aria-labelledby="chief-prompt-title">
       <div className="flex items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-pill bg-gain-wash text-brand"><Icon name="chat" size={20} accent="current" /></span>
-        <div className="min-w-0 flex-1"><h2 id="chief-prompt-title" className="font-serif text-2xl text-ink">What do you want to do?</h2>
+        <div className="min-w-0 flex-1"><h2 id="chief-prompt-title" className="font-serif text-2xl text-ink">Chief of Staff</h2>
           <p className="mt-1 text-[12.5px] text-ink-dim">Tell your Chief of Staff in your own words. You will review every proposed move before it enters the plan.</p>
-          <button type="button" onClick={() => askChief('What should we do this quarter?')} className="btn btn-primary tap-target mt-3 px-4">Start a conversation</button>
+          <button type="button" onClick={() => askChief('What should we do this quarter?')} className="btn btn-primary tap-target mt-3 px-4">Open Chief of Staff</button>
         </div>
       </div>
     </section>

@@ -121,3 +121,13 @@ describe('owned accelerator supply contracts', () => {
   });
 
 });
+
+
+it('settles a larger first delivery then the recurring quantity without repeating the first instalment', () => {
+  let state = seeded({ initialQuantity: 50, quantityPerQuarter: 10, durationQuarters: 3 });
+  for (let q = 0; q < 4; q++) state = resolve(state).nextState;
+  expect(state.deals[0]!.settlements?.map((row) => row.dueUnits)).toEqual([50, 10, 10]);
+  expect(state.deals[0]!.settlements?.map((row) => row.deliveredUnits)).toEqual([50, 10, 10]);
+  expect(state.deals[0]!.status).toBe('executed');
+  expect(SessionStateSchema.parse(state).deals[0]!.gives[0]).toMatchObject({ initialQuantity: 50 });
+});

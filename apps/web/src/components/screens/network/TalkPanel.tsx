@@ -21,6 +21,7 @@
  *   commitment. The panel says which of the two the player is reading.
  */
 
+import { sheetHref } from '@/lib/sheets';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AcceleratorPurchaseDraft, ActionIntent, Character, CharacterReply, CharacterUtteranceContext, ConversationReceipt, DealProposal, DealProposalDraft, Memory, MemoryDraft, Relationship, SessionState } from '@frontier/contracts';
 import { AiLabel, ConfirmDialog, Icon, SectionHeading, Tag, cx } from '@/components/ui';
@@ -94,7 +95,7 @@ function commandTerms(intent: ActionIntent | null): readonly string[] {
       `Offer to ${intent.proposal.counterpartyId}`,
       intent.proposal.binding ? 'Binding obligations if accepted' : 'Non-binding intent only',
       ...intent.proposal.gives.concat(intent.proposal.gets).flatMap((obligation) => obligation.kind === 'owned_accelerator_supply'
-        ? [`Owned accelerators: ${obligation.quantityPerQuarter}/quarter for ${obligation.durationQuarters} quarters`, `Premium ${obligation.premiumPct}% · cap $${obligation.maxUnitPriceUsd.toLocaleString()} · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries cancellable' : 'Future deliveries not cancellable']
+        ? [`Owned accelerators: ${obligation.initialQuantity ?? obligation.quantityPerQuarter} first, then ${obligation.quantityPerQuarter}/quarter; ${obligation.durationQuarters} instalments total`, `Premium ${obligation.premiumPct}% · cap $${obligation.maxUnitPriceUsd.toLocaleString()} · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries cancellable' : 'Future deliveries not cancellable']
         : [obligation.kind.replaceAll('_', ' ')]),
       `Expires Q${intent.proposal.expiresQuarter}`,
     ];
@@ -108,7 +109,7 @@ function commandTerms(intent: ActionIntent | null): readonly string[] {
 
 function hardwareTerms(deal: DealProposal): readonly string[] {
   return [...deal.gives, ...deal.gets].flatMap((obligation) => obligation.kind === 'owned_accelerator_supply'
-    ? [`${obligation.quantityPerQuarter} owned accelerators/quarter × ${obligation.durationQuarters} quarters`, `Premium ${obligation.premiumPct}% · max $${obligation.maxUnitPriceUsd.toLocaleString()}/unit · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries may be cancelled' : 'Not cancellable']
+    ? [`${obligation.initialQuantity ?? obligation.quantityPerQuarter} owned accelerators first, then ${obligation.quantityPerQuarter}/quarter; ${obligation.durationQuarters} instalments total`, `Premium ${obligation.premiumPct}% · max $${obligation.maxUnitPriceUsd.toLocaleString()}/unit · priority ${obligation.priority}`, obligation.cancellable ? 'Future deliveries may be cancelled' : 'Not cancellable']
     : []);
 }
 
@@ -246,7 +247,7 @@ export function TalkPanel({
       relationship: inbound,
       counterpartRelationship: outbound,
       memories: theirMemories.slice(0, 6),
-      topic: message.slice(0, 200),
+      topic: message,
       gameFacts: negotiationFacts(session, target, company, view.techGraph, counterparty?.id),
       conversationHistory: companyHistory.map((turn) => ({ speakerId: turn.speakerId, text: turn.text.slice(0, 600) })),
       accessBasis,
@@ -348,23 +349,6 @@ export function TalkPanel({
         </ul>
       </section> : null}
 
-      {commandProposals.length > 0 ? <section className="mt-3 flex flex-col gap-2">
-        <SectionHeading rule>CEO proposal</SectionHeading>
-        <p className="text-xs leading-relaxed text-ink-dim">These are proposed company actions, not completed deals. Review the exact terms, then queue one for quarter resolution.</p>
-        {commandProposals.map((proposal) => {
-          const receipt = proposal.receipt;
-          const expired = proposal.quarter !== session.quarter;
-          const pending = receipt?.status === 'queued' || receipt?.status === 'duplicate';
-          return <article key={`${proposal.turnId}:${proposal.index}`} className="rounded-card raised-surface px-3 py-2 text-xs text-ink-dim">
-            <div className="flex flex-wrap items-center gap-2"><Tag tone={receipt === null ? (expired ? 'warn' : 'warn') : receiptTone(receipt.status)}>{receipt === null ? (expired ? 'Draft expired — refresh terms' : 'Awaiting your approval') : pending && expired ? `Submitted in Q${proposal.quarter}` : receiptLabel(receipt.status)}</Tag><span>{proposalLabel(proposal.command)}</span></div>
-            {commandTerms(proposal.command).map((term) => <div key={term} className="mt-1">{term}</div>)}
-            {receipt?.reason === null || receipt === null ? null : <div className="mt-1 text-warn">{receipt.reason}</div>}
-            {proposal.error === undefined ? null : <div className="mt-1 text-warn">{proposal.error}</div>}
-            {receipt === null && !expired ? <button type="button" className="btn btn-primary mt-2" disabled={proposal.submitting} onClick={() => setPendingCommand(proposal)}>{proposal.submitting ? 'Queuing…' : 'Queue for resolution'}</button> : receipt === null ? <p className="mt-2">This draft was from an earlier quarter. Ask the CEO for current terms before queuing anything.</p> : pending && expired ? <p className="mt-2">Submitted in Q{proposal.quarter} — check the quarter outcome and current company terms. This is a historical submission, not a pending action.</p> : pending ? <p className="mt-2">Queued for resolution. It is not accepted, binding, or delivered until the resolver records that outcome.</p> : null}
-          </article>;
-        })}
-      </section> : null}
-
       {conversationDeals.length > 0 ? <section className="mt-2 flex flex-col gap-2">
         <SectionHeading rule>Current company terms</SectionHeading>
         {conversationDeals.map((deal) => {
@@ -424,6 +408,23 @@ export function TalkPanel({
         </ul>
       ) : null}
 
+      {commandProposals.length > 0 ? <section className="mt-3 flex flex-col gap-2">
+        <SectionHeading rule>CEO proposal</SectionHeading>
+        <p className="text-xs leading-relaxed text-ink-dim">These are proposed company actions, not completed deals. Review the exact terms, then queue one for quarter resolution.</p>
+        {commandProposals.map((proposal) => {
+          const receipt = proposal.receipt;
+          const expired = proposal.quarter !== session.quarter;
+          const pending = receipt?.status === 'queued' || receipt?.status === 'duplicate';
+          return <article key={`${proposal.turnId}:${proposal.index}`} className="rounded-card raised-surface px-3 py-2 text-xs text-ink-dim">
+            <div className="flex flex-wrap items-center gap-2"><Tag tone={receipt === null ? (expired ? 'warn' : 'warn') : receiptTone(receipt.status)}>{receipt === null ? (expired ? 'Draft expired — refresh terms' : 'Awaiting your approval') : pending && expired ? `Submitted in Q${proposal.quarter}` : receiptLabel(receipt.status)}</Tag><span>{proposalLabel(proposal.command)}</span></div>
+            {commandTerms(proposal.command).map((term) => <div key={term} className="mt-1">{term}</div>)}
+            {receipt?.reason === null || receipt === null ? null : <div className="mt-1 text-warn">{receipt.reason}</div>}
+            {proposal.error === undefined ? null : <div className="mt-1 text-warn">{proposal.error}</div>}
+            {receipt === null && !expired ? <button type="button" className="btn btn-primary mt-2" disabled={proposal.submitting} onClick={() => setPendingCommand(proposal)}>{proposal.submitting ? 'Queuing…' : 'Queue for resolution'}</button> : receipt === null ? <p className="mt-2">This draft was from an earlier quarter. Ask the CEO for current terms before queuing anything.</p> : pending && expired ? <p className="mt-2">Submitted in Q{proposal.quarter} — check the quarter outcome and current company terms. This is a historical submission, not a pending action.</p> : pending ? <p className="mt-2">Queued for resolution. It is not accepted, binding, or delivered until the resolver records that outcome.</p> : null}
+          </article>;
+        })}
+      </section> : null}
+
       <div className="mt-2 flex items-end gap-2">
         <label className="block flex-1">
           <span className="sr-only">Message {target.name}</span>
@@ -478,6 +479,7 @@ export function TalkPanel({
           </>}
         </div> : null}
       </div> : null}
+      <a href={sheetHref('chief-of-staff')} className="btn tap-target mt-3">Open Chief of Staff</a>
       {offline && turns.length > 0 ? (
         <div className="mt-1.5">
           <Tag tone="neutral">Deterministic reply — no model available</Tag>

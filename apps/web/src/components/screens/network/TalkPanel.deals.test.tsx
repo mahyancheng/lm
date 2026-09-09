@@ -48,7 +48,7 @@ describe('TalkPanel owned-hardware terms', () => {
     currentSession = { ...currentSession, deals: [...currentSession.deals, deal] };
     await act(async () => root.render(<Panel />));
     const rendered = walk(container).map((node) => node.textContent).filter(Boolean).join(' ');
-    expect(rendered).toContain('1250 owned accelerators/quarter × 4 quarters'); expect(rendered).toContain('max $987,654/unit');
+    expect(rendered).toContain('1250 owned accelerators first, then 1250/quarter; 4 instalments total'); expect(rendered).toContain('max $987,654/unit');
     await act(async () => click(button(container, 'Accept terms'))); expect(queueAction).not.toHaveBeenCalled(); expect(walk(container).map((node) => node.textContent).join(' ')).toContain('Accept these company terms');
     await act(async () => click(button(container, 'Queue acceptance'))); expect(queueAction).toHaveBeenCalledWith({ type: 'accept_deal', dealId: deal.id }, { confirmed: true });
     const accepted = { ...deal, status: 'accepted' as const, respondedQuarter: currentSession.quarter, settlements: [{ quarter: currentSession.quarter, obligationKind: 'owned_accelerator_supply' as const, status: 'delivered' as const, dueUnits: 1250, deliveredUnits: 1250, unitPriceUsd: 900000, totalUsd: 1125000000, reason: null }] };

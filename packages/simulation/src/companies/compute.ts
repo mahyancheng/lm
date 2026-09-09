@@ -99,22 +99,23 @@ function resolveOwnedAcceleratorContracts(draft: SessionState, ctx: ResolverCont
     if (receipts.some((row) => row.obligationKind === 'owned_accelerator_supply' && row.quarter === ctx.quarter)) continue;
     const complete = receipts.filter((row) => row.obligationKind === 'owned_accelerator_supply' && row.status !== 'price_cap_unmet').length;
     if (complete >= terms.durationQuarters) { deal.status = 'executed'; continue; }
+    const dueUnits = complete === 0 ? terms.initialQuantity ?? terms.quantityPerQuarter : terms.quantityPerQuarter;
     const supplier = draft.companies.find((company) => company.id === terms.supplierCompanyId);
     const buyer = draft.companies.find((company) => company.id === terms.buyerCompanyId);
     if (supplier === undefined || buyer === undefined || !supplier.isActive || !buyer.isActive || ctx.quarter > terms.contractEndQuarter) {
-      deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status: 'expired', dueUnits: terms.quantityPerQuarter, deliveredUnits: 0, unitPriceUsd: 0, totalUsd: 0, reason: 'Contract term ended or a party is inactive.' }];
+      deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status: 'expired', dueUnits: dueUnits, deliveredUnits: 0, unitPriceUsd: 0, totalUsd: 0, reason: 'Contract term ended or a party is inactive.' }];
       deal.status = 'executed';
       emitEvent(draft, ctx, 'deal_breached', terms.supplierCompanyId, terms.buyerCompanyId, { dealId: deal.id, status: 'expired', reason: 'Contract term ended or a party is inactive.' }, 'company');
       continue;
     }
-    const seller = availableAcceleratorSeller(draft, buyer.id, supplier.id, terms.quantityPerQuarter, availability);
+    const seller = availableAcceleratorSeller(draft, buyer.id, supplier.id, dueUnits, availability);
     const unitPrice = seller === null ? 0 : money(seller.unitPriceUsd * (1 + terms.premiumPct / 100));
     const remaining = seller === null ? 0 : availability.get(supplier.id) ?? 0;
-    const delivered = unitPrice > terms.maxUnitPriceUsd ? 0 : Math.min(terms.quantityPerQuarter, remaining);
-    const status = unitPrice > terms.maxUnitPriceUsd ? 'price_cap_unmet' : delivered === terms.quantityPerQuarter ? 'delivered' : delivered > 0 ? 'partial' : 'defaulted';
-    const reason = unitPrice > terms.maxUnitPriceUsd ? 'Seller quote exceeds the buyer-approved maximum price; delivery is suspended, not a supplier breach.' : delivered === 0 ? 'Supplier had no allocable hardware output.' : delivered < terms.quantityPerQuarter ? 'Supplier output was scarce; partial delivery recorded.' : null;
+    const delivered = unitPrice > terms.maxUnitPriceUsd ? 0 : Math.min(dueUnits, remaining);
+    const status = unitPrice > terms.maxUnitPriceUsd ? 'price_cap_unmet' : delivered === dueUnits ? 'delivered' : delivered > 0 ? 'partial' : 'defaulted';
+    const reason = unitPrice > terms.maxUnitPriceUsd ? 'Seller quote exceeds the buyer-approved maximum price; delivery is suspended, not a supplier breach.' : delivered === 0 ? 'Supplier had no allocable hardware output.' : delivered < dueUnits ? 'Supplier output was scarce; partial delivery recorded.' : null;
     const totalUsd = money(delivered * unitPrice);
-    deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status, dueUnits: terms.quantityPerQuarter, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, reason }];
+    deal.settlements = [...receipts, { quarter: ctx.quarter, obligationKind: 'owned_accelerator_supply', status, dueUnits: dueUnits, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, reason }];
     // A zero-fill is an explicit supplier supply default and ends the remaining
     // obligation. A partial fill is recorded but leaves later instalments live.
     // Buyer cash is deliberately not a delivery gate: the ordinary world-2
@@ -130,9 +131,9 @@ function resolveOwnedAcceleratorContracts(draft: SessionState, ctx: ResolverCont
       buyer.compute.pendingAcceleratorPurchases = [...(buyer.compute.pendingAcceleratorPurchases ?? []), { sellerCompanyId: supplier.id, units: delivered, unitPriceUsd: unitPrice, totalUsd }];
     }
     const eventId = emitEvent(draft, ctx, status === 'defaulted' ? 'deal_breached' : 'accelerators_bought', supplier.id, buyer.id,
-      { dealId: deal.id, supplierCompanyId: supplier.id, buyerCompanyId: buyer.id, dueUnits: terms.quantityPerQuarter, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, status, reason }, 'company');
+      { dealId: deal.id, supplierCompanyId: supplier.id, buyerCompanyId: buyer.id, dueUnits: dueUnits, deliveredUnits: delivered, unitPriceUsd: unitPrice, totalUsd, status, reason }, 'company');
     const verb = status === 'delivered' ? 'delivered' : status === 'partial' ? 'partly delivered' : status === 'price_cap_unmet' ? 'suspended at the price cap on' : 'defaulted on';
-    ctx.log({ phase: 'product_demand_resolution', text: `${supplier.name} ${verb} hardware contract ${deal.id}: ${delivered}/${terms.quantityPerQuarter} accelerators.`, deltaLabel: `${delivered}/${terms.quantityPerQuarter}`, refEventIds: [eventId], tone: status === 'delivered' ? 'positive' : 'warning', subjectId: supplier.id });
+    ctx.log({ phase: 'product_demand_resolution', text: `${supplier.name} ${verb} hardware contract ${deal.id}: ${delivered}/${dueUnits} accelerators.`, deltaLabel: `${delivered}/${dueUnits}`, refEventIds: [eventId], tone: status === 'delivered' ? 'positive' : 'warning', subjectId: supplier.id });
     if (deal.status !== 'executed' && (deal.settlements ?? []).filter((row) => row.status !== 'price_cap_unmet').length >= terms.durationQuarters) deal.status = 'executed';
   }
 }

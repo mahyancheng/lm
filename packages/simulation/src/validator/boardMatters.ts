@@ -60,7 +60,7 @@ export interface BoardMatter {
 export function materialHardwareDealAmount(intent: Extract<ActionIntent, { type: 'propose_deal' }>['proposal'], company: Company): number | null {
   const hardware = [...intent.gives, ...intent.gets].find((obligation) => obligation.kind === 'owned_accelerator_supply');
   if (hardware === undefined || !intent.binding) return null;
-  const maximumCommitment = hardware.quantityPerQuarter * hardware.durationQuarters * hardware.maxUnitPriceUsd;
+  const maximumCommitment = ((hardware.initialQuantity ?? hardware.quantityPerQuarter) + hardware.quantityPerQuarter * (hardware.durationQuarters - 1)) * hardware.maxUnitPriceUsd;
   const threshold = Math.max(BOARD_GOV_CONTRACT_FLOOR_USD, company.financials.revenueQuarterly * BOARD_GOV_CONTRACT_REVENUE_MULTIPLE);
   return maximumCommitment >= threshold ? maximumCommitment : null;
 }

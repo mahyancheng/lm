@@ -3,9 +3,8 @@
 # itself with `deploy/pi/update.sh` — no Mac, no tailnet access for anyone
 # else, no build on the Pi (which would OOM).
 #
-# QEMU-emulated arm64 builds of a Next app are slow (expect 20–40 minutes) but
-# free on public repositories. The Dockerfile's final gate still runs: an image
-# that cannot execute the Agent SDK's arm64 binary fails here, not on the Pi.
+# Build natively on GitHub-hosted ARM64 so releases need neither emulation
+# nor a Mac build. The Dockerfile still checks the pinned Codex CLI at build time.
 name: pi-image
 
 on:
@@ -31,14 +30,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/arm64
 
       - uses: docker/setup-buildx-action@v3
 

@@ -2,9 +2,9 @@
 #
 # Frontier Capital — Raspberry Pi (linux/arm64) image.
 #
-# Built on a Mac with colima, exported with `docker save`, loaded on the Pi.
-# See README.md in this directory for the bring-up, and HANDOFF.md for what the
-# building machine must verify.
+# Built on GitHub-hosted ARM64 and published to GitHub Container Registry.
+# The Pi pulls the commit-tagged image; no Mac build is required.
+# See README.md in this directory for bring-up and HANDOFF.md for checks.
 #
 # ## The one thing this image is really about
 #

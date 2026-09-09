@@ -1,0 +1,111 @@
+'use client';
+
+/**
+ * TODAY.
+ *
+ * Every line is a condition that exists in committed state, and every line
+ * links to the screen that resolves it. A quiet feed is information: it means
+ * nothing in the session currently needs an answer from you.
+ *
+ * A line is a **card row**, not a table row: on a phone it is the thing a thumb
+ * has to hit, so it clears 44px, carries its own tone dot and says where it
+ * goes with a chevron rather than leaving the player to guess.
+ *
+ * `feed.ts` writes each line's address as the old route that owned the subject
+ * (`/capital`, `/news?section=world`), because that is the vocabulary the
+ * builder and its test share. The rewrite to a tab plus a sheet happens here,
+ * once, through `legacyHref` — so no row ever renders an address the router
+ * would have to redirect.
+ */
+
+import Link from 'next/link';
+import { EmptyState, Icon, TONE_VAR, cx } from '@/components/ui';
+import { legacyHref } from '@/lib/sheets';
+import type { FeedItem } from './feed';
+import type { IconName } from '@/components/ui';
+
+const GROUP_LABEL: Readonly<Record<FeedItem['group'], string>> = {
+  company: 'Your company',
+  world: 'The world',
+  competition: 'Competition',
+};
+
+const GROUP_ICON: Readonly<Record<FeedItem['group'], IconName>> = {
+  company: 'building',
+  world: 'globe',
+  competition: 'trophy',
+};
+
+export interface AlertFeedProps {
+  readonly items: readonly FeedItem[];
+  /**
+   * Whether to head each group with the part of the world it comes from.
+   * Home reads a capped handful and does not need three headings over five
+   * rows — each row already carries its tone and its destination — so it asks
+   * for the flat list and keeps the page a glance rather than a filing system.
+   */
+  readonly grouped?: boolean;
+}
+
+export function AlertFeed({ items, grouped = true }: AlertFeedProps): React.JSX.Element {
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        icon="check"
+        compact
+        title="Nothing is asking for you"
+        message="No board matters, no closing procurements, no severe events and nothing blocked in the queue. Open the Chief of Staff and set the quarter's direction."
+      />
+    );
+  }
+
+  const groups: FeedItem['group'][] = ['company', 'world', 'competition'];
+  const ordered = grouped ? [] : groups.flatMap((group) => items.filter((item) => item.group === group));
+
+  const rowsOf = (rows: readonly FeedItem[]): React.JSX.Element => (
+    <ul className="flex flex-col gap-1.5">
+      {rows.map((item) => (
+        <li key={item.id}>
+          <Link
+            href={legacyHref(item.href)}
+            className="raised-surface press-pop tap-target flex items-center gap-2.5 px-3 py-2 transition-colors hover:border-hair-strong"
+          >
+            <span
+              className="inline-block size-2 shrink-0 rounded-pill"
+              style={{ backgroundColor: TONE_VAR[item.tone] }}
+              aria-hidden="true"
+            />
+            <span className={cx('min-w-0 flex-1 text-[12.5px] leading-snug', item.tone === 'loss' ? 'text-loss' : 'text-ink-dim')}>
+              {item.text}
+            </span>
+            {item.meta === undefined ? null : <span className="figure shrink-0 text-[10.5px] text-ink-faint">{item.meta}</span>}
+            <span className="shrink-0 text-ink-faint">
+              <Icon name="chevronRight" size={13} accent="current" />
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+
+  // Ungrouped keeps the same order the headings would have put the rows in.
+  if (!grouped) return rowsOf(ordered);
+
+  return (
+    <div className="flex flex-col gap-3.5">
+      {groups.map((group) => {
+        const rows = items.filter((item) => item.group === group);
+        if (rows.length === 0) return null;
+        return (
+          <div key={group}>
+            <div className="label-caps-faint mb-1.5 flex items-center gap-1.5">
+              <Icon name={GROUP_ICON[group]} size={14} accent="current" />
+              {GROUP_LABEL[group]}
+            </div>
+            {rowsOf(rows)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

@@ -1,0 +1,18 @@
+# Overlay for the self-update path: run the image GitHub Actions built instead
+# of one loaded from the Mac.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# `update.sh` does exactly that after pulling. The base file's `build:` stays
+# for the Mac path; this overlay only swaps the image and lets it pull.
+#
+# The service key MUST be `app` — the base file's service name — so the merge
+# overrides that service. A different key here does not error: it silently
+# adds a second service, and an "update" then starts a container nobody is
+# routed to while the old one keeps serving. `update.sh` runs
+# `docker compose config` first and refuses to proceed if more than one
+# service comes out of the merge.
+services:
+  app:
+    image: ghcr.io/mahyancheng/lm/frontier-capital:pi
+    pull_policy: always
